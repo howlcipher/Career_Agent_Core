@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/generative-ai-go/genai"
@@ -21,38 +22,76 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
-func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (string, string, error) {
+func (c *Client) ScoreJob(scrapedData map[string]string, parsedDocument string) (int, error) {
 	if c.APIKey == "" {
-		return "", "", fmt.Errorf("GEMINI_API_KEY is not set")
+		return 0, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create gemini client: %w", err)
+		return 0, fmt.Errorf("failed to create gemini client: %w", err)
 	}
 	defer client.Close()
 
-	// Use Gemini Pro
 	model := client.GenerativeModel("gemini-1.5-pro")
 
-	// Set system instruction exactly as specified
+	prompt := fmt.Sprintf("Analyze the following job description and my background. Return ONLY a single integer from 0 to 100 representing how good of a fit I am for this role. Do not include any other text.\n\nJob Title: %s\n\nJob Description: %s\n\nMy Background:\n%s",
+		scrapedData["title"], scrapedData["desc"], parsedDocument)
+
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate content: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return 0, fmt.Errorf("empty response")
+	}
+
+	scoreStr := ""
+	if text, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+		scoreStr = strings.TrimSpace(string(text))
+	}
+
+	// Remove any extraneous characters
+	scoreStr = strings.Trim(scoreStr, " \n\r\t\"'")
+	score, err := strconv.Atoi(scoreStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse score %q: %w", scoreStr, err)
+	}
+
+	return score, nil
+}
+
+func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (string, string, string, error) {
+	if c.APIKey == "" {
+		return "", "", "", fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to create gemini client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel("gemini-1.5-pro")
+
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{genai.Text(SystemPrompt)},
 	}
 
-	// Craft the prompt and instruct how to separate the two files without using hyphens (as per SystemPrompt instructions)
-	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it.",
+	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
 		scrapedData["title"], scrapedData["desc"], parsedDocument)
 
 	fmt.Println("Sending application context to Gemini Pro...")
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to generate content from gemini: %w", err)
+		return "", "", "", fmt.Errorf("failed to generate content from gemini: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", "", fmt.Errorf("empty response from gemini")
+		return "", "", "", fmt.Errorf("empty response from gemini")
 	}
 
 	var fullText string
@@ -62,15 +101,24 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		}
 	}
 
-	// Parse the output using the separator
-	parts := strings.Split(fullText, "===COVERLETTER===")
-	if len(parts) < 2 {
-		// Fallback if separator wasn't strictly followed
-		return fullText, "Cover letter generation failed or merged into resume.", nil
+	// Parse the output using the separators
+	resumeOut := ""
+	coverOut := ""
+	prepOut := "Interview prep failed to generate properly."
+
+	parts1 := strings.Split(fullText, "===COVERLETTER===")
+	if len(parts1) > 0 {
+		resumeOut = strings.TrimSpace(parts1[0])
+	}
+	if len(parts1) > 1 {
+		parts2 := strings.Split(parts1[1], "===INTERVIEWPREP===")
+		if len(parts2) > 0 {
+			coverOut = strings.TrimSpace(parts2[0])
+		}
+		if len(parts2) > 1 {
+			prepOut = strings.TrimSpace(parts2[1])
+		}
 	}
 
-	resumeOutput := strings.TrimSpace(parts[0])
-	coverLetterOutput := strings.TrimSpace(parts[1])
-
-	return resumeOutput, coverLetterOutput, nil
+	return resumeOut, coverOut, prepOut, nil
 }

@@ -6,6 +6,7 @@ require (
 	github.com/danielthedm/promptsec v0.1.0
 	github.com/google/generative-ai-go v0.20.1
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/mattn/go-sqlite3 v1.14.48
 	google.golang.org/api v0.186.0
 	gopkg.in/yaml.v3 v3.0.1
 )

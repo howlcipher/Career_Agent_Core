@@ -16,6 +16,10 @@ import (
 func main() {
 	log.Println("Initializing Career Agent Core...")
 
+	if err := storage.InitDB(); err != nil {
+		log.Fatalf("Failed to initialize SQLite database: %v", err)
+	}
+
 	prof, err := config.LoadProfile("profile.yaml")
 	if err != nil {
 		log.Fatalf("Configuration error: %v", err)
@@ -55,23 +59,40 @@ func main() {
 			continue
 		}
 
+		if storage.HasApplied(job.URL) {
+			log.Printf("Duplicate check: Already applied to %s. Skipping.", job.CompanyName)
+			continue
+		}
+
 		scrapedData := map[string]string{
 			"title": job.Title,
 			"desc":  job.Description,
 		}
+
+		score, err := client.ScoreJob(scrapedData, docContext)
+		if err != nil {
+			log.Printf("Failed to score job for %s: %v", job.CompanyName, err)
+			continue
+		}
+
+		if score < 80 {
+			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 80.", job.CompanyName, score)
+			continue
+		}
+		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
 
 		profileConstraints := map[string]interface{}{
 			"salary_floor": prof.SalaryFloor,
 			"remote_only":  prof.RemoteOnly,
 		}
 
-		resume, coverLetter, err := client.ProcessJobApplication(scrapedData, profileConstraints, docContext)
+		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, docContext)
 		if err != nil {
 			log.Printf("Failed to process job for %s: %v", job.CompanyName, err)
 			continue
 		}
 
-		if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter); err != nil {
+		if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
 			log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
 			continue
 		}

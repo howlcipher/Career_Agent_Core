@@ -24,12 +24,17 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string) er
 		page.Goto(applyURL)
 	*/
 
-	if strings.Contains(strings.ToLower(applyURL), "greenhouse.io") || strings.Contains(strings.ToLower(applyURL), "lever.co") {
-		log.Printf("[Auto-Submit] Detected standard ATS. In a full implementation, Playwright would now fill the DOM fields and upload %s", resumePath)
-		// e.g., page.Fill("input[name='first_name']", "William")
+	if strings.Contains(strings.ToLower(applyURL), "linkedin.com/jobs") {
+		log.Printf("[Auto-Submit] Detected LinkedIn Job. In a full implementation, Playwright would click 'Easy Apply', fill the DOM fields, and upload %s", resumePath)
+		// e.g., page.Locator("button.jobs-apply-button").Click()
 		// page.SetInputFiles("input[type='file']", []playwright.InputFile{{Name: "resume.md", Path: resumePath}})
 		return nil
 	}
 
-	return fmt.Errorf("unsupported Applicant Tracking System or custom form detected at %s", applyURL)
+	if strings.Contains(strings.ToLower(applyURL), "greenhouse.io") || strings.Contains(strings.ToLower(applyURL), "lever.co") {
+		log.Printf("[Auto-Submit] Detected standard ATS. In a full implementation, Playwright would now fill the DOM fields and upload %s", resumePath)
+		return nil
+	}
+
+	return fmt.Errorf("unsupported Applicant Tracking System (not LinkedIn Easy Apply or known ATS) at %s", applyURL)
 }
