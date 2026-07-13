@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
@@ -46,7 +47,7 @@ func main() {
 		log.Fatalf("Security quarantine triggered: %v", err)
 	}
 
-	client := mcp.NewClient("http://localhost:8080")
+	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 
 	for _, job := range jobs {
 		if !prof.ValidateJob(job.Salary, job.Remote) {
