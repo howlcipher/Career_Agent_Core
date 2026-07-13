@@ -82,8 +82,9 @@ func main() {
 		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
 
 		profileConstraints := map[string]interface{}{
-			"salary_floor": prof.SalaryFloor,
-			"remote_only":  prof.RemoteOnly,
+			"salary_floor":      prof.SalaryFloor,
+			"remote_only":       prof.RemoteOnly,
+			"cover_letter_tone": prof.CoverLetterTone,
 		}
 
 		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, docContext)

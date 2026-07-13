@@ -16,6 +16,7 @@ type Profile struct {
 	Skills           []string `yaml:"skills"`
 	ExcludeCompanies []string `yaml:"exclude_companies"`
 	AutoSubmit       bool     `yaml:"auto_submit"`
+	CoverLetterTone  string   `yaml:"cover_letter_tone"`
 }
 
 func LoadProfile(path string) (*Profile, error) {

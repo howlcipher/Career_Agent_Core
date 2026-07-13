@@ -90,8 +90,13 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		Parts: []genai.Part{genai.Text(SystemPrompt)},
 	}
 
-	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
-		scrapedData["title"], scrapedData["desc"], parsedDocument)
+	toneContext := ""
+	if tone, ok := profileConstraints["cover_letter_tone"].(string); ok && tone != "" {
+		toneContext = fmt.Sprintf("\n\nCRITICAL DIRECTIVE: You must strictly adhere to this exact tone for the cover letter: %s", tone)
+	}
+
+	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
+		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext)
 
 	fmt.Println("Sending application context to Gemini Pro...")
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
