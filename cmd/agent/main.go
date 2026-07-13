@@ -29,9 +29,9 @@ func main() {
 	}
 
 	docContext := ""
-	mdContent, err := parser.ReadMarkdown("base_resume.md")
+	mdContent, err := parser.ReadMarkdown("/run/media/system/tallgeese/dev/ai_knowledge_library/USER_PROFILE.md")
 	if err != nil {
-		log.Println("Markdown resume not found, trying fallback PDF...")
+		log.Println("USER_PROFILE.md not found in knowledge library, trying fallback PDF...")
 		pdfContent, pdfErr := parser.ExtractFromFallbackPDF("__William_Elias_Resume__.pdf")
 		if pdfErr != nil {
 			log.Println("PDF fallback also failed. Proceeding without local document context.")
