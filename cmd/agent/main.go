@@ -26,6 +26,12 @@ func main() {
 	}
 	log.Printf("Loaded profile: role=%s, salary_floor=%d", prof.Role, prof.SalaryFloor)
 
+	piiData, err := config.LoadPII("pii.yaml")
+	if err != nil {
+		log.Printf("PII warning (defaulting to empty fields): %v", err)
+		piiData = &config.PII{}
+	}
+
 	filter := security.NewQuarantineLayer()
 	
 	scrapeEngine := scraper.NewEngine(prof.SalaryFloor)
@@ -103,7 +109,7 @@ func main() {
 		if prof.AutoSubmit {
 			resumePath := "applications/" + job.CompanyName + "/resume.md"
 			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
-			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath); err != nil {
+			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath, piiData); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
 					log.Printf("Also failed to log manual submission for %s: %v", job.CompanyName, logErr)
