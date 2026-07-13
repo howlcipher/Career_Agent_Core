@@ -26,14 +26,6 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, fmt.Errorf("failed to parse profile: %w", err)
 	}
 
-	if p.SalaryFloor < 135000 {
-		return nil, fmt.Errorf("profile salary floor %d is below the strict requirement of 135000", p.SalaryFloor)
-	}
-
-	if !p.RemoteOnly {
-		return nil, fmt.Errorf("profile must enforce remote_only parameter")
-	}
-
 	return &p, nil
 }
 
@@ -41,7 +33,7 @@ func (p *Profile) ValidateJob(salary int, remote bool) bool {
 	if salary < p.SalaryFloor {
 		return false
 	}
-	if !remote {
+	if p.RemoteOnly && !remote {
 		return false
 	}
 	return true
