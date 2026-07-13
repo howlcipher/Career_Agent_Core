@@ -55,7 +55,7 @@ func main() {
 
 		scrapedData := map[string]string{
 			"title": job.Title,
-			"desc":  "Job description placeholder",
+			"desc":  job.Description,
 		}
 
 		profileConstraints := map[string]interface{}{
