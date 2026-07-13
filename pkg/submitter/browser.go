@@ -1,6 +1,7 @@
 package submitter
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	// "github.com/playwright-community/playwright-go" // Uncomment when implementing real browser logic
@@ -30,6 +31,5 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string) er
 		return nil
 	}
 
-	log.Printf("[Auto-Submit] Simulated submission complete for %s. (Requires specific ATS DOM logic to actually submit)", companyName)
-	return nil
+	return fmt.Errorf("unsupported Applicant Tracking System or custom form detected at %s", applyURL)
 }

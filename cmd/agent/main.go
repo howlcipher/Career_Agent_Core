@@ -83,6 +83,9 @@ func main() {
 			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
 			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
+				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
+					log.Printf("Also failed to log manual submission for %s: %v", job.CompanyName, logErr)
+				}
 			}
 		}
 	}

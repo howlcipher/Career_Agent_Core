@@ -54,3 +54,28 @@ func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverL
 
 	return nil
 }
+
+// LogFailedSubmission appends a failed auto-submission to a manual review checklist
+func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
+	reportPath := filepath.Join("applications", "manual_submissions.md")
+	
+	// Create the file with a header if it doesn't exist
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		header := "# Manual Submission Backlog\n\nThe auto-submitter failed to process the following applications. Please submit them manually:\n\n"
+		os.WriteFile(reportPath, []byte(header), 0644)
+	}
+
+	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s)\n", companyName, jobTitle, applyURL)
+	
+	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open manual submission report: %w", err)
+	}
+	defer f.Close()
+
+	if _, err = f.WriteString(entry); err != nil {
+		return fmt.Errorf("failed to write to manual submission report: %w", err)
+	}
+	
+	return nil
+}
