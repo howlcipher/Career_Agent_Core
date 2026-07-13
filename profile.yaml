@@ -5,3 +5,11 @@ experience_years: 9
 skills:
   - Python
   - Go
+exclude_companies:
+  - "Stellantis"
+  - "HBK Engineering"
+  - "Intrepid Control Systems"
+  - "Ford"
+  - "Project Worldwide"
+  - "Trendset Communications"
+auto_submit: false

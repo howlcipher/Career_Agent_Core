@@ -10,6 +10,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func main() {
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 
 	for _, job := range jobs {
-		if !prof.ValidateJob(job.Salary, job.Remote) {
+		if !prof.ValidateJob(job.CompanyName, job.Salary, job.Remote) {
 			continue
 		}
 
@@ -76,5 +77,13 @@ func main() {
 		}
 
 		log.Printf("Successfully generated and saved application for %s", job.CompanyName)
+
+		if prof.AutoSubmit {
+			resumePath := "applications/" + job.CompanyName + "/resume.md"
+			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
+			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath); err != nil {
+				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
+			}
+		}
 	}
 }

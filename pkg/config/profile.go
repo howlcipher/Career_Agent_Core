@@ -3,16 +3,19 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Profile struct {
-	SalaryFloor     int      `yaml:"salary_floor"`
-	RemoteOnly      bool     `yaml:"remote_only"`
-	Role            string   `yaml:"role"`
-	ExperienceYears int      `yaml:"experience_years"`
-	Skills          []string `yaml:"skills"`
+	SalaryFloor      int      `yaml:"salary_floor"`
+	RemoteOnly       bool     `yaml:"remote_only"`
+	Role             string   `yaml:"role"`
+	ExperienceYears  int      `yaml:"experience_years"`
+	Skills           []string `yaml:"skills"`
+	ExcludeCompanies []string `yaml:"exclude_companies"`
+	AutoSubmit       bool     `yaml:"auto_submit"`
 }
 
 func LoadProfile(path string) (*Profile, error) {
@@ -29,12 +32,22 @@ func LoadProfile(path string) (*Profile, error) {
 	return &p, nil
 }
 
-func (p *Profile) ValidateJob(salary int, remote bool) bool {
+func (p *Profile) ValidateJob(companyName string, salary int, remote bool) bool {
 	if salary < p.SalaryFloor {
 		return false
 	}
 	if p.RemoteOnly && !remote {
 		return false
 	}
+	
+	// Security check: Never apply to current/past employers
+	nameLower := strings.ToLower(companyName)
+	for _, excluded := range p.ExcludeCompanies {
+		if strings.Contains(nameLower, strings.ToLower(excluded)) {
+			fmt.Printf("Security Block: Skipping %s (Found in ExcludeCompanies blocklist)\n", companyName)
+			return false
+		}
+	}
+	
 	return true
 }
