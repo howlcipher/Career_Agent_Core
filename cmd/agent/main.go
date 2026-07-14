@@ -214,13 +214,13 @@ func main() {
 			continue
 		}
 
-		if score < 80 {
-			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 80.", job.CompanyName, score)
+		if score < 50 {
+			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", job.CompanyName, score)
 			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
 			time.Sleep(15 * time.Second)
 			continue
 		}
-		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
+		log.Printf("Fit Score Pipeline: %s scored %d! Proceeding with application.", job.CompanyName, score)
 
 		profileConstraints := map[string]interface{}{
 			"salary_floor":        prof.SalaryFloor,
