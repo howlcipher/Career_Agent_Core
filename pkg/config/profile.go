@@ -10,6 +10,7 @@ import (
 
 type Profile struct {
 	SalaryFloor      int      `yaml:"salary_floor"`
+	TargetComp       int      `yaml:"target_compensation"`
 	RemoteOnly       bool     `yaml:"remote_only"`
 	Roles            []string `yaml:"roles"`
 	ExperienceYears  int      `yaml:"experience_years"`

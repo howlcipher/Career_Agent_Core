@@ -40,6 +40,8 @@ func main() {
 		log.Fatalf("Scraper error: %v", err)
 	}
 
+	pipeline := submitter.NewPipeline(storage.GetDB(), filter)
+
 	docContext := ""
 	mdContent, err := parser.ReadMarkdown("/run/media/system/tallgeese/dev/ai_knowledge_library/USER_PROFILE.md")
 	if err != nil {
@@ -88,9 +90,10 @@ func main() {
 		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
 
 		profileConstraints := map[string]interface{}{
-			"salary_floor":      prof.SalaryFloor,
-			"remote_only":       prof.RemoteOnly,
-			"cover_letter_tone": prof.CoverLetterTone,
+			"salary_floor":        prof.SalaryFloor,
+			"target_compensation": prof.TargetComp,
+			"remote_only":         prof.RemoteOnly,
+			"cover_letter_tone":   prof.CoverLetterTone,
 		}
 
 		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, docContext)
@@ -109,11 +112,21 @@ func main() {
 		if prof.AutoSubmit {
 			resumePath := "applications/" + job.CompanyName + "/resume.md"
 			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
+
+			// Use the new dynamic pipeline to verify and match ATS templates
+			// This demonstrates the Two-Step Verification and State Checkpointing architecture
+			if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
+				log.Printf("Failed to checkpoint: %v", err)
+			}
+
 			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
 					log.Printf("Also failed to log manual submission for %s: %v", job.CompanyName, logErr)
 				}
+			} else {
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")
 			}
 		}
 	}

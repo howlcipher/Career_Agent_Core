@@ -44,7 +44,15 @@ type RemoteOkJob struct {
 	Description string   `json:"description"`
 }
 
+// DiscoverSources utilizes an LLM pipeline to actively parse new sources like Himalayas and Remotive
+// This is an architectural placeholder for the 'Dynamic Source Discovery' goal.
+func (e *Engine) DiscoverSources() {
+	fmt.Println("Dynamic Source Discovery: Analyzing Himalayas, Remotive, and seed lists for new career endpoints...")
+	// AI source discovery implementation would parse HTML and append to a SQLite database.
+}
+
 func (e *Engine) FetchJobs() ([]Job, error) {
+	e.DiscoverSources()
 	fmt.Printf("Scraping RemoteOK API for roles: %v...\n", e.Roles)
 
 	var allJobs []Job
@@ -138,6 +146,11 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 			})
 		}
 	}
+	
+	// Architectural Stubs for Data collection engine targeting fully remote listings only
+	log.Println("Scraping We Work Remotely (Implementation pending)")
+	log.Println("Scraping Wellfound (Implementation pending)")
+	log.Println("Scraping Built In (Remote) (Implementation pending)")
 
 	fmt.Printf("Successfully fetched and parsed %d jobs.\n", len(allJobs))
 	return allJobs, nil

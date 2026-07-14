@@ -10,16 +10,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-const SystemPrompt = `You are an elite technical recruiter and stealth writer. Your primary directive is to completely bypass AI detection and sound 100% human. 
-Analyze the job description and tailor the base resume and cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. 
-Use the heading Executive Summary in the resume. Do not hallucinate metrics. 
-Write a three-paragraph cover letter highlighting 9+ years of IT and software experience. 
-STEALTH WRITING RULES:
-- NEVER use typical AI buzzwords (e.g., delve, tapestry, testament, beacon, thrilled, dynamic, seamless, paradigm, leverage, synergy).
-- Use varied sentence lengths. Mix short, punchy sentences with longer, complex ones.
-- Maintain a conversational, direct, and professional tone. Avoid overly corporate jargon.
-- Write in active voice. 
-- Output the resume in Markdown and the cover letter in plain text. Do not use hyphens.`
+const SystemPrompt = "You are an expert technical recruiter. Analyze the job description and tailor the base resume and cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Output the resume in Markdown and the cover letter in plain text. Do not use hyphens."
 
 type Client struct {
 	APIKey string
@@ -95,8 +86,13 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		toneContext = fmt.Sprintf("\n\nCRITICAL DIRECTIVE: You must strictly adhere to this exact tone for the cover letter: %s", tone)
 	}
 
-	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
-		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext)
+	compContext := ""
+	if comp, ok := profileConstraints["target_compensation"].(int); ok && comp > 0 {
+		compContext = fmt.Sprintf("\n\nNOTE: If a desired salary or target compensation is requested, explicitly state it as $%d.", comp)
+	}
+
+	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
+		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
 
 	fmt.Println("Sending application context to Gemini Pro...")
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))

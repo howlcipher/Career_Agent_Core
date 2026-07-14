@@ -27,9 +27,19 @@ func InitDB() error {
 		job_title TEXT,
 		url TEXT UNIQUE,
 		applied_at DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS execution_state (
+		job_id TEXT PRIMARY KEY,
+		url TEXT,
+		status TEXT,
+		last_updated DATETIME
 	);`
 	_, err = db.Exec(createTableQuery)
 	return err
+}
+
+func GetDB() *sql.DB {
+	return db
 }
 
 func HasApplied(url string) bool {
