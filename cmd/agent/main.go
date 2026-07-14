@@ -13,12 +13,21 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or error loading it. Relying on system environment variables.")
 	}
+
+	// Setup rotating logs
+	log.SetOutput(&lumberjack.Logger{
+		Filename:   "career_agent.log",
+		MaxSize:    10, // megabytes
+		MaxBackups: 3,
+		MaxAge:     28, // days
+	})
 
 	log.Println("Initializing Career Agent Core...")
 
@@ -126,11 +135,13 @@ func main() {
 		score, err := client.ScoreJob(scrapedData, tailoredContext)
 		if err != nil {
 			log.Printf("Failed to score job for %s: %v", job.CompanyName, err)
+			storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
 			continue
 		}
 
 		if score < 80 {
 			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 80.", job.CompanyName, score)
+			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
 			continue
 		}
 		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
@@ -168,12 +179,17 @@ func main() {
 			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, masterResumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
+				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
 				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
 					log.Printf("Also failed to log manual submission for %s: %v", job.CompanyName, logErr)
 				}
 			} else {
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")
+				storage.UpdateFunnelStatus(job.URL, "APPLIED")
 			}
+		} else {
+			// If not auto-submitting, we still consider the pipeline processing done
+			storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
 		}
 	}
 }

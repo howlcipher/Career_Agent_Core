@@ -170,15 +170,25 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	return nil
 }
 
-func AddToFunnel(companyName, jobTitle, url, status string) error {
+func AddToFunnel(company, title, url, status string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec("INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(url) DO UPDATE SET status=excluded.status", companyName, jobTitle, url, status, time.Now())
+	_, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at) 
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(url) DO UPDATE SET status=excluded.status`, company, title, url, status)
 	return err
 }
 
-func UpdateFunnelStatus(url, status string, fitScore int) error {
+func UpdateFunnelStatus(url, status string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("UPDATE job_funnel SET status = ? WHERE url = ?", status, url)
+	return err
+}
+
+func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
