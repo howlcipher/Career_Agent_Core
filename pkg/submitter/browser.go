@@ -13,7 +13,7 @@ import (
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pii *config.PII) error {
+func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
 	// Install playwright browsers if they don't exist
@@ -29,7 +29,7 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 	defer pw.Stop()
 
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(false), // Run visibly for debugging/captcha reasons
+		Headless: playwright.Bool(headlessBrowser),
 	})
 	if err != nil {
 		return fmt.Errorf("could not launch browser: %w", err)
@@ -48,17 +48,17 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 
 	urlLower := strings.ToLower(applyURL)
 	if strings.Contains(urlLower, "linkedin.com/jobs") {
-		return handleLinkedIn(page, resumePath, pii)
+		return handleLinkedIn(page, resumePath, pii, autoSubmitClick)
 	} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
-		return handleGreenhouse(page, resumePath, pii)
+		return handleGreenhouse(page, resumePath, pii, autoSubmitClick)
 	} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
-		return handleLever(page, resumePath, pii)
+		return handleLever(page, resumePath, pii, autoSubmitClick)
 	}
 
 	return fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
 }
 
-func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII) error {
+func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected LinkedIn Job. Implementing Easy Apply automation...")
 	
 	// Click Easy Apply button
@@ -77,7 +77,7 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII) er
 	return fmt.Errorf("linkedin easy apply modal interaction not fully implemented")
 }
 
-func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII) error {
+func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
 	// Basic fields
@@ -106,13 +106,14 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII) 
 		}
 	}
 
-	// Submit (commented out to prevent accidental submissions while testing)
-	// page.Locator("input#submit_app").Click()
+	if autoSubmitClick {
+		page.Locator("input#submit_app").Click()
+	}
 	
 	return nil
 }
 
-func handleLever(page playwright.Page, resumePath string, pii *config.PII) error {
+func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
 
 	if pii != nil {
@@ -138,8 +139,9 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII) error
 		}
 	}
 
-	// Submit (commented out to prevent accidental submissions while testing)
-	// page.Locator("button.postings-btn.template-btn-submit").Click()
+	if autoSubmitClick {
+		page.Locator("button.postings-btn.template-btn-submit").Click()
+	}
 
 	return nil
 }

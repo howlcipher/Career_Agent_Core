@@ -1,6 +1,8 @@
 salary_floor: 105000
 remote_only: true
-role: "Senior Backend Engineer"
+roles:
+  - "Senior Backend Engineer"
+  - "DevOps Engineer"
 experience_years: 9
 skills:
   - Python
@@ -12,5 +14,7 @@ exclude_companies:
   - "Ford"
   - "Project Worldwide"
   - "Trendset Communications"
-auto_submit: false
+auto_submit: true
+auto_submit_click: false
+headless_browser: false
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."

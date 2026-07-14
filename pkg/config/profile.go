@@ -11,11 +11,13 @@ import (
 type Profile struct {
 	SalaryFloor      int      `yaml:"salary_floor"`
 	RemoteOnly       bool     `yaml:"remote_only"`
-	Role             string   `yaml:"role"`
+	Roles            []string `yaml:"roles"`
 	ExperienceYears  int      `yaml:"experience_years"`
 	Skills           []string `yaml:"skills"`
 	ExcludeCompanies []string `yaml:"exclude_companies"`
 	AutoSubmit       bool     `yaml:"auto_submit"`
+	AutoSubmitClick  bool     `yaml:"auto_submit_click"`
+	HeadlessBrowser  bool     `yaml:"headless_browser"`
 	CoverLetterTone  string   `yaml:"cover_letter_tone"`
 }
 
