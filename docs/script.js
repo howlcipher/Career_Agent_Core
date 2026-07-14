@@ -1,101 +1,60 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // DOM Elements
-    const hamburgerBtn = document.getElementById('hamburger-btn');
-    const navMenu = document.getElementById('nav-menu');
-    const settingsBtn = document.getElementById('settings-btn');
-    const settingsContent = document.getElementById('settings-content');
-    const themeToggle = document.getElementById('theme-toggle');
-    const colorblindToggle = document.getElementById('colorblind-toggle');
-    const body = document.body;
+    // --- Mobile Navigation Toggle ---
+    const mobileToggle = document.querySelector('.mobile-toggle');
+    const navMenu = document.querySelector('.nav-menu');
 
-    // Mobile Hamburger Menu Toggle
-    hamburgerBtn.addEventListener('click', () => {
-        hamburgerBtn.classList.toggle('active');
-        navMenu.classList.toggle('active');
-    });
-
-    // Close mobile menu when clicking a link
-    document.querySelectorAll('.nav-link').forEach(link => {
-        link.addEventListener('click', () => {
-            hamburgerBtn.classList.remove('active');
-            navMenu.classList.remove('active');
+    if (mobileToggle && navMenu) {
+        mobileToggle.addEventListener('click', () => {
+            mobileToggle.classList.toggle('active');
+            navMenu.classList.toggle('active');
         });
-    });
 
-    // Settings Dropdown Toggle
-    settingsBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        settingsContent.classList.toggle('show');
-    });
-
-    // Close settings dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!settingsBtn.contains(e.target) && !settingsContent.contains(e.target)) {
-            settingsContent.classList.remove('show');
-        }
-    });
-
-    // Preferences State Management
-    let isDarkMode = localStorage.getItem('darkMode') === 'true';
-    let isColorBlindMode = localStorage.getItem('colorBlindMode') === 'true';
-
-    // Apply initial state
-    if (isDarkMode) {
-        body.classList.replace('light-mode', 'dark-mode');
-        themeToggle.textContent = 'Light Mode';
+        // Close mobile menu when a link is clicked
+        const navLinks = document.querySelectorAll('.nav-link, .btn-nav');
+        navLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                mobileToggle.classList.remove('active');
+                navMenu.classList.remove('active');
+            });
+        });
     }
 
-    if (isColorBlindMode) {
-        body.classList.add('color-blind-mode');
-        colorblindToggle.textContent = 'Disable CB Mode';
-    }
+    // --- Scroll Animations (Intersection Observer) ---
+    const fadeElements = document.querySelectorAll('.fade-in-up');
 
-    // Theme Toggle Logic
-    themeToggle.addEventListener('click', () => {
-        if (body.classList.contains('light-mode')) {
-            body.classList.replace('light-mode', 'dark-mode');
-            themeToggle.textContent = 'Light Mode';
-            localStorage.setItem('darkMode', 'true');
-        } else {
-            body.classList.replace('dark-mode', 'light-mode');
-            themeToggle.textContent = 'Dark Mode';
-            localStorage.setItem('darkMode', 'false');
-        }
-    });
+    const observerOptions = {
+        root: null,
+        rootMargin: '0px',
+        threshold: 0.15
+    };
 
-    // Color Blind Mode Logic
-    colorblindToggle.addEventListener('click', () => {
-        body.classList.toggle('color-blind-mode');
-        if (body.classList.contains('color-blind-mode')) {
-            colorblindToggle.textContent = 'Disable CB Mode';
-            localStorage.setItem('colorBlindMode', 'true');
-        } else {
-            colorblindToggle.textContent = 'Color Blind Mode';
-            localStorage.setItem('colorBlindMode', 'false');
-        }
-    });
-
-    // Intersection Observer for scroll animations (fade-in)
-    const fadeElements = document.querySelectorAll('.fade-in');
-    
-    // Elements are already animated on load due to CSS animations, 
-    // but this observer would handle scroll-based reveal if they were lower down the page.
-    const observer = new IntersectionObserver((entries) => {
+    const scrollObserver = new IntersectionObserver((entries, observer) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                entry.target.style.animationPlayState = 'running';
-                observer.unobserve(entry.target);
+                entry.target.classList.add('visible');
+                // Optional: Stop observing once animated
+                // observer.unobserve(entry.target);
             }
         });
-    }, {
-        threshold: 0.1
-    });
+    }, observerOptions);
 
     fadeElements.forEach(el => {
-        // We pause the animation initially if it's below the fold
-        if (el.getBoundingClientRect().top > window.innerHeight) {
-            el.style.animationPlayState = 'paused';
-            observer.observe(el);
-        }
+        scrollObserver.observe(el);
+    });
+
+    // --- Parallax Effect on Ambient Orbs ---
+    const ambientOrbs = document.querySelectorAll('.ambient-orb');
+    
+    window.addEventListener('mousemove', (e) => {
+        const x = e.clientX / window.innerWidth;
+        const y = e.clientY / window.innerHeight;
+
+        ambientOrbs.forEach((orb, index) => {
+            const speed = (index + 1) * 20;
+            const xOffset = (x - 0.5) * speed;
+            const yOffset = (y - 0.5) * speed;
+            
+            orb.style.transform = `translate(${xOffset}px, ${yOffset}px)`;
+        });
     });
 });
