@@ -14,6 +14,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 	"gopkg.in/natefinch/lumberjack.v2"
+	"time"
 )
 
 func main() {
@@ -112,10 +113,24 @@ func main() {
 
 		// RAG Retrieval: Dynamically build tailored context
 		jobDescText := job.Title + "\n" + job.Description
-		jobEmb, err := client.GetEmbedding(jobDescText)
+		
+		var jobEmb []float32
+		var embErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			jobEmb, embErr = client.GetEmbedding(jobDescText)
+			if embErr == nil {
+				break
+			}
+			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") {
+				log.Printf("Network error getting embedding (attempt %d/3). Retrying in 10s...", attempt)
+				time.Sleep(10 * time.Second)
+			} else {
+				break
+			}
+		}
 		
 		var tailoredContext string
-		if err == nil {
+		if embErr == nil {
 			topChunks, _ := parser.RetrieveTopK(jobEmb, 5)
 			var sb strings.Builder
 			sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
@@ -124,7 +139,7 @@ func main() {
 			}
 			tailoredContext = sb.String()
 		} else {
-			log.Printf("[RAG] Embedding failed, falling back to empty context: %v", err)
+			log.Printf("[RAG] Embedding failed after retries, falling back to empty context: %v", embErr)
 		}
 
 		if err := filter.CheckPayload(tailoredContext); err != nil {
@@ -132,9 +147,23 @@ func main() {
 			continue
 		}
 
-		score, err := client.ScoreJob(scrapedData, tailoredContext)
-		if err != nil {
-			log.Printf("Failed to score job for %s: %v", job.CompanyName, err)
+		var score int
+		var scoreErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			score, scoreErr = client.ScoreJob(scrapedData, tailoredContext)
+			if scoreErr == nil {
+				break
+			}
+			if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") {
+				log.Printf("Network error scoring job %s (attempt %d/3). Retrying in 10s... %v", job.CompanyName, attempt, scoreErr)
+				time.Sleep(10 * time.Second)
+			} else {
+				break
+			}
+		}
+
+		if scoreErr != nil {
+			log.Printf("Failed to score job for %s after retries: %v", job.CompanyName, scoreErr)
 			storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
 			continue
 		}
@@ -153,9 +182,23 @@ func main() {
 			"cover_letter_tone":   prof.CoverLetterTone,
 		}
 
-		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
-		if err != nil {
-			log.Printf("Failed to process job for %s: %v", job.CompanyName, err)
+		var resume, coverLetter, interviewPrep string
+		var processErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			resume, coverLetter, interviewPrep, processErr = client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
+			if processErr == nil {
+				break
+			}
+			if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") {
+				log.Printf("Network error processing application %s (attempt %d/3). Retrying in 10s... %v", job.CompanyName, attempt, processErr)
+				time.Sleep(10 * time.Second)
+			} else {
+				break
+			}
+		}
+
+		if processErr != nil {
+			log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
 			continue
 		}
 

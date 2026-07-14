@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/playwright-community/playwright-go"
 )
 
 type FunnelEngine struct {
@@ -28,6 +29,7 @@ func NewFunnelEngine(roles []string) *FunnelEngine {
 }
 
 type SerpApiResponse struct {
+	Error          string `json:"error"`
 	OrganicResults []struct {
 		Title string `json:"title"`
 		Link  string `json:"link"`
@@ -43,10 +45,28 @@ func (f *FunnelEngine) DiscoverJobs() error {
 
 	log.Println("[FunnelEngine] Starting live job discovery via SerpApi...")
 	
+	useFallback := false
+	var pw *playwright.Playwright
+	var browser playwright.Browser
+	defer func() {
+		if browser != nil {
+			browser.Close()
+		}
+		if pw != nil {
+			pw.Stop()
+		}
+	}()
+
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
 			query := fmt.Sprintf(`"Remote" "%s" site:%s`, role, ats)
 			log.Printf("[FunnelEngine] Searching Google for: %s", query)
+
+			if useFallback {
+				f.discoverWithPlaywright(&pw, &browser, query, role)
+				time.Sleep(3 * time.Second)
+				continue
+			}
 
 			reqURL := fmt.Sprintf("https://serpapi.com/search.json?q=%s&api_key=%s&num=10", url.QueryEscape(query), apiKey)
 			
@@ -62,6 +82,14 @@ func (f *FunnelEngine) DiscoverJobs() error {
 			var serpResult SerpApiResponse
 			if err := json.Unmarshal(body, &serpResult); err != nil {
 				log.Printf("[FunnelEngine] Failed to parse API response: %v", err)
+				continue
+			}
+
+			if serpResult.Error != "" {
+				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Playwright fallback...", serpResult.Error)
+				useFallback = true
+				f.discoverWithPlaywright(&pw, &browser, query, role)
+				time.Sleep(3 * time.Second)
 				continue
 			}
 
@@ -102,4 +130,57 @@ func extractCompanyFromTitle(title string) string {
 		return strings.TrimSpace(parts[0])
 	}
 	return "Unknown Company"
+}
+
+func (f *FunnelEngine) discoverWithPlaywright(pw **playwright.Playwright, browser *playwright.Browser, query, role string) {
+	log.Printf("[FunnelEngine] Fallback searching DuckDuckGo for: %s", query)
+	
+	if *pw == nil {
+		playwright.Install()
+		p, err := playwright.Run()
+		if err != nil {
+			log.Printf("[FunnelEngine] could not start playwright: %v", err)
+			return
+		}
+		*pw = p
+	}
+
+	if *browser == nil {
+		b, err := (*pw).Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+			Headless: playwright.Bool(true),
+		})
+		if err != nil {
+			log.Printf("[FunnelEngine] could not launch browser: %v", err)
+			return
+		}
+		*browser = b
+	}
+
+	page, err := (*browser).NewPage()
+	if err != nil {
+		return
+	}
+	defer page.Close()
+
+	searchURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", url.QueryEscape(query))
+	if _, err = page.Goto(searchURL); err != nil {
+		log.Printf("[FunnelEngine] failed to navigate: %v", err)
+		return
+	}
+
+	// Wait for DDG modern results
+	page.WaitForSelector("[data-testid=\"result-title-a\"]", playwright.PageWaitForSelectorOptions{
+		Timeout: playwright.Float(5000),
+	})
+
+	locators, _ := page.Locator("[data-testid=\"result-title-a\"]").All()
+	for _, loc := range locators {
+		href, _ := loc.GetAttribute("href")
+		titleText, _ := loc.InnerText()
+		if href != "" {
+			company := extractCompanyFromTitle(titleText)
+			log.Printf("[FunnelEngine] Fallback Discovered Live Job: %s at %s", titleText, href)
+			storage.AddToFunnel(company, role, href, "DISCOVERED")
+		}
+	}
 }

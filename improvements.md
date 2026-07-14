@@ -7,6 +7,7 @@ This file tracks potential enhancements, architectural improvements, and new fea
 - **Multi-Step Form Logic:** Enhance the JSON mapping to handle "Next" buttons and multi-page application flows (like Workday).
 - **Graceful DB Degradation:** If Playwright fails on a cached CSS selector, mark the DB entry as stale/failed so it forces a re-learn on the next attempt instead of infinitely failing.
 - **Stealth & Proxies:** Implement `playwright-stealth` or Cloudflare-bypass logic (for Wellfound, Built In, etc.) to prevent headless browsers from being blocked.
+- **Playwright Scraper Fallback:** Implement a headless Playwright scraper to bypass SerpApi limits and scrape DuckDuckGo/Google manually if quota maxes out.
 
 ## Completed Improvements
 - **V2 Architecture Blueprint** implemented.
