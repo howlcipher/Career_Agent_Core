@@ -34,7 +34,7 @@ func (c *Client) ScoreJob(scrapedData map[string]string, parsedDocument string) 
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.5-pro")
+	model := client.GenerativeModel("gemini-2.5-flash")
 
 	prompt := fmt.Sprintf("Analyze the following job description and my background. Return ONLY a single integer from 0 to 100 representing how good of a fit I am for this role. Do not include any other text.\n\nJob Title: %s\n\nJob Description: %s\n\nMy Background:\n%s",
 		scrapedData["title"], scrapedData["desc"], parsedDocument)
@@ -75,7 +75,7 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.5-pro")
+	model := client.GenerativeModel("gemini-2.5-flash")
 
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{genai.Text(SystemPrompt)},
@@ -146,7 +146,7 @@ func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.5-pro")
+	model := client.GenerativeModel("gemini-2.5-flash")
 	
 	// Force JSON output
 	model.ResponseMIMEType = "application/json"
@@ -209,7 +209,7 @@ func (c *Client) ExtractFormMappingVision(screenshotBytes []byte) (string, error
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.5-pro")
+	model := client.GenerativeModel("gemini-2.5-flash")
 	
 	// Force JSON output
 	model.ResponseMIMEType = "application/json"
@@ -283,4 +283,26 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	}
 
 	return res.Embedding.Values, nil
+}
+
+// ExtractRejectionReason reads an HR rejection email and explicitly figures out why the candidate was rejected.
+func (c *Client) ExtractRejectionReason(emailText string) string {
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return "Failed to parse API key"
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel("gemini-2.5-flash")
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{genai.Text("You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection').")},
+	}
+
+	res, err := model.GenerateContent(ctx, genai.Text(emailText))
+	if err != nil || len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
+		return "Generic templated rejection (no specific reason provided)"
+	}
+
+	return fmt.Sprintf("%v", res.Candidates[0].Content.Parts[0])
 }

@@ -9,7 +9,10 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message/mail"
+	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"os"
+	"path/filepath"
 )
 
 // IMAPConfig holds credentials for the tracker
@@ -87,16 +90,19 @@ func StartTracker(cfg IMAPConfig) error {
 		}
 
 		if status != "" {
-			// Extract domain to match with company (naive approach)
 			parts := strings.Split(senderEmail, "@")
 			if len(parts) == 2 {
 				domain := parts[1]
 				companyGuess := strings.Split(domain, ".")[0]
 				
-				// Update DB
 				log.Printf("[Tracker] Detected %s from %s (%s). Updating database.", status, companyGuess, subject)
-				// Here we would run an UPDATE query in storage where company_name LIKE %companyGuess%
 				updateDBWithTrackerResult(companyGuess, status)
+
+				if status == "REJECTED" {
+					geminiClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
+					reason := geminiClient.ExtractRejectionReason(bodyText)
+					logRejectionFeedback(companyGuess, subject, reason)
+				}
 			}
 		}
 	}
@@ -113,9 +119,25 @@ func updateDBWithTrackerResult(companyQuery, status string) {
 	if db == nil {
 		return
 	}
-	// We update the status where the company name matches the domain roughly
 	query := "UPDATE job_funnel SET status = ? WHERE company_name LIKE ? AND status = 'APPLIED'"
 	db.Exec(query, status, "%"+companyQuery+"%")
+}
+
+func logRejectionFeedback(company, subject, reason string) {
+	reportPath := filepath.Join("applications", "rejection_feedback.md")
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		os.MkdirAll("applications", 0755)
+		header := "# 📉 Rejection Analytics\n\nThis file tracks the exact reasons why companies are rejecting your applications so you can improve your resume.\n\n"
+		os.WriteFile(reportPath, []byte(header), 0644)
+	}
+
+	entry := fmt.Sprintf("### 🏢 %s\n- **Email Subject:** %s\n- **HR Feedback:** %s\n\n", company, subject, reason)
+	
+	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err == nil {
+		f.WriteString(entry)
+		f.Close()
+	}
 }
 
 func extractBody(msg *imap.Message, section *imap.BodySectionName) string {
