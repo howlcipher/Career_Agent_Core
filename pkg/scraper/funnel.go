@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/mxschmitt/playwright-go"
 )
 
 type FunnelEngine struct {
@@ -51,16 +51,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 	log.Println("[FunnelEngine] Starting live job discovery via SerpApi...")
 	
 	useFallback := false
-	var pw *playwright.Playwright
-	var browser playwright.Browser
-	defer func() {
-		if browser != nil {
-			browser.Close()
-		}
-		if pw != nil {
-			pw.Stop()
-		}
-	}()
+
 
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
@@ -68,7 +59,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 			log.Printf("[FunnelEngine] Searching Google for: %s", query)
 
 			if useFallback {
-				f.discoverWithPlaywright(&pw, &browser, query, role, jobChan)
+				f.discoverWithYahooHTML(query, role, jobChan)
 				time.Sleep(3 * time.Second)
 				continue
 			}
@@ -91,9 +82,9 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 			}
 
 			if serpResult.Error != "" {
-				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Playwright fallback...", serpResult.Error)
+				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Yahoo Fallback...", serpResult.Error)
 				useFallback = true
-				f.discoverWithPlaywright(&pw, &browser, query, role, jobChan)
+				f.discoverWithYahooHTML(query, role, jobChan)
 				time.Sleep(3 * time.Second)
 				continue
 			}
@@ -143,60 +134,48 @@ func extractCompanyFromTitle(title string) string {
 	return "Unknown Company"
 }
 
-func (f *FunnelEngine) discoverWithPlaywright(pw **playwright.Playwright, browser *playwright.Browser, query, role string, jobChan chan<- Job) {
-	log.Printf("[FunnelEngine] Fallback searching DuckDuckGo for: %s", query)
+func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- Job) {
+	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 	
-	if *pw == nil {
-		playwright.Install()
-		p, err := playwright.Run()
-		if err != nil {
-			log.Printf("[FunnelEngine] could not start playwright: %v", err)
-			return
-		}
-		*pw = p
-	}
-
-	if *browser == nil {
-		b, err := (*pw).Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-			Headless: playwright.Bool(true),
-		})
-		if err != nil {
-			log.Printf("[FunnelEngine] could not launch browser: %v", err)
-			return
-		}
-		*browser = b
-	}
-
-	page, err := (*browser).NewPage()
+	client := &http.Client{Timeout: 10 * time.Second}
+	searchURL := fmt.Sprintf("https://search.yahoo.com/search?p=%s", url.QueryEscape(query))
+	req, _ := http.NewRequest("GET", searchURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	
+	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[FunnelEngine] Yahoo fallback failed: %v", err)
 		return
 	}
-	defer page.Close()
-
-	searchURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", url.QueryEscape(query))
-	if _, err = page.Goto(searchURL); err != nil {
-		log.Printf("[FunnelEngine] failed to navigate: %v", err)
-		return
-	}
-
-	// Wait for DDG modern results
-	page.WaitForSelector("[data-testid=\"result-title-a\"]", playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(5000),
-	})
-
-	locators, _ := page.Locator("[data-testid=\"result-title-a\"]").All()
-	for _, loc := range locators {
-		href, _ := loc.GetAttribute("href")
-		titleText, _ := loc.InnerText()
-		if href != "" {
-			company := extractCompanyFromTitle(titleText)
-			log.Printf("[FunnelEngine] Fallback Discovered Live Job: %s at %s", titleText, href)
-			err := storage.AddToFunnel(company, role, href, "DISCOVERED")
+	defer resp.Body.Close()
+	
+	b, _ := io.ReadAll(resp.Body)
+	html := string(b)
+	
+	// Extract RU parameter from r.search.yahoo.com links
+	re := regexp.MustCompile(`RU=(https?%3a%2f%2f[^/]+%2f[^/]+(?:%2f[^/"&<]*)?)/RK=`)
+	matches := re.FindAllStringSubmatch(html, -1)
+	
+	found := make(map[string]bool)
+	for _, m := range matches {
+		decoded, _ := url.QueryUnescape(m[1])
+		if !found[decoded] && (strings.Contains(decoded, "greenhouse.io") || strings.Contains(decoded, "lever.co") || strings.Contains(decoded, "workday.com") || strings.Contains(decoded, "ashbyhq.com") || strings.Contains(decoded, "breezy.hr")) {
+			found[decoded] = true
+			
+			company := "Unknown Company"
+			// Try to extract company from the URL path as a simple fallback
+			parts := strings.Split(decoded, "/")
+			if len(parts) > 3 {
+				company = parts[3]
+			}
+			
+			log.Printf("[FunnelEngine] Yahoo Fallback Discovered Live Job at %s", decoded)
+			err := storage.AddToFunnel(company, role, decoded, "DISCOVERED")
 			if err == nil && jobChan != nil {
 				jobChan <- Job{
 					CompanyName: company,
-					Title:       titleText,
-					URL:         href,
+					Title:       role,
+					URL:         decoded,
 				}
 			}
 		}
