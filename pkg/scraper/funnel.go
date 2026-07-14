@@ -36,8 +36,13 @@ type SerpApiResponse struct {
 	} `json:"organic_results"`
 }
 
-// DiscoverJobs queries Google using SerpApi to find live job pages
-func (f *FunnelEngine) DiscoverJobs() error {
+// DiscoverJobs queries Google using SerpApi to find live job pages and sends them directly to a consumer channel.
+func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
+	defer func() {
+		if jobChan != nil {
+			close(jobChan)
+		}
+	}()
 	apiKey := os.Getenv("SERPAPI_API_KEY")
 	if apiKey == "" {
 		return fmt.Errorf("SERPAPI_API_KEY environment variable is missing. Job discovery requires this API key.")
@@ -63,7 +68,7 @@ func (f *FunnelEngine) DiscoverJobs() error {
 			log.Printf("[FunnelEngine] Searching Google for: %s", query)
 
 			if useFallback {
-				f.discoverWithPlaywright(&pw, &browser, query, role)
+				f.discoverWithPlaywright(&pw, &browser, query, role, jobChan)
 				time.Sleep(3 * time.Second)
 				continue
 			}
@@ -88,7 +93,7 @@ func (f *FunnelEngine) DiscoverJobs() error {
 			if serpResult.Error != "" {
 				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Playwright fallback...", serpResult.Error)
 				useFallback = true
-				f.discoverWithPlaywright(&pw, &browser, query, role)
+				f.discoverWithPlaywright(&pw, &browser, query, role, jobChan)
 				time.Sleep(3 * time.Second)
 				continue
 			}
@@ -105,6 +110,12 @@ func (f *FunnelEngine) DiscoverJobs() error {
 				err := storage.AddToFunnel(company, role, result.Link, "DISCOVERED")
 				if err != nil {
 					log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
+				} else if jobChan != nil {
+					jobChan <- Job{
+						CompanyName: company,
+						Title:       role,
+						URL:         result.Link,
+					}
 				}
 			}
 			
@@ -132,7 +143,7 @@ func extractCompanyFromTitle(title string) string {
 	return "Unknown Company"
 }
 
-func (f *FunnelEngine) discoverWithPlaywright(pw **playwright.Playwright, browser *playwright.Browser, query, role string) {
+func (f *FunnelEngine) discoverWithPlaywright(pw **playwright.Playwright, browser *playwright.Browser, query, role string, jobChan chan<- Job) {
 	log.Printf("[FunnelEngine] Fallback searching DuckDuckGo for: %s", query)
 	
 	if *pw == nil {
@@ -180,7 +191,14 @@ func (f *FunnelEngine) discoverWithPlaywright(pw **playwright.Playwright, browse
 		if href != "" {
 			company := extractCompanyFromTitle(titleText)
 			log.Printf("[FunnelEngine] Fallback Discovered Live Job: %s at %s", titleText, href)
-			storage.AddToFunnel(company, role, href, "DISCOVERED")
+			err := storage.AddToFunnel(company, role, href, "DISCOVERED")
+			if err == nil && jobChan != nil {
+				jobChan <- Job{
+					CompanyName: company,
+					Title:       titleText,
+					URL:         href,
+				}
+			}
 		}
 	}
 }

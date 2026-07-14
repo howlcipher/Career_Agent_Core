@@ -16,6 +16,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 	"github.com/joho/godotenv"
 	"gopkg.in/natefinch/lumberjack.v2"
+	"sync"
 )
 
 func main() {
@@ -56,29 +57,28 @@ func main() {
 	}
 
 	filter := security.NewQuarantineLayer()
-	
-	funnelEngine := scraper.NewFunnelEngine(prof.Roles)
-	if err := funnelEngine.DiscoverJobs(); err != nil {
-		log.Printf("Funnel discovery error: %v", err)
-	}
+	jobChan := make(chan scraper.Job, 2000)
 
 	discoveredJobs, err := storage.GetDiscoveredJobs()
-	if err != nil {
-		log.Fatalf("Failed to fetch discovered jobs: %v", err)
+	if err == nil {
+		for _, dj := range discoveredJobs {
+			jobChan <- scraper.Job{
+				CompanyName: dj.CompanyName,
+				Title:       dj.JobTitle,
+				URL:         dj.URL,
+				Salary:      prof.TargetComp, 
+				Remote:      true,            
+			}
+		}
+		log.Printf("Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
 	}
 
-	var jobs []scraper.Job
-	for _, dj := range discoveredJobs {
-		jobs = append(jobs, scraper.Job{
-			CompanyName: dj.CompanyName,
-			Title:       dj.JobTitle,
-			URL:         dj.URL,
-			Salary:      prof.TargetComp, 
-			Remote:      true,            
-		})
-	}
-
-
+	funnelEngine := scraper.NewFunnelEngine(prof.Roles)
+	go func() {
+		if err := funnelEngine.DiscoverJobs(jobChan); err != nil {
+			log.Printf("Funnel discovery error: %v", err)
+		}
+	}()
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 	pipeline := submitter.NewPipeline(storage.GetDB(), filter, client)
@@ -103,7 +103,14 @@ func main() {
 		log.Printf("[RAG] Found %d career chunks in local SQLite Vector DB.", len(existingChunks))
 	}
 
-	for _, job := range jobs {
+	var wg sync.WaitGroup
+	numWorkers := 3 // 3 parallel Gemini threads
+	
+	for w := 1; w <= numWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobChan {
 		if !prof.ValidateJob(job.CompanyName, job.Salary, job.Remote) {
 			continue
 		}
@@ -241,8 +248,11 @@ func main() {
 			// If not auto-submitting, we still consider the pipeline processing done
 			storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
 		}
+			} // close for job := range jobChan
+		}(w)
 	}
-
+	
+	wg.Wait()
 	log.Println("Batch execution complete!")
 
 	if *daemonMode {
