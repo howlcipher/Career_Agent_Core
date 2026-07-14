@@ -1,23 +1,27 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
-	"github.com/joho/godotenv"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
+	"github.com/joho/godotenv"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"time"
 )
 
 func main() {
+	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
+	flag.Parse()
+
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or error loading it. Relying on system environment variables.")
 	}
@@ -31,6 +35,9 @@ func main() {
 	})
 
 	log.Println("Initializing Career Agent Core...")
+	if *daemonMode {
+		log.Println("[DAEMON MODE] Agent will drip applications every 6 hours to evade ATS IP bans.")
+	}
 
 	if err := storage.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
@@ -234,5 +241,13 @@ func main() {
 			// If not auto-submitting, we still consider the pipeline processing done
 			storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
 		}
+	}
+
+	log.Println("Batch execution complete!")
+
+	if *daemonMode {
+		log.Println("[DAEMON MODE] Sleeping for 6 hours before next drip campaign...")
+		time.Sleep(6 * time.Hour)
+		main() // recursive loop for daemon
 	}
 }

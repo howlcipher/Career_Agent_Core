@@ -195,6 +195,70 @@ Return a JSON object in this exact format:
 	return strings.TrimSpace(jsonOutput), nil
 }
 
+// ExtractFormMappingVision uses Gemini 1.5 Pro to visually analyze a screenshot of an ATS form
+// and generate a JSON mapping for Playwright, bypassing HTML DOM obfuscation entirely.
+func (c *Client) ExtractFormMappingVision(screenshotBytes []byte) (string, error) {
+	if c.APIKey == "" {
+		return "", fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return "", fmt.Errorf("failed to create gemini client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel("gemini-1.5-pro-latest")
+	
+	// Force JSON output
+	model.ResponseMIMEType = "application/json"
+
+	systemDirective := `You are an expert autonomous web automation agent. You will be provided with a screenshot of a job application form.
+Your task is to identify the precise CSS selectors or coordinates needed by Playwright to fill out this form.
+Map the following logical fields to their corresponding CSS selectors (if visible in standard structural layout) or describe the input placeholder text:
+- first_name
+- last_name
+- email
+- phone
+- resume
+- cover_letter
+- submit_button
+
+Return a JSON object in this exact format:
+{
+  "fields": {
+    "first_name": "selector",
+    "last_name": "selector",
+    ...
+  }
+}`
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{genai.Text(systemDirective)},
+	}
+
+	prompt := genai.Text("Analyze this screenshot and extract the input selectors based on visual placement and placeholders:")
+	imgData := genai.ImageData("png", screenshotBytes)
+
+	resp, err := model.GenerateContent(ctx, prompt, imgData)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate form mapping from vision: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response from gemini vision")
+	}
+
+	var jsonOutput string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if text, ok := part.(genai.Text); ok {
+			jsonOutput += string(text)
+		}
+	}
+
+	return strings.TrimSpace(jsonOutput), nil
+}
+
 // GetEmbedding uses Gemini text-embedding-004 to create a vector for semantic search
 func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	if c.APIKey == "" {

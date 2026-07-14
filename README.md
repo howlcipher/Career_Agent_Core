@@ -13,7 +13,11 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Security Quarantine**: Implements a prompt injection quarantine layer via `promptsec` to prevent hostile job postings from manipulating the AI.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
 - **Auto-Submit Framework**: Architecture in place to integrate Playwright for headless browser submission (currently targets LinkedIn Easy Apply).
-- **Manual Backlog**: Jobs that fail auto-submission are gracefully logged to an actionable markdown checklist.
+- **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests, updating your funnels automatically.
+- **Live Metrics Dashboard**: Ships with a beautifully formatted zero-dependency Terminal UI (TUI) to track your live conversion rates.
+- **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
+- **Playwright Fallback Scraper**: Bypasses SerpApi limits by deploying an undetectable headless DuckDuckGo scraper with `navigator.webdriver` evasion when API credits run out.
+- **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
 
 ## Getting Started (How to Use)
 
@@ -36,20 +40,37 @@ Open `profile.yaml` to customize your search parameters:
 ### 3. Ensure Your Context Exists
 The AI relies on a base resume or profile to tailor against job descriptions. Ensure you have your base markdown profile (e.g., `USER_PROFILE.md`) accessible to the system or a fallback `__William_Elias_Resume__.pdf` in the root directory.
 
-### 4. Authenticate Gemini
-The agent uses Gemini Pro for generation. You must export your API key before running:
+### 4. Authenticate APIs & Mail
+The agent requires Gemini and IMAP credentials. Edit your `.env` file (never commit this to Git):
 ```bash
-export GEMINI_API_KEY="your_api_key_here"
+GEMINI_API_KEY="your_api_key_here"
+SERPAPI_API_KEY="your_serpapi_key"
+IMAP_SERVER="imap.gmail.com:993"
+IMAP_USER="your_email@gmail.com"
+IMAP_APP_PASSWORD="your_16_digit_app_password"
 ```
 
-### 5. Run the Agent
-Fire up the CLI:
+### 5. Launch the Suite
+The Core Agent can be run in batch or daemon mode:
 ```bash
+# Run one massive batch and exit
 go run cmd/agent/main.go
-```
-*Note: On its very first run, Playwright will automatically download the necessary Chromium browser binaries (this might take a moment).*
 
-The agent will populate the `applications/` folder with a customized Markdown resume, plain text cover letter, a tailored interview cheat sheet, and a `metadata.json` for every matching job.
+# Run continuously as a background service (drip mode)
+go run cmd/agent/main.go --daemon
+```
+
+*Note: On its very first run, Playwright will automatically download the necessary Chromium browser binaries.*
+
+While the agent runs, open a new terminal window to view your live stats:
+```bash
+go run cmd/dashboard/main.go
+```
+
+To enable auto-tracking of employer rejections and interview requests, launch the Email Tracker in the background:
+```bash
+go run cmd/tracker/main.go
+```
 
 ## Managing Submissions
 If `auto_submit: true` is enabled in your config but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to dynamic Playwright generation or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.
