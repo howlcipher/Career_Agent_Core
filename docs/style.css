@@ -1,14 +1,14 @@
 /* Zen Design System Variables */
 :root {
-    /* Light Mode */
-    --bg-primary: #f8fafc;
+    /* Light Mode - Ultra Zen */
+    --bg-primary: #fcfcfc;
     --bg-secondary: #ffffff;
-    --text-primary: #1e293b;
-    --text-secondary: #475569;
-    --accent: #0f172a;
-    --accent-hover: #334155;
-    --border: #e2e8f0;
-    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+    --text-primary: #2d3748;
+    --text-secondary: #718096;
+    --accent: #2c3e50;
+    --accent-hover: #1a202c;
+    --border: #edf2f7;
+    --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.02), 0 4px 6px -2px rgba(0, 0, 0, 0.01);
     
     /* Semantic Colors (Color Blind Friendly Baseline) */
     --success: #3b82f6; /* Blue instead of green for better visibility */
@@ -19,14 +19,15 @@
 }
 
 body.dark-mode {
-    --bg-primary: #0f172a;
-    --bg-secondary: #1e293b;
-    --text-primary: #f8fafc;
-    --text-secondary: #cbd5e1;
-    --accent: #f8fafc;
-    --accent-hover: #cbd5e1;
-    --border: #334155;
-    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+    /* Dark Mode - Ultra Zen */
+    --bg-primary: #121212;
+    --bg-secondary: #1a1a1a;
+    --text-primary: #e2e8f0;
+    --text-secondary: #a0aec0;
+    --accent: #cbd5e1;
+    --accent-hover: #ffffff;
+    --border: #2d3748;
+    --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
     --success: #60a5fa;
     --warning: #fbbf24;
 }
@@ -66,8 +67,9 @@ body {
     font-family: 'Inter', -apple-system, sans-serif;
     background-color: var(--bg-primary);
     color: var(--text-primary);
-    line-height: 1.6;
-    transition: background-color 0.4s ease, color 0.4s ease;
+    line-height: 1.8;
+    letter-spacing: 0.01em;
+    transition: background-color 0.6s ease, color 0.6s ease;
     overflow-x: hidden;
 }
 
@@ -252,20 +254,22 @@ body.dark-mode .btn-primary {
 
 /* Hero Section */
 .hero {
-    padding: 6rem 0;
+    padding: 8rem 0 6rem 0;
     text-align: center;
 }
 
 .hero h1 {
-    font-size: clamp(2.5rem, 5vw, 4rem);
-    letter-spacing: -0.03em;
+    font-size: clamp(3rem, 6vw, 4.5rem);
+    letter-spacing: -0.04em;
+    font-weight: 300;
 }
 
 .hero .subtitle {
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     color: var(--text-secondary);
-    max-width: 600px;
-    margin: 0 auto 2.5rem auto;
+    max-width: 650px;
+    margin: 0 auto 3rem auto;
+    font-weight: 300;
 }
 
 .hero-actions {
