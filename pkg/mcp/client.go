@@ -34,7 +34,7 @@ func (c *Client) ScoreJob(scrapedData map[string]string, parsedDocument string) 
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.0-flash-lite")
+	model := client.GenerativeModel("gemini-flash-latest")
 
 	prompt := fmt.Sprintf("Analyze the following job description and my background. Return ONLY a single integer from 0 to 100 representing how good of a fit I am for this role. Do not include any other text.\n\nJob Title: %s\n\nJob Description: %s\n\nMy Background:\n%s",
 		scrapedData["title"], scrapedData["desc"], parsedDocument)
@@ -75,7 +75,7 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.0-flash-lite")
+	model := client.GenerativeModel("gemini-flash-latest")
 
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{genai.Text(SystemPrompt)},
@@ -146,7 +146,7 @@ func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.0-flash-lite")
+	model := client.GenerativeModel("gemini-flash-latest")
 	
 	// Force JSON output
 	model.ResponseMIMEType = "application/json"
@@ -209,7 +209,7 @@ func (c *Client) ExtractFormMappingVision(screenshotBytes []byte) (string, error
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.0-flash-lite")
+	model := client.GenerativeModel("gemini-flash-latest")
 	
 	// Force JSON output
 	model.ResponseMIMEType = "application/json"
