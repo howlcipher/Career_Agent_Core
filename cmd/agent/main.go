@@ -104,7 +104,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	numWorkers := 3 // 3 parallel Gemini threads
+	numWorkers := 1 // Reduced to 1 to respect strict Free Tier 5 RPM limits
 	
 	for w := 1; w <= numWorkers; w++ {
 		wg.Add(1)
@@ -135,9 +135,9 @@ func main() {
 			if embErr == nil {
 				break
 			}
-			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") {
-				log.Printf("Network error getting embedding (attempt %d/3). Retrying in 10s...", attempt)
-				time.Sleep(10 * time.Second)
+			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") {
+				log.Printf("Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", attempt)
+				time.Sleep(60 * time.Second)
 			} else {
 				break
 			}
@@ -168,9 +168,9 @@ func main() {
 			if scoreErr == nil {
 				break
 			}
-			if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") {
-				log.Printf("Network error scoring job %s (attempt %d/3). Retrying in 10s... %v", job.CompanyName, attempt, scoreErr)
-				time.Sleep(10 * time.Second)
+			if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "429") {
+				log.Printf("Network or Rate Limit error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+				time.Sleep(60 * time.Second)
 			} else {
 				break
 			}
@@ -179,12 +179,14 @@ func main() {
 		if scoreErr != nil {
 			log.Printf("Failed to score job for %s after retries: %v", job.CompanyName, scoreErr)
 			storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
+			time.Sleep(15 * time.Second)
 			continue
 		}
 
 		if score < 80 {
 			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 80.", job.CompanyName, score)
 			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
+			time.Sleep(15 * time.Second)
 			continue
 		}
 		log.Printf("Fit Score Pipeline: %s scored an excellent %d! Proceeding with application.", job.CompanyName, score)
@@ -203,9 +205,9 @@ func main() {
 			if processErr == nil {
 				break
 			}
-			if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") {
-				log.Printf("Network error processing application %s (attempt %d/3). Retrying in 10s... %v", job.CompanyName, attempt, processErr)
-				time.Sleep(10 * time.Second)
+			if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "429") {
+				log.Printf("Network or Rate Limit error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+				time.Sleep(60 * time.Second)
 			} else {
 				break
 			}
@@ -213,11 +215,13 @@ func main() {
 
 		if processErr != nil {
 			log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
+			time.Sleep(15 * time.Second)
 			continue
 		}
 
 		if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
 			log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
+			time.Sleep(15 * time.Second)
 			continue
 		}
 
@@ -248,6 +252,9 @@ func main() {
 			// If not auto-submitting, we still consider the pipeline processing done
 			storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
 		}
+
+		// Sleep for 15 seconds to ensure we never hit the 5 RPM rate limit
+		time.Sleep(15 * time.Second)
 			} // close for job := range jobChan
 		}(w)
 	}
