@@ -3,8 +3,10 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/joho/godotenv"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
@@ -14,6 +16,10 @@ import (
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found or error loading it. Relying on system environment variables.")
+	}
+
 	log.Println("Initializing Career Agent Core...")
 
 	if err := storage.InitDB(); err != nil {
@@ -34,33 +40,51 @@ func main() {
 
 	filter := security.NewQuarantineLayer()
 	
-	scrapeEngine := scraper.NewEngine(prof.SalaryFloor, prof.Roles)
-	jobs, err := scrapeEngine.FetchJobs()
+	funnelEngine := scraper.NewFunnelEngine(prof.Roles)
+	if err := funnelEngine.DiscoverJobs(); err != nil {
+		log.Printf("Funnel discovery error: %v", err)
+	}
+
+	discoveredJobs, err := storage.GetDiscoveredJobs()
 	if err != nil {
-		log.Fatalf("Scraper error: %v", err)
+		log.Fatalf("Failed to fetch discovered jobs: %v", err)
 	}
 
-	pipeline := submitter.NewPipeline(storage.GetDB(), filter)
-
-	docContext := ""
-	mdContent, err := parser.ReadMarkdown("/run/media/system/tallgeese/dev/ai_knowledge_library/USER_PROFILE.md")
-	if err != nil {
-		log.Println("USER_PROFILE.md not found in knowledge library, trying fallback PDF...")
-		pdfContent, pdfErr := parser.ExtractFromFallbackPDF("__William_Elias_Resume__.pdf")
-		if pdfErr != nil {
-			log.Println("PDF fallback also failed. Proceeding without local document context.")
-		} else {
-			docContext = pdfContent
-		}
-	} else {
-		docContext = mdContent
+	var jobs []scraper.Job
+	for _, dj := range discoveredJobs {
+		jobs = append(jobs, scraper.Job{
+			CompanyName: dj.CompanyName,
+			Title:       dj.JobTitle,
+			URL:         dj.URL,
+			Salary:      prof.TargetComp, 
+			Remote:      true,            
+		})
 	}
 
-	if err := filter.CheckPayload(docContext); err != nil {
-		log.Fatalf("Security quarantine triggered: %v", err)
-	}
+
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
+	pipeline := submitter.NewPipeline(storage.GetDB(), filter, client)
+
+	// Local Embedded RAG Ingestion
+	existingChunks, _ := storage.GetAllCareerChunks()
+	if len(existingChunks) == 0 {
+		log.Println("[RAG] Knowledge Library cache empty. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
+		mdContent, err := parser.ReadMarkdown("/run/media/system/tallgeese/dev/ai_knowledge_library/USER_PROFILE.md")
+		if err == nil {
+			chunks := parser.ChunkMarkdown(mdContent)
+			for _, text := range chunks {
+				if strings.TrimSpace(text) == "" { continue }
+				emb, err := client.GetEmbedding(text)
+				if err == nil {
+					storage.SaveCareerChunk(text, emb)
+				}
+			}
+			log.Printf("[RAG] Successfully embedded and cached %d career chunks.", len(chunks))
+		}
+	} else {
+		log.Printf("[RAG] Found %d career chunks in local SQLite Vector DB.", len(existingChunks))
+	}
 
 	for _, job := range jobs {
 		if !prof.ValidateJob(job.CompanyName, job.Salary, job.Remote) {
@@ -77,7 +101,29 @@ func main() {
 			"desc":  job.Description,
 		}
 
-		score, err := client.ScoreJob(scrapedData, docContext)
+		// RAG Retrieval: Dynamically build tailored context
+		jobDescText := job.Title + "\n" + job.Description
+		jobEmb, err := client.GetEmbedding(jobDescText)
+		
+		var tailoredContext string
+		if err == nil {
+			topChunks, _ := parser.RetrieveTopK(jobEmb, 5)
+			var sb strings.Builder
+			sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
+			for _, tc := range topChunks {
+				sb.WriteString(tc.Text + "\n\n")
+			}
+			tailoredContext = sb.String()
+		} else {
+			log.Printf("[RAG] Embedding failed, falling back to empty context: %v", err)
+		}
+
+		if err := filter.CheckPayload(tailoredContext); err != nil {
+			log.Printf("Security quarantine triggered on RAG output: %v", err)
+			continue
+		}
+
+		score, err := client.ScoreJob(scrapedData, tailoredContext)
 		if err != nil {
 			log.Printf("Failed to score job for %s: %v", job.CompanyName, err)
 			continue
@@ -96,7 +142,7 @@ func main() {
 			"cover_letter_tone":   prof.CoverLetterTone,
 		}
 
-		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, docContext)
+		resume, coverLetter, interviewPrep, err := client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
 		if err != nil {
 			log.Printf("Failed to process job for %s: %v", job.CompanyName, err)
 			continue

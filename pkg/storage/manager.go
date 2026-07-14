@@ -33,6 +33,41 @@ func InitDB() error {
 		url TEXT,
 		status TEXT,
 		last_updated DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS career_sites (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT UNIQUE,
+		ats_provider TEXT,
+		last_scanned DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS form_mappings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT UNIQUE,
+		mapping_json TEXT,
+		created_at DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS execution_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		job_id TEXT,
+		url TEXT,
+		tokens_used INTEGER,
+		status TEXT,
+		logged_at DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS career_chunks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		chunk_text TEXT,
+		embedding_json TEXT
 	);`
 	_, err = db.Exec(createTableQuery)
 	return err
@@ -133,4 +168,133 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	}
 	
 	return nil
+}
+
+func AddToFunnel(companyName, jobTitle, url, status string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(url) DO UPDATE SET status=excluded.status", companyName, jobTitle, url, status, time.Now())
+	return err
+}
+
+func UpdateFunnelStatus(url, status string, fitScore int) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ? WHERE url = ?", status, fitScore, url)
+	return err
+}
+
+func SaveFormMapping(domain, mappingJson string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("INSERT INTO form_mappings (domain, mapping_json, created_at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET mapping_json=excluded.mapping_json", domain, mappingJson, time.Now())
+	return err
+}
+
+func GetFormMapping(domain string) (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("db not initialized")
+	}
+	var mappingJson string
+	err := db.QueryRow("SELECT mapping_json FROM form_mappings WHERE domain = ?", domain).Scan(&mappingJson)
+	return mappingJson, err
+}
+
+func DeleteFormMapping(domain string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("DELETE FROM form_mappings WHERE domain = ?", domain)
+	return err
+}
+
+func LogExecution(jobID, url, status string, tokens int) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("INSERT INTO execution_logs (job_id, url, tokens_used, status, logged_at) VALUES (?, ?, ?, ?, ?)", jobID, url, tokens, status, time.Now())
+	return err
+}
+
+type FunnelJob struct {
+	CompanyName string
+	JobTitle    string
+	URL         string
+}
+
+func GetDiscoveredJobs() ([]FunnelJob, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := db.Query("SELECT company_name, job_title, url FROM job_funnel WHERE status = 'DISCOVERED'")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []FunnelJob
+	for rows.Next() {
+		var j FunnelJob
+		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL); err != nil {
+			continue
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
+type CareerChunk struct {
+	ID        int
+	Text      string
+	Embedding []float32
+}
+
+func SaveCareerChunk(chunkText string, embedding []float32) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	embeddingJSON, err := json.Marshal(embedding)
+	if err != nil {
+		return err
+	}
+	// Upsert based on text matching is hard without unique constraint, so we just insert
+	// In reality we should clear table on re-ingest or use a hash. We will just insert for now.
+	_, err = db.Exec("INSERT INTO career_chunks (chunk_text, embedding_json) VALUES (?, ?)", chunkText, string(embeddingJSON))
+	return err
+}
+
+func ClearCareerChunks() error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec("DELETE FROM career_chunks")
+	return err
+}
+
+func GetAllCareerChunks() ([]CareerChunk, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := db.Query("SELECT id, chunk_text, embedding_json FROM career_chunks")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []CareerChunk
+	for rows.Next() {
+		var c CareerChunk
+		var embStr string
+		if err := rows.Scan(&c.ID, &c.Text, &embStr); err != nil {
+			continue
+		}
+		if err := json.Unmarshal([]byte(embStr), &c.Embedding); err != nil {
+			continue
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, nil
 }

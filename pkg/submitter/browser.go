@@ -1,12 +1,14 @@
 package submitter
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/playwright-community/playwright-go"
 )
 
@@ -44,6 +46,19 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 	log.Printf("[Auto-Submit] Navigating to %s", applyURL)
 	if _, err = page.Goto(applyURL); err != nil {
 		return fmt.Errorf("could not navigate to apply URL: %w", err)
+	}
+
+	domain := ExtractDomain(applyURL)
+	mappingJSON, err := storage.GetFormMapping(domain)
+	if err == nil && mappingJSON != "" {
+		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
+		dynErr := handleDynamic(page, resumePath, pii, mappingJSON, autoSubmitClick)
+		if dynErr != nil {
+			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
+			storage.DeleteFormMapping(domain)
+			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
+		}
+		return nil
 	}
 
 	urlLower := strings.ToLower(applyURL)
@@ -141,6 +156,69 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 
 	if autoSubmitClick {
 		page.Locator("button.postings-btn.template-btn-submit").Click()
+	}
+
+	return nil
+}
+
+type FormMapping struct {
+	Fields map[string]string `json:"fields"`
+}
+
+func safeFill(page playwright.Page, selector, text string) error {
+	if selector == "" || text == "" {
+		return nil
+	}
+	return page.Locator(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(5000)})
+}
+
+func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
+	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
+	var mapping FormMapping
+	if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
+		return fmt.Errorf("failed to parse mapping json: %w", err)
+	}
+
+	if pii != nil {
+		if err := safeFill(page, mapping.Fields["first_name"], "William"); err != nil {
+			return fmt.Errorf("failed to fill first_name: %w", err)
+		}
+		if err := safeFill(page, mapping.Fields["last_name"], "Elias"); err != nil {
+			return fmt.Errorf("failed to fill last_name: %w", err)
+		}
+		if err := safeFill(page, mapping.Fields["email"], pii.Email); err != nil {
+			return fmt.Errorf("failed to fill email: %w", err)
+		}
+		if err := safeFill(page, mapping.Fields["phone"], pii.Phone); err != nil {
+			return fmt.Errorf("failed to fill phone: %w", err)
+		}
+	}
+
+	if sel, ok := mapping.Fields["resume"]; ok && sel != "" {
+		fileInput := page.Locator(sel)
+		if count, _ := fileInput.Count(); count > 0 {
+			fileBytes, err := os.ReadFile(resumePath)
+			if err == nil {
+				err = fileInput.First().SetInputFiles([]playwright.InputFile{{
+					Name:   "resume.pdf",
+					Buffer: fileBytes,
+				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(5000)})
+				if err != nil {
+					return fmt.Errorf("failed to upload resume: %w", err)
+				}
+			}
+		} else {
+			return fmt.Errorf("resume input selector not found")
+		}
+	}
+
+	if autoSubmitClick {
+		if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
+			err := page.Locator(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)})
+			if err != nil {
+				return fmt.Errorf("failed to click submit: %w", err)
+			}
+		}
 	}
 
 	return nil

@@ -132,3 +132,91 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 
 	return resumeOut, coverOut, prepOut, nil
 }
+
+// ExtractFormMapping uses Gemini to parse an unknown ATS DOM and generate a JSON mapping for Playwright
+func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
+	if c.APIKey == "" {
+		return "", fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return "", fmt.Errorf("failed to create gemini client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel("gemini-1.5-pro-latest")
+	
+	// Force JSON output
+	model.ResponseMIMEType = "application/json"
+
+	systemDirective := `You are an expert web scraper and DOM analyst. You will be provided with the HTML source of a job application form.
+Your task is to identify the precise CSS selectors needed by Playwright to fill out this form.
+Map the following logical fields to their corresponding CSS selectors (prefer id, name, or specific data-qa attributes):
+- first_name
+- last_name
+- email
+- phone
+- resume
+- cover_letter
+- submit_button
+
+Return a JSON object in this exact format:
+{
+  "fields": {
+    "first_name": "selector",
+    "last_name": "selector",
+    ...
+  }
+}`
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{genai.Text(systemDirective)},
+	}
+
+	prompt := fmt.Sprintf("Analyze this DOM and extract the input selectors:\n\n%s", domHTML)
+	
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate form mapping: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response from gemini for form mapping")
+	}
+
+	var jsonOutput string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if text, ok := part.(genai.Text); ok {
+			jsonOutput += string(text)
+		}
+	}
+
+	return strings.TrimSpace(jsonOutput), nil
+}
+
+// GetEmbedding uses Gemini text-embedding-004 to create a vector for semantic search
+func (c *Client) GetEmbedding(text string) ([]float32, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gemini client: %w", err)
+	}
+	defer client.Close()
+
+	em := client.EmbeddingModel("text-embedding-004")
+	res, err := em.EmbedContent(ctx, genai.Text(text))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get embedding: %w", err)
+	}
+
+	if res == nil || res.Embedding == nil {
+		return nil, fmt.Errorf("empty embedding response")
+	}
+
+	return res.Embedding.Values, nil
+}
