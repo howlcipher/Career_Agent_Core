@@ -10,6 +10,8 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
+	"io"
+	"net/http"
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
@@ -87,7 +89,7 @@ func main() {
 	existingChunks, _ := storage.GetAllCareerChunks()
 	if len(existingChunks) == 0 {
 		log.Println("[RAG] Knowledge Library cache empty. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
-		mdContent, err := parser.ReadMarkdown("/run/media/system/tallgeese/dev/ai_knowledge_library/USER_PROFILE.md")
+		mdContent, err := parser.ReadMarkdown("/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md")
 		if err == nil {
 			chunks := parser.ChunkMarkdown(mdContent)
 			for _, text := range chunks {
@@ -111,8 +113,37 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for job := range jobChan {
-		if !prof.ValidateJob(job.CompanyName, job.Salary, job.Remote) {
+		// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
+		// We only need to enforce the hard blocklist here.
+		nameLower := strings.ToLower(job.CompanyName)
+		excluded := false
+		for _, ex := range prof.ExcludeCompanies {
+			if strings.Contains(nameLower, strings.ToLower(ex)) {
+				log.Printf("Security Block: Skipping %s (Found in ExcludeCompanies blocklist)\n", job.CompanyName)
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
 			continue
+		}
+
+		// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
+		if job.Description == "" {
+			log.Printf("Fetching job description for %s...", job.CompanyName)
+			httpClient := &http.Client{Timeout: 10 * time.Second}
+			req, _ := http.NewRequest("GET", job.URL, nil)
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			resp, err := httpClient.Do(req)
+			if err == nil {
+				b, _ := io.ReadAll(resp.Body)
+				pruned, _ := parser.PruneDOM(string(b))
+				job.Description = pruned
+				resp.Body.Close()
+			} else {
+				log.Printf("Failed to fetch job description for %s: %v", job.CompanyName, err)
+			}
 		}
 
 		if storage.HasApplied(job.URL) {
