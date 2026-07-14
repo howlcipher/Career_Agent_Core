@@ -156,16 +156,16 @@ func main() {
 		log.Printf("Successfully generated and saved application for %s", job.CompanyName)
 
 		if prof.AutoSubmit {
-			resumePath := "applications/" + job.CompanyName + "/resume.md"
+			// We still save the LLM-generated resume to the application folder for your records,
+			// but we upload the beautifully formatted master PDF to the actual ATS to ensure it parses correctly.
+			masterResumePath := "master_resume.pdf"
 			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
 
-			// Use the new dynamic pipeline to verify and match ATS templates
-			// This demonstrates the Two-Step Verification and State Checkpointing architecture
 			if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
 				log.Printf("Failed to checkpoint: %v", err)
 			}
 
-			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, resumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, masterResumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
