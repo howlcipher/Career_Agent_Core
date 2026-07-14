@@ -208,7 +208,7 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	}
 	defer client.Close()
 
-	em := client.EmbeddingModel("text-embedding-004")
+	em := client.EmbeddingModel("embedding-001")
 	res, err := em.EmbedContent(ctx, genai.Text(text))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get embedding: %w", err)
