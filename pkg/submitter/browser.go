@@ -9,7 +9,7 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.

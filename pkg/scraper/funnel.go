@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 type FunnelEngine struct {
