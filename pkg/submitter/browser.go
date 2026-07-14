@@ -32,16 +32,27 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(headlessBrowser),
+		Args: []string{
+			"--disable-blink-features=AutomationControlled", // Stealth: hide automation flag
+			"--disable-infobars",
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("could not launch browser: %w", err)
 	}
 	defer browser.Close()
 
-	page, err := browser.NewPage()
+	page, err := browser.NewPage(playwright.BrowserNewPageOptions{
+		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	})
 	if err != nil {
 		return fmt.Errorf("could not create page: %w", err)
 	}
+
+	// Stealth: Overwrite navigator.webdriver
+	page.AddInitScript(playwright.Script{
+		Content: playwright.String("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"),
+	})
 
 	log.Printf("[Auto-Submit] Navigating to %s", applyURL)
 	if _, err = page.Goto(applyURL); err != nil {
@@ -222,4 +233,35 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 	}
 
 	return nil
+}
+
+// PruneDOM removes <script>, <style>, and <svg> tags to drastically reduce token counts for Gemini LLM.
+func PruneDOM(html string) string {
+	// A full implementation would use x/net/html, but basic string manipulation works for simple minification
+	rules := []struct {
+		open  string
+		close string
+	}{
+		{"<script", "</script>"},
+		{"<style", "</style>"},
+		{"<svg", "</svg>"},
+	}
+
+	res := html
+	for _, rule := range rules {
+		for {
+			start := strings.Index(res, rule.open)
+			if start == -1 {
+				break
+			}
+			end := strings.Index(res[start:], rule.close)
+			if end == -1 {
+				// Malformed, just remove the open tag
+				res = res[:start] + res[start+len(rule.open):]
+				break
+			}
+			res = res[:start] + res[start+end+len(rule.close):]
+		}
+	}
+	return res
 }
