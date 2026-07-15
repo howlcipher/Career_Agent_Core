@@ -23,7 +23,7 @@ type FunnelEngine struct {
 func NewFunnelEngine(roles []string) *FunnelEngine {
 	return &FunnelEngine{
 		// Common ATS providers that often host remote roles
-		TargetATS: []string{"greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com", "recruitee.com", "apply.workable.com", "boards.eu.greenhouse.io"},
+		TargetATS: []string{"greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com", "recruitee.com", "apply.workable.com", "boards.eu.greenhouse.io", "jobs.jobvite.com", "applytojob.com", "myworkdayjobs.com", "pinpointhq.com", "homerun.co"},
 		Roles:     roles,
 	}
 }
@@ -159,7 +159,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	found := make(map[string]bool)
 	for _, m := range matches {
 		decoded, _ := url.QueryUnescape(m[1])
-		if !found[decoded] && (strings.Contains(decoded, "greenhouse.io") || strings.Contains(decoded, "lever.co") || strings.Contains(decoded, "workday.com") || strings.Contains(decoded, "ashbyhq.com") || strings.Contains(decoded, "breezy.hr") || strings.Contains(decoded, "bamboohr.com") || strings.Contains(decoded, "workable.com") || strings.Contains(decoded, "smartrecruiters.com") || strings.Contains(decoded, "recruitee.com")) {
+		if !found[decoded] && (strings.Contains(decoded, "greenhouse.io") || strings.Contains(decoded, "lever.co") || strings.Contains(decoded, "workday.com") || strings.Contains(decoded, "ashbyhq.com") || strings.Contains(decoded, "breezy.hr") || strings.Contains(decoded, "bamboohr.com") || strings.Contains(decoded, "workable.com") || strings.Contains(decoded, "smartrecruiters.com") || strings.Contains(decoded, "recruitee.com") || strings.Contains(decoded, "jobvite.com") || strings.Contains(decoded, "applytojob.com") || strings.Contains(decoded, "myworkdayjobs.com") || strings.Contains(decoded, "pinpointhq.com") || strings.Contains(decoded, "homerun.co")) {
 			found[decoded] = true
 			
 			company := "Unknown Company"
