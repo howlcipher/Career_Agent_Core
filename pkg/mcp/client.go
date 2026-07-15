@@ -22,7 +22,7 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
-func (c *Client) ScoreJob(scrapedData map[string]string, parsedDocument string) (int, error) {
+func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (int, error) {
 	if c.APIKey == "" {
 		return 0, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
@@ -36,8 +36,30 @@ func (c *Client) ScoreJob(scrapedData map[string]string, parsedDocument string) 
 
 	model := client.GenerativeModel("gemini-flash-latest")
 
-	prompt := fmt.Sprintf("Analyze the following job description and my background. Return ONLY a single integer from 0 to 100 representing how good of a fit I am for this role. Do not include any other text.\n\nJob Title: %s\n\nJob Description: %s\n\nMy Background:\n%s",
-		scrapedData["title"], scrapedData["desc"], parsedDocument)
+	// Lower the temperature so the model is highly strictly analytical rather than creative when scoring
+	temp := float32(0.1)
+	model.Temperature = &temp
+
+	prompt := fmt.Sprintf(`Analyze the following job description against my background and constraints. 
+Return ONLY a single integer from 0 to 100 representing how good of a fit I am. Do not include any other text.
+
+SCORING RUBRIC:
+1. Start at a baseline of 80.
+2. If "Remote Only" is true and the job requires on-site/hybrid, deduct 80 points.
+3. If the job explicitly states a salary below my salary floor, deduct 30 points.
+4. Deduct 10 points for every mandatory tech skill missing from my background.
+5. Add 10-20 points if my background perfectly aligns with the core requirements.
+
+MY CONSTRAINTS:
+- Remote Only: %v
+- Salary Floor: %v
+
+Job Title: %s
+Job Description: %s
+
+My Background:
+%s`,
+		profileConstraints["remote_only"], profileConstraints["salary_floor"], scrapedData["title"], scrapedData["desc"], parsedDocument)
 
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {

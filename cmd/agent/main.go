@@ -192,10 +192,17 @@ func main() {
 			continue
 		}
 
+		profileConstraints := map[string]interface{}{
+			"salary_floor":        prof.SalaryFloor,
+			"target_compensation": prof.TargetComp,
+			"remote_only":         prof.RemoteOnly,
+			"cover_letter_tone":   prof.CoverLetterTone,
+		}
+
 		var score int
 		var scoreErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			score, scoreErr = client.ScoreJob(scrapedData, tailoredContext)
+			score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
 			if scoreErr == nil {
 				break
 			}
@@ -221,13 +228,6 @@ func main() {
 			continue
 		}
 		log.Printf("Fit Score Pipeline: %s scored %d! Proceeding with application.", job.CompanyName, score)
-
-		profileConstraints := map[string]interface{}{
-			"salary_floor":        prof.SalaryFloor,
-			"target_compensation": prof.TargetComp,
-			"remote_only":         prof.RemoteOnly,
-			"cover_letter_tone":   prof.CoverLetterTone,
-		}
 
 		var resume, coverLetter, interviewPrep string
 		var processErr error
