@@ -47,8 +47,9 @@ SCORING RUBRIC:
 1. Start at a baseline of 80.
 2. If "Remote Only" is true and the job requires on-site/hybrid, deduct 80 points.
 3. If the job explicitly states a salary below my salary floor, deduct 30 points.
-4. Deduct 10 points for every mandatory tech skill missing from my background.
-5. Add 10-20 points if my background perfectly aligns with the core requirements.
+4. Be tech-stack agnostic. Do NOT deduct points if I am missing a specific language/framework (e.g. JS, AWS) but have strong experience in adjacent technologies (e.g. Python/Go, GCP). Assume a senior engineer can easily learn equivalent tools.
+5. Deduct 15 points ONLY if I am entirely missing a core domain (e.g., job requires deep Machine Learning or Mobile App Dev, and I have zero background in that domain).
+6. Add 10-20 points if my background perfectly aligns with the core domain.
 
 MY CONSTRAINTS:
 - Remote Only: %v
