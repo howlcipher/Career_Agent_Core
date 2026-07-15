@@ -63,16 +63,18 @@ func main() {
 
 	discoveredJobs, err := storage.GetDiscoveredJobs()
 	if err == nil {
-		for _, dj := range discoveredJobs {
-			jobChan <- scraper.Job{
-				CompanyName: dj.CompanyName,
-				Title:       dj.JobTitle,
-				URL:         dj.URL,
-				Salary:      prof.TargetComp, 
-				Remote:      true,            
+		go func() {
+			for _, dj := range discoveredJobs {
+				jobChan <- scraper.Job{
+					CompanyName: dj.CompanyName,
+					Title:       dj.JobTitle,
+					URL:         dj.URL,
+					Salary:      prof.TargetComp, 
+					Remote:      true,            
+				}
 			}
-		}
-		log.Printf("Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
+			log.Printf("Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
+		}()
 	}
 
 	funnelEngine := scraper.NewFunnelEngine(prof.Roles)
