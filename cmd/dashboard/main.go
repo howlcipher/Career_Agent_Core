@@ -39,9 +39,9 @@ func main() {
 		}
 
 		fmt.Printf("🔍 In Queue (Discovered)   : %-5d [%.1f%%]\n", totalDiscovered, float64(totalDiscovered)/float64(totalJobs)*100)
-		fmt.Printf("⏭️  Skipped (Score < 80)    : %-5d [%.1f%%]\n", totalSkipped, float64(totalSkipped)/float64(totalJobs)*100)
 		fmt.Printf("📝 Successfully Applied    : %-5d [%.1f%%]\n", totalApplied, float64(totalApplied)/float64(totalJobs)*100)
-		fmt.Printf("❌ Rejected / Errors       : %-5d [%.1f%%]\n", totalFailed, float64(totalFailed)/float64(totalJobs)*100)
+		fmt.Printf("⏭️  Rejected (Low Fit Score): %-5d [%.1f%%]\n", totalSkipped, float64(totalSkipped)/float64(totalJobs)*100)
+		fmt.Printf("⚠️  Actionable Errors       : %-5d [%.1f%%]\n", totalFailed, float64(totalFailed)/float64(totalJobs)*100)
 		fmt.Println("----------------------------------------------------------")
 
 		// Recent applications
