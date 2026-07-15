@@ -113,7 +113,7 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
-	if err := page.WaitForSelector("input#first_name", playwright.PageWaitForSelectorOptions{
+	if _, err := page.WaitForSelector("input#first_name", playwright.PageWaitForSelectorOptions{
 		Timeout: playwright.Float(15000),
 	}); err != nil {
 		return fmt.Errorf("form failed to render in time: %w", err)
@@ -155,7 +155,7 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
 
-	if err := page.WaitForSelector("input[name='name']", playwright.PageWaitForSelectorOptions{
+	if _, err := page.WaitForSelector("input[name='name']", playwright.PageWaitForSelectorOptions{
 		Timeout: playwright.Float(15000),
 	}); err != nil {
 		return fmt.Errorf("form failed to render in time: %w", err)
