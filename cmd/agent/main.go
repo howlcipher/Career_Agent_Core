@@ -106,7 +106,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	numWorkers := 1 // Reduced to 1 to respect strict Free Tier 5 RPM limits
+	numWorkers := 10 // Increased to 10 workers for massive concurrency on Paid Tier
 	
 	for w := 1; w <= numWorkers; w++ {
 		wg.Add(1)
@@ -221,14 +221,14 @@ func main() {
 		if scoreErr != nil {
 			log.Printf("Failed to score job for %s after retries: %v", job.CompanyName, scoreErr)
 			storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
-			time.Sleep(15 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
 		if score < 50 {
 			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", job.CompanyName, score)
 			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
-			time.Sleep(15 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 		log.Printf("Fit Score Pipeline: %s scored %d! Proceeding with application.", job.CompanyName, score)
@@ -254,13 +254,13 @@ func main() {
 
 		if processErr != nil {
 			log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
-			time.Sleep(15 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
 		if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
 			log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
-			time.Sleep(15 * time.Second)
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
@@ -293,7 +293,7 @@ func main() {
 		}
 
 		// Sleep for 15 seconds to ensure we never hit the 5 RPM rate limit
-		time.Sleep(15 * time.Second)
+		time.Sleep(1 * time.Second)
 			} // close for job := range jobChan
 		}(w)
 	}
