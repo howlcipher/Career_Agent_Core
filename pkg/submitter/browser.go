@@ -49,6 +49,10 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 		return fmt.Errorf("could not create page: %w", err)
 	}
 
+	// Set a strict 45-second global timeout for all page operations (navigation, clicks, fills).
+	// If a captcha blocks the page, Playwright will time out instead of hanging the worker forever.
+	page.SetDefaultTimeout(45000)
+
 	// Stealth: Overwrite navigator.webdriver
 	page.AddInitScript(playwright.Script{
 		Content: playwright.String("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"),
