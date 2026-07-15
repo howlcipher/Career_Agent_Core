@@ -206,8 +206,12 @@ func main() {
 			if scoreErr == nil {
 				break
 			}
-			if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "429") {
-				log.Printf("Network or Rate Limit error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+			if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
+				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Deep Sleeping for 1 hour to wait for quota reset...", job.CompanyName)
+				time.Sleep(1 * time.Hour)
+				attempt-- // Don't count this as a failed attempt, just pause execution
+			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") {
+				log.Printf("Network error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
 				break
@@ -236,8 +240,12 @@ func main() {
 			if processErr == nil {
 				break
 			}
-			if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "429") {
-				log.Printf("Network or Rate Limit error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+			if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
+				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Deep Sleeping for 1 hour to wait for quota reset...", job.CompanyName)
+				time.Sleep(1 * time.Hour)
+				attempt-- // Don't count this as a failed attempt, just pause execution
+			} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") {
+				log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
 				break
