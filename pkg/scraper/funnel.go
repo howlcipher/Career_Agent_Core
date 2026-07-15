@@ -55,7 +55,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
-			query := fmt.Sprintf(`"Remote" "%s" site:%s`, role, ats)
+			query := fmt.Sprintf(`Remote %s site:%s`, role, ats)
 			log.Printf("[FunnelEngine] Searching Google for: %s", query)
 
 			if useFallback {

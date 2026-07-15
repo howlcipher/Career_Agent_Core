@@ -55,8 +55,15 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 	})
 
 	log.Printf("[Auto-Submit] Navigating to %s", applyURL)
-	if _, err = page.Goto(applyURL); err != nil {
-		return fmt.Errorf("could not navigate to apply URL: %w", err)
+	if _, err = page.Goto(applyURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+	}); err != nil {
+		log.Printf("[Auto-Submit] NetworkIdle wait timed out or failed. Falling back to Domcontentloaded...")
+		if _, err = page.Goto(applyURL, playwright.PageGotoOptions{
+			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		}); err != nil {
+			return fmt.Errorf("could not navigate to apply URL after retries: %w", err)
+		}
 	}
 
 	domain := ExtractDomain(applyURL)
@@ -106,6 +113,12 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
+	if err := page.WaitForSelector("input#first_name", playwright.PageWaitForSelectorOptions{
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		return fmt.Errorf("form failed to render in time: %w", err)
+	}
+
 	// Basic fields
 	if pii != nil {
 		page.Locator("input#first_name").Fill("William")
@@ -141,6 +154,12 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 
 func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
+
+	if err := page.WaitForSelector("input[name='name']", playwright.PageWaitForSelectorOptions{
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		return fmt.Errorf("form failed to render in time: %w", err)
+	}
 
 	if pii != nil {
 		page.Locator("input[name='name']").Fill("William Elias")
