@@ -24,6 +24,24 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
 - **Extensible Handlers:** Decoupled `parser`, `scraper`, and `submitter` logic for effortless ATS expansion.
 
+### 🏛️ System Architecture
+```mermaid
+graph TD
+    A[RemoteOK / Google API] -->|Job Feeds| B(pkg/scraper: Funnel Engine)
+    B -->|Raw URL| C{cmd/agent: Main Loop}
+    
+    C -->|Parse Description| D[pkg/mcp: Gemini API]
+    D -->|Fit Score > 50| C
+    
+    C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
+    E -->|DOM HTML| F[pkg/security: Quarantine Layer]
+    F -->|Clean HTML| D
+    D -->|ATS Mapping| E
+    
+    E -->|Write Status| G[(pkg/storage: SQLite DB)]
+    C -->|Update Funnel| G
+```
+
 ---
 ### 📜 Changelog
 Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](CHANGELOG.md)!

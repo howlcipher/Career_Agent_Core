@@ -2,70 +2,89 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
+	"encoding/json"
 	"log"
-	"time"
+	"net/http"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func clearScreen() {
-	fmt.Print("\033[H\033[2J")
+type Metrics struct {
+	Discovered int `json:"discovered"`
+	Processing int `json:"processing"`
+	Skipped    int `json:"skipped"`
+	Applied    int `json:"applied"`
+	Failed     int `json:"failed"`
 }
 
+var db *sql.DB
+
 func main() {
-	db, err := sql.Open("sqlite3", "./applications.db")
+	var err error
+	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL")
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 
-	for {
-		clearScreen()
-		fmt.Println("==========================================================")
-		fmt.Println("🚀 CAREER AGENT: LIVE METRICS DASHBOARD")
-		fmt.Println("==========================================================")
+	http.HandleFunc("/", serveDashboard)
+	http.HandleFunc("/api/metrics", serveMetrics)
 
-		var totalDiscovered, totalProcessing, totalSkipped, totalApplied, totalFailed int
+	log.Println("🚀 Career Agent Web Dashboard running at http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
 
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED' OR status = 'NEW'").Scan(&totalDiscovered)
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'PROCESSING'").Scan(&totalProcessing)
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'SKIPPED'").Scan(&totalSkipped)
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&totalApplied)
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&totalFailed)
+func serveMetrics(w http.ResponseWriter, r *http.Request) {
+	var m Metrics
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED' OR status = 'NEW'").Scan(&m.Discovered)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'PROCESSING'").Scan(&m.Processing)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'SKIPPED'").Scan(&m.Skipped)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&m.Applied)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&m.Failed)
 
-		totalJobs := totalDiscovered + totalProcessing + totalSkipped + totalApplied + totalFailed
-		if totalJobs == 0 {
-			totalJobs = 1 // prevent div by zero
-		}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(m)
+}
 
-		fmt.Printf("🔍 In Queue (Waiting)    : %-5d [%.1f%%]\n", totalDiscovered, float64(totalDiscovered)/float64(totalJobs)*100)
-		fmt.Printf("⚙️  Actively Processing   : %-5d [%.1f%%]\n", totalProcessing, float64(totalProcessing)/float64(totalJobs)*100)
-		fmt.Printf("📝 Successfully Applied  : %-5d [%.1f%%]\n", totalApplied, float64(totalApplied)/float64(totalJobs)*100)
-		fmt.Printf("⏭️  Rejected (Low Fit)    : %-5d [%.1f%%]\n", totalSkipped, float64(totalSkipped)/float64(totalJobs)*100)
-		fmt.Printf("⚠️  Actionable Errors     : %-5d [%.1f%%]\n", totalFailed, float64(totalFailed)/float64(totalJobs)*100)
-		fmt.Println("----------------------------------------------------------")
-
-		// Recent applications
-		fmt.Println("Recent Applications:")
-		rows, err := db.Query("SELECT company_name, job_title FROM applied_jobs ORDER BY applied_at DESC LIMIT 5")
-		if err == nil {
-			count := 0
-			for rows.Next() {
-				var comp, title string
-				if rows.Scan(&comp, &title) == nil {
-					fmt.Printf("   ✅ %s - %s\n", comp, title)
-					count++
-				}
-			}
-			rows.Close()
-			if count == 0 {
-				fmt.Println("   (No applications submitted yet...)")
-			}
-		}
-
-		fmt.Println("==========================================================")
-		fmt.Println("Press Ctrl+C to exit. Refreshing every 3 seconds...")
-		time.Sleep(3 * time.Second)
-	}
+func serveDashboard(w http.ResponseWriter, r *http.Request) {
+	html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Career Agent Dashboard</title>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #fff; padding: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 8px; text-align: center; border-top: 4px solid #00ff88; }
+        h2 { font-size: 2rem; margin: 0; color: #00ff88; }
+        p { color: #aaa; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Career Agent Live Metrics</h1>
+    <div class="grid">
+        <div class="card"><h2 id="discovered">0</h2><p>In Queue</p></div>
+        <div class="card"><h2 id="processing">0</h2><p>Processing</p></div>
+        <div class="card"><h2 id="applied">0</h2><p>Applied</p></div>
+        <div class="card"><h2 id="skipped">0</h2><p>Skipped</p></div>
+        <div class="card"><h2 id="failed">0</h2><p>Failed</p></div>
+    </div>
+    <script>
+        async function fetchMetrics() {
+            const res = await fetch('/api/metrics');
+            const data = await res.json();
+            document.getElementById('discovered').innerText = data.discovered;
+            document.getElementById('processing').innerText = data.processing;
+            document.getElementById('applied').innerText = data.applied;
+            document.getElementById('skipped').innerText = data.skipped;
+            document.getElementById('failed').innerText = data.failed;
+        }
+        setInterval(fetchMetrics, 3000);
+        fetchMetrics();
+    </script>
+</body>
+</html>`
+	w.Write([]byte(html))
 }

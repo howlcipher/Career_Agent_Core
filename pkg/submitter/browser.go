@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -36,10 +38,17 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 	// Anti-SSRF Route Filter
 	err = page.Route("**/*", func(route playwright.Route) {
-		reqURL := route.Request().URL()
-		if strings.Contains(reqURL, "localhost") || strings.Contains(reqURL, "127.0.0.1") || strings.Contains(reqURL, "169.254.169.254") || strings.Contains(reqURL, "0.0.0.0") {
-			route.Abort("accessdenied")
-			return
+		reqURL, _ := url.Parse(route.Request().URL())
+		if reqURL != nil {
+			ip := net.ParseIP(reqURL.Hostname())
+			if ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+				route.Abort("accessdenied")
+				return
+			}
+			if reqURL.Hostname() == "localhost" {
+				route.Abort("accessdenied")
+				return
+			}
 		}
 		route.Continue()
 	})
@@ -80,11 +89,16 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 	// At this point, the page is live. NOW we generate the costly resume and cover letter!
 	log.Printf("[Auto-Submit] Verified page is live. Generating tailored documents...")
-	resumePath, _, err := generateDocs()
+	resumePath, coverPath, err := generateDocs()
 	if err != nil {
 		return fmt.Errorf("failed to generate application documents: %w", err)
 	}
-	defer os.Remove(resumePath)
+	if !strings.Contains(resumePath, "master_resume") {
+		defer os.Remove(resumePath)
+	}
+	if !strings.Contains(coverPath, "master_cover") {
+		defer os.Remove(coverPath)
+	}
 
 	domain := ExtractDomain(applyURL)
 	mappingJSON, err := storage.GetFormMapping(domain)

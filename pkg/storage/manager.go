@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,11 +17,13 @@ var db *sql.DB
 
 func InitDB() error {
 	var err error
-	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL")
+	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open database: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 
 	createTableQuery := `
 	CREATE TABLE IF NOT EXISTS applied_jobs (
@@ -104,9 +108,14 @@ type Metadata struct {
 }
 
 func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
-	baseDir := "applications"
-	companyDir := filepath.Join(baseDir, companyName)
+	safeCompany := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, companyName)
 
+	companyDir := filepath.Join("applications", safeCompany)
 	if err := os.MkdirAll(companyDir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -147,17 +156,22 @@ func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverL
 	return RecordApplicationInDB(companyName, jobTitle, url)
 }
 
+var logMutex sync.Mutex
+
 // LogFailedSubmission appends a failed auto-submission to a manual review checklist
 func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
 	reportPath := filepath.Join("applications", "manual_submissions.md")
-	
+
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
 		header := "# Manual Submission Backlog\n\nThe auto-submitter failed to process the following applications. Please submit them manually:\n\n"
 		os.WriteFile(reportPath, []byte(header), 0644)
 	}
 
 	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s)\n", companyName, jobTitle, applyURL)
-	
+
 	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open manual submission report: %w", err)
