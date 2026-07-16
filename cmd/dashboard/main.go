@@ -26,22 +26,24 @@ func main() {
 		fmt.Println("🚀 CAREER AGENT: LIVE METRICS DASHBOARD")
 		fmt.Println("==========================================================")
 
-		var totalDiscovered, totalSkipped, totalApplied, totalFailed int
+		var totalDiscovered, totalProcessing, totalSkipped, totalApplied, totalFailed int
 
-		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED'").Scan(&totalDiscovered)
+		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED' OR status = 'NEW'").Scan(&totalDiscovered)
+		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'PROCESSING'").Scan(&totalProcessing)
 		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'SKIPPED'").Scan(&totalSkipped)
 		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&totalApplied)
 		db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&totalFailed)
 
-		totalJobs := totalDiscovered + totalSkipped + totalApplied + totalFailed
+		totalJobs := totalDiscovered + totalProcessing + totalSkipped + totalApplied + totalFailed
 		if totalJobs == 0 {
 			totalJobs = 1 // prevent div by zero
 		}
 
-		fmt.Printf("🔍 In Queue (Discovered)   : %-5d [%.1f%%]\n", totalDiscovered, float64(totalDiscovered)/float64(totalJobs)*100)
-		fmt.Printf("📝 Successfully Applied    : %-5d [%.1f%%]\n", totalApplied, float64(totalApplied)/float64(totalJobs)*100)
-		fmt.Printf("⏭️  Rejected (Low Fit Score): %-5d [%.1f%%]\n", totalSkipped, float64(totalSkipped)/float64(totalJobs)*100)
-		fmt.Printf("⚠️  Actionable Errors       : %-5d [%.1f%%]\n", totalFailed, float64(totalFailed)/float64(totalJobs)*100)
+		fmt.Printf("🔍 In Queue (Waiting)    : %-5d [%.1f%%]\n", totalDiscovered, float64(totalDiscovered)/float64(totalJobs)*100)
+		fmt.Printf("⚙️  Actively Processing   : %-5d [%.1f%%]\n", totalProcessing, float64(totalProcessing)/float64(totalJobs)*100)
+		fmt.Printf("📝 Successfully Applied  : %-5d [%.1f%%]\n", totalApplied, float64(totalApplied)/float64(totalJobs)*100)
+		fmt.Printf("⏭️  Rejected (Low Fit)    : %-5d [%.1f%%]\n", totalSkipped, float64(totalSkipped)/float64(totalJobs)*100)
+		fmt.Printf("⚠️  Actionable Errors     : %-5d [%.1f%%]\n", totalFailed, float64(totalFailed)/float64(totalJobs)*100)
 		fmt.Println("----------------------------------------------------------")
 
 		// Recent applications
