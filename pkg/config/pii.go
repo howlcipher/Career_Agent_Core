@@ -8,10 +8,12 @@ import (
 )
 
 type PII struct {
-	Email   string `yaml:"email"`
-	Phone   string `yaml:"phone"`
-	DOB     string `yaml:"dob"`
-	Address string `yaml:"address"`
+	FirstName string `yaml:"first_name"`
+	LastName  string `yaml:"last_name"`
+	Email     string `yaml:"email"`
+	Phone     string `yaml:"phone"`
+	DOB       string `yaml:"dob"`
+	Address   string `yaml:"address"`
 }
 
 func LoadPII(path string) (*PII, error) {

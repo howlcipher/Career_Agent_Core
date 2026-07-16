@@ -10,12 +10,18 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
+	"context"
+	"os/signal"
+	"syscall"
 	"io"
+	"fmt"
 	"net/http"
+	"net/url"
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
+	"github.com/playwright-community/playwright-go"
 	"github.com/joho/godotenv"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"sync"
@@ -37,6 +43,9 @@ func main() {
 		MaxAge:     28, // days
 	})
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	log.Println("Initializing Career Agent Core...")
 	if *daemonMode {
 		log.Println("[DAEMON MODE] Agent will drip applications every 6 hours to evade ATS IP bans.")
@@ -45,6 +54,16 @@ func main() {
 	if err := storage.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
 	}
+	defer storage.CloseDB()
+	if err := playwright.Install(); err != nil {
+		log.Fatalf("Failed to install Playwright: %v", err)
+	}
+
+	pw, err := playwright.Run()
+	if err != nil {
+		log.Fatalf("could not start playwright: %v", err)
+	}
+	defer pw.Stop()
 
 	prof, err := config.LoadProfile("profile.yaml")
 	if err != nil {
@@ -62,8 +81,12 @@ func main() {
 	jobChan := make(chan scraper.Job, 2000)
 
 	discoveredJobs, err := storage.GetDiscoveredJobs()
+	var producerWg sync.WaitGroup
+
 	if err == nil {
+		producerWg.Add(1)
 		go func() {
+			defer producerWg.Done()
 			for _, dj := range discoveredJobs {
 				jobChan <- scraper.Job{
 					CompanyName: dj.CompanyName,
@@ -78,14 +101,21 @@ func main() {
 	}
 
 	funnelEngine := scraper.NewFunnelEngine(prof.Roles)
+	producerWg.Add(1)
 	go func() {
+		defer producerWg.Done()
 		if err := funnelEngine.DiscoverJobs(jobChan); err != nil {
 			log.Printf("Funnel discovery error: %v", err)
 		}
 	}()
 
+	go func() {
+		producerWg.Wait()
+		close(jobChan)
+	}()
+
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-	pipeline := submitter.NewPipeline(storage.GetDB(), filter, client)
+	pipeline := submitter.NewPipeline(storage.GetDB(), filter, client, pw)
 
 	// Local Embedded RAG Ingestion
 	existingChunks, _ := storage.GetAllCareerChunks()
@@ -115,6 +145,12 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for job := range jobChan {
+				select {
+				case <-ctx.Done():
+					log.Printf("Worker %d shutting down gracefully...", workerID)
+					return
+				default:
+				}
 		storage.UpdateFunnelStatus(job.URL, "PROCESSING")
 		// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
 		// We only need to enforce the hard blocklist here.
@@ -135,14 +171,35 @@ func main() {
 		// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
 		if job.Description == "" {
 			log.Printf("Fetching job description for %s...", job.CompanyName)
-			httpClient := &http.Client{Timeout: 10 * time.Second}
-			req, _ := http.NewRequest("GET", job.URL, nil)
+			u, err := url.Parse(job.URL)
+			if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
+				log.Printf("Invalid or unsafe URL blocked: %s", job.URL)
+				continue
+			}
+			
+			httpClient := &http.Client{
+				Timeout: 10 * time.Second,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					if req.URL.Hostname() == "localhost" || req.URL.Hostname() == "127.0.0.1" || req.URL.Hostname() == "169.254.169.254" {
+						return fmt.Errorf("redirect to internal IP blocked")
+					}
+					if len(via) >= 10 {
+						return fmt.Errorf("stopped after 10 redirects")
+					}
+					return nil
+				},
+			}
+			req, err := http.NewRequest("GET", job.URL, nil)
+			if err != nil {
+				log.Printf("Failed to create request for %s: %v", job.CompanyName, err)
+				continue
+			}
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 			resp, err := httpClient.Do(req)
 			if err == nil {
-				b, _ := io.ReadAll(resp.Body)
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 				htmlStr := string(b)
-				resp.Body.Close()
 				
 				// Captcha / Bot protection check
 				lowerHTML := strings.ToLower(htmlStr)
@@ -286,7 +343,7 @@ func main() {
 				return masterResumePath, coverLetterPath, nil
 			}
 
-			if err := submitter.AttemptSubmit(client, job.CompanyName, job.URL, generateDocsFunc, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			if err := submitter.AttemptSubmit(pw, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
@@ -310,10 +367,4 @@ func main() {
 	
 	wg.Wait()
 	log.Println("Batch execution complete!")
-
-	if *daemonMode {
-		log.Println("[DAEMON MODE] Sleeping for 6 hours before next drip campaign...")
-		time.Sleep(6 * time.Hour)
-		main() // recursive loop for daemon
-	}
 }

@@ -38,17 +38,14 @@ type SerpApiResponse struct {
 
 // DiscoverJobs queries Google using SerpApi to find live job pages and sends them directly to a consumer channel.
 func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
-	defer func() {
-		if jobChan != nil {
-			close(jobChan)
-		}
-	}()
 	apiKey := os.Getenv("SERPAPI_API_KEY")
 	if apiKey == "" {
 		return fmt.Errorf("SERPAPI_API_KEY environment variable is missing. Job discovery requires this API key.")
 	}
 
 	log.Println("[FunnelEngine] Starting live job discovery via SerpApi...")
+	
+	f.discoverWithRemoteOK(jobChan)
 	
 	useFallback := false
 
@@ -64,16 +61,22 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				continue
 			}
 
-			reqURL := fmt.Sprintf("https://serpapi.com/search.json?q=%s&api_key=%s&num=10", url.QueryEscape(query), apiKey)
+			reqURL := fmt.Sprintf("https://serpapi.com/search.json?q=%s&api_key=%s&num=100", url.QueryEscape(query), apiKey)
 			
-			resp, err := http.Get(reqURL)
+			client := &http.Client{Timeout: 30 * time.Second}
+			resp, err := client.Get(reqURL)
 			if err != nil {
-				log.Printf("[FunnelEngine] API request failed: %v", err)
+				safeErr := strings.ReplaceAll(err.Error(), apiKey, "REDACTED")
+				log.Printf("[FunnelEngine] API request failed: %v", safeErr)
 				continue
 			}
 			
-			body, _ := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if err != nil {
+				log.Printf("[FunnelEngine] Failed to read response body: %v", err)
+				continue
+			}
 
 			var serpResult SerpApiResponse
 			if err := json.Unmarshal(body, &serpResult); err != nil {
@@ -204,4 +207,62 @@ func isValidATSUrl(link string) bool {
 	}
 	
 	return false
+}
+
+func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
+	log.Println("[FunnelEngine] Scraping RemoteOK API...")
+
+	for _, role := range f.Roles {
+		tag := strings.ReplaceAll(strings.ToLower(role), " ", "-")
+		
+		url := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		var rawJobs []json.RawMessage
+		if err := json.Unmarshal(body, &rawJobs); err != nil {
+			continue
+		}
+
+		if len(rawJobs) <= 1 {
+			continue
+		}
+
+		for i := 1; i < len(rawJobs); i++ {
+			var roJob RemoteOkJob
+			if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
+				continue
+			}
+
+			// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
+			err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
+			if err == nil && jobChan != nil {
+				log.Printf("[FunnelEngine] Discovered RemoteOK Job: %s at %s", roJob.Position, roJob.URL)
+				jobChan <- Job{
+					CompanyName: roJob.Company,
+					Title:       roJob.Position,
+					URL:         roJob.URL,
+				}
+			}
+		}
+	}
 }

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -320,7 +321,7 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	}
 	defer client.Close()
 
-	em := client.EmbeddingModel("gemini-embedding-001")
+	em := client.EmbeddingModel("text-embedding-004")
 	if err := incrementAndLogAPICall("GetEmbedding", len(text)); err != nil { return nil, err }
 	res, err := em.EmbedContent(ctx, genai.Text(text))
 	if err != nil {
@@ -335,12 +336,16 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 }
 
 // ExtractRejectionReason reads an HR rejection email and explicitly figures out why the candidate was rejected.
-func (c *Client) ExtractRejectionReason(emailText string) string {
+func (c *Client) ExtractRejectionReason(emailText string) (string, error) {
+	if c.APIKey == "" {
+		return "", fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
-		return "Failed to parse API key"
+		return "", fmt.Errorf("failed to create gemini client: %w", err)
 	}
 	defer client.Close()
 
@@ -349,11 +354,73 @@ func (c *Client) ExtractRejectionReason(emailText string) string {
 		Parts: []genai.Part{genai.Text("You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection').")},
 	}
 
-	if err := incrementAndLogAPICall("AnalyzeEmail", len(emailText)); err != nil { return err.Error() }
+	if err := incrementAndLogAPICall("AnalyzeEmail", len(emailText)); err != nil { return "", err }
 	res, err := model.GenerateContent(ctx, genai.Text(emailText))
-	if err != nil || len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
-		return "Generic templated rejection (no specific reason provided)"
+	if err != nil {
+		return "", fmt.Errorf("failed to extract rejection reason: %w", err)
+	}
+	if len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
+		return "Generic templated rejection (no specific reason provided)", nil
 	}
 
-	return fmt.Sprintf("%v", res.Candidates[0].Content.Parts[0])
+	return fmt.Sprintf("%v", res.Candidates[0].Content.Parts[0]), nil
+}
+
+// SolveValidationErrors analyzes a failed form submission and generates values for missing required fields
+func (c *Client) SolveValidationErrors(domHTML string, profileContext string) (map[string]string, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gemini client: %w", err)
+	}
+	defer client.Close()
+
+	// Use Gemini Flash as it's significantly cheaper and completely capable of DOM reasoning
+	model := client.GenerativeModel("gemini-flash-latest")
+	model.ResponseMIMEType = "application/json"
+
+	systemDirective := `You are an expert web scraper and DOM analyst. You are provided with the HTML source of a job application form that just FAILED validation (required fields are missing or invalid).
+You are also provided with the applicant's profile context.
+Your task is to identify ALL the missing or invalid fields in the form (like custom questions, URLs, visa status, etc.), determine the correct CSS selector for each, and generate the appropriate string value to fill them in based on the applicant's profile.
+
+Return a JSON object in this exact format mapping the CSS selector to the string value to fill:
+{
+  "selector_1": "value_1",
+  "selector_2": "value_2"
+}`
+
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{genai.Text(systemDirective)},
+	}
+
+	prompt := fmt.Sprintf("Applicant Profile:\n%s\n\nFailed Form DOM:\n%s", profileContext, domHTML)
+	
+	if err := incrementAndLogAPICall("SolveValidationErrors", len(prompt)); err != nil { return nil, err }
+	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		return nil, fmt.Errorf("failed to solve validation errors: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("empty response from gemini for validation errors")
+	}
+
+	var jsonOutput string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if text, ok := part.(genai.Text); ok {
+			jsonOutput += string(text)
+		}
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse json response: %w", err)
+	}
+
+	return result, nil
 }

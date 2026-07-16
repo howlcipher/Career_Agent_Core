@@ -100,7 +100,10 @@ func StartTracker(cfg IMAPConfig) error {
 
 				if status == "REJECTED" {
 					geminiClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-					reason := geminiClient.ExtractRejectionReason(bodyText)
+					reason, err := geminiClient.ExtractRejectionReason(bodyText)
+					if err != nil {
+						reason = "Generic templated rejection (no specific reason provided)"
+					}
 					logRejectionFeedback(companyGuess, subject, reason)
 				}
 			}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"math/rand"
@@ -70,8 +71,8 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		// Sleep for a random jitter (1-3 seconds) to seem human
 		time.Sleep(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
 
-		url := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
-		req, err := http.NewRequest("GET", url, nil)
+		reqURL := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
+		req, err := http.NewRequest("GET", reqURL, nil)
 		if err != nil {
 			log.Printf("Failed to create request for %s: %v", role, err)
 			continue
@@ -84,7 +85,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		req.Header.Set("Connection", "keep-alive")
 		req.Header.Set("Upgrade-Insecure-Requests", "1")
 
-		client := &http.Client{}
+		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("Failed to execute request for %s: %v", role, err)
@@ -93,6 +94,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		
 		if resp.StatusCode != http.StatusOK {
 			log.Printf("API returned non-200 status for %s: %d", role, resp.StatusCode)
+			time.Sleep(5 * time.Second)
 			resp.Body.Close()
 			continue
 		}
@@ -133,6 +135,10 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 			estimatedSalary := roJob.SalaryMax
 			if roJob.SalaryMin > 0 && roJob.SalaryMax == 0 {
 				estimatedSalary = roJob.SalaryMin
+			}
+			u, err := url.Parse(roJob.URL)
+			if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
+				continue
 			}
 
 			allJobs = append(allJobs, Job{

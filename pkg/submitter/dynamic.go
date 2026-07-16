@@ -18,6 +18,7 @@ import (
 type FormMapper interface {
 	ExtractFormMapping(domHTML string) (string, error)
 	ExtractFormMappingVision(screenshotBytes []byte) (string, error)
+	SolveValidationErrors(domHTML string, profileContext string) (map[string]string, error)
 }
 
 // Pipeline represents the dynamic script-generation pipeline for ATS submissions.
@@ -25,14 +26,16 @@ type Pipeline struct {
 	DB        *sql.DB
 	Filter    *security.QuarantineLayer
 	Mapper    FormMapper
+	PW        *playwright.Playwright
 	Templates map[string]string // Known ATS footprints mapped to templates
 }
 
-func NewPipeline(db *sql.DB, filter *security.QuarantineLayer, mapper FormMapper) *Pipeline {
+func NewPipeline(db *sql.DB, filter *security.QuarantineLayer, mapper FormMapper, pw *playwright.Playwright) *Pipeline {
 	return &Pipeline{
 		DB:     db,
 		Filter: filter,
 		Mapper: mapper,
+		PW:     pw,
 		Templates: map[string]string{
 			"greenhouse.io": "GreenhouseTemplate",
 			"lever.co":      "LeverTemplate",
@@ -66,39 +69,31 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 		return "", fmt.Errorf("invalid response from target URL")
 	}
 
-	// Extract visible text for security scanning
-	pageText, err := page.Evaluate("document.body.innerText")
+	domHTML, err := page.Content()
 	if err != nil {
-		return "", fmt.Errorf("failed to extract page text: %w", err)
+		return "", fmt.Errorf("failed to extract page DOM: %w", err)
 	}
 
-	// Intercept Prompt Injection Anomalies
-	if textStr, ok := pageText.(string); ok {
-		if err := p.Filter.CheckPayload(textStr); err != nil {
-			return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
-		}
+	pruned, _ := parser.PruneDOMToText(domHTML)
+	if err := p.Filter.CheckPayload(pruned); err != nil {
+		return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
 	}
 
 	log.Println("[Pipeline] Step 2: Site verified secure. Extracting structural DOM...")
 
-	// Extract DOM footprint
-	domHTML, err := page.Content()
-	if err != nil {
-		return "", fmt.Errorf("failed to extract DOM content: %w", err)
-	}
-
 	return domHTML, nil
 }
 
-// ExtractDomain gets the base domain from a URL for caching
+// ExtractDomain gets the base domain + tenant path from a URL for caching
 func ExtractDomain(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
 	}
-	parts := strings.Split(u.Hostname(), ".")
-	if len(parts) > 2 {
-		return strings.Join(parts[len(parts)-2:], ".")
+	
+	pathSegments := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(pathSegments) > 0 && pathSegments[0] != "" {
+		return u.Hostname() + "/" + pathSegments[0]
 	}
 	return u.Hostname()
 }
@@ -192,16 +187,9 @@ func (p *Pipeline) Execute(ctx context.Context, jobID, url string) error {
 	}
 
 	// 1. Launch Playwright
-	err := playwright.Install()
-	if err != nil {
-		return fmt.Errorf("failed to install playwright: %w", err)
-	}
-	pw, err := playwright.Run()
-	if err != nil {
-		return err
-	}
-	defer pw.Stop()
-	browser, err := pw.Chromium.Launch()
+	browser, err := p.PW.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+		Args: []string{"--disable-dev-shm-usage", "--no-sandbox"},
+	})
 	if err != nil {
 		return err
 	}
@@ -210,6 +198,7 @@ func (p *Pipeline) Execute(ctx context.Context, jobID, url string) error {
 	if err != nil {
 		return err
 	}
+	defer page.Close()
 
 	// 2. Two-Step Verification
 	dom, err := p.TwoStepVerification(page, url)

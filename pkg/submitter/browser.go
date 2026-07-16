@@ -10,32 +10,22 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/mxschmitt/playwright-go"
+	"github.com/playwright-community/playwright-go"
 )
 
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(pw *playwright.Playwright, filter *security.QuarantineLayer, mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
-
-	// Install playwright browsers if they don't exist
-	err := playwright.Install()
-	if err != nil {
-		return fmt.Errorf("failed to install playwright browsers: %w", err)
-	}
-
-	pw, err := playwright.Run()
-	if err != nil {
-		return fmt.Errorf("could not start playwright: %w", err)
-	}
-	defer pw.Stop()
 
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(headlessBrowser),
 		Args: []string{
 			"--disable-blink-features=AutomationControlled", // Stealth: hide automation flag
 			"--disable-infobars",
+			"--disable-dev-shm-usage",
+			"--no-sandbox",
 		},
 	})
 	if err != nil {
@@ -44,10 +34,24 @@ func AttemptSubmit(mapper FormMapper, companyName, applyURL string, generateDocs
 	defer browser.Close()
 
 	page, err := browser.NewPage(playwright.BrowserNewPageOptions{
-		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"),
 	})
 	if err != nil {
 		return fmt.Errorf("could not create page: %w", err)
+	}
+	defer page.Close()
+
+	// Anti-SSRF Route Filter
+	err = page.Route("**/*", func(route playwright.Route) {
+		reqURL := route.Request().URL()
+		if strings.Contains(reqURL, "localhost") || strings.Contains(reqURL, "127.0.0.1") || strings.Contains(reqURL, "169.254.169.254") || strings.Contains(reqURL, "0.0.0.0") {
+			route.Abort("accessdenied")
+			return
+		}
+		route.Continue()
+	})
+	if err != nil {
+		return fmt.Errorf("failed to setup SSRF route blocking: %w", err)
 	}
 
 	// Set a strict 45-second global timeout for all page operations (navigation, clicks, fills).
@@ -87,6 +91,7 @@ func AttemptSubmit(mapper FormMapper, companyName, applyURL string, generateDocs
 	if err != nil {
 		return fmt.Errorf("failed to generate application documents: %w", err)
 	}
+	defer os.Remove(resumePath)
 
 	domain := ExtractDomain(applyURL)
 	mappingJSON, err := storage.GetFormMapping(domain)
@@ -100,42 +105,91 @@ func AttemptSubmit(mapper FormMapper, companyName, applyURL string, generateDocs
 		}
 		return nil
 	}
-
 	urlLower := strings.ToLower(applyURL)
-	if strings.Contains(urlLower, "linkedin.com/jobs") {
-		return handleLinkedIn(page, resumePath, pii, autoSubmitClick)
-	} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
-		return handleGreenhouse(page, resumePath, pii, autoSubmitClick)
-	} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
-		return handleLever(page, resumePath, pii, autoSubmitClick)
-	}
+	var execErr error
+	var initialAttemptComplete bool
 
-	if mapper != nil {
-		log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
-		domHTML, _ := page.Content()
-		prunedHTML, err := parser.PruneDOM(domHTML)
-		if err != nil {
-			prunedHTML = domHTML
-		}
-		
-		newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML)
-		if err == nil && newMappingJSON != "" {
-			log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
-			storage.SaveFormMapping(domain, newMappingJSON)
-			
-			dynErr := handleDynamic(page, resumePath, pii, newMappingJSON, autoSubmitClick)
-			if dynErr != nil {
-				storage.DeleteFormMapping(domain)
-				return fmt.Errorf("dynamic execution of learned mapping failed: %w", dynErr)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if !initialAttemptComplete {
+			if strings.Contains(urlLower, "linkedin.com/jobs") {
+				execErr = handleLinkedIn(page, resumePath, pii, autoSubmitClick)
+			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
+				execErr = handleGreenhouse(page, resumePath, pii, autoSubmitClick)
+			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
+				execErr = handleLever(page, resumePath, pii, autoSubmitClick)
+			} else if mapper != nil {
+				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
+				domHTML, _ := page.Content()
+				prunedHTML, err := parser.PruneDOMToText(domHTML)
+				if err != nil {
+					prunedHTML = domHTML
+				}
+
+				if filter != nil {
+					if err := filter.CheckPayload(prunedHTML); err != nil {
+						return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
+					}
+				}
+
+				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML)
+				if err == nil && newMappingJSON != "" {
+					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
+					storage.SaveFormMapping(domain, newMappingJSON)
+					execErr = handleDynamic(page, resumePath, pii, newMappingJSON, autoSubmitClick)
+				} else {
+					log.Printf("[Learner Module] Failed to map form: %v", err)
+					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
+					execErr = AttemptVisionSubmit(page, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+				}
+			} else {
+				execErr = fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
 			}
+			initialAttemptComplete = true
+		} else {
+			log.Printf("[Auto-Submit] Attempt %d: Solving validation errors...", attempt)
+			domHTML, _ := page.Content()
+			prunedHTML, err := parser.PruneDOM(domHTML)
+			if err != nil { prunedHTML = domHTML }
+
+			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, profileContext)
+			if fixErr != nil {
+				return fmt.Errorf("failed to solve validation errors: %w", fixErr)
+			}
+			
+			for selector, value := range fixesMap {
+				safeFill(page, selector, value)
+			}
+
+			submitLocator := page.Locator("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
+			if count, _ := submitLocator.Count(); count > 0 {
+				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)})
+			} else {
+				execErr = fmt.Errorf("could not find submit button to retry submission")
+			}
+		}
+
+		if execErr != nil {
+			return execErr
+		}
+
+		if autoSubmitClick {
+			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+				State: playwright.LoadStateNetworkidle,
+				Timeout: playwright.Float(10000),
+			})
+
+			currentURL := page.URL()
+			if currentURL != applyURL || strings.Contains(strings.ToLower(currentURL), "thank") || strings.Contains(strings.ToLower(currentURL), "success") || strings.Contains(strings.ToLower(currentURL), "confirmation") {
+				return nil
+			}
+			
+			log.Printf("[Auto-Submit] Submission failed validation. Retrying...")
+		} else {
 			return nil
 		}
-		log.Printf("[Learner Module] Failed to map form: %v", err)
-		log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
-		return AttemptVisionSubmit(page, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
 	}
 
-	return fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
+	return fmt.Errorf("failed to submit application after 3 validation error attempts")
 }
 
 func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
@@ -168,8 +222,12 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 
 	// Basic fields
 	if pii != nil {
-		page.Locator("input#first_name").Fill("William")
-		page.Locator("input#last_name").Fill("Elias")
+		if pii.FirstName != "" {
+			page.Locator("input#first_name").Fill(pii.FirstName)
+		}
+		if pii.LastName != "" {
+			page.Locator("input#last_name").Fill(pii.LastName)
+		}
 		if pii.Email != "" {
 			page.Locator("input#email").Fill(pii.Email)
 		}
@@ -209,7 +267,9 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 	}
 
 	if pii != nil {
-		page.Locator("input[name='name']").Fill("William Elias")
+		if pii.FirstName != "" || pii.LastName != "" {
+			page.Locator("input[name='name']").Fill(pii.FirstName + " " + pii.LastName)
+		}
 		if pii.Email != "" {
 			page.Locator("input[name='email']").Fill(pii.Email)
 		}
@@ -257,11 +317,15 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 	}
 
 	if pii != nil {
-		if err := safeFill(page, mapping.Fields["first_name"], "William"); err != nil {
-			return fmt.Errorf("failed to fill first_name: %w", err)
+		if pii.FirstName != "" {
+			if err := safeFill(page, mapping.Fields["first_name"], pii.FirstName); err != nil {
+				return fmt.Errorf("failed to fill first_name: %w", err)
+			}
 		}
-		if err := safeFill(page, mapping.Fields["last_name"], "Elias"); err != nil {
-			return fmt.Errorf("failed to fill last_name: %w", err)
+		if pii.LastName != "" {
+			if err := safeFill(page, mapping.Fields["last_name"], pii.LastName); err != nil {
+				return fmt.Errorf("failed to fill last_name: %w", err)
+			}
 		}
 		if err := safeFill(page, mapping.Fields["email"], pii.Email); err != nil {
 			return fmt.Errorf("failed to fill email: %w", err)
@@ -301,33 +365,4 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 	return nil
 }
 
-// PruneDOM removes <script>, <style>, and <svg> tags to drastically reduce token counts for Gemini LLM.
-func PruneDOM(html string) string {
-	// A full implementation would use x/net/html, but basic string manipulation works for simple minification
-	rules := []struct {
-		open  string
-		close string
-	}{
-		{"<script", "</script>"},
-		{"<style", "</style>"},
-		{"<svg", "</svg>"},
-	}
 
-	res := html
-	for _, rule := range rules {
-		for {
-			start := strings.Index(res, rule.open)
-			if start == -1 {
-				break
-			}
-			end := strings.Index(res[start:], rule.close)
-			if end == -1 {
-				// Malformed, just remove the open tag
-				res = res[:start] + res[start+len(rule.open):]
-				break
-			}
-			res = res[:start] + res[start+end+len(rule.close):]
-		}
-	}
-	return res
-}

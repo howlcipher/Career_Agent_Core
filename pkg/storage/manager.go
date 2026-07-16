@@ -15,10 +15,11 @@ var db *sql.DB
 
 func InitDB() error {
 	var err error
-	db, err = sql.Open("sqlite3", "./applications.db")
+	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL")
 	if err != nil {
 		return err
 	}
+	db.SetMaxOpenConns(1)
 
 	createTableQuery := `
 	CREATE TABLE IF NOT EXISTS applied_jobs (
@@ -167,6 +168,13 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 		return fmt.Errorf("failed to write to manual submission report: %w", err)
 	}
 	
+	return nil
+}
+
+func CloseDB() error {
+	if db != nil {
+		return db.Close()
+	}
 	return nil
 }
 
