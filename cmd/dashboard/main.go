@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -16,6 +17,9 @@ type Metrics struct {
 	Applied    int `json:"applied"`
 	Failed     int `json:"failed"`
 }
+
+//go:embed index.html
+var indexHTML embed.FS
 
 var db *sql.DB
 
@@ -48,43 +52,11 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveDashboard(w http.ResponseWriter, r *http.Request) {
-	html := `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Career Agent Dashboard</title>
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #fff; padding: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        .card { background: #1e1e1e; padding: 20px; border-radius: 8px; text-align: center; border-top: 4px solid #00ff88; }
-        h2 { font-size: 2rem; margin: 0; color: #00ff88; }
-        p { color: #aaa; margin-top: 5px; }
-    </style>
-</head>
-<body>
-    <h1>🚀 Career Agent Live Metrics</h1>
-    <div class="grid">
-        <div class="card"><h2 id="discovered">0</h2><p>In Queue</p></div>
-        <div class="card"><h2 id="processing">0</h2><p>Processing</p></div>
-        <div class="card"><h2 id="applied">0</h2><p>Applied</p></div>
-        <div class="card"><h2 id="skipped">0</h2><p>Skipped</p></div>
-        <div class="card"><h2 id="failed">0</h2><p>Failed</p></div>
-    </div>
-    <script>
-        async function fetchMetrics() {
-            const res = await fetch('/api/metrics');
-            const data = await res.json();
-            document.getElementById('discovered').innerText = data.discovered;
-            document.getElementById('processing').innerText = data.processing;
-            document.getElementById('applied').innerText = data.applied;
-            document.getElementById('skipped').innerText = data.skipped;
-            document.getElementById('failed').innerText = data.failed;
-        }
-        setInterval(fetchMetrics, 3000);
-        fetchMetrics();
-    </script>
-</body>
-</html>`
-	w.Write([]byte(html))
+	content, err := indexHTML.ReadFile("index.html")
+	if err != nil {
+		http.Error(w, "Could not load dashboard", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(content)
 }
