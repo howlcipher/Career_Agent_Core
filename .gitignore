@@ -7,3 +7,9 @@ main
 /agent
 master_resume.pdf
 career_agent.log
+
+# Compiled binaries
+dashboard
+career-agent
+agent
+
