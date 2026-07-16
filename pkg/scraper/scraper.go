@@ -12,6 +12,9 @@ import (
 	"math/rand"
 )
 
+var remoteOKBaseURL = "https://remoteok.com/api"
+
+
 type Job struct {
 	CompanyName string
 	Title       string
@@ -71,7 +74,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		// Sleep for a random jitter (1-3 seconds) to seem human
 		time.Sleep(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
 
-		reqURL := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
+		reqURL := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
 		req, err := http.NewRequest("GET", reqURL, nil)
 		if err != nil {
 			log.Printf("[Scraper] Failed to create request for %s: %v", role, err)

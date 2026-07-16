@@ -15,6 +15,11 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
+var (
+	serpAPIBaseURL = "https://serpapi.com/search.json"
+	yahooBaseURL   = "https://search.yahoo.com/search"
+)
+
 type FunnelEngine struct {
 	TargetATS []string
 	Roles     []string
@@ -61,7 +66,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				continue
 			}
 
-			reqURL := fmt.Sprintf("https://serpapi.com/search.json?q=%s&api_key=%s&num=100", url.QueryEscape(query), apiKey)
+			reqURL := fmt.Sprintf("%s?q=%s&api_key=%s&num=100", serpAPIBaseURL, url.QueryEscape(query), apiKey)
 			
 			client := &http.Client{Timeout: 30 * time.Second}
 			resp, err := client.Get(reqURL)
@@ -141,7 +146,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 	
 	client := &http.Client{Timeout: 10 * time.Second}
-	searchURL := fmt.Sprintf("https://search.yahoo.com/search?p=%s", url.QueryEscape(query))
+	searchURL := fmt.Sprintf("%s?p=%s", yahooBaseURL, url.QueryEscape(query))
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		log.Printf("[FunnelEngine] Failed to create request for Yahoo: %v", err)
@@ -227,7 +232,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 	for _, role := range f.Roles {
 		tag := strings.ReplaceAll(strings.ToLower(role), " ", "-")
 		
-		url := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
+		url := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to create request for %s: %v", tag, err)
