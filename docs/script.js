@@ -3,7 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeToggle = document.getElementById('theme-toggle');
     const htmlElement = document.documentElement;
     
-    // Check local storage or system preference
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme) {
         htmlElement.setAttribute('data-theme', savedTheme);
@@ -26,14 +25,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (mobileToggle && navMenu) {
         mobileToggle.addEventListener('click', () => {
+            const isExpanded = mobileToggle.getAttribute('aria-expanded') === 'true' || false;
+            mobileToggle.setAttribute('aria-expanded', !isExpanded);
             mobileToggle.classList.toggle('active');
             navMenu.classList.toggle('active');
         });
 
-        // Close mobile menu when a link is clicked
         const navLinks = document.querySelectorAll('.nav-link, .btn-nav');
         navLinks.forEach(link => {
             link.addEventListener('click', () => {
+                mobileToggle.setAttribute('aria-expanded', 'false');
                 mobileToggle.classList.remove('active');
                 navMenu.classList.remove('active');
             });
@@ -42,40 +43,73 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Scroll Animations (Intersection Observer) ---
     const fadeElements = document.querySelectorAll('.fade-in-up');
-
     const observerOptions = {
         root: null,
         rootMargin: '0px',
-        threshold: 0.15
+        threshold: 0.1
     };
 
-    const scrollObserver = new IntersectionObserver((entries, observer) => {
+    const scrollObserver = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
                 entry.target.classList.add('visible');
-                // Optional: Stop observing once animated
-                // observer.unobserve(entry.target);
             }
         });
     }, observerOptions);
 
-    fadeElements.forEach(el => {
-        scrollObserver.observe(el);
-    });
+    fadeElements.forEach(el => scrollObserver.observe(el));
 
     // --- Parallax Effect on Ambient Orbs ---
     const ambientOrbs = document.querySelectorAll('.ambient-orb');
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+    let currentX = mouseX;
+    let currentY = mouseY;
     
     window.addEventListener('mousemove', (e) => {
-        const x = e.clientX / window.innerWidth;
-        const y = e.clientY / window.innerHeight;
+        mouseX = e.clientX;
+        mouseY = e.clientY;
+    });
+
+    function animateOrbs() {
+        // Smooth interpolation for parallax
+        currentX += (mouseX - currentX) * 0.05;
+        currentY += (mouseY - currentY) * 0.05;
+
+        const x = currentX / window.innerWidth;
+        const y = currentY / window.innerHeight;
 
         ambientOrbs.forEach((orb, index) => {
-            const speed = (index + 1) * 20;
+            const speed = (index + 1) * 30;
             const xOffset = (x - 0.5) * speed;
             const yOffset = (y - 0.5) * speed;
-            
-            orb.style.transform = `translate(${xOffset}px, ${yOffset}px)`;
+            orb.style.transform = `translate3d(${xOffset}px, ${yOffset}px, 0)`;
+        });
+        requestAnimationFrame(animateOrbs);
+    }
+    animateOrbs();
+
+    // --- Bento Card Spotlight Effect ---
+    const cards = document.querySelectorAll('.bento-card');
+    cards.forEach(card => {
+        card.addEventListener('mousemove', (e) => {
+            const rect = card.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            card.style.setProperty('--mouse-x', `${x}px`);
+            card.style.setProperty('--mouse-y', `${y}px`);
         });
     });
+
+    // --- Scrolled Nav Effect ---
+    const nav = document.querySelector('.glass-nav');
+    if (nav) {
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 50) {
+                nav.classList.add('scrolled');
+            } else {
+                nav.classList.remove('scrolled');
+            }
+        }, { passive: true });
+    }
 });
