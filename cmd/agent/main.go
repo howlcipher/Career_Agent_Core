@@ -69,6 +69,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("Configuration error: %v", err)
 	}
+
+	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+		Headless: playwright.Bool(prof.HeadlessBrowser),
+		Args: []string{
+			"--disable-blink-features=AutomationControlled",
+			"--disable-infobars",
+			"--disable-dev-shm-usage",
+			"--no-sandbox",
+		},
+	})
+	if err != nil {
+		log.Fatalf("could not launch browser: %v", err)
+	}
+	defer browser.Close()
+
 	log.Printf("Loaded profile: roles=%v, salary_floor=%d", prof.Roles, prof.SalaryFloor)
 
 	piiData, err := config.LoadPII("pii.yaml")
@@ -115,7 +130,7 @@ func main() {
 	}()
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-	pipeline := submitter.NewPipeline(storage.GetDB(), filter, client, pw)
+	pipeline := submitter.NewPipeline(filter, client, browser)
 
 	// Local Embedded RAG Ingestion
 	existingChunks, _ := storage.GetAllCareerChunks()
@@ -277,8 +292,9 @@ func main() {
 				break
 			}
 			if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
-				time.Sleep(1 * time.Hour)
+				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", job.CompanyName)
+				cancel()
+				return
 			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
 				log.Printf("Network error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
@@ -316,8 +332,9 @@ func main() {
 						break
 					}
 					if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-						log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
-						time.Sleep(1 * time.Hour)
+						log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Shutting down agent...", job.CompanyName)
+						cancel()
+						return "", "", fmt.Errorf("quota exceeded")
 					} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
 						log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 						time.Sleep(60 * time.Second)
@@ -343,7 +360,7 @@ func main() {
 				return masterResumePath, coverLetterPath, nil
 			}
 
-			if err := submitter.AttemptSubmit(pw, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			if err := submitter.AttemptSubmit(browser, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")

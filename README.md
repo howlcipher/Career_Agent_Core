@@ -22,6 +22,11 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
 - **Resilient Networking**: All LLM API calls are wrapped in strict 60-second context timeouts to prevent workers from hanging indefinitely during network blips or silent connection drops.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
+- **Extensible Handlers:** Decoupled `parser`, `scraper`, and `submitter` logic for effortless ATS expansion.
+
+---
+### 📜 Changelog
+Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](CHANGELOG.md)!
 
 ## Requirements
 - **Go 1.21+**

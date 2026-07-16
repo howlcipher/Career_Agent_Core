@@ -53,7 +53,7 @@ func (e *Engine) DiscoverSources() {
 }
 
 func (e *Engine) FetchJobs() ([]Job, error) {
-	e.DiscoverSources()
+	// e.DiscoverSources()
 	fmt.Printf("Scraping RemoteOK API for roles: %v...\n", e.Roles)
 
 	var allJobs []Job
@@ -66,7 +66,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 
 	for _, role := range rolesToSearch {
 		// Convert "DevOps Engineer" to "devops-engineer"
-		tag := strings.ReplaceAll(strings.ToLower(role), " ", "-")
+		tag := url.QueryEscape(strings.ToLower(strings.ReplaceAll(role, " ", "-")))
 
 		// Sleep for a random jitter (1-3 seconds) to seem human
 		time.Sleep(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)

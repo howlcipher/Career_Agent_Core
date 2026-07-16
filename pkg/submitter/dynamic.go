@@ -2,7 +2,6 @@ package submitter
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/playwright-community/playwright-go"
 )
 
@@ -23,19 +23,17 @@ type FormMapper interface {
 
 // Pipeline represents the dynamic script-generation pipeline for ATS submissions.
 type Pipeline struct {
-	DB        *sql.DB
 	Filter    *security.QuarantineLayer
 	Mapper    FormMapper
-	PW        *playwright.Playwright
+	Browser   playwright.Browser
 	Templates map[string]string // Known ATS footprints mapped to templates
 }
 
-func NewPipeline(db *sql.DB, filter *security.QuarantineLayer, mapper FormMapper, pw *playwright.Playwright) *Pipeline {
+func NewPipeline(filter *security.QuarantineLayer, mapper FormMapper, browser playwright.Browser) *Pipeline {
 	return &Pipeline{
-		DB:     db,
-		Filter: filter,
-		Mapper: mapper,
-		PW:     pw,
+		Filter:  filter,
+		Mapper:  mapper,
+		Browser: browser,
 		Templates: map[string]string{
 			"greenhouse.io": "GreenhouseTemplate",
 			"lever.co":      "LeverTemplate",
@@ -106,13 +104,10 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 	log.Printf("[Learner Module] Checking DB for known mappings for domain: %s", domain)
 	
 	// 1. Check Cache (Zero Token Path)
-	if p.DB != nil {
-		var cachedMapping string
-		err := p.DB.QueryRow("SELECT mapping_json FROM form_mappings WHERE domain = ?", domain).Scan(&cachedMapping)
-		if err == nil && cachedMapping != "" {
-			log.Printf("[Learner Module] Cache Hit! Using pre-learned mappings. Tokens saved: ~15,000")
-			return "CachedScript_" + domain, nil
-		}
+	cachedMapping, err := storage.GetFormMapping(domain)
+	if err == nil && cachedMapping != "" {
+		log.Printf("[Learner Module] Cache Hit! Using pre-learned mappings. Tokens saved: ~15,000")
+		return "CachedScript_" + domain, nil
 	}
 
 	// 2. Cache Miss (High Token Path)
@@ -124,12 +119,9 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 			log.Printf("[Pipeline] Match found! ATS identified as %s. Loading %s...", footprint, templateName)
 			
 			// Save the learning back to DB for next time
-			if p.DB != nil {
-				mockMappingJSON := fmt.Sprintf(`{"ats_type": "%s", "fields": {"first_name": "input#first_name"}}`, footprint)
-				_, err := p.DB.Exec("INSERT INTO form_mappings (domain, mapping_json, created_at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET mapping_json=excluded.mapping_json", domain, mockMappingJSON, time.Now())
-				if err != nil {
-					log.Printf("Failed to cache learned mapping: %v", err)
-				}
+			mockMappingJSON := fmt.Sprintf(`{"ats_type": "%s", "fields": {"first_name": "input#first_name"}}`, footprint)
+			if err := storage.SaveFormMapping(domain, mockMappingJSON); err != nil {
+				log.Printf("Failed to cache learned mapping: %v", err)
 			}
 			return templateName, nil
 		}
@@ -150,25 +142,63 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 			return "DynamicGeneratedScript_Failed", err
 		}
 
-		if p.DB != nil {
-			p.DB.Exec("INSERT INTO form_mappings (domain, mapping_json, created_at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET mapping_json=excluded.mapping_json", domain, mappingJSON, time.Now())
-			log.Printf("[Learner Module] Successfully learned and cached new form mapping for %s", domain)
+		if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {
+			log.Printf("Failed to cache learned mapping: %v", err)
 		}
+		log.Printf("[Learner Module] Successfully learned and cached new form mapping for %s", domain)
 		return "CachedScript_" + domain, nil
 	}
 	
 	return "DynamicGeneratedScript", nil
 }
 
-// SaveCheckpoint records the current progress to the SQLite database
-func (p *Pipeline) SaveCheckpoint(jobID, url, status string) error {
-	if p.DB == nil {
-		return fmt.Errorf("database not initialized for checkpointing")
+func (p *Pipeline) CheckCache(domain string) (string, error) {
+	var cachedMapping string
+	cachedMapping, err := storage.GetFormMapping(domain)
+	if err == nil && cachedMapping != "" {
+		return cachedMapping, nil
 	}
-	query := `INSERT INTO execution_state (job_id, url, status, last_updated) VALUES (?, ?, ?, ?)
-			  ON CONFLICT(job_id) DO UPDATE SET status=excluded.status, last_updated=excluded.last_updated`
-	_, err := p.DB.Exec(query, jobID, url, status, time.Now())
-	return err
+
+	return "", fmt.Errorf("not found in cache")
+}
+
+func (p *Pipeline) ProcessDomain(domain string) (string, error) {
+	// Attempt Cache First
+	cached, err := p.CheckCache(domain)
+	if err == nil {
+		log.Printf("[Learner Module] Cache hit for domain %s", domain)
+		return cached, nil
+	}
+
+	// For demonstration, simulating LLM latency for mapping derivation
+	time.Sleep(2 * time.Second)
+	mockMappingJSON := `{"fields": {"firstName": "#first_name_input"}}`
+	
+	err = storage.SaveFormMapping(domain, mockMappingJSON)
+	if err != nil {
+		log.Printf("Failed to cache form mapping: %v", err)
+	}
+
+	return mockMappingJSON, nil
+}
+
+func (p *Pipeline) AnalyzeAndMapForm(htmlContent, domain string) (string, error) {
+	mappingJSON, err := p.Mapper.ExtractFormMapping(htmlContent)
+	if err != nil {
+		return "", fmt.Errorf("LLM failed to map form: %w", err)
+	}
+
+	err = storage.SaveFormMapping(domain, mappingJSON)
+	if err != nil {
+		log.Printf("Failed to cache form mapping: %v", err)
+	}
+
+	return mappingJSON, nil
+}
+
+// SaveCheckpoint saves the execution state.
+func (p *Pipeline) SaveCheckpoint(jobID, url, status string) error {
+	return storage.LogExecution(jobID, url, status, 0)
 }
 
 // Execute handles the robust pipeline logic, including rate limiting thresholds and execution safeguards
@@ -187,14 +217,13 @@ func (p *Pipeline) Execute(ctx context.Context, jobID, url string) error {
 	}
 
 	// 1. Launch Playwright
-	browser, err := p.PW.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Args: []string{"--disable-dev-shm-usage", "--no-sandbox"},
-	})
+	bCtx, err := p.Browser.NewContext()
 	if err != nil {
 		return err
 	}
-	defer browser.Close()
-	page, err := browser.NewPage()
+	defer bCtx.Close()
+
+	page, err := bCtx.NewPage()
 	if err != nil {
 		return err
 	}

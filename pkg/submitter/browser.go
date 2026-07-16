@@ -9,6 +9,7 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/playwright-community/playwright-go"
 )
@@ -16,26 +17,18 @@ import (
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(pw *playwright.Playwright, filter *security.QuarantineLayer, mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(headlessBrowser),
-		Args: []string{
-			"--disable-blink-features=AutomationControlled", // Stealth: hide automation flag
-			"--disable-infobars",
-			"--disable-dev-shm-usage",
-			"--no-sandbox",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("could not launch browser: %w", err)
-	}
-	defer browser.Close()
-
-	page, err := browser.NewPage(playwright.BrowserNewPageOptions{
+	bCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"),
 	})
+	if err != nil {
+		return fmt.Errorf("could not create context: %w", err)
+	}
+	defer bCtx.Close()
+
+	page, err := bCtx.NewPage()
 	if err != nil {
 		return fmt.Errorf("could not create page: %w", err)
 	}
