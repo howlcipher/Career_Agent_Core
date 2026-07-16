@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,6 +272,7 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	for rows.Next() {
 		var j FunnelJob
 		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL); err != nil {
+			log.Printf("[Storage] Error scanning discovered job row: %v", err)
 			continue
 		}
 		jobs = append(jobs, j)
@@ -321,9 +323,11 @@ func GetAllCareerChunks() ([]CareerChunk, error) {
 		var c CareerChunk
 		var embStr string
 		if err := rows.Scan(&c.ID, &c.Text, &embStr); err != nil {
+			log.Printf("[Storage] Error scanning career chunk row: %v", err)
 			continue
 		}
 		if err := json.Unmarshal([]byte(embStr), &c.Embedding); err != nil {
+			log.Printf("[Storage] Error unmarshaling career chunk embedding: %v", err)
 			continue
 		}
 		chunks = append(chunks, c)

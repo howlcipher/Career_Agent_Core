@@ -46,9 +46,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	log.Println("Initializing Career Agent Core...")
+	log.Println("[Agent] Initializing Career Agent Core...")
 	if *daemonMode {
-		log.Println("[DAEMON MODE] Agent will drip applications every 6 hours to evade ATS IP bans.")
+		log.Println("[Agent] [DAEMON MODE] Agent will drip applications every 6 hours to evade ATS IP bans.")
 	}
 
 	if err := storage.InitDB(); err != nil {
@@ -84,11 +84,11 @@ func main() {
 	}
 	defer browser.Close()
 
-	log.Printf("Loaded profile: roles=%v, salary_floor=%d", prof.Roles, prof.SalaryFloor)
+	log.Printf("[Agent] Loaded profile: roles=%v, salary_floor=%d", prof.Roles, prof.SalaryFloor)
 
 	piiData, err := config.LoadPII("pii.yaml")
 	if err != nil {
-		log.Printf("PII warning (defaulting to empty fields): %v", err)
+		log.Printf("[Agent] PII warning (defaulting to empty fields): %v", err)
 		piiData = &config.PII{}
 	}
 
@@ -111,7 +111,7 @@ func main() {
 					Remote:      true,            
 				}
 			}
-			log.Printf("Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
+			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
 		}()
 	}
 
@@ -120,7 +120,7 @@ func main() {
 	go func() {
 		defer producerWg.Done()
 		if err := funnelEngine.DiscoverJobs(jobChan); err != nil {
-			log.Printf("Funnel discovery error: %v", err)
+			log.Printf("[Agent] Funnel discovery error: %v", err)
 		}
 	}()
 
@@ -133,7 +133,10 @@ func main() {
 	pipeline := submitter.NewPipeline(filter, client, browser)
 
 	// Local Embedded RAG Ingestion
-	existingChunks, _ := storage.GetAllCareerChunks()
+	existingChunks, err := storage.GetAllCareerChunks()
+	if err != nil {
+		log.Printf("[Agent] [RAG] Failed to get career chunks from storage: %v", err)
+	}
 	if len(existingChunks) == 0 {
 		log.Println("[RAG] Knowledge Library cache empty. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
 		mdContent, err := parser.ReadMarkdown("/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md")
@@ -162,7 +165,7 @@ func main() {
 			for job := range jobChan {
 				select {
 				case <-ctx.Done():
-					log.Printf("Worker %d shutting down gracefully...", workerID)
+					log.Printf("[Worker-%d] Shutting down gracefully...", workerID)
 					return
 				default:
 				}
@@ -173,7 +176,7 @@ func main() {
 		excluded := false
 		for _, ex := range prof.ExcludeCompanies {
 			if strings.Contains(nameLower, strings.ToLower(ex)) {
-				log.Printf("Security Block: Skipping %s (Found in ExcludeCompanies blocklist)\n", job.CompanyName)
+				log.Printf("[Worker-%d] Security Block: Skipping %s (Found in ExcludeCompanies blocklist)", workerID, job.CompanyName)
 				excluded = true
 				break
 			}
@@ -185,10 +188,10 @@ func main() {
 
 		// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
 		if job.Description == "" {
-			log.Printf("Fetching job description for %s...", job.CompanyName)
+			log.Printf("[Worker-%d] Fetching job description for %s...", workerID, job.CompanyName)
 			u, err := url.Parse(job.URL)
 			if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
-				log.Printf("Invalid or unsafe URL blocked: %s", job.URL)
+				log.Printf("[Worker-%d] Invalid or unsafe URL blocked: %s", workerID, job.URL)
 				continue
 			}
 			
@@ -206,33 +209,40 @@ func main() {
 			}
 			req, err := http.NewRequest("GET", job.URL, nil)
 			if err != nil {
-				log.Printf("Failed to create request for %s: %v", job.CompanyName, err)
+				log.Printf("[Worker-%d] Failed to create request for %s: %v", workerID, job.CompanyName, err)
 				continue
 			}
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 			resp, err := httpClient.Do(req)
 			if err == nil {
 				defer resp.Body.Close()
-				b, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+				b, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+				if err != nil {
+					log.Printf("[Worker-%d] Failed to read response body for %s: %v", workerID, job.CompanyName, err)
+					continue
+				}
 				htmlStr := string(b)
 				
 				// Captcha / Bot protection check
 				lowerHTML := strings.ToLower(htmlStr)
 				if strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required")) || strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile") {
-					log.Printf("Security/Captcha block detected for %s. Skipping job to save API tokens.", job.CompanyName)
+					log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
 					storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
 					continue
 				}
 
-				pruned, _ := parser.PruneDOMToText(htmlStr)
+				pruned, err := parser.PruneDOMToText(htmlStr)
+				if err != nil {
+					log.Printf("[Worker-%d] Failed to prune DOM for %s: %v", workerID, job.CompanyName, err)
+				}
 				job.Description = pruned
 			} else {
-				log.Printf("Failed to fetch job description for %s: %v", job.CompanyName, err)
+				log.Printf("[Worker-%d] Failed to fetch job description for %s: %v", workerID, job.CompanyName, err)
 			}
 		}
 
 		if storage.HasApplied(job.URL) {
-			log.Printf("Duplicate check: Already applied to %s. Skipping.", job.CompanyName)
+			log.Printf("[Worker-%d] Duplicate check: Already applied to %s. Skipping.", workerID, job.CompanyName)
 			continue
 		}
 
@@ -252,7 +262,7 @@ func main() {
 				break
 			}
 			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-				log.Printf("Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", attempt)
+				log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
 				break
@@ -273,7 +283,7 @@ func main() {
 		}
 
 		if err := filter.CheckPayload(tailoredContext); err != nil {
-			log.Printf("Security quarantine triggered on RAG output: %v", err)
+			log.Printf("[Worker-%d] Security quarantine triggered on RAG output: %v", workerID, err)
 			continue
 		}
 
@@ -292,11 +302,11 @@ func main() {
 				break
 			}
 			if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", job.CompanyName)
+				log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
 				cancel()
 				return
 			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-				log.Printf("Network error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+				log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
 				break
@@ -304,23 +314,23 @@ func main() {
 		}
 
 		if scoreErr != nil {
-			log.Printf("Failed to score job for %s after retries: %v", job.CompanyName, scoreErr)
+			log.Printf("[Worker-%d] Failed to score job for %s after retries: %v", workerID, job.CompanyName, scoreErr)
 			storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
 		if score < 50 {
-			log.Printf("Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", job.CompanyName, score)
+			log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", workerID, job.CompanyName, score)
 			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		log.Printf("Fit Score Pipeline: %s scored %d! Proceeding with application.", job.CompanyName, score)
+		log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d! Proceeding with application.", workerID, job.CompanyName, score)
 
 		if prof.AutoSubmit {
 			if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
-				log.Printf("Failed to checkpoint: %v", err)
+				log.Printf("[Worker-%d] Failed to checkpoint: %v", workerID, err)
 			}
 
 			generateDocsFunc := func() (string, string, error) {
@@ -332,11 +342,11 @@ func main() {
 						break
 					}
 					if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-						log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Shutting down agent...", job.CompanyName)
+						log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Shutting down agent...", workerID, job.CompanyName)
 						cancel()
 						return "", "", fmt.Errorf("quota exceeded")
 					} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
-						log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+						log.Printf("[Worker-%d] Network error processing application %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
 						time.Sleep(60 * time.Second)
 					} else {
 						break
@@ -344,16 +354,16 @@ func main() {
 				}
 
 				if processErr != nil {
-					log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
+					log.Printf("[Worker-%d] Failed to process job for %s after retries: %v", workerID, job.CompanyName, processErr)
 					return "", "", processErr
 				}
 
 				if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
-					log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
+					log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
 					return "", "", err
 				}
 
-				log.Printf("Successfully generated and saved application for %s", job.CompanyName)
+				log.Printf("[Worker-%d] Successfully generated and saved application for %s", workerID, job.CompanyName)
 
 				masterResumePath := "master_resume.pdf"
 				coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
@@ -361,11 +371,11 @@ func main() {
 			}
 
 			if err := submitter.AttemptSubmit(browser, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
-				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
+				log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
 				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
-					log.Printf("Also failed to log manual submission for %s: %v", job.CompanyName, logErr)
+					log.Printf("[Worker-%d] Also failed to log manual submission for %s: %v", workerID, job.CompanyName, logErr)
 				}
 			} else {
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")
@@ -383,5 +393,5 @@ func main() {
 	}
 	
 	wg.Wait()
-	log.Println("Batch execution complete!")
+	log.Println("[Agent] Batch execution complete!")
 }

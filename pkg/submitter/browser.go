@@ -205,7 +205,10 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 	// Click Easy Apply button
 	easyApplyBtn := page.Locator("button.jobs-apply-button")
 	if count, _ := easyApplyBtn.Count(); count > 0 {
-		easyApplyBtn.First().Click()
+		if err := easyApplyBtn.First().Click(); err != nil {
+			log.Printf("[Playwright] Failed to click Easy Apply button: %v", err)
+			return fmt.Errorf("failed to click easy apply: %w", err)
+		}
 	} else {
 		return fmt.Errorf("could not find Easy Apply button")
 	}
@@ -230,16 +233,24 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 	// Basic fields
 	if pii != nil {
 		if pii.FirstName != "" {
-			page.Locator("input#first_name").Fill(pii.FirstName)
+			if err := page.Locator("input#first_name").Fill(pii.FirstName); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill first_name: %v", err)
+			}
 		}
 		if pii.LastName != "" {
-			page.Locator("input#last_name").Fill(pii.LastName)
+			if err := page.Locator("input#last_name").Fill(pii.LastName); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill last_name: %v", err)
+			}
 		}
 		if pii.Email != "" {
-			page.Locator("input#email").Fill(pii.Email)
+			if err := page.Locator("input#email").Fill(pii.Email); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill email: %v", err)
+			}
 		}
 		if pii.Phone != "" {
-			page.Locator("input#phone").Fill(pii.Phone)
+			if err := page.Locator("input#phone").Fill(pii.Phone); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill phone: %v", err)
+			}
 		}
 	}
 
@@ -248,17 +259,21 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 	if count, _ := fileInput.Count(); count > 0 {
 		fileBytes, err := os.ReadFile(resumePath)
 		if err == nil {
-			fileInput.First().SetInputFiles([]playwright.InputFile{{
+			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
 				Name:   "resume.pdf", 
 				Buffer: fileBytes,
-			}})
+			}}); err != nil {
+				log.Printf("[Playwright] Warning: Failed to set resume file: %v", err)
+			}
 		} else {
-			log.Printf("Failed to read resume for upload: %v", err)
+			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
 		}
 	}
 
 	if autoSubmitClick {
-		page.Locator("input#submit_app").Click()
+		if err := page.Locator("input#submit_app").Click(); err != nil {
+			log.Printf("[Playwright] Warning: Failed to click submit: %v", err)
+		}
 	}
 	
 	return nil
@@ -275,13 +290,19 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 
 	if pii != nil {
 		if pii.FirstName != "" || pii.LastName != "" {
-			page.Locator("input[name='name']").Fill(pii.FirstName + " " + pii.LastName)
+			if err := page.Locator("input[name='name']").Fill(pii.FirstName + " " + pii.LastName); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill name: %v", err)
+			}
 		}
 		if pii.Email != "" {
-			page.Locator("input[name='email']").Fill(pii.Email)
+			if err := page.Locator("input[name='email']").Fill(pii.Email); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill email: %v", err)
+			}
 		}
 		if pii.Phone != "" {
-			page.Locator("input[name='phone']").Fill(pii.Phone)
+			if err := page.Locator("input[name='phone']").Fill(pii.Phone); err != nil {
+				log.Printf("[Playwright] Warning: Failed to fill phone: %v", err)
+			}
 		}
 	}
 
@@ -289,17 +310,21 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 	if count, _ := fileInput.Count(); count > 0 {
 		fileBytes, err := os.ReadFile(resumePath)
 		if err == nil {
-			fileInput.First().SetInputFiles([]playwright.InputFile{{
+			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
 				Name:   "resume.pdf",
 				Buffer: fileBytes,
-			}})
+			}}); err != nil {
+				log.Printf("[Playwright] Warning: Failed to set resume file: %v", err)
+			}
 		} else {
-			log.Printf("Failed to read resume for upload: %v", err)
+			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
 		}
 	}
 
 	if autoSubmitClick {
-		page.Locator("button.postings-btn.template-btn-submit").Click()
+		if err := page.Locator("button.postings-btn.template-btn-submit").Click(); err != nil {
+			log.Printf("[Playwright] Warning: Failed to click submit: %v", err)
+		}
 	}
 
 	return nil

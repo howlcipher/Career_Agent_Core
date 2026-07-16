@@ -121,7 +121,7 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 			// Save the learning back to DB for next time
 			mockMappingJSON := fmt.Sprintf(`{"ats_type": "%s", "fields": {"first_name": "input#first_name"}}`, footprint)
 			if err := storage.SaveFormMapping(domain, mockMappingJSON); err != nil {
-				log.Printf("Failed to cache learned mapping: %v", err)
+				log.Printf("[Learner Module] Failed to cache learned mapping: %v", err)
 			}
 			return templateName, nil
 		}
@@ -132,18 +132,18 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 	if p.Mapper != nil {
 		prunedDOM, pruneErr := parser.PruneDOM(domHTML)
 		if pruneErr != nil {
-			log.Printf("DOM pruning failed, using raw HTML: %v", pruneErr)
+			log.Printf("[Submitter] DOM pruning failed, using raw HTML: %v", pruneErr)
 			prunedDOM = domHTML
 		}
 
 		mappingJSON, err := p.Mapper.ExtractFormMapping(prunedDOM)
 		if err != nil {
-			log.Printf("LLM mapping failed: %v", err)
+			log.Printf("[Learner Module] LLM mapping failed: %v", err)
 			return "DynamicGeneratedScript_Failed", err
 		}
 
 		if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {
-			log.Printf("Failed to cache learned mapping: %v", err)
+			log.Printf("[Learner Module] Failed to cache learned mapping: %v", err)
 		}
 		log.Printf("[Learner Module] Successfully learned and cached new form mapping for %s", domain)
 		return "CachedScript_" + domain, nil
@@ -176,7 +176,7 @@ func (p *Pipeline) ProcessDomain(domain string) (string, error) {
 	
 	err = storage.SaveFormMapping(domain, mockMappingJSON)
 	if err != nil {
-		log.Printf("Failed to cache form mapping: %v", err)
+		log.Printf("[Storage] Failed to cache form mapping: %v", err)
 	}
 
 	return mockMappingJSON, nil
@@ -190,7 +190,7 @@ func (p *Pipeline) AnalyzeAndMapForm(htmlContent, domain string) (string, error)
 
 	err = storage.SaveFormMapping(domain, mappingJSON)
 	if err != nil {
-		log.Printf("Failed to cache form mapping: %v", err)
+		log.Printf("[Storage] Failed to cache form mapping: %v", err)
 	}
 
 	return mappingJSON, nil
@@ -204,7 +204,7 @@ func (p *Pipeline) SaveCheckpoint(jobID, url, status string) error {
 // Execute handles the robust pipeline logic, including rate limiting thresholds and execution safeguards
 func (p *Pipeline) Execute(ctx context.Context, jobID, url string) error {
 	if err := p.SaveCheckpoint(jobID, url, "STARTED"); err != nil {
-		log.Printf("Checkpoint warning: %v", err)
+		log.Printf("[Pipeline] Checkpoint warning: %v", err)
 	}
 
 	// Placeholder for compute/rate limit circuit breaker
