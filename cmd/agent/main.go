@@ -245,49 +245,48 @@ func main() {
 		}
 		log.Printf("Fit Score Pipeline: %s scored %d! Proceeding with application.", job.CompanyName, score)
 
-		var resume, coverLetter, interviewPrep string
-		var processErr error
-		for attempt := 1; attempt <= 3; attempt++ {
-			resume, coverLetter, interviewPrep, processErr = client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
-			if processErr == nil {
-				break
-			}
-			if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
-				time.Sleep(1 * time.Hour)
-			} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
-				log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
-				time.Sleep(60 * time.Second)
-			} else {
-				break
-			}
-		}
-
-		if processErr != nil {
-			log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
-			log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		log.Printf("Successfully generated and saved application for %s", job.CompanyName)
-
 		if prof.AutoSubmit {
-			// We still save the LLM-generated resume to the application folder for your records,
-			// but we upload the beautifully formatted master PDF to the actual ATS to ensure it parses correctly.
-			masterResumePath := "master_resume.pdf"
-			coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
-
 			if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
 				log.Printf("Failed to checkpoint: %v", err)
 			}
 
-			if err := submitter.AttemptSubmit(client, job.CompanyName, job.URL, masterResumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			generateDocsFunc := func() (string, string, error) {
+				var resume, coverLetter, interviewPrep string
+				var processErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					resume, coverLetter, interviewPrep, processErr = client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
+					if processErr == nil {
+						break
+					}
+					if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
+						log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
+						time.Sleep(1 * time.Hour)
+					} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
+						log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
+						time.Sleep(60 * time.Second)
+					} else {
+						break
+					}
+				}
+
+				if processErr != nil {
+					log.Printf("Failed to process job for %s after retries: %v", job.CompanyName, processErr)
+					return "", "", processErr
+				}
+
+				if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
+					log.Printf("Failed to save application for %s: %v", job.CompanyName, err)
+					return "", "", err
+				}
+
+				log.Printf("Successfully generated and saved application for %s", job.CompanyName)
+
+				masterResumePath := "master_resume.pdf"
+				coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
+				return masterResumePath, coverLetterPath, nil
+			}
+
+			if err := submitter.AttemptSubmit(client, job.CompanyName, job.URL, generateDocsFunc, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")

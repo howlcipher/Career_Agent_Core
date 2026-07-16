@@ -16,7 +16,7 @@ import (
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(mapper FormMapper, companyName, applyURL, resumePath, coverLetterPath string, pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
 	// Install playwright browsers if they don't exist
@@ -71,6 +71,23 @@ func AttemptSubmit(mapper FormMapper, companyName, applyURL, resumePath, coverLe
 		}
 	}
 
+	// Wait for a brief moment to let bot-protection scripts (like Cloudflare) reveal themselves
+	page.WaitForTimeout(2000)
+	
+	// Check for obvious dead ends
+	content, _ := page.Content()
+	lowerContent := strings.ToLower(content)
+	if strings.Contains(lowerContent, "job is no longer available") || strings.Contains(lowerContent, "position has been filled") || strings.Contains(lowerContent, "404 not found") {
+		return fmt.Errorf("job posting is dead or expired")
+	}
+
+	// At this point, the page is live. NOW we generate the costly resume and cover letter!
+	log.Printf("[Auto-Submit] Verified page is live. Generating tailored documents...")
+	resumePath, _, err := generateDocs()
+	if err != nil {
+		return fmt.Errorf("failed to generate application documents: %w", err)
+	}
+
 	domain := ExtractDomain(applyURL)
 	mappingJSON, err := storage.GetFormMapping(domain)
 	if err == nil && mappingJSON != "" {
@@ -114,6 +131,8 @@ func AttemptSubmit(mapper FormMapper, companyName, applyURL, resumePath, coverLe
 			return nil
 		}
 		log.Printf("[Learner Module] Failed to map form: %v", err)
+		log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
+		return AttemptVisionSubmit(page, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
 	}
 
 	return fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)

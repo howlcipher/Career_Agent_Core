@@ -17,6 +17,7 @@ import (
 // FormMapper extracts Playwright selector mappings from a DOM
 type FormMapper interface {
 	ExtractFormMapping(domHTML string) (string, error)
+	ExtractFormMappingVision(screenshotBytes []byte) (string, error)
 }
 
 // Pipeline represents the dynamic script-generation pipeline for ATS submissions.
