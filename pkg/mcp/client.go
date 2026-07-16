@@ -5,12 +5,26 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"log"
+	"sync/atomic"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
 )
 
 const SystemPrompt = "You are an expert technical recruiter. Analyze the job description and tailor the base resume and cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Output the resume in Markdown and the cover letter in plain text. Do not use hyphens."
+
+var apiCallCount uint64
+
+func incrementAndLogAPICall(callType string, payloadLen int) error {
+	count := atomic.AddUint64(&apiCallCount, 1)
+	log.Printf("[API Metrics] %s API Call #%d executed. Payload length: %d characters.", callType, count, payloadLen)
+	
+	if payloadLen > 50000 {
+		return fmt.Errorf("CIRCUIT BREAKER TRIGGERED: Payload size %d exceeds safety limit (50k chars). Aborting to prevent runaway LLM costs.", payloadLen)
+	}
+	return nil
+}
 
 type Client struct {
 	APIKey string
@@ -62,6 +76,7 @@ My Background:
 %s`,
 		profileConstraints["remote_only"], profileConstraints["salary_floor"], scrapedData["title"], scrapedData["desc"], parsedDocument)
 
+	if err := incrementAndLogAPICall("ScoreJob", len(prompt)); err != nil { return 0, err }
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate content: %w", err)
@@ -118,6 +133,7 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
 
 	fmt.Println("Sending application context to Gemini Pro...")
+	if err := incrementAndLogAPICall("ProcessJobApplication", len(prompt)); err != nil { return "", "", "", err }
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to generate content from gemini: %w", err)
@@ -199,6 +215,7 @@ Return a JSON object in this exact format:
 
 	prompt := fmt.Sprintf("Analyze this DOM and extract the input selectors:\n\n%s", domHTML)
 	
+	if err := incrementAndLogAPICall("ExtractFormMapping", len(prompt)); err != nil { return "", err }
 	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping: %w", err)
@@ -263,6 +280,8 @@ Return a JSON object in this exact format:
 	prompt := genai.Text("Analyze this screenshot and extract the input selectors based on visual placement and placeholders:")
 	imgData := genai.ImageData("png", screenshotBytes)
 
+	// Cannot easily measure image data size in chars, but we log the prompt
+	if err := incrementAndLogAPICall("ExtractFormMappingVision", len(string(prompt))); err != nil { return "", err }
 	resp, err := model.GenerateContent(ctx, prompt, imgData)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping from vision: %w", err)
@@ -296,6 +315,7 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	defer client.Close()
 
 	em := client.EmbeddingModel("gemini-embedding-001")
+	if err := incrementAndLogAPICall("GetEmbedding", len(text)); err != nil { return nil, err }
 	res, err := em.EmbedContent(ctx, genai.Text(text))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get embedding: %w", err)
@@ -322,6 +342,7 @@ func (c *Client) ExtractRejectionReason(emailText string) string {
 		Parts: []genai.Part{genai.Text("You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection').")},
 	}
 
+	if err := incrementAndLogAPICall("AnalyzeEmail", len(emailText)); err != nil { return err.Error() }
 	res, err := model.GenerateContent(ctx, genai.Text(emailText))
 	if err != nil || len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
 		return "Generic templated rejection (no specific reason provided)"

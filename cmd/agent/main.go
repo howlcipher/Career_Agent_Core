@@ -151,7 +151,7 @@ func main() {
 					continue
 				}
 
-				pruned, _ := parser.PruneDOM(htmlStr)
+				pruned, _ := parser.PruneDOMToText(htmlStr)
 				job.Description = pruned
 			} else {
 				log.Printf("Failed to fetch job description for %s: %v", job.CompanyName, err)
