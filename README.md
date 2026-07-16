@@ -17,7 +17,17 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Live Metrics Dashboard**: Ships with a beautifully formatted zero-dependency Terminal UI (TUI) to track your live conversion rates.
 - **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
 - **Playwright Fallback Scraper**: Bypasses SerpApi limits by deploying an undetectable headless DuckDuckGo scraper with `navigator.webdriver` evasion when API credits run out.
+- **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with Gemini, ensuring payloads remain under ~1,500 characters to prevent budget blowouts and quota exhaustion.
+- **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it automatically sends the raw form to Gemini to mathematically map the input selectors. It caches this learned blueprint in SQLite and successfully submits the application, theoretically supporting any job board on the internet.
+- **Resilient Networking**: All LLM API calls are wrapped in strict 60-second context timeouts to prevent workers from hanging indefinitely during network blips or silent connection drops.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
+
+## Requirements
+- **Go 1.21+**
+- **Playwright System Dependencies**: Headless auto-submission requires specific system libraries (like `libicu`). On Linux, run the following to install the necessary dependencies before starting the agent:
+  ```bash
+  go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps
+  ```
 
 ## Getting Started (How to Use)
 
