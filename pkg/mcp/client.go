@@ -7,6 +7,7 @@ import (
 	"strings"
 	"log"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -41,7 +42,8 @@ func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[
 		return 0, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return 0, fmt.Errorf("failed to create gemini client: %w", err)
@@ -106,7 +108,8 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		return "", "", "", fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to create gemini client: %w", err)
@@ -178,7 +181,8 @@ func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
 		return "", fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return "", fmt.Errorf("failed to create gemini client: %w", err)
@@ -242,7 +246,8 @@ func (c *Client) ExtractFormMappingVision(screenshotBytes []byte) (string, error
 		return "", fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return "", fmt.Errorf("failed to create gemini client: %w", err)
@@ -307,7 +312,8 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gemini client: %w", err)
@@ -330,7 +336,8 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 
 // ExtractRejectionReason reads an HR rejection email and explicitly figures out why the candidate was rejected.
 func (c *Client) ExtractRejectionReason(emailText string) string {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
 	if err != nil {
 		return "Failed to parse API key"

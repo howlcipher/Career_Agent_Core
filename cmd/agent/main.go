@@ -178,7 +178,7 @@ func main() {
 			if embErr == nil {
 				break
 			}
-			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") {
+			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
 				log.Printf("Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", attempt)
 				time.Sleep(60 * time.Second)
 			} else {
@@ -221,7 +221,7 @@ func main() {
 			if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
 				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
 				time.Sleep(1 * time.Hour)
-			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") {
+			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
 				log.Printf("Network error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
@@ -254,7 +254,7 @@ func main() {
 			if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
 				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
 				time.Sleep(1 * time.Hour)
-			} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") {
+			} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
 				log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
 			} else {
