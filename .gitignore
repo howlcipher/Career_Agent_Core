@@ -4,6 +4,6 @@ applications/
 applications.db
 main
 .env
-agent
+/agent
 master_resume.pdf
 career_agent.log

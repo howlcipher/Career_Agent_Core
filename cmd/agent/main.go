@@ -140,9 +140,19 @@ func main() {
 			resp, err := httpClient.Do(req)
 			if err == nil {
 				b, _ := io.ReadAll(resp.Body)
-				pruned, _ := parser.PruneDOM(string(b))
-				job.Description = pruned
+				htmlStr := string(b)
 				resp.Body.Close()
+				
+				// Captcha / Bot protection check
+				lowerHTML := strings.ToLower(htmlStr)
+				if strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required")) || strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile") {
+					log.Printf("Security/Captcha block detected for %s. Skipping job to save API tokens.", job.CompanyName)
+					storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
+					continue
+				}
+
+				pruned, _ := parser.PruneDOM(htmlStr)
+				job.Description = pruned
 			} else {
 				log.Printf("Failed to fetch job description for %s: %v", job.CompanyName, err)
 			}
@@ -209,9 +219,8 @@ func main() {
 				break
 			}
 			if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Deep Sleeping for 1 hour to wait for quota reset...", job.CompanyName)
+				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
 				time.Sleep(1 * time.Hour)
-				attempt-- // Don't count this as a failed attempt, just pause execution
 			} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") {
 				log.Printf("Network error scoring job %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
@@ -243,9 +252,8 @@ func main() {
 				break
 			}
 			if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Deep Sleeping for 1 hour to wait for quota reset...", job.CompanyName)
+				log.Printf("CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Sleeping for 1 hour before next attempt...", job.CompanyName)
 				time.Sleep(1 * time.Hour)
-				attempt-- // Don't count this as a failed attempt, just pause execution
 			} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") {
 				log.Printf("Network error processing application %s (attempt %d/3). Sleeping 60s...", job.CompanyName, attempt)
 				time.Sleep(60 * time.Second)
