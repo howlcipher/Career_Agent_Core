@@ -142,7 +142,11 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	
 	client := &http.Client{Timeout: 10 * time.Second}
 	searchURL := fmt.Sprintf("https://search.yahoo.com/search?p=%s", url.QueryEscape(query))
-	req, _ := http.NewRequest("GET", searchURL, nil)
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		log.Printf("[FunnelEngine] Failed to create request for Yahoo: %v", err)
+		return
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	
 	resp, err := client.Do(req)
@@ -152,7 +156,11 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	}
 	defer resp.Body.Close()
 	
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[FunnelEngine] Failed to read response body for Yahoo: %v", err)
+		return
+	}
 	html := string(b)
 	
 	// Extract RU parameter from r.search.yahoo.com links
@@ -161,7 +169,11 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	
 	found := make(map[string]bool)
 	for _, m := range matches {
-		decoded, _ := url.QueryUnescape(m[1])
+		decoded, err := url.QueryUnescape(m[1])
+		if err != nil {
+			log.Printf("[FunnelEngine] Failed to decode URL: %v", err)
+			continue
+		}
 		if !found[decoded] && isValidATSUrl(decoded) {
 			found[decoded] = true
 			
@@ -218,6 +230,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 		url := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
+			log.Printf("[FunnelEngine] Failed to create request for %s: %v", tag, err)
 			continue
 		}
 		
@@ -226,6 +239,11 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
+			if err != nil {
+				log.Printf("[FunnelEngine] Failed to execute request for %s: %v", tag, err)
+			} else {
+				log.Printf("[FunnelEngine] API returned non-200 status for %s: %d", tag, resp.StatusCode)
+			}
 			if resp != nil {
 				resp.Body.Close()
 			}
@@ -235,11 +253,13 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			log.Printf("[FunnelEngine] Failed to read response body for %s: %v", tag, err)
 			continue
 		}
 
 		var rawJobs []json.RawMessage
 		if err := json.Unmarshal(body, &rawJobs); err != nil {
+			log.Printf("[FunnelEngine] Failed to unmarshal JSON for %s: %v", tag, err)
 			continue
 		}
 
@@ -250,12 +270,15 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 		for i := 1; i < len(rawJobs); i++ {
 			var roJob RemoteOkJob
 			if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
+				log.Printf("[FunnelEngine] Failed to unmarshal job %d: %v", i, err)
 				continue
 			}
 
 			// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
 			err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
-			if err == nil && jobChan != nil {
+			if err != nil {
+				log.Printf("[FunnelEngine] Failed to add %s to funnel: %v", roJob.URL, err)
+			} else if jobChan != nil {
 				log.Printf("[FunnelEngine] Discovered RemoteOK Job: %s at %s", roJob.Position, roJob.URL)
 				jobChan <- Job{
 					CompanyName: roJob.Company,

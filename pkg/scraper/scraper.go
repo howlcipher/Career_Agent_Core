@@ -48,13 +48,13 @@ type RemoteOkJob struct {
 // DiscoverSources utilizes an LLM pipeline to actively parse new sources like Himalayas and Remotive
 // This is an architectural placeholder for the 'Dynamic Source Discovery' goal.
 func (e *Engine) DiscoverSources() {
-	fmt.Println("Dynamic Source Discovery: Analyzing Himalayas, Remotive, and seed lists for new career endpoints...")
+	log.Println("[Scraper] Dynamic Source Discovery: Analyzing Himalayas, Remotive, and seed lists for new career endpoints...")
 	// AI source discovery implementation would parse HTML and append to a SQLite database.
 }
 
 func (e *Engine) FetchJobs() ([]Job, error) {
 	// e.DiscoverSources()
-	fmt.Printf("Scraping RemoteOK API for roles: %v...\n", e.Roles)
+	log.Printf("[Scraper] Scraping RemoteOK API for roles: %v...", e.Roles)
 
 	var allJobs []Job
 	seenURLs := make(map[string]bool)
@@ -74,7 +74,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		reqURL := fmt.Sprintf("https://remoteok.com/api?tag=%s", tag)
 		req, err := http.NewRequest("GET", reqURL, nil)
 		if err != nil {
-			log.Printf("Failed to create request for %s: %v", role, err)
+			log.Printf("[Scraper] Failed to create request for %s: %v", role, err)
 			continue
 		}
 	
@@ -88,12 +88,12 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("Failed to execute request for %s: %v", role, err)
+			log.Printf("[Scraper] Failed to execute request for %s: %v", role, err)
 			continue
 		}
 		
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("API returned non-200 status for %s: %d", role, resp.StatusCode)
+			log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
 			time.Sleep(5 * time.Second)
 			resp.Body.Close()
 			continue
@@ -102,13 +102,13 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			log.Printf("Failed to read response body for %s: %v", role, err)
+			log.Printf("[Scraper] Failed to read response body for %s: %v", role, err)
 			continue
 		}
 
 		var rawJobs []json.RawMessage
 		if err := json.Unmarshal(body, &rawJobs); err != nil {
-			log.Printf("Failed to unmarshal JSON for %s: %v", role, err)
+			log.Printf("[Scraper] Failed to unmarshal JSON for %s: %v", role, err)
 			continue
 		}
 
@@ -119,6 +119,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		for i := 1; i < len(rawJobs); i++ {
 			var roJob RemoteOkJob
 			if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
+				log.Printf("[Scraper] Failed to unmarshal job %d: %v", i, err)
 				continue
 			}
 
@@ -154,10 +155,10 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 	}
 	
 	// Architectural Stubs for Data collection engine targeting fully remote listings only
-	log.Println("Scraping We Work Remotely (Implementation pending)")
-	log.Println("Scraping Wellfound (Implementation pending)")
-	log.Println("Scraping Built In (Remote) (Implementation pending)")
+	log.Println("[Scraper] Scraping We Work Remotely (Implementation pending)")
+	log.Println("[Scraper] Scraping Wellfound (Implementation pending)")
+	log.Println("[Scraper] Scraping Built In (Remote) (Implementation pending)")
 
-	fmt.Printf("Successfully fetched and parsed %d jobs.\n", len(allJobs))
+	log.Printf("[Scraper] Successfully fetched and parsed %d jobs.", len(allJobs))
 	return allJobs, nil
 }
