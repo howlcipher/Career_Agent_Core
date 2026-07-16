@@ -8,13 +8,15 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **AI Tailoring**: Connects to the Gemini 1.5 Pro API to analyze job descriptions and synthesize them with your `USER_PROFILE.md`.
 - **Stealth Writer**: The system prompt is engineered with strict humanizing constraints (banning words like "delve", "tapestry", "synergy") and high burstiness to completely bypass AI detection.
 - **Interview Cheat Sheet**: Automatically generates an `interview_prep.md` alongside your resume containing likely interview questions and tailored talking points.
-- **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` to ensure you never accidentally apply to the same job twice.
+- **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
 - **Strict Rule Enforcement**: Dynamically discards jobs that don't meet your salary floor or remote requirements defined in `profile.yaml`.
-- **Security Quarantine**: Implements a prompt injection quarantine layer via `promptsec` to prevent hostile job postings from manipulating the AI.
+- **Security Quarantine**: Implements a prompt injection quarantine layer via `promptsec` and comprehensive SSRF vulnerability protections to prevent hostile job postings from manipulating the AI or infrastructure.
+- **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
+- **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
 - **Auto-Submit Framework**: Architecture in place to integrate Playwright for headless browser submission (currently targets LinkedIn Easy Apply).
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests, updating your funnels automatically.
-- **Live Metrics Dashboard**: Ships with a beautifully formatted zero-dependency Terminal UI (TUI) to track your live conversion rates.
+- **Live Metrics Dashboard**: Ships with a beautifully formatted, premium HTTP Web Dashboard to intuitively track your live conversion rates.
 - **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
 - **Playwright Fallback Scraper**: Bypasses SerpApi limits by deploying an undetectable headless DuckDuckGo scraper with `navigator.webdriver` evasion when API credits run out.
 - **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with Gemini, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
@@ -34,12 +36,15 @@ graph TD
     D -->|Fit Score > 50| C
     
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
-    E -->|DOM HTML| F[pkg/security: Quarantine Layer]
+    E -->|DOM HTML| F[pkg/security: Quarantine & SSRF Protection]
     F -->|Clean HTML| D
     D -->|ATS Mapping| E
     
-    E -->|Write Status| G[(pkg/storage: SQLite DB)]
+    E -->|Write Status| G[(pkg/storage: SQLite DB w/ WAL & Pooling)]
     C -->|Update Funnel| G
+    
+    H[HTTP Web Dashboard] -->|Reads Metrics| G
+    I[SRE Logging] -.->|Observability| C
 ```
 
 ---
@@ -71,7 +76,7 @@ If you are running an immutable atomic OS where the root filesystem is read-only
    npx playwright install-deps
    go run cmd/agent/main.go
    ```
-*(Note: Because Distrobox perfectly mirrors your home folder, you can run the TUI Dashboard `go run cmd/dashboard/main.go` natively on your host OS and it will instantly read the database updates being written by the containerized agent!)*
+*(Note: Because Distrobox perfectly mirrors your home folder, you can run the HTTP Web Dashboard `go run cmd/dashboard/main.go` natively on your host OS and it will instantly read the database updates being written by the containerized agent!)*
 
 
 ## Getting Started (How to Use)
@@ -117,7 +122,7 @@ go run cmd/agent/main.go --daemon
 
 *Note: On its very first run, Playwright will automatically download the necessary Chromium browser binaries.*
 
-While the agent runs, open a new terminal window to view your live stats:
+While the agent runs, open a new terminal window to serve your live metrics via the HTTP Web Dashboard:
 ```bash
 go run cmd/dashboard/main.go
 ```
