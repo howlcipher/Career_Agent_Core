@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/mxschmitt/playwright-go"
 )
@@ -15,7 +16,7 @@ import (
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(mapper FormMapper, companyName, applyURL, resumePath, coverLetterPath string, pii *config.PII, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
 	// Install playwright browsers if they don't exist
@@ -90,6 +91,29 @@ func AttemptSubmit(companyName, applyURL, resumePath, coverLetterPath string, pi
 		return handleGreenhouse(page, resumePath, pii, autoSubmitClick)
 	} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
 		return handleLever(page, resumePath, pii, autoSubmitClick)
+	}
+
+	if mapper != nil {
+		log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
+		domHTML, _ := page.Content()
+		prunedHTML, err := parser.PruneDOM(domHTML)
+		if err != nil {
+			prunedHTML = domHTML
+		}
+		
+		newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML)
+		if err == nil && newMappingJSON != "" {
+			log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
+			storage.SaveFormMapping(domain, newMappingJSON)
+			
+			dynErr := handleDynamic(page, resumePath, pii, newMappingJSON, autoSubmitClick)
+			if dynErr != nil {
+				storage.DeleteFormMapping(domain)
+				return fmt.Errorf("dynamic execution of learned mapping failed: %w", dynErr)
+			}
+			return nil
+		}
+		log.Printf("[Learner Module] Failed to map form: %v", err)
 	}
 
 	return fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)

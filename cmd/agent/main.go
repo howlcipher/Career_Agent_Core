@@ -286,7 +286,7 @@ func main() {
 				log.Printf("Failed to checkpoint: %v", err)
 			}
 
-			if err := submitter.AttemptSubmit(job.CompanyName, job.URL, masterResumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			if err := submitter.AttemptSubmit(client, job.CompanyName, job.URL, masterResumePath, coverLetterPath, piiData, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
 				log.Printf("Auto-Submit failed for %s: %v", job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
