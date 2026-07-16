@@ -14,6 +14,8 @@ import (
 
 var remoteOKBaseURL = "https://remoteok.com/api"
 
+var SleepFunc = time.Sleep
+
 
 type Job struct {
 	CompanyName string
@@ -72,7 +74,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		tag := url.QueryEscape(strings.ToLower(strings.ReplaceAll(role, " ", "-")))
 
 		// Sleep for a random jitter (1-3 seconds) to seem human
-		time.Sleep(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
+		SleepFunc(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
 
 		reqURL := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
 		req, err := http.NewRequest("GET", reqURL, nil)
@@ -97,7 +99,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		
 		if resp.StatusCode != http.StatusOK {
 			log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
-			time.Sleep(5 * time.Second)
+			SleepFunc(5 * time.Second)
 			resp.Body.Close()
 			continue
 		}

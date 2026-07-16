@@ -62,7 +62,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 
 			if useFallback {
 				f.discoverWithYahooHTML(query, role, jobChan)
-				time.Sleep(3 * time.Second)
+				SleepFunc(3 * time.Second)
 				continue
 			}
 
@@ -93,7 +93,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Yahoo Fallback...", serpResult.Error)
 				useFallback = true
 				f.discoverWithYahooHTML(query, role, jobChan)
-				time.Sleep(3 * time.Second)
+				SleepFunc(3 * time.Second)
 				continue
 			}
 
@@ -119,7 +119,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 			}
 			
 			// Sleep to respect rate limits if on free tier
-			time.Sleep(1 * time.Second)
+			SleepFunc(1 * time.Second)
 		}
 	}
 	

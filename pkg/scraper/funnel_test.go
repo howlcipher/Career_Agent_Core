@@ -7,11 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 func TestDiscoverJobs(t *testing.T) {
+	oldSleep := SleepFunc
+	SleepFunc = func(time.Duration) {}
+	defer func() { SleepFunc = oldSleep }()
+
 	// Initialize test DB
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
