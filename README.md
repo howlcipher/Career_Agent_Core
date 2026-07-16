@@ -24,10 +24,31 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 
 ## Requirements
 - **Go 1.21+**
-- **Playwright System Dependencies**: Headless auto-submission requires specific system libraries (like `libicu`). On Linux, run the following to install the necessary dependencies before starting the agent:
+- **Playwright System Dependencies**: Headless auto-submission requires specific system libraries (like `libicu`). On standard Linux, run the following to install the necessary dependencies before starting the agent:
   ```bash
   go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps
   ```
+
+### Running on Immutable OS (Bazzite / Fedora Silverblue / SteamOS)
+If you are running an immutable atomic OS where the root filesystem is read-only, you cannot natively install Playwright's system C libraries (like `libX11` or `libicu`). Instead, use **Distrobox** to safely run the agent in a container while maintaining full access to your host filesystem:
+
+1. Open a terminal and create an Ubuntu container:
+   ```bash
+   distrobox create --name career-agent --image ubuntu:22.04
+   distrobox enter career-agent
+   ```
+2. Once inside the container, install the base dependencies:
+   ```bash
+   sudo apt-get update && sudo apt-get install -y golang-go nodejs npm
+   ```
+3. Run the Playwright installer and the agent from inside the container:
+   ```bash
+   cd ~/dev/Career_Agent_Core
+   npx playwright install-deps
+   go run cmd/agent/main.go
+   ```
+*(Note: Because Distrobox perfectly mirrors your home folder, you can run the TUI Dashboard `go run cmd/dashboard/main.go` natively on your host OS and it will instantly read the database updates being written by the containerized agent!)*
+
 
 ## Getting Started (How to Use)
 
