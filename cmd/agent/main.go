@@ -115,6 +115,7 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for job := range jobChan {
+		storage.UpdateFunnelStatus(job.URL, "PROCESSING")
 		// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
 		// We only need to enforce the hard blocklist here.
 		nameLower := strings.ToLower(job.CompanyName)

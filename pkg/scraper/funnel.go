@@ -159,7 +159,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	found := make(map[string]bool)
 	for _, m := range matches {
 		decoded, _ := url.QueryUnescape(m[1])
-		if !found[decoded] && (strings.Contains(decoded, "greenhouse.io") || strings.Contains(decoded, "lever.co") || strings.Contains(decoded, "workday.com") || strings.Contains(decoded, "ashbyhq.com") || strings.Contains(decoded, "breezy.hr") || strings.Contains(decoded, "bamboohr.com") || strings.Contains(decoded, "workable.com") || strings.Contains(decoded, "smartrecruiters.com") || strings.Contains(decoded, "recruitee.com") || strings.Contains(decoded, "jobvite.com") || strings.Contains(decoded, "applytojob.com") || strings.Contains(decoded, "myworkdayjobs.com") || strings.Contains(decoded, "pinpointhq.com") || strings.Contains(decoded, "homerun.co")) {
+		if !found[decoded] && isValidATSUrl(decoded) {
 			found[decoded] = true
 			
 			company := "Unknown Company"
@@ -180,4 +180,28 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 			}
 		}
 	}
+}
+
+func isValidATSUrl(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	
+	host := strings.ToLower(u.Hostname())
+	
+	atsDomains := []string{
+		"greenhouse.io", "lever.co", "workday.com", "ashbyhq.com",
+		"breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com",
+		"recruitee.com", "jobvite.com", "applytojob.com", "myworkdayjobs.com",
+		"pinpointhq.com", "homerun.co",
+	}
+	
+	for _, domain := range atsDomains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	
+	return false
 }
