@@ -4,14 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
-	"log"
 	"sync/atomic"
-	"time"
-
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
+	"unicode"
 )
 
 const SystemPrompt = "You are an expert technical recruiter. Analyze the job description and tailor the base resume and cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Output the resume in Markdown and the cover letter in plain text. Do not use hyphens."
@@ -21,43 +18,42 @@ var apiCallCount uint64
 func incrementAndLogAPICall(callType string, payloadLen int) error {
 	count := atomic.AddUint64(&apiCallCount, 1)
 	log.Printf("[API Metrics] %s API Call #%d executed. Payload length: %d characters.", callType, count, payloadLen)
-	
+
 	if payloadLen > 50000 {
 		return fmt.Errorf("CIRCUIT BREAKER TRIGGERED: Payload size %d exceeds safety limit (50k chars). Aborting to prevent runaway LLM costs.", payloadLen)
 	}
 	return nil
 }
 
+// Client routes all LLM calls through a configurable backend.
+// The backend is selected via the LLM_PROVIDER environment variable:
+// "ollama" (default, local), "claude", or "gemini".
 type Client struct {
-	APIKey string
+	// APIKey is the Gemini API key, kept for backward compatibility.
+	// Only used when LLM_PROVIDER=gemini.
+	APIKey   string
+	provider provider
 }
 
 func NewClient(apiKey string) *Client {
+	p := newProviderFromEnv(apiKey)
+	log.Printf("[LLM] Using provider: %s", p.Name())
 	return &Client{
-		APIKey: apiKey,
+		APIKey:   apiKey,
+		provider: p,
 	}
 }
 
-func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (int, error) {
-	if c.APIKey == "" {
-		return 0, fmt.Errorf("GEMINI_API_KEY is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+// generate runs a single generation request against the configured provider
+// with the provider's own timeout.
+func (c *Client) generate(req genRequest) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.provider.Timeout())
 	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return 0, fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
+	return c.provider.Generate(ctx, req)
+}
 
-	model := client.GenerativeModel("gemini-flash-latest")
-
-	// Lower the temperature so the model is highly strictly analytical rather than creative when scoring
-	temp := float32(0.1)
-	model.Temperature = &temp
-
-	prompt := fmt.Sprintf(`Analyze the following job description against my background and constraints. 
+func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (int, error) {
+	prompt := fmt.Sprintf(`Analyze the following job description against my background and constraints.
 Return ONLY a single integer from 0 to 100 representing how good of a fit I am. Do not include any other text.
 
 SCORING RUBRIC:
@@ -79,50 +75,51 @@ My Background:
 %s`,
 		profileConstraints["remote_only"], profileConstraints["salary_floor"], scrapedData["title"], scrapedData["desc"], parsedDocument)
 
-	if err := incrementAndLogAPICall("ScoreJob", len(prompt)); err != nil { return 0, err }
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	if err := incrementAndLogAPICall("ScoreJob", len(prompt)); err != nil {
+		return 0, err
+	}
+
+	// Lower the temperature so the model is strictly analytical rather than creative when scoring
+	raw, err := c.generate(genRequest{prompt: prompt, temperature: 0.1})
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return 0, fmt.Errorf("empty response")
-	}
-
-	scoreStr := ""
-	if text, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-		scoreStr = strings.TrimSpace(string(text))
-	}
-
-	// Remove any extraneous characters
-	scoreStr = strings.Trim(scoreStr, " \n\r\t\"'")
+	scoreStr := strings.Trim(strings.TrimSpace(raw), " \n\r\t\"'")
 	score, err := strconv.Atoi(scoreStr)
 	if err != nil {
+		// Smaller local models sometimes wrap the number in prose despite
+		// instructions; salvage the first integer in the response.
+		if n, ok := firstInt(scoreStr); ok {
+			return n, nil
+		}
 		return 0, fmt.Errorf("failed to parse score %q: %w", scoreStr, err)
 	}
 
 	return score, nil
 }
 
+// firstInt returns the first run of digits in s as an integer.
+func firstInt(s string) (int, bool) {
+	start := -1
+	for i, r := range s {
+		if unicode.IsDigit(r) {
+			if start == -1 {
+				start = i
+			}
+		} else if start != -1 {
+			n, err := strconv.Atoi(s[start:i])
+			return n, err == nil
+		}
+	}
+	if start != -1 {
+		n, err := strconv.Atoi(s[start:])
+		return n, err == nil
+	}
+	return 0, false
+}
+
 func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (string, string, string, error) {
-	if c.APIKey == "" {
-		return "", "", "", fmt.Errorf("GEMINI_API_KEY is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel("gemini-flash-latest")
-
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text(SystemPrompt)},
-	}
-
 	toneContext := ""
 	if tone, ok := profileConstraints["cover_letter_tone"].(string); ok && tone != "" {
 		toneContext = fmt.Sprintf("\n\nCRITICAL DIRECTIVE: You must strictly adhere to this exact tone for the cover letter: %s", tone)
@@ -136,22 +133,14 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
 		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
 
-	fmt.Println("Sending application context to Gemini Pro...")
-	if err := incrementAndLogAPICall("ProcessJobApplication", len(prompt)); err != nil { return "", "", "", err }
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	fmt.Printf("Sending application context to %s...\n", c.provider.Name())
+	if err := incrementAndLogAPICall("ProcessJobApplication", len(prompt)); err != nil {
+		return "", "", "", err
+	}
+
+	fullText, err := c.generate(genRequest{system: SystemPrompt, prompt: prompt, temperature: -1})
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to generate content from gemini: %w", err)
-	}
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", "", "", fmt.Errorf("empty response from gemini")
-	}
-
-	var fullText string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if text, ok := part.(genai.Text); ok {
-			fullText += string(text)
-		}
+		return "", "", "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	// Parse the output using the separators
@@ -176,25 +165,8 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 	return resumeOut, coverOut, prepOut, nil
 }
 
-// ExtractFormMapping uses Gemini to parse an unknown ATS DOM and generate a JSON mapping for Playwright
+// ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright
 func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
-	if c.APIKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel("gemini-flash-latest")
-	
-	// Force JSON output
-	model.ResponseMIMEType = "application/json"
-
 	systemDirective := `You are an expert web scraper and DOM analyst. You will be provided with the HTML source of a job application form.
 Your task is to identify the precise CSS selectors needed by Playwright to fill out this form.
 Map the following logical fields to their corresponding CSS selectors (prefer id, name, or specific data-qa attributes):
@@ -214,52 +186,24 @@ Return a JSON object in this exact format:
     ...
   }
 }`
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text(systemDirective)},
-	}
 
 	prompt := fmt.Sprintf("Analyze this DOM and extract the input selectors:\n\n%s", domHTML)
-	
-	if err := incrementAndLogAPICall("ExtractFormMapping", len(prompt)); err != nil { return "", err }
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+
+	if err := incrementAndLogAPICall("ExtractFormMapping", len(prompt)); err != nil {
+		return "", err
+	}
+
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1})
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("empty response from gemini for form mapping")
-	}
-
-	var jsonOutput string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if text, ok := part.(genai.Text); ok {
-			jsonOutput += string(text)
-		}
-	}
-
-	return strings.TrimSpace(jsonOutput), nil
+	return stripJSONFences(raw), nil
 }
 
-// ExtractFormMappingVision uses Gemini 1.5 Pro to visually analyze a screenshot of an ATS form
-// and generate a JSON mapping for Playwright, bypassing HTML DOM obfuscation entirely.
+// ExtractFormMappingVision visually analyzes a screenshot of an ATS form
+// and generates a JSON mapping for Playwright, bypassing HTML DOM obfuscation entirely.
 func (c *Client) ExtractFormMappingVision(screenshotBytes []byte) (string, error) {
-	if c.APIKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel("gemini-flash-latest")
-	
-	// Force JSON output
-	model.ResponseMIMEType = "application/json"
-
 	systemDirective := `You are an expert autonomous web automation agent. You will be provided with a screenshot of a job application form.
 Your task is to identify the precise CSS selectors or coordinates needed by Playwright to fill out this form.
 Map the following logical fields to their corresponding CSS selectors (if visible in standard structural layout) or describe the input placeholder text:
@@ -279,111 +223,53 @@ Return a JSON object in this exact format:
     ...
   }
 }`
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text(systemDirective)},
+
+	prompt := "Analyze this screenshot and extract the input selectors based on visual placement and placeholders:"
+
+	if err := incrementAndLogAPICall("ExtractFormMappingVision", len(prompt)); err != nil {
+		return "", err
 	}
 
-	prompt := genai.Text("Analyze this screenshot and extract the input selectors based on visual placement and placeholders:")
-	imgData := genai.ImageData("png", screenshotBytes)
-
-	// Cannot easily measure image data size in chars, but we log the prompt
-	if err := incrementAndLogAPICall("ExtractFormMappingVision", len(string(prompt))); err != nil { return "", err }
-	resp, err := model.GenerateContent(ctx, prompt, imgData)
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1, imagePNG: screenshotBytes})
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping from vision: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("empty response from gemini vision")
-	}
-
-	var jsonOutput string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if text, ok := part.(genai.Text); ok {
-			jsonOutput += string(text)
-		}
-	}
-
-	return strings.TrimSpace(jsonOutput), nil
+	return stripJSONFences(raw), nil
 }
 
-// GetEmbedding uses Gemini text-embedding-004 to create a vector for semantic search
+// GetEmbedding creates a vector for semantic search using the configured
+// embedding backend (Ollama by default; text-embedding-004 on Gemini).
 func (c *Client) GetEmbedding(text string) ([]float32, error) {
-	if c.APIKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
+	if err := incrementAndLogAPICall("GetEmbedding", len(text)); err != nil {
+		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), c.provider.Timeout())
 	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	em := client.EmbeddingModel("text-embedding-004")
-	if err := incrementAndLogAPICall("GetEmbedding", len(text)); err != nil { return nil, err }
-	res, err := em.EmbedContent(ctx, genai.Text(text))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get embedding: %w", err)
-	}
-
-	if res == nil || res.Embedding == nil {
-		return nil, fmt.Errorf("empty embedding response")
-	}
-
-	return res.Embedding.Values, nil
+	return c.provider.Embed(ctx, text)
 }
 
 // ExtractRejectionReason reads an HR rejection email and explicitly figures out why the candidate was rejected.
 func (c *Client) ExtractRejectionReason(emailText string) (string, error) {
-	if c.APIKey == "" {
-		return "", fmt.Errorf("GEMINI_API_KEY is not set")
+	if err := incrementAndLogAPICall("AnalyzeEmail", len(emailText)); err != nil {
+		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	model := client.GenerativeModel("gemini-2.5-flash")
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text("You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection').")},
-	}
-
-	if err := incrementAndLogAPICall("AnalyzeEmail", len(emailText)); err != nil { return "", err }
-	res, err := model.GenerateContent(ctx, genai.Text(emailText))
+	system := "You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection')."
+	raw, err := c.generate(genRequest{system: system, prompt: emailText, temperature: -1})
 	if err != nil {
 		return "", fmt.Errorf("failed to extract rejection reason: %w", err)
 	}
-	if len(res.Candidates) == 0 || len(res.Candidates[0].Content.Parts) == 0 {
+	if strings.TrimSpace(raw) == "" {
 		return "Generic templated rejection (no specific reason provided)", nil
 	}
 
-	return fmt.Sprintf("%v", res.Candidates[0].Content.Parts[0]), nil
+	return raw, nil
 }
 
 // SolveValidationErrors analyzes a failed form submission and generates values for missing required fields
 func (c *Client) SolveValidationErrors(domHTML string, profileContext string) (map[string]string, error) {
-	if c.APIKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	client, err := genai.NewClient(ctx, option.WithAPIKey(c.APIKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gemini client: %w", err)
-	}
-	defer client.Close()
-
-	// Use Gemini Flash as it's significantly cheaper and completely capable of DOM reasoning
-	model := client.GenerativeModel("gemini-flash-latest")
-	model.ResponseMIMEType = "application/json"
-
 	systemDirective := `You are an expert web scraper and DOM analyst. You are provided with the HTML source of a job application form that just FAILED validation (required fields are missing or invalid).
 You are also provided with the applicant's profile context.
 Your task is to identify ALL the missing or invalid fields in the form (like custom questions, URLs, visa status, etc.), determine the correct CSS selector for each, and generate the appropriate string value to fill them in based on the applicant's profile.
@@ -394,31 +280,19 @@ Return a JSON object in this exact format mapping the CSS selector to the string
   "selector_2": "value_2"
 }`
 
-	model.SystemInstruction = &genai.Content{
-		Parts: []genai.Part{genai.Text(systemDirective)},
+	prompt := fmt.Sprintf("Applicant Profile:\n%s\n\nFailed Form DOM:\n%s", profileContext, domHTML)
+
+	if err := incrementAndLogAPICall("SolveValidationErrors", len(prompt)); err != nil {
+		return nil, err
 	}
 
-	prompt := fmt.Sprintf("Applicant Profile:\n%s\n\nFailed Form DOM:\n%s", profileContext, domHTML)
-	
-	if err := incrementAndLogAPICall("SolveValidationErrors", len(prompt)); err != nil { return nil, err }
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1})
 	if err != nil {
 		return nil, fmt.Errorf("failed to solve validation errors: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("empty response from gemini for validation errors")
-	}
-
-	var jsonOutput string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if text, ok := part.(genai.Text); ok {
-			jsonOutput += string(text)
-		}
-	}
-
 	var result map[string]string
-	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &result); err != nil {
+	if err := json.Unmarshal([]byte(stripJSONFences(raw)), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse json response: %w", err)
 	}
 

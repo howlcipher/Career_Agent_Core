@@ -14,8 +14,8 @@ import (
 func main() {
 	godotenv.Load()
 	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("No API key")
+	if os.Getenv("LLM_PROVIDER") == "gemini" && apiKey == "" {
+		log.Fatal("LLM_PROVIDER=gemini requires GEMINI_API_KEY")
 	}
 
 	c := mcp.NewClient(apiKey)

@@ -100,10 +100,40 @@ Open `profile.yaml` to customize your search parameters:
 ### 3. Ensure Your Context Exists
 The AI relies on a base resume or profile to tailor against job descriptions. Ensure you have your base markdown profile (e.g., `USER_PROFILE.md`) accessible to the system or a fallback `__William_Elias_Resume__.pdf` in the root directory.
 
-### 4. Authenticate APIs & Mail
-The agent requires Gemini and IMAP credentials. Edit your `.env` file (never commit this to Git):
+### 4. Choose an LLM Provider & Authenticate APIs
+The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git). The default is **Ollama** (local, free, no API key required).
+
+**Ollama (default)** — install [Ollama](https://ollama.com), then pull the models:
 ```bash
+ollama pull llama3.1          # text (scoring, resumes, cover letters)
+ollama pull llava             # vision (screenshot form mapping)
+ollama pull nomic-embed-text  # embeddings (semantic search / RAG)
+```
+```bash
+LLM_PROVIDER="ollama"                     # optional, this is the default
+OLLAMA_HOST="http://localhost:11434"      # optional
+OLLAMA_MODEL="llama3.1"                   # optional
+OLLAMA_VISION_MODEL="llava"               # optional
+OLLAMA_EMBED_MODEL="nomic-embed-text"     # optional
+```
+
+**Claude (Anthropic)**:
+```bash
+LLM_PROVIDER="claude"
+ANTHROPIC_API_KEY="your_api_key_here"
+ANTHROPIC_MODEL="claude-opus-4-8"         # optional, this is the default
+```
+Note: Anthropic has no embeddings API, so the Claude provider uses Ollama for embeddings — keep `nomic-embed-text` pulled locally.
+
+**Gemini (Google AI)**:
+```bash
+LLM_PROVIDER="gemini"
 GEMINI_API_KEY="your_api_key_here"
+GEMINI_MODEL="gemini-flash-latest"        # optional, this is the default
+```
+
+Mail tracking and scraping credentials:
+```bash
 SERPAPI_API_KEY="your_serpapi_key"
 IMAP_SERVER="imap.gmail.com:993"
 IMAP_USER="your_email@gmail.com"
