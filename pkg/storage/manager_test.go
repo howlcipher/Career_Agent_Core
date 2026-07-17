@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,64 +8,9 @@ import (
 )
 
 func setupTestDB(t *testing.T) {
-	var err error
-	db, err = sql.Open("sqlite3", ":memory:")
+	err := InitDBWithPath(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
-	}
-
-	createTableQuery := `
-	CREATE TABLE IF NOT EXISTS applied_jobs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		company_name TEXT,
-		job_title TEXT,
-		url TEXT UNIQUE,
-		applied_at DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS execution_state (
-		job_id TEXT PRIMARY KEY,
-		url TEXT,
-		status TEXT,
-		last_updated DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS career_sites (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		domain TEXT UNIQUE,
-		ats_provider TEXT,
-		last_scanned DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS job_funnel (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		company_name TEXT,
-		job_title TEXT,
-		url TEXT UNIQUE,
-		status TEXT,
-		fit_score INTEGER,
-		discovered_at DATETIME,
-		applied_at DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS form_mappings (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		domain TEXT UNIQUE,
-		mapping_json TEXT,
-		created_at DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS execution_logs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		job_id TEXT,
-		url TEXT,
-		tokens_used INTEGER,
-		status TEXT,
-		logged_at DATETIME
-	);
-	CREATE TABLE IF NOT EXISTS career_chunks (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		chunk_text TEXT,
-		embedding_json TEXT
-	);`
-	_, err = db.Exec(createTableQuery)
-	if err != nil {
-		t.Fatalf("Failed to create tables: %v", err)
 	}
 }
 
@@ -289,6 +233,21 @@ func TestSaveApplication(t *testing.T) {
 		}
 	}
 
+	resumeBytes, err := os.ReadFile(filepath.Join(companyDir, "resume.md"))
+	if err != nil || string(resumeBytes) != "# Resume" {
+		t.Errorf("resume.md content mismatch or error: %v", err)
+	}
+
+	coverBytes, err := os.ReadFile(filepath.Join(companyDir, "coverletter.txt"))
+	if err != nil || string(coverBytes) != "Dear hiring manager" {
+		t.Errorf("coverletter.txt content mismatch or error: %v", err)
+	}
+
+	prepBytes, err := os.ReadFile(filepath.Join(companyDir, "interview_prep.md"))
+	if err != nil || string(prepBytes) != "Prep notes" {
+		t.Errorf("interview_prep.md content mismatch or error: %v", err)
+	}
+
 	// Verify DB record
 	if !HasApplied("http://test.com") {
 		t.Errorf("Expected URL to be marked as applied in DB")
@@ -314,5 +273,8 @@ func TestLogFailedSubmission(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "FailCorp") || !strings.Contains(content, "http://fail.com") {
 		t.Errorf("Report content mismatch: %s", content)
+	}
+	if !strings.Contains(content, "# Manual Submission Backlog") {
+		t.Errorf("Missing markdown header in report")
 	}
 }

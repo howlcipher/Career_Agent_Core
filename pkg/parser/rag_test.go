@@ -61,3 +61,14 @@ func TestRetrieveTopK(t *testing.T) {
 		t.Errorf("expected chunk 1, got %q", results[0].Text)
 	}
 }
+
+func TestCosineSimilarityMismatchedSize(t *testing.T) {
+	a := []float32{1, 0, 0}
+	b := []float32{1, 0}
+	
+	// This should not panic
+	score := CosineSimilarity(a, b)
+	if score != 0.0 {
+		t.Errorf("expected 0.0 for mismatched sizes, got %f", score)
+	}
+}

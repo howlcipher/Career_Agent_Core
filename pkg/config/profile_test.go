@@ -44,11 +44,35 @@ cover_letter_tone: "professional"
 	if profile.SalaryFloor != 100000 {
 		t.Errorf("Expected SalaryFloor 100000, got %d", profile.SalaryFloor)
 	}
+	if profile.TargetComp != 150000 {
+		t.Errorf("Expected TargetComp 150000, got %d", profile.TargetComp)
+	}
 	if !profile.RemoteOnly {
 		t.Errorf("Expected RemoteOnly to be true")
 	}
-	if len(profile.Roles) != 2 || profile.Roles[0] != "Software Engineer" {
+	if len(profile.Roles) != 2 || profile.Roles[0] != "Software Engineer" || profile.Roles[1] != "Backend Engineer" {
 		t.Errorf("Roles mismatch: %v", profile.Roles)
+	}
+	if profile.ExperienceYears != 5 {
+		t.Errorf("Expected ExperienceYears 5, got %d", profile.ExperienceYears)
+	}
+	if len(profile.Skills) != 2 || profile.Skills[0] != "Go" || profile.Skills[1] != "Python" {
+		t.Errorf("Skills mismatch: %v", profile.Skills)
+	}
+	if len(profile.ExcludeCompanies) != 2 || profile.ExcludeCompanies[0] != "EvilCorp" || profile.ExcludeCompanies[1] != "BadCompany" {
+		t.Errorf("ExcludeCompanies mismatch: %v", profile.ExcludeCompanies)
+	}
+	if !profile.AutoSubmit {
+		t.Errorf("Expected AutoSubmit to be true")
+	}
+	if profile.AutoSubmitClick {
+		t.Errorf("Expected AutoSubmitClick to be false")
+	}
+	if !profile.HeadlessBrowser {
+		t.Errorf("Expected HeadlessBrowser to be true")
+	}
+	if profile.CoverLetterTone != "professional" {
+		t.Errorf("Expected CoverLetterTone 'professional', got '%s'", profile.CoverLetterTone)
 	}
 }
 
@@ -88,5 +112,36 @@ func TestLoadProfile_InvalidFile(t *testing.T) {
 	_, err := LoadProfile("non_existent_profile.yaml")
 	if err == nil {
 		t.Errorf("Expected error for non-existent file, got nil")
+	}
+}
+
+func TestValidateJob_NotRemoteOnly(t *testing.T) {
+	profile := &Profile{
+		SalaryFloor:      100000,
+		RemoteOnly:       false,
+		ExcludeCompanies: []string{"EvilCorp", "BadCompany"},
+	}
+
+	res := profile.ValidateJob("GoodCorp", 120000, false)
+	if !res {
+		t.Errorf("ValidateJob failed for non-remote job when RemoteOnly is false")
+	}
+}
+
+func TestLoadProfile_MalformedYaml(t *testing.T) {
+	yamlData := `salary_floor: 100000
+	malformed_yaml_here
+	`
+	tmpFile, err := os.CreateTemp("", "profile_invalid_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Write([]byte(yamlData))
+	tmpFile.Close()
+
+	_, err = LoadProfile(tmpFile.Name())
+	if err == nil {
+		t.Errorf("Expected error for invalid yaml, got nil")
 	}
 }

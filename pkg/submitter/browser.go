@@ -234,22 +234,22 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 	if pii != nil {
 		if pii.FirstName != "" {
 			if err := page.Locator("input#first_name").Fill(pii.FirstName); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill first_name: %v", err)
+				return fmt.Errorf("failed to fill first_name: %w", err)
 			}
 		}
 		if pii.LastName != "" {
 			if err := page.Locator("input#last_name").Fill(pii.LastName); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill last_name: %v", err)
+				return fmt.Errorf("failed to fill last_name: %w", err)
 			}
 		}
 		if pii.Email != "" {
 			if err := page.Locator("input#email").Fill(pii.Email); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill email: %v", err)
+				return fmt.Errorf("failed to fill email: %w", err)
 			}
 		}
 		if pii.Phone != "" {
 			if err := page.Locator("input#phone").Fill(pii.Phone); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill phone: %v", err)
+				return fmt.Errorf("failed to fill phone: %w", err)
 			}
 		}
 	}
@@ -263,7 +263,7 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 				Name:   "resume.pdf", 
 				Buffer: fileBytes,
 			}}); err != nil {
-				log.Printf("[Playwright] Warning: Failed to set resume file: %v", err)
+				return fmt.Errorf("failed to set resume file: %w", err)
 			}
 		} else {
 			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
@@ -272,7 +272,7 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 
 	if autoSubmitClick {
 		if err := page.Locator("input#submit_app").Click(); err != nil {
-			log.Printf("[Playwright] Warning: Failed to click submit: %v", err)
+			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}
 	
@@ -291,17 +291,17 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 	if pii != nil {
 		if pii.FirstName != "" || pii.LastName != "" {
 			if err := page.Locator("input[name='name']").Fill(pii.FirstName + " " + pii.LastName); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill name: %v", err)
+				return fmt.Errorf("failed to fill name: %w", err)
 			}
 		}
 		if pii.Email != "" {
 			if err := page.Locator("input[name='email']").Fill(pii.Email); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill email: %v", err)
+				return fmt.Errorf("failed to fill email: %w", err)
 			}
 		}
 		if pii.Phone != "" {
 			if err := page.Locator("input[name='phone']").Fill(pii.Phone); err != nil {
-				log.Printf("[Playwright] Warning: Failed to fill phone: %v", err)
+				return fmt.Errorf("failed to fill phone: %w", err)
 			}
 		}
 	}
@@ -314,7 +314,7 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 				Name:   "resume.pdf",
 				Buffer: fileBytes,
 			}}); err != nil {
-				log.Printf("[Playwright] Warning: Failed to set resume file: %v", err)
+				return fmt.Errorf("failed to set resume file: %w", err)
 			}
 		} else {
 			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
@@ -323,7 +323,7 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 
 	if autoSubmitClick {
 		if err := page.Locator("button.postings-btn.template-btn-submit").Click(); err != nil {
-			log.Printf("[Playwright] Warning: Failed to click submit: %v", err)
+			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}
 
@@ -334,8 +334,13 @@ type FormMapping struct {
 	Fields map[string]string `json:"fields"`
 }
 
+var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
+
 func safeFill(page playwright.Page, selector, text string) error {
-	if selector == "" || text == "" {
+	if selector == "" {
+		return ErrEmptySelector
+	}
+	if text == "" {
 		return nil
 	}
 	return page.Locator(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(5000)})

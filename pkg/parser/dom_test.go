@@ -43,3 +43,25 @@ func TestPruneDOMToText(t *testing.T) {
 		t.Errorf("expected 'Hello World!', got %q", output)
 	}
 }
+
+func TestPruneDOMResilience(t *testing.T) {
+	input := `<html><body><div>Hello</div><svg><path d="M0 0"/></svg><iframe src="evil.com"></iframe><script>alert(1);</body></html>`
+	
+	output, err := PruneDOM(input)
+	if err != nil {
+		t.Fatalf("PruneDOM error: %v", err)
+	}
+	
+	if !strings.Contains(output, "<div>Hello</div>") {
+		t.Errorf("expected output to contain div, got: %s", output)
+	}
+	if strings.Contains(output, "<script>") {
+		t.Errorf("expected script to be removed, got: %s", output)
+	}
+	if strings.Contains(output, "<svg>") || strings.Contains(output, "<path>") {
+		t.Errorf("expected svg to be removed, got: %s", output)
+	}
+	if strings.Contains(output, "<iframe") {
+		t.Errorf("expected iframe to be removed, got: %s", output)
+	}
+}

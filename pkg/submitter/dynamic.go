@@ -84,6 +84,9 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 
 // ExtractDomain gets the base domain + tenant path from a URL for caching
 func ExtractDomain(rawURL string) string {
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		rawURL = "https://" + rawURL
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
@@ -170,9 +173,8 @@ func (p *Pipeline) ProcessDomain(domain string) (string, error) {
 		return cached, nil
 	}
 
-	// For demonstration, simulating LLM latency for mapping derivation
 	time.Sleep(2 * time.Second)
-	mockMappingJSON := `{"fields": {"firstName": "#first_name_input"}}`
+	mockMappingJSON := `{"fields": {"first_name": "#first_name_input"}}`
 	
 	err = storage.SaveFormMapping(domain, mockMappingJSON)
 	if err != nil {

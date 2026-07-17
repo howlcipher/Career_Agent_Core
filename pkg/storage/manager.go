@@ -22,7 +22,11 @@ func InitDB() error {
 
 func InitDBWithPath(path string) error {
 	var err error
-	db, err = sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	dsn := path
+	if !strings.Contains(path, "?") {
+		dsn += "?_journal_mode=WAL&_busy_timeout=5000"
+	}
+	db, err = sql.Open("sqlite3", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

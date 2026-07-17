@@ -30,8 +30,23 @@ address: "123 Main St"
 		t.Fatalf("LoadPII failed: %v", err)
 	}
 
-	if pii.FirstName != "John" || pii.Email != "john.doe@example.com" {
-		t.Errorf("PII data mismatch: %+v", pii)
+	if pii.FirstName != "John" {
+		t.Errorf("Expected FirstName 'John', got '%s'", pii.FirstName)
+	}
+	if pii.LastName != "Doe" {
+		t.Errorf("Expected LastName 'Doe', got '%s'", pii.LastName)
+	}
+	if pii.Email != "john.doe@example.com" {
+		t.Errorf("Expected Email 'john.doe@example.com', got '%s'", pii.Email)
+	}
+	if pii.Phone != "+1234567890" {
+		t.Errorf("Expected Phone '+1234567890', got '%s'", pii.Phone)
+	}
+	if pii.DOB != "1990-01-01" {
+		t.Errorf("Expected DOB '1990-01-01', got '%s'", pii.DOB)
+	}
+	if pii.Address != "123 Main St" {
+		t.Errorf("Expected Address '123 Main St', got '%s'", pii.Address)
 	}
 }
 

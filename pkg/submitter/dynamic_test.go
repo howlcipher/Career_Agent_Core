@@ -13,7 +13,7 @@ func TestExtractDomain(t *testing.T) {
 		{"https://boards.greenhouse.io/company/jobs/456", "boards.greenhouse.io/company"},
 		{"https://linkedin.com/jobs/view/789", "linkedin.com/jobs"},
 		{"http://example.com", "example.com"},
-		{"invalid-url", "/invalid-url"},
+		{"invalid-url", "invalid-url"},
 	}
 
 	for _, tt := range tests {
