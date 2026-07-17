@@ -105,24 +105,46 @@ install_linux_system() {
     curl -fsSL https://ollama.com/install.sh | sh
 }
 
+# Download an Ollama release bundle, preferring the current .tar.zst format
+# with a .tgz fallback for older releases (mirrors the official installer).
+fetch_bundle() {
+    local name="$1" dest="$2"
+    local base="https://ollama.com/download"
+    if command -v zstd >/dev/null 2>&1 \
+        && curl -fsIL --max-time 15 "$base/$name.tar.zst" >/dev/null 2>&1; then
+        log "Downloading $base/$name.tar.zst ..."
+        curl -fL --progress-bar "$base/$name.tar.zst" | zstd -d | tar -xf - -C "$dest"
+    else
+        log "Downloading $base/$name.tgz ..."
+        curl -fL --progress-bar "$base/$name.tgz" | tar -xzf - -C "$dest"
+    fi
+}
+
 install_linux_user() {
     local prefix="$HOME/.local/share/ollama"
-    local tarball="ollama-linux-${ARCH}.tgz"
     log "Installing Ollama into $prefix (no root required)..."
     mkdir -p "$prefix" "$HOME/.local/bin"
 
-    log "Downloading https://ollama.com/download/$tarball (~1.5 GB)..."
-    curl -fL --progress-bar "https://ollama.com/download/$tarball" | tar -xz -C "$prefix"
+    fetch_bundle "ollama-linux-${ARCH}" "$prefix"
 
     # AMD GPUs need the additional ROCm runtime bundle
     if [ "$ARCH" = "amd64" ] && command -v lspci >/dev/null 2>&1 \
         && lspci -d ::0300 2>/dev/null | grep -qi 'AMD\|ATI'; then
         log "AMD GPU detected — downloading ROCm runtime bundle..."
-        curl -fL --progress-bar "https://ollama.com/download/ollama-linux-${ARCH}-rocm.tgz" | tar -xz -C "$prefix" \
+        fetch_bundle "ollama-linux-${ARCH}-rocm" "$prefix" \
             || warn "ROCm bundle download failed; Ollama will fall back to CPU."
     fi
 
-    ln -sf "$prefix/bin/ollama" "$HOME/.local/bin/ollama"
+    # Release bundles have shipped both layouts: bin/ollama and ./ollama
+    local ollama_bin
+    if [ -x "$prefix/bin/ollama" ]; then
+        ollama_bin="$prefix/bin/ollama"
+    elif [ -x "$prefix/ollama" ]; then
+        ollama_bin="$prefix/ollama"
+    else
+        die "Extraction succeeded but no ollama binary found under $prefix"
+    fi
+    ln -sf "$ollama_bin" "$HOME/.local/bin/ollama"
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;
         *) warn "~/.local/bin is not on your PATH — add it to your shell profile." ;;
@@ -137,7 +159,7 @@ Description=Ollama (user)
 After=network-online.target
 
 [Service]
-ExecStart=$prefix/bin/ollama serve
+ExecStart=$ollama_bin serve
 Restart=always
 RestartSec=3
 
@@ -148,7 +170,7 @@ EOF
         systemctl --user enable --now ollama.service
     else
         warn "systemd user session unavailable — starting 'ollama serve' with nohup."
-        nohup "$prefix/bin/ollama" serve >"$HOME/.local/share/ollama/serve.log" 2>&1 &
+        nohup "$ollama_bin" serve >"$prefix/serve.log" 2>&1 &
     fi
 }
 
