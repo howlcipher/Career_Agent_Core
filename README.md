@@ -103,12 +103,12 @@ The AI relies on a base resume or profile to tailor against job descriptions. En
 ### 4. Choose an LLM Provider & Authenticate APIs
 The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git). The default is **Ollama** (local, free, no API key required).
 
-**Ollama (default)** — install [Ollama](https://ollama.com), then pull the models:
+**Ollama (default)** — run the bundled installer, which detects your OS (Debian, Ubuntu, Fedora, Arch, macOS, and immutable distros like Bazzite/Silverblue via a no-root user-space install), installs Ollama, starts the server, and pulls the required models:
 ```bash
-ollama pull llama3.1          # text (scoring, resumes, cover letters)
-ollama pull llava             # vision (screenshot form mapping)
-ollama pull nomic-embed-text  # embeddings (semantic search / RAG)
+./scripts/install_ollama.sh              # Linux / macOS
+.\scripts\install_ollama.ps1             # Windows (PowerShell)
 ```
+Useful flags: `--user` (force no-sudo install), `--system` (force the official sudo installer), `--no-models` (skip the multi-GB model downloads). The models it pulls: `llama3.1` (text: scoring, resumes, cover letters), `llava` (vision: screenshot form mapping), and `nomic-embed-text` (embeddings: semantic search / RAG).
 ```bash
 LLM_PROVIDER="ollama"                     # optional, this is the default
 OLLAMA_HOST="http://localhost:11434"      # optional

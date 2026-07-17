@@ -154,6 +154,16 @@
                         <p>Dramatically reduces API token spend by launching Playwright to verify the job posting is active and free of CAPTCHAs before generating the expensive LLM Cover Letter and Resume.</p>
                     </div>
                 </div>
+
+                <div class="bento-card bento-wide hover-glow fade-in-up delay-5">
+                    <div class="card-icon-wrapper">
+                        <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+                    </div>
+                    <div class="card-content">
+                        <h3>Local-First, Multi-Provider AI</h3>
+                        <p>Runs entirely on your machine with <strong>Ollama</strong> by default — zero API cost, zero data leaving your box. Flip a single <code>LLM_PROVIDER</code> variable to switch to Claude or Gemini. A bundled installer detects your OS (Debian, Ubuntu, Fedora, Arch, macOS, Windows, and immutable distros like Bazzite) and sets up the local models in one command.</p>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -181,7 +191,7 @@
                             </div>
                             <div class="feature-text">
                                 <strong>Dynamic Learner Module</strong>
-                                <span>Autonomously reads unknown Applicant Tracking Systems (e.g. Workday), sends the form to Gemini to mathematically map input selectors, caches the blueprint, and applies.</span>
+                                <span>Autonomously reads unknown Applicant Tracking Systems (e.g. Workday), sends the form to your configured LLM (Ollama, Claude, or Gemini) to mathematically map input selectors, caches the blueprint, and applies.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-3">
