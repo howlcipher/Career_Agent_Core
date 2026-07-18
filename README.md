@@ -101,7 +101,9 @@ Open `profile.yaml` to customize your search parameters:
 The AI relies on a base resume or profile to tailor against job descriptions. Ensure you have your base markdown profile (e.g., `USER_PROFILE.md`) accessible to the system or a fallback `__William_Elias_Resume__.pdf` in the root directory.
 
 ### 4. Choose an LLM Provider & Authenticate APIs
-The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git). The default is **Ollama** (local, free, no API key required).
+The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git — copy `.env.example` as a starting point). The default is **Ollama** (local, free, no API key required).
+
+**Model recommendation:** the installer's defaults (`llama3.1` + `llava`) fit modest hardware. If you have ~32 GB RAM, use `OLLAMA_MODEL="qwen3:30b-instruct"` and `OLLAMA_VISION_MODEL="qwen2.5vl:7b"` instead — a 30B mixture-of-experts model that scores jobs in ~5 seconds on CPU with noticeably better writing. Avoid the `qwen3:30b-a3b` (thinking) variant: its hidden reasoning makes CPU scoring take minutes.
 
 **Ollama (default)** — run the bundled installer, which detects your OS (Debian, Ubuntu, Fedora, Arch, macOS, and immutable distros like Bazzite/Silverblue via a no-root user-space install), installs Ollama, starts the server, and pulls the required models:
 ```bash
