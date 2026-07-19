@@ -1,0 +1,2 @@
+description = "Resume an interrupted task from its journal"
+prompt = "Read the file .agents/prompts/resume_task.md and follow it exactly. Invocation arguments (may be empty): {{args}}"

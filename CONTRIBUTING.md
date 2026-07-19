@@ -26,6 +26,9 @@ To add static support for a new Applicant Tracking System:
 - **Godoc:** All exported functions and structs must be documented with Godoc standard comments.
 - **ADRs:** Significant architectural changes must be proposed with a new Architecture Decision Record in `docs/adrs/`.
 
+## Bug and Improvement Backlog
+Known defects live in `bugs.md`, planned enhancements in `improvements.md` — both are ranked, ROI-scored backlogs with a shared Working Protocol (see `improvements.md`). `bugs.md` opens with a Usability Gate defining what "100% usable" means for this project; until that gate is met, bug fixes take priority over everything in `improvements.md`. AI agents working in this repo can pick up the next item automatically via the `/work_next_item`, `/resume_task`, and `/groom_backlogs` prompts in `.agents/prompts/` (see `AGENTS.md`).
+
 ## Running Tests
 Ensure all unit tests pass before submitting a Pull Request.
 
