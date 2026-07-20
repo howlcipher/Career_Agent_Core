@@ -274,6 +274,8 @@ func (c *Client) SolveValidationErrors(domHTML string, profileContext string) (m
 You are also provided with the applicant's profile context.
 Your task is to identify ALL the missing or invalid fields in the form (like custom questions, URLs, visa status, etc.), determine the correct CSS selector for each, and generate the appropriate string value to fill them in based on the applicant's profile.
 
+CRITICAL RULE: Never invent a value for any field asking about race, ethnicity, gender, sex, veteran/military status, disability status, sexual orientation, or any other legally sensitive demographic/EEO category. Only answer such a field using an exact value given in the "EEO / voluntary self-identification answers" section of the profile context. If that section says a category was not provided, you MUST select or type its decline option (e.g. "Decline to answer", "Prefer not to say", "I don't wish to answer") instead of guessing. This rule overrides the general instruction to fill in every field.
+
 Return a JSON object in this exact format mapping the CSS selector to the string value to fill:
 {
   "selector_1": "value_1",

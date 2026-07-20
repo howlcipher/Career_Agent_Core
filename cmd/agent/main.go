@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,8 +157,16 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	numWorkers := 10 // Increased to 10 workers for massive concurrency on Paid Tier
-	
+	numWorkers := defaultWorkerCount()
+	if raw := os.Getenv("WORKER_COUNT"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			numWorkers = n
+		} else {
+			log.Printf("[Config] Ignoring invalid WORKER_COUNT=%q, using %d", raw, numWorkers)
+		}
+	}
+	log.Printf("[Config] Using %d worker(s)", numWorkers)
+
 	for w := 1; w <= numWorkers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -394,4 +403,20 @@ func main() {
 	
 	wg.Wait()
 	log.Println("[Agent] Batch execution complete!")
+}
+
+// defaultWorkerCount picks a starting concurrency: local Ollama serves one
+// request at a time (single slot), so piling on workers just queues them and
+// starves the shared context window; paid API backends can parallelize.
+func defaultWorkerCount() int {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER")))
+	if provider == "" || provider == "ollama" {
+		// Local Ollama serves one request at a time (-np 1): a second
+		// concurrent worker just queues behind the first and, on slow
+		// CPU inference, can blow past the client's own request timeout
+		// before ever being served. One worker matches the server's
+		// actual capacity and avoids that queuing/timeout churn.
+		return 1
+	}
+	return 10
 }

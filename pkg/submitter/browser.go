@@ -158,7 +158,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			prunedHTML, err := parser.PruneDOM(domHTML)
 			if err != nil { prunedHTML = domHTML }
 
-			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, profileContext)
+			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)
 			if fixErr != nil {
 				return fmt.Errorf("failed to solve validation errors: %w", fixErr)
 			}
