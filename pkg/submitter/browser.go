@@ -169,7 +169,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			submitLocator := page.Locator("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
-				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)})
+				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
 			}
@@ -225,7 +225,7 @@ func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, 
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
 	if _, err := page.WaitForSelector("input#first_name", playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(15000),
+		Timeout: playwright.Float(30000),
 	}); err != nil {
 		return fmt.Errorf("form failed to render in time: %w", err)
 	}
@@ -283,7 +283,7 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
 
 	if _, err := page.WaitForSelector("input[name='name']", playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(15000),
+		Timeout: playwright.Float(30000),
 	}); err != nil {
 		return fmt.Errorf("form failed to render in time: %w", err)
 	}
@@ -343,7 +343,7 @@ func safeFill(page playwright.Page, selector, text string) error {
 	if text == "" {
 		return nil
 	}
-	return page.Locator(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(5000)})
+	return page.Locator(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
 }
 
 func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
@@ -380,7 +380,7 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 				err = fileInput.First().SetInputFiles([]playwright.InputFile{{
 					Name:   "resume.pdf",
 					Buffer: fileBytes,
-				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(5000)})
+				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(15000)})
 				if err != nil {
 					return fmt.Errorf("failed to upload resume: %w", err)
 				}
@@ -392,7 +392,7 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 
 	if autoSubmitClick {
 		if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
-			err := page.Locator(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)})
+			err := page.Locator(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
 			if err != nil {
 				return fmt.Errorf("failed to click submit: %w", err)
 			}
