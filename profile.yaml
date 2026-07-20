@@ -62,6 +62,6 @@ exclude_companies:
   - "Project Worldwide"
   - "Trendset Communications"
 auto_submit: true
-auto_submit_click: true
+auto_submit_click: false
 headless_browser: true
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."

@@ -6,7 +6,7 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // AttemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen

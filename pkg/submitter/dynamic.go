@@ -11,7 +11,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // FormMapper extracts Playwright selector mappings from a DOM

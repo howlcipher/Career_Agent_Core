@@ -2,14 +2,17 @@ applications/
 pii.yaml
 applications/
 applications.db
+applications.db-shm
+applications.db-wal
 main
 .env
 /agent
 master_resume.pdf
 career_agent.log
+career_agent-*.log
 
 # Compiled binaries
-dashboard
-career-agent
-agent
+/dashboard
+/career-agent
+/agent
 

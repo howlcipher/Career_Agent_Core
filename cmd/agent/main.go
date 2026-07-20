@@ -21,7 +21,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 	"github.com/joho/godotenv"
 	"gopkg.in/natefinch/lumberjack.v2"
 	"sync"
