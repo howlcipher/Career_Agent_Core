@@ -178,11 +178,18 @@ Map the following logical fields to their corresponding CSS selectors (prefer id
 - cover_letter
 - submit_button
 
+Also identify each field's visible accessible label text where one exists - the text of an associated <label> element, or an aria-label/aria-labelledby value (e.g. "First Name", "Email Address"). This is used as a fallback if the CSS selector guess turns out to be wrong, so include it whenever the form has one, even if you are confident in the selector.
+
 Return a JSON object in this exact format:
 {
   "fields": {
     "first_name": "selector",
     "last_name": "selector",
+    ...
+  },
+  "labels": {
+    "first_name": "visible label text, or omit if none exists",
+    "last_name": "visible label text, or omit if none exists",
     ...
   }
 }`
@@ -215,11 +222,18 @@ Map the following logical fields to their corresponding CSS selectors (if visibl
 - cover_letter
 - submit_button
 
+Also read the visible label text printed next to or above each input field (e.g. "First Name", "Email Address") and include it separately. This is used as a fallback if the CSS selector guess turns out to be wrong, so include it whenever you can read one, even if you are confident in the selector.
+
 Return a JSON object in this exact format:
 {
   "fields": {
     "first_name": "selector",
     "last_name": "selector",
+    ...
+  },
+  "labels": {
+    "first_name": "visible label text, or omit if none is visible",
+    "last_name": "visible label text, or omit if none is visible",
     ...
   }
 }`

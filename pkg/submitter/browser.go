@@ -24,6 +24,13 @@ import (
 // timeout is, since the element genuinely isn't in that document.
 type fillTarget interface {
 	Loc(selector string) playwright.Locator
+	// GetByLabelLoc finds an input by its visible accessible label text (a
+	// <label for="...">, aria-label, or aria-labelledby association) instead
+	// of a CSS selector. WCAG-compliant ATS forms - most enterprise ones -
+	// reliably expose this even when their raw name/id attributes are
+	// obfuscated or vary by vendor theme, making it a more robust fallback
+	// than an LLM-guessed CSS selector.
+	GetByLabelLoc(text string) playwright.Locator
 	WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error)
 	HTML() (string, error)
 }
@@ -31,6 +38,9 @@ type fillTarget interface {
 type pageTarget struct{ page playwright.Page }
 
 func (t pageTarget) Loc(selector string) playwright.Locator { return t.page.Locator(selector) }
+func (t pageTarget) GetByLabelLoc(text string) playwright.Locator {
+	return t.page.GetByLabel(text)
+}
 func (t pageTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.page.WaitForSelector(selector, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
 }
@@ -39,6 +49,9 @@ func (t pageTarget) HTML() (string, error) { return t.page.Content() }
 type frameTarget struct{ frame playwright.Frame }
 
 func (t frameTarget) Loc(selector string) playwright.Locator { return t.frame.Locator(selector) }
+func (t frameTarget) GetByLabelLoc(text string) playwright.Locator {
+	return t.frame.GetByLabel(text)
+}
 func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.frame.WaitForSelector(selector, playwright.FrameWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
 }
@@ -439,6 +452,12 @@ func handleLever(target fillTarget, resumePath string, pii *config.PII, autoSubm
 
 type FormMapping struct {
 	Fields map[string]string `json:"fields"`
+	// Labels holds the field's visible accessible label text (e.g. "First
+	// Name"), keyed the same as Fields. Optional: populated when the mapper
+	// can identify it, used as a fallback when the CSS selector guess in
+	// Fields turns out to be wrong - WCAG-compliant ATS forms reliably
+	// expose a stable label even when raw name/id attributes don't.
+	Labels map[string]string `json:"labels"`
 }
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
@@ -453,6 +472,37 @@ func safeFill(target fillTarget, selector, text string) error {
 	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
 }
 
+// safeFillWithLabelFallback tries the field's accessible label first when one
+// is available, falling back to the LLM-guessed CSS selector otherwise (or
+// if the label attempt itself fails). Label-based locators are the
+// established best practice for resilient form automation against unknown
+// markup - Playwright's own "user-first locator" guidance recommends
+// GetByLabel ahead of raw CSS selectors precisely because it's tied to what
+// a human actually sees, not implementation details that vary by ATS vendor
+// theme, whereas a CSS selector can also silently match the wrong element
+// of the same tag/name without erroring at all. CSS selector remains the
+// fallback since not every mapping call successfully identifies a label.
+func safeFillWithLabelFallback(target fillTarget, selector, labelText, text string) error {
+	if text == "" {
+		return nil
+	}
+	if labelText != "" {
+		labelErr := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
+		if labelErr == nil {
+			return nil
+		}
+		if selector == "" {
+			return fmt.Errorf("label fallback for %q failed and no selector available: %w", labelText, labelErr)
+		}
+		if err := safeFill(target, selector, text); err != nil {
+			return fmt.Errorf("label fill for %q failed (%v), selector fill also failed: %w", labelText, labelErr, err)
+		}
+		log.Printf("[Auto-Submit] Label fill for %q failed; CSS selector fallback succeeded", labelText)
+		return nil
+	}
+	return safeFill(target, selector, text)
+}
+
 func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
 	var mapping FormMapping
@@ -462,19 +512,19 @@ func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappin
 
 	if pii != nil {
 		if pii.FirstName != "" {
-			if err := safeFill(target, mapping.Fields["first_name"], pii.FirstName); err != nil {
+			if err := safeFillWithLabelFallback(target, mapping.Fields["first_name"], mapping.Labels["first_name"], pii.FirstName); err != nil {
 				return fmt.Errorf("failed to fill first_name: %w", err)
 			}
 		}
 		if pii.LastName != "" {
-			if err := safeFill(target, mapping.Fields["last_name"], pii.LastName); err != nil {
+			if err := safeFillWithLabelFallback(target, mapping.Fields["last_name"], mapping.Labels["last_name"], pii.LastName); err != nil {
 				return fmt.Errorf("failed to fill last_name: %w", err)
 			}
 		}
-		if err := safeFill(target, mapping.Fields["email"], pii.Email); err != nil {
+		if err := safeFillWithLabelFallback(target, mapping.Fields["email"], mapping.Labels["email"], pii.Email); err != nil {
 			return fmt.Errorf("failed to fill email: %w", err)
 		}
-		if err := safeFill(target, mapping.Fields["phone"], pii.Phone); err != nil {
+		if err := safeFillWithLabelFallback(target, mapping.Fields["phone"], mapping.Labels["phone"], pii.Phone); err != nil {
 			return fmt.Errorf("failed to fill phone: %w", err)
 		}
 	}
