@@ -127,6 +127,27 @@ func (m *MockLocator) Click(options ...playwright.LocatorClickOptions) error {
 	return nil
 }
 
+func TestIsDeadJobPage(t *testing.T) {
+	tests := []struct {
+		content string
+		want    bool
+	}{
+		{"<html><body>Apply now for this Senior Engineer role</body></html>", false},
+		{"<html><body>Sorry, the job listing no longer exists</body></html>", true},
+		{"<html><body>This position has been filled</body></html>", true},
+		{"<html><body>404 Not Found</body></html>", true},
+		{"<html><body>We are no longer accepting applications for this role</body></html>", true},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := isDeadJobPage(tt.content)
+		if got != tt.want {
+			t.Errorf("isDeadJobPage(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
+
 func TestClickApplyIfPresent_NoApplyButton(t *testing.T) {
 	mockLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
 	mockPage := &MockPage{

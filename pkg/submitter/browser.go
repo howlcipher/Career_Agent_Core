@@ -44,6 +44,36 @@ func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.
 }
 func (t frameTarget) HTML() (string, error) { return t.frame.Content() }
 
+// deadJobPhrases are lowercase substrings different ATS platforms use to say a
+// posting is gone. Confirmed live 2026-07-21: a Jobvite listing that had
+// expired between discovery and AttemptSubmit said "the job listing no
+// longer [exists]" — a phrasing the original single hardcoded check for
+// "job is no longer available" did not match, so the dead-job guard silently
+// let an expired posting through a full generation + Learner Module cycle.
+var deadJobPhrases = []string{
+	"job is no longer available",
+	"position has been filled",
+	"404 not found",
+	"no longer exists",
+	"no longer accepting applications",
+	"job listing no longer",
+	"posting is no longer active",
+	"job has been filled",
+}
+
+// isDeadJobPage reports whether page content matches a known "this posting is
+// gone" phrasing, so AttemptSubmit can bail out before spending a costly
+// generation cycle and a fill attempt on a job that can never succeed.
+func isDeadJobPage(content string) bool {
+	lowerContent := strings.ToLower(content)
+	for _, phrase := range deadJobPhrases {
+		if strings.Contains(lowerContent, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 // clickApplyIfPresent looks for a visible "Apply"-labeled clickable element on the
 // top-level page and clicks it, giving click-to-reveal application forms (a
 // fancybox/lightbox modal, an in-page form injected by JS, etc.) a chance to render
@@ -151,8 +181,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	
 	// Check for obvious dead ends
 	content, _ := page.Content()
-	lowerContent := strings.ToLower(content)
-	if strings.Contains(lowerContent, "job is no longer available") || strings.Contains(lowerContent, "position has been filled") || strings.Contains(lowerContent, "404 not found") {
+	if isDeadJobPage(content) {
 		return fmt.Errorf("job posting is dead or expired")
 	}
 
