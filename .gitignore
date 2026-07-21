@@ -10,6 +10,9 @@ main
 master_resume.pdf
 career_agent.log
 career_agent-*.log
+career_agent_live.log
+agent_run_batch.log
+agent_run_batch.pid
 
 # Compiled binaries
 /dashboard
