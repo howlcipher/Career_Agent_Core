@@ -96,6 +96,67 @@ func (m *MockPage) Locator(selector string, options ...playwright.PageLocatorOpt
 	return nil
 }
 
+func (m *MockPage) WaitForTimeout(timeout float64) {}
+
+// pwLocator aliases playwright.Locator so it can be embedded under a field
+// name other than "Locator" — the interface has its own Locator(...)
+// chaining method, which otherwise collides with the embedded field name.
+type pwLocator = playwright.Locator
+
+type MockLocator struct {
+	pwLocator
+	countFunc  func() (int, error)
+	clickFunc  func(options ...playwright.LocatorClickOptions) error
+	clickCalls int
+}
+
+func (m *MockLocator) First() playwright.Locator { return m }
+
+func (m *MockLocator) Count() (int, error) {
+	if m.countFunc != nil {
+		return m.countFunc()
+	}
+	return 0, nil
+}
+
+func (m *MockLocator) Click(options ...playwright.LocatorClickOptions) error {
+	m.clickCalls++
+	if m.clickFunc != nil {
+		return m.clickFunc(options...)
+	}
+	return nil
+}
+
+func TestClickApplyIfPresent_NoApplyButton(t *testing.T) {
+	mockLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return mockLocator
+		},
+	}
+
+	clickApplyIfPresent(mockPage)
+
+	if mockLocator.clickCalls != 0 {
+		t.Errorf("expected Click to not be called when no Apply element is found, got %d calls", mockLocator.clickCalls)
+	}
+}
+
+func TestClickApplyIfPresent_ClicksWhenFound(t *testing.T) {
+	mockLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return mockLocator
+		},
+	}
+
+	clickApplyIfPresent(mockPage)
+
+	if mockLocator.clickCalls != 1 {
+		t.Errorf("expected Click to be called exactly once when an Apply element is found, got %d calls", mockLocator.clickCalls)
+	}
+}
+
 func TestSafeFill_Empty(t *testing.T) {
 	mockPage := &MockPage{}
 	target := pageTarget{mockPage}

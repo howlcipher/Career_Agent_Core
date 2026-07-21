@@ -44,6 +44,26 @@ func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.
 }
 func (t frameTarget) HTML() (string, error) { return t.frame.Content() }
 
+// clickApplyIfPresent looks for a visible "Apply"-labeled clickable element on the
+// top-level page and clicks it, giving click-to-reveal application forms (a
+// fancybox/lightbox modal, an in-page form injected by JS, etc.) a chance to render
+// before the Learner Module inspects the DOM or the fill logic looks for form
+// fields. No-ops silently if no such element is found, since most ATS platforms
+// already show the form directly without requiring a click.
+func clickApplyIfPresent(page playwright.Page) {
+	locator := page.Locator("button:has-text('Apply'), a:has-text('Apply')").First()
+	count, err := locator.Count()
+	if err != nil || count == 0 {
+		return
+	}
+	if err := locator.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)}); err != nil {
+		log.Printf("[Auto-Submit] Found an Apply-labeled element but failed to click it: %v", err)
+		return
+	}
+	log.Printf("[Auto-Submit] Clicked an Apply-labeled element to reveal the application form")
+	page.WaitForTimeout(2000)
+}
+
 // resolveFillTarget picks the top-level page if it already contains form
 // inputs, otherwise scans child frames for the first one that does (the
 // common case for embedded-widget ATS platforms). Falls back to the page
@@ -175,6 +195,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				execErr = handleLever(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
+				clickApplyIfPresent(page)
 				target := resolveFillTarget(page)
 				domHTML, _ := target.HTML()
 				prunedHTML, err := parser.PruneDOMToText(domHTML)
