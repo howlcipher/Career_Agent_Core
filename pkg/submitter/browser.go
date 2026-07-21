@@ -202,10 +202,15 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	mappingJSON, err := storage.GetFormMapping(domain)
 	if err == nil && mappingJSON != "" {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
-		dynErr := handleDynamic(resolveFillTarget(page), resumePath, pii, mappingJSON, autoSubmitClick)
+		cachedTarget := resolveFillTarget(page)
+		dynErr := handleDynamic(cachedTarget, resumePath, pii, mappingJSON, autoSubmitClick)
 		if dynErr != nil {
 			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
 			storage.DeleteFormMapping(domain)
+			if mapper != nil {
+				log.Printf("[Auto-Submit] Falling back to Vision module after cached-mapping fill failure...")
+				return AttemptVisionSubmit(page, cachedTarget, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+			}
 			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
 		}
 		return nil
@@ -243,6 +248,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
 					execErr = handleDynamic(target, resumePath, pii, newMappingJSON, autoSubmitClick)
+					if execErr != nil {
+						log.Printf("[Auto-Submit] Dynamic fill failed for %s after Learner Module mapping. Invalidating cache. Falling back to Vision module. Error: %v", domain, execErr)
+						storage.DeleteFormMapping(domain)
+						execErr = AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+					}
 				} else {
 					log.Printf("[Learner Module] Failed to map form: %v", err)
 					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
