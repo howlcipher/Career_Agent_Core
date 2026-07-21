@@ -16,6 +16,55 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
+// fillTarget abstracts over playwright.Page and playwright.Frame so form-fill
+// logic can transparently target whichever one actually holds the form.
+// Many ATS platforms (SmartRecruiters, Workday, and others) embed the real
+// application form in an <iframe>; searching only the top-level page for
+// input#first_name etc. finds nothing and times out no matter how long the
+// timeout is, since the element genuinely isn't in that document.
+type fillTarget interface {
+	Loc(selector string) playwright.Locator
+	WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error)
+	HTML() (string, error)
+}
+
+type pageTarget struct{ page playwright.Page }
+
+func (t pageTarget) Loc(selector string) playwright.Locator { return t.page.Locator(selector) }
+func (t pageTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
+	return t.page.WaitForSelector(selector, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
+}
+func (t pageTarget) HTML() (string, error) { return t.page.Content() }
+
+type frameTarget struct{ frame playwright.Frame }
+
+func (t frameTarget) Loc(selector string) playwright.Locator { return t.frame.Locator(selector) }
+func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
+	return t.frame.WaitForSelector(selector, playwright.FrameWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
+}
+func (t frameTarget) HTML() (string, error) { return t.frame.Content() }
+
+// resolveFillTarget picks the top-level page if it already contains form
+// inputs, otherwise scans child frames for the first one that does (the
+// common case for embedded-widget ATS platforms). Falls back to the page
+// itself if no frame has any inputs either, so callers get a normal
+// "selector not found" error instead of a nil target.
+func resolveFillTarget(page playwright.Page) fillTarget {
+	if count, _ := page.Locator("input, textarea, select").Count(); count > 0 {
+		return pageTarget{page}
+	}
+	for _, f := range page.Frames() {
+		if f == page.MainFrame() {
+			continue
+		}
+		if count, _ := f.Locator("input, textarea, select").Count(); count > 0 {
+			log.Printf("[Auto-Submit] Form fields not found on main page; using embedded iframe (%s) instead", f.URL())
+			return frameTarget{f}
+		}
+	}
+	return pageTarget{page}
+}
+
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
@@ -104,7 +153,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	mappingJSON, err := storage.GetFormMapping(domain)
 	if err == nil && mappingJSON != "" {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
-		dynErr := handleDynamic(page, resumePath, pii, mappingJSON, autoSubmitClick)
+		dynErr := handleDynamic(resolveFillTarget(page), resumePath, pii, mappingJSON, autoSubmitClick)
 		if dynErr != nil {
 			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
 			storage.DeleteFormMapping(domain)
@@ -121,12 +170,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
 				execErr = handleLinkedIn(page, resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
-				execErr = handleGreenhouse(page, resumePath, pii, autoSubmitClick)
+				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
-				execErr = handleLever(page, resumePath, pii, autoSubmitClick)
+				execErr = handleLever(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
-				domHTML, _ := page.Content()
+				target := resolveFillTarget(page)
+				domHTML, _ := target.HTML()
 				prunedHTML, err := parser.PruneDOMToText(domHTML)
 				if err != nil {
 					prunedHTML = domHTML
@@ -142,11 +192,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if err == nil && newMappingJSON != "" {
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
-					execErr = handleDynamic(page, resumePath, pii, newMappingJSON, autoSubmitClick)
+					execErr = handleDynamic(target, resumePath, pii, newMappingJSON, autoSubmitClick)
 				} else {
 					log.Printf("[Learner Module] Failed to map form: %v", err)
 					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
-					execErr = AttemptVisionSubmit(page, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+					execErr = AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
 				}
 			} else {
 				execErr = fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
@@ -154,7 +204,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			initialAttemptComplete = true
 		} else {
 			log.Printf("[Auto-Submit] Attempt %d: Solving validation errors...", attempt)
-			domHTML, _ := page.Content()
+			target := resolveFillTarget(page)
+			domHTML, _ := target.HTML()
 			prunedHTML, err := parser.PruneDOM(domHTML)
 			if err != nil { prunedHTML = domHTML }
 
@@ -162,12 +213,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if fixErr != nil {
 				return fmt.Errorf("failed to solve validation errors: %w", fixErr)
 			}
-			
+
 			for selector, value := range fixesMap {
-				safeFill(page, selector, value)
+				safeFill(target, selector, value)
 			}
 
-			submitLocator := page.Locator("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
+			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
 				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
 			} else {
@@ -221,92 +272,39 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 	return fmt.Errorf("linkedin easy apply modal interaction not fully implemented")
 }
 
-func handleGreenhouse(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
+func handleGreenhouse(target fillTarget, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
-	if _, err := page.WaitForSelector("input#first_name", playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(30000),
-	}); err != nil {
+	if _, err := target.WaitForSel("input#first_name", 30000); err != nil {
 		return fmt.Errorf("form failed to render in time: %w", err)
 	}
 
 	// Basic fields
 	if pii != nil {
 		if pii.FirstName != "" {
-			if err := page.Locator("input#first_name").Fill(pii.FirstName); err != nil {
+			if err := target.Loc("input#first_name").Fill(pii.FirstName); err != nil {
 				return fmt.Errorf("failed to fill first_name: %w", err)
 			}
 		}
 		if pii.LastName != "" {
-			if err := page.Locator("input#last_name").Fill(pii.LastName); err != nil {
+			if err := target.Loc("input#last_name").Fill(pii.LastName); err != nil {
 				return fmt.Errorf("failed to fill last_name: %w", err)
 			}
 		}
 		if pii.Email != "" {
-			if err := page.Locator("input#email").Fill(pii.Email); err != nil {
+			if err := target.Loc("input#email").Fill(pii.Email); err != nil {
 				return fmt.Errorf("failed to fill email: %w", err)
 			}
 		}
 		if pii.Phone != "" {
-			if err := page.Locator("input#phone").Fill(pii.Phone); err != nil {
+			if err := target.Loc("input#phone").Fill(pii.Phone); err != nil {
 				return fmt.Errorf("failed to fill phone: %w", err)
 			}
 		}
 	}
 
 	// Upload resume
-	fileInput := page.Locator("input[type='file'][name='resume']")
-	if count, _ := fileInput.Count(); count > 0 {
-		fileBytes, err := os.ReadFile(resumePath)
-		if err == nil {
-			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
-				Name:   "resume.pdf", 
-				Buffer: fileBytes,
-			}}); err != nil {
-				return fmt.Errorf("failed to set resume file: %w", err)
-			}
-		} else {
-			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
-		}
-	}
-
-	if autoSubmitClick {
-		if err := page.Locator("input#submit_app").Click(); err != nil {
-			return fmt.Errorf("failed to click submit: %w", err)
-		}
-	}
-	
-	return nil
-}
-
-func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
-	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
-
-	if _, err := page.WaitForSelector("input[name='name']", playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(30000),
-	}); err != nil {
-		return fmt.Errorf("form failed to render in time: %w", err)
-	}
-
-	if pii != nil {
-		if pii.FirstName != "" || pii.LastName != "" {
-			if err := page.Locator("input[name='name']").Fill(pii.FirstName + " " + pii.LastName); err != nil {
-				return fmt.Errorf("failed to fill name: %w", err)
-			}
-		}
-		if pii.Email != "" {
-			if err := page.Locator("input[name='email']").Fill(pii.Email); err != nil {
-				return fmt.Errorf("failed to fill email: %w", err)
-			}
-		}
-		if pii.Phone != "" {
-			if err := page.Locator("input[name='phone']").Fill(pii.Phone); err != nil {
-				return fmt.Errorf("failed to fill phone: %w", err)
-			}
-		}
-	}
-
-	fileInput := page.Locator("input[type='file'][id='resume-upload-input']")
+	fileInput := target.Loc("input[type='file'][name='resume']")
 	if count, _ := fileInput.Count(); count > 0 {
 		fileBytes, err := os.ReadFile(resumePath)
 		if err == nil {
@@ -322,7 +320,56 @@ func handleLever(page playwright.Page, resumePath string, pii *config.PII, autoS
 	}
 
 	if autoSubmitClick {
-		if err := page.Locator("button.postings-btn.template-btn-submit").Click(); err != nil {
+		if err := target.Loc("input#submit_app").Click(); err != nil {
+			return fmt.Errorf("failed to click submit: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func handleLever(target fillTarget, resumePath string, pii *config.PII, autoSubmitClick bool) error {
+	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
+
+	if _, err := target.WaitForSel("input[name='name']", 30000); err != nil {
+		return fmt.Errorf("form failed to render in time: %w", err)
+	}
+
+	if pii != nil {
+		if pii.FirstName != "" || pii.LastName != "" {
+			if err := target.Loc("input[name='name']").Fill(pii.FirstName + " " + pii.LastName); err != nil {
+				return fmt.Errorf("failed to fill name: %w", err)
+			}
+		}
+		if pii.Email != "" {
+			if err := target.Loc("input[name='email']").Fill(pii.Email); err != nil {
+				return fmt.Errorf("failed to fill email: %w", err)
+			}
+		}
+		if pii.Phone != "" {
+			if err := target.Loc("input[name='phone']").Fill(pii.Phone); err != nil {
+				return fmt.Errorf("failed to fill phone: %w", err)
+			}
+		}
+	}
+
+	fileInput := target.Loc("input[type='file'][id='resume-upload-input']")
+	if count, _ := fileInput.Count(); count > 0 {
+		fileBytes, err := os.ReadFile(resumePath)
+		if err == nil {
+			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
+				Name:   "resume.pdf",
+				Buffer: fileBytes,
+			}}); err != nil {
+				return fmt.Errorf("failed to set resume file: %w", err)
+			}
+		} else {
+			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
+		}
+	}
+
+	if autoSubmitClick {
+		if err := target.Loc("button.postings-btn.template-btn-submit").Click(); err != nil {
 			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}
@@ -336,17 +383,17 @@ type FormMapping struct {
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
 
-func safeFill(page playwright.Page, selector, text string) error {
+func safeFill(target fillTarget, selector, text string) error {
 	if selector == "" {
 		return ErrEmptySelector
 	}
 	if text == "" {
 		return nil
 	}
-	return page.Locator(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
+	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
 }
 
-func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
+func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
 	var mapping FormMapping
 	if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
@@ -355,25 +402,25 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 
 	if pii != nil {
 		if pii.FirstName != "" {
-			if err := safeFill(page, mapping.Fields["first_name"], pii.FirstName); err != nil {
+			if err := safeFill(target, mapping.Fields["first_name"], pii.FirstName); err != nil {
 				return fmt.Errorf("failed to fill first_name: %w", err)
 			}
 		}
 		if pii.LastName != "" {
-			if err := safeFill(page, mapping.Fields["last_name"], pii.LastName); err != nil {
+			if err := safeFill(target, mapping.Fields["last_name"], pii.LastName); err != nil {
 				return fmt.Errorf("failed to fill last_name: %w", err)
 			}
 		}
-		if err := safeFill(page, mapping.Fields["email"], pii.Email); err != nil {
+		if err := safeFill(target, mapping.Fields["email"], pii.Email); err != nil {
 			return fmt.Errorf("failed to fill email: %w", err)
 		}
-		if err := safeFill(page, mapping.Fields["phone"], pii.Phone); err != nil {
+		if err := safeFill(target, mapping.Fields["phone"], pii.Phone); err != nil {
 			return fmt.Errorf("failed to fill phone: %w", err)
 		}
 	}
 
 	if sel, ok := mapping.Fields["resume"]; ok && sel != "" {
-		fileInput := page.Locator(sel)
+		fileInput := target.Loc(sel)
 		if count, _ := fileInput.Count(); count > 0 {
 			fileBytes, err := os.ReadFile(resumePath)
 			if err == nil {
@@ -392,7 +439,7 @@ func handleDynamic(page playwright.Page, resumePath string, pii *config.PII, map
 
 	if autoSubmitClick {
 		if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
-			err := page.Locator(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
+			err := target.Loc(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
 			if err != nil {
 				return fmt.Errorf("failed to click submit: %w", err)
 			}

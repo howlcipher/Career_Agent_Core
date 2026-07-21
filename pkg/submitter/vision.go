@@ -11,7 +11,7 @@ import (
 
 // AttemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen
 // and map coordinates/selectors if standard HTML DOM pruning fails or is heavily obfuscated.
-func AttemptVisionSubmit(page playwright.Page, companyName, applyURL, resumePath string, pii *config.PII, mapper FormMapper, autoSubmitClick bool) error {
+func AttemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath string, pii *config.PII, mapper FormMapper, autoSubmitClick bool) error {
 	log.Printf("[Vision-Submit] Taking a full-page screenshot of %s for Visual Reasoning...", applyURL)
 	
 	// Take full page screenshot
@@ -40,5 +40,5 @@ func AttemptVisionSubmit(page playwright.Page, companyName, applyURL, resumePath
 	}
 
 	// Now execute the standard dynamic handler using the newly generated visual mapping
-	return handleDynamic(page, resumePath, pii, mappingJSON, autoSubmitClick)
+	return handleDynamic(target, resumePath, pii, mappingJSON, autoSubmitClick)
 }

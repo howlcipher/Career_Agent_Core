@@ -98,12 +98,13 @@ func (m *MockPage) Locator(selector string, options ...playwright.PageLocatorOpt
 
 func TestSafeFill_Empty(t *testing.T) {
 	mockPage := &MockPage{}
-	err := safeFill(mockPage, "", "text")
+	target := pageTarget{mockPage}
+	err := safeFill(target, "", "text")
 	if err != ErrEmptySelector {
 		t.Errorf("safeFill with empty selector should return ErrEmptySelector, got %v", err)
 	}
-	
-	err = safeFill(mockPage, "selector", "")
+
+	err = safeFill(target, "selector", "")
 	if err != nil {
 		t.Errorf("safeFill with empty text should return nil, got %v", err)
 	}
