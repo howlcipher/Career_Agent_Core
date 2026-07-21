@@ -7,23 +7,50 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 // ollamaProvider talks to a local Ollama server (https://ollama.com).
 // Configuration:
 //
-//	OLLAMA_HOST         base URL, default http://localhost:11434
-//	OLLAMA_MODEL        text model, default llama3.1
-//	OLLAMA_VISION_MODEL vision model, default llava
-//	OLLAMA_EMBED_MODEL  embedding model, default nomic-embed-text
+//	OLLAMA_HOST            base URL, default http://localhost:11434
+//	OLLAMA_MODEL           text model, default llama3.1
+//	OLLAMA_VISION_MODEL    vision model, default llava
+//	OLLAMA_EMBED_MODEL     embedding model, default nomic-embed-text
+//	OLLAMA_TIMEOUT_MINUTES per-request client timeout, default 45
 type ollamaProvider struct {
 	host        string
 	model       string
 	visionModel string
 	embedModel  string
+	timeout     time.Duration
 	http        *http.Client
+}
+
+// defaultOllamaTimeoutMinutes was measured live on an 8-core CPU-only host:
+// a real ProcessJobApplication-shaped prompt (~4000 prompt tokens) generating
+// resume + cover letter + interview prep in one call ran at a steady ~1.6-1.8
+// tokens/sec (attention cost scales with total context length, not just a
+// discrete "context shift" event), so a full response can take 25-35+
+// minutes. The old hardcoded 10-minute timeout killed these requests
+// mid-generation with "context deadline exceeded" long before Ollama itself
+// hung or errored (bugs.md #6).
+const defaultOllamaTimeoutMinutes = 45
+
+func ollamaTimeoutFromEnv() time.Duration {
+	raw := envOr("OLLAMA_TIMEOUT_MINUTES", "")
+	if raw == "" {
+		return defaultOllamaTimeoutMinutes * time.Minute
+	}
+	minutes, err := strconv.Atoi(raw)
+	if err != nil || minutes <= 0 {
+		log.Printf("[LLM] Invalid OLLAMA_TIMEOUT_MINUTES %q, using default %d", raw, defaultOllamaTimeoutMinutes)
+		return defaultOllamaTimeoutMinutes * time.Minute
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 func newOllamaProvider() *ollamaProvider {
@@ -32,6 +59,7 @@ func newOllamaProvider() *ollamaProvider {
 		model:       envOr("OLLAMA_MODEL", "llama3.1"),
 		visionModel: envOr("OLLAMA_VISION_MODEL", "llava"),
 		embedModel:  envOr("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+		timeout:     ollamaTimeoutFromEnv(),
 		http:        &http.Client{},
 	}
 }
@@ -39,8 +67,8 @@ func newOllamaProvider() *ollamaProvider {
 func (p *ollamaProvider) Name() string { return "ollama" }
 
 // Local inference can be slow, especially for long resume/cover-letter
-// generations on CPU-bound hardware.
-func (p *ollamaProvider) Timeout() time.Duration { return 10 * time.Minute }
+// generations on CPU-bound hardware; see defaultOllamaTimeoutMinutes.
+func (p *ollamaProvider) Timeout() time.Duration { return p.timeout }
 
 type ollamaChatMessage struct {
 	Role    string   `json:"role"`
