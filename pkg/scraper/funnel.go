@@ -209,9 +209,12 @@ func isValidATSUrl(link string) bool {
 	}
 	
 	host := strings.ToLower(u.Hostname())
+	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
+		return false
+	}
 	
 	atsDomains := []string{
-		"greenhouse.io", "lever.co", "workday.com", "ashbyhq.com",
+		"greenhouse.io", "lever.co", "ashbyhq.com",
 		"breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com",
 		"recruitee.com", "jobvite.com", "applytojob.com", "myworkdayjobs.com",
 		"pinpointhq.com", "homerun.co",

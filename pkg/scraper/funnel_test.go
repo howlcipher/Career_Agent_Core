@@ -229,3 +229,25 @@ func TestHybridOnsiteFiltering(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValidATSUrl(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://developer.workday.com/welcome", false},
+		{"https://developer.workday.com/documentation", false},
+		{"https://acme.myworkdayjobs.com/en-US/External/job/12345", true},
+		{"https://jobs.workable.com/search/global/remote-software-engineer-jobs", false},
+		{"https://apply.workable.com/protera/j/5E238E8E8A/", true},
+		{"https://jobs.lever.co/TestCorp/123", true},
+		{"https://example.com/random-page", false},
+	}
+
+	for _, tt := range tests {
+		got := isValidATSUrl(tt.url)
+		if got != tt.want {
+			t.Errorf("isValidATSUrl(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
