@@ -26,9 +26,12 @@ func TestJobFunnelCRUD(t *testing.T) {
 	defer teardownTestDB()
 
 	// 1. Create a job in funnel
-	err := AddToFunnel("TestCorp", "Software Engineer", "http://testcorp.com/job1", "DISCOVERED")
+	isNew, err := AddToFunnel("TestCorp", "Software Engineer", "http://testcorp.com/job1", "DISCOVERED")
 	if err != nil {
 		t.Fatalf("Failed to add to funnel: %v", err)
+	}
+	if !isNew {
+		t.Fatalf("Expected AddToFunnel to report a new insert for a fresh URL")
 	}
 
 	// 2. Read discovered jobs
@@ -68,6 +71,28 @@ func TestJobFunnelCRUD(t *testing.T) {
 	}
 	if score != 95 {
 		t.Errorf("Expected score 95, got %d", score)
+	}
+
+	// 5. Re-discovering the same URL later (FunnelEngine re-encountering it in
+	// a later search pass) must be a no-op: it must not report a new insert,
+	// and it must not reset the job's progress back to DISCOVERED. Confirmed
+	// live 2026-07-21 as the root cause of the same job being reprocessed
+	// multiple times and eventually hitting the applied_jobs UNIQUE
+	// constraint - see bugs.md #12.
+	isNewAgain, err := AddToFunnel("TestCorp", "Software Engineer", "http://testcorp.com/job1", "DISCOVERED")
+	if err != nil {
+		t.Fatalf("Failed to re-add existing URL to funnel: %v", err)
+	}
+	if isNewAgain {
+		t.Errorf("Expected AddToFunnel to report no new insert for an already-known URL")
+	}
+
+	var statusAfterRediscovery string
+	if err := db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://testcorp.com/job1").Scan(&statusAfterRediscovery); err != nil {
+		t.Fatalf("Failed to query status: %v", err)
+	}
+	if statusAfterRediscovery != "INTERVIEW" {
+		t.Errorf("Re-discovering an existing URL must not reset its status; expected %q, got %q", "INTERVIEW", statusAfterRediscovery)
 	}
 }
 

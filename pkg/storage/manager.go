@@ -201,14 +201,31 @@ func CloseDB() error {
 	return nil
 }
 
-func AddToFunnel(company, title, url, status string) error {
+// AddToFunnel inserts a newly discovered job. Callers only ever pass
+// "DISCOVERED" as status, so on a conflict (a URL already known from an
+// earlier discovery pass, possibly from a previous session) this is a no-op:
+// it must NOT reset an in-progress or already-resolved job's status back to
+// "DISCOVERED", which would make it eligible for reprocessing while a worker
+// is already handling it (or already finished it) - confirmed live 2026-07-21
+// as the root cause of the same URL being queued and processed multiple
+// times, eventually hitting the UNIQUE constraint on applied_jobs.url.
+// The returned bool reports whether a genuinely new row was inserted, so
+// callers can avoid re-queuing a URL they already know about.
+func AddToFunnel(company, title, url, status string) (bool, error) {
 	if db == nil {
-		return fmt.Errorf("db not initialized")
+		return false, fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at) 
+	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at)
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(url) DO UPDATE SET status=excluded.status`, company, title, url, status)
-	return err
+		ON CONFLICT(url) DO NOTHING`, company, title, url, status)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
 }
 
 func UpdateFunnelStatus(url, status string) error {
