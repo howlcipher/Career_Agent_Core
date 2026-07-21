@@ -34,7 +34,11 @@
 ## Progress Log
 
 - 2026-07-21 — Journal opened. Pre-flight checks complete (concurrent-session check, host secrets noted but not touched, auto-submit risk confirmed with user). About to launch the live batch.
+- 2026-07-21 ~10:15 — Launched `go run cmd/agent/main.go` inside the `career-agent` podman container (correct Go 1.26.5 via `/usr/local/go/bin` prepend). Initial monitor watched the wrong file (stdout redirect only captures `fmt.Printf` lines; all SRE `log.Printf` output goes to a lumberjack-rotated `career_agent.log` set via `log.SetOutput` in `cmd/agent/main.go:40`) — corrected to tail `career_agent.log` instead.
+- 2026-07-21 ~11:20-11:47 — Live run active and healthy: 24+ API calls, multiple jobs reaching `AttemptSubmit`. Several jobs correctly blocked by the prompt-injection security guardrail (working as intended, not a bug). Observed 5 consecutive `developer.workday.com` doc pages being scored/tailored/attempted — live reproduction of bugs.md #5.
+- 2026-07-21 ~11:47-12:10 — Used the wait time productively: diagnosed #5's root cause in `pkg/scraper/funnel.go` (`isValidATSUrl` bare `"workday.com"` suffix match), delegated the fix to Gemini 3.1 Pro via `agy`, verified the real diff against `git diff` (matched brief exactly, no fabrication), ran `go build/vet/test ./...` (all pass), updated `bugs.md` (moved #5's Workday/Workable portion to Resolved, filed remaining Greenhouse case as new #7), committed as `069ed98`. This did not touch the still-running live batch (separately compiled `go run` process in the container, unaffected by source edits on host).
+- Still watching for bug #4: no iframe-embedded SmartRecruiters case or genuine `APPLIED` status reached yet in this run.
 
 ## Next Step
 
-Launch `cmd/agent` inside the `career-agent` podman container and begin monitoring `career_agent.log` for a genuine `APPLIED` outcome.
+Keep monitoring `career_agent.log` in the `career-agent` container for a genuine `APPLIED` status (verifies #4) or a new iframe-related failure. If the run stalls or exits without reaching one, decide whether to relaunch or extend.
