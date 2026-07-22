@@ -2,6 +2,8 @@ salary_floor: 105000
 target_compensation: 135000
 remote_only: true
 roles:
+  - "Software Engineer"
+  - "Senior Software Engineer"
   - "Senior Backend Engineer"
   - "Senior Go Developer"
   - "Senior Python Developer"
