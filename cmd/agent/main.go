@@ -402,6 +402,11 @@ func main() {
 				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
 					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
 				}
+			} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
+				// Bug #23: not a submit failure — the site is bot-walled.
+				log.Printf("[Worker-%d] %s is behind a bot-protection challenge — marked BLOCKED_CAPTCHA: %v", workerID, job.CompanyName, err)
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "BLOCKED_CAPTCHA")
+				storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
 			} else if err != nil {
 				log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")

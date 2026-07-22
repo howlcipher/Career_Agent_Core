@@ -223,6 +223,25 @@ func TestRegistrableDomain(t *testing.T) {
 	}
 }
 
+func TestIsCaptchaContent(t *testing.T) {
+	tests := []struct {
+		content string
+		want    bool
+	}{
+		// DataDome interstitial copy, confirmed live (bugs.md #23)
+		{"<html><body>Access is temporarily restricted. We detected unusual activity from your device or network.</body></html>", true},
+		{"<html><body>Attention Required! | Cloudflare</body></html>", true},
+		{"<html><body>Please verify you are human</body></html>", true},
+		{"<html><body><form><label>First Name</label><input/></form></body></html>", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isCaptchaContent(tt.content); got != tt.want {
+			t.Errorf("isCaptchaContent(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
+
 func TestIsKnownAuthGatedHost(t *testing.T) {
 	tests := []struct {
 		url  string

@@ -147,6 +147,60 @@ func deadRedirectReason(applyURL, finalURL string) string {
 	return ""
 }
 
+// ErrCaptchaBlocked marks a page serving a bot-protection challenge instead
+// of the posting (bug #23: DataDome on SmartRecruiters). The worker records
+// BLOCKED_CAPTCHA; solving is improvements.md #17's (paid, user-gated) scope.
+var ErrCaptchaBlocked = errors.New("page is behind a bot-protection challenge")
+
+// captchaFrameHosts identify challenge iframes by URL substring.
+var captchaFrameHosts = []string{
+	"captcha-delivery.com", // DataDome
+	"hcaptcha.com",
+	"recaptcha",
+	"challenges.cloudflare.com", // Turnstile
+	"arkoselabs.com",
+}
+
+// captchaContentPhrases identify challenge pages by their visible copy.
+var captchaContentPhrases = []string{
+	"access is temporarily restricted",
+	"verify you are human",
+	"unusual activity from your device",
+	"attention required",
+	"cf-turnstile",
+}
+
+// isCaptchaContent reports whether page content reads like a bot-protection
+// interstitial rather than a job posting.
+func isCaptchaContent(content string) bool {
+	lowerContent := strings.ToLower(content)
+	for _, phrase := range captchaContentPhrases {
+		if strings.Contains(lowerContent, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCaptchaBlocked combines the content check with a frame scan: DataDome's
+// interstitial has almost no text of its own — the giveaway is the challenge
+// iframe's source host (confirmed live 2026-07-22 on AbbVie/SmartRecruiters:
+// a 12-element page whose only real frame was geo.captcha-delivery.com).
+func isCaptchaBlocked(page playwright.Page, content string) bool {
+	if isCaptchaContent(content) {
+		return true
+	}
+	for _, f := range page.Frames() {
+		frameURL := strings.ToLower(f.URL())
+		for _, host := range captchaFrameHosts {
+			if strings.Contains(frameURL, host) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ErrAuthWall marks an application flow gated behind account creation or
 // sign-in, where no fillable application form exists pre-auth (bug #18:
 // Workday). Callers should route these to the manual-submission backlog
@@ -331,6 +385,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	content, _ := page.Content()
 	if isDeadJobPage(content) {
 		return fmt.Errorf("job posting is dead or expired")
+	}
+	// Bug #23: a bot-protection interstitial means nothing downstream can
+	// work — bail before the costly doc generation and mapping attempts.
+	if isCaptchaBlocked(page, content) {
+		return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 	}
 
 	// At this point, the page is live. NOW we generate the costly resume and cover letter!
