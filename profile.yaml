@@ -57,6 +57,19 @@ roles:
   - "Network Automation Engineer"
   - "Cyber Security Automation Engineer"
   - "Application Security Engineer"
+  - "Backend Developer"
+  - "Python Developer"
+  - "Go Developer"
+  - "Golang Developer"
+  - "Python Automation Engineer"
+  - "QA Automation Engineer"
+  - "Test Automation Engineer"
+  - "SDET"
+  - "CI/CD Engineer"
+  - "Integration Engineer"
+  - "ETL Developer"
+  - "Network Engineer"
+  - "AI Agent Engineer"
 experience_years: 9
 skills:
   - Python
