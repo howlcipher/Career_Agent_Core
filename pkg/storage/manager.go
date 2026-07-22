@@ -2,11 +2,13 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -190,8 +192,80 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	if _, err = f.WriteString(entry); err != nil {
 		return fmt.Errorf("failed to write to manual submission report: %w", err)
 	}
-	
+
 	return nil
+}
+
+// PromptInjectionThreat is a storage-local mirror of promptsec.Threat, kept
+// separate so this package doesn't need to import the security package's
+// third-party dependency just to log what was found.
+type PromptInjectionThreat struct {
+	Type     string
+	Severity float64
+	Message  string
+	Guard    string
+	Match    string
+	Start    int
+	End      int
+}
+
+var injectionLogMutex sync.Mutex
+
+// LogPromptInjectionDetections appends one CSV row per detected threat to
+// applications/prompt_injection_detections.csv, so a real prompt-injection
+// or hidden-content attempt on a scraped career page is kept as a
+// reviewable record instead of only appearing transiently in the log file.
+func LogPromptInjectionDetections(url, companyName string, threats []PromptInjectionThreat) error {
+	if len(threats) == 0 {
+		return nil
+	}
+
+	injectionLogMutex.Lock()
+	defer injectionLogMutex.Unlock()
+
+	if err := os.MkdirAll("applications", 0755); err != nil {
+		return fmt.Errorf("failed to create applications directory: %w", err)
+	}
+
+	reportPath := filepath.Join("applications", "prompt_injection_detections.csv")
+	writeHeader := false
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		writeHeader = true
+	}
+
+	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open prompt injection report: %w", err)
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	if writeHeader {
+		if err := w.Write([]string{"detected_at", "url", "company_name", "threat_type", "severity", "guard", "message", "matched_text", "match_start", "match_end"}); err != nil {
+			return fmt.Errorf("failed to write CSV header: %w", err)
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	for _, t := range threats {
+		row := []string{
+			now,
+			url,
+			companyName,
+			t.Type,
+			strconv.FormatFloat(t.Severity, 'f', 2, 64),
+			t.Guard,
+			t.Message,
+			t.Match,
+			strconv.Itoa(t.Start),
+			strconv.Itoa(t.End),
+		}
+		if err := w.Write(row); err != nil {
+			return fmt.Errorf("failed to write CSV row: %w", err)
+		}
+	}
+	w.Flush()
+	return w.Error()
 }
 
 func CloseDB() error {

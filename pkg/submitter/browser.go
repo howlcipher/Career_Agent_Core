@@ -9,12 +9,32 @@ import (
 	"os"
 	"strings"
 
+	"github.com/danielthedm/promptsec"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/mxschmitt/playwright-go"
 )
+
+// toStoredThreats converts promptsec's threat type to storage's own mirror,
+// so pkg/storage doesn't need to depend on the security package's
+// third-party dependency just to log what was found.
+func toStoredThreats(threats []promptsec.Threat) []storage.PromptInjectionThreat {
+	out := make([]storage.PromptInjectionThreat, 0, len(threats))
+	for _, t := range threats {
+		out = append(out, storage.PromptInjectionThreat{
+			Type:     string(t.Type),
+			Severity: t.Severity,
+			Message:  t.Message,
+			Guard:    t.Guard,
+			Match:    t.Match,
+			Start:    t.Start,
+			End:      t.End,
+		})
+	}
+	return out
+}
 
 // fillTarget abstracts over playwright.Page and playwright.Frame so form-fill
 // logic can transparently target whichever one actually holds the form.
@@ -251,7 +271,10 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				}
 
 				if filter != nil {
-					if err := filter.CheckPayload(prunedHTML); err != nil {
+					if safe, threats, err := filter.CheckPayloadDetailed(prunedHTML); !safe {
+						if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
+							log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
+						}
 						return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
 					}
 				}
