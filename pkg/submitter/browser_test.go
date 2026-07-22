@@ -165,6 +165,8 @@ func TestIsDeadJobPage(t *testing.T) {
 		{"<html><body>We are no longer accepting applications for this role</body></html>", true},
 		// Lever's expired-posting shell, confirmed live (bugs.md #15)
 		{"<html><head><title>Not found – 404 error</title></head><body>Sorry, we couldn't find anything here</body></html>", true},
+		// SmartRecruiters expired banner, confirmed live (Arista, 2026-07-22)
+		{"<html><body><button>Sorry, this job has expired</button></body></html>", true},
 		{"", false},
 	}
 

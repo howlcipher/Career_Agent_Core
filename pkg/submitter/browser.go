@@ -109,6 +109,9 @@ var deadJobPhrases = []string{
 	// Lever renders expired postings as a 404 shell titled
 	// "Not found – 404 error" with an HTTP 200 status (bugs.md #15).
 	"404 error",
+	// SmartRecruiters renders a "Sorry, this job has expired" banner on the
+	// otherwise-normal posting page (confirmed live 2026-07-22, Arista).
+	"job has expired",
 }
 
 // registrableDomain approximates eTLD+1 with the host's last two labels —
