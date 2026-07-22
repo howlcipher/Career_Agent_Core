@@ -500,6 +500,13 @@ func SaveFormMapping(domain, mappingJson string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	// LLM mappers sometimes return prose instead of JSON; caching that
+	// guarantees a parse failure on every future visit to the domain
+	// (confirmed live 2026-07-22: cached mapping for www.workday.com/en-us
+	// began with "T", failing every reuse until invalidated).
+	if !json.Valid([]byte(mappingJson)) {
+		return fmt.Errorf("refusing to cache non-JSON form mapping for %s", domain)
+	}
 	_, err := db.Exec("INSERT INTO form_mappings (domain, mapping_json, created_at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET mapping_json=excluded.mapping_json", domain, mappingJson, time.Now())
 	return err
 }

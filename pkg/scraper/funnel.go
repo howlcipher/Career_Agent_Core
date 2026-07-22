@@ -263,6 +263,12 @@ func isValidATSUrl(link string) bool {
 		return false
 	}
 	
+	// Expired-posting redirects (?error=true / ?error=404) end up in search
+	// indexes and get "discovered" as live jobs — confirmed live 2026-07-22
+	// (job-boards.greenhouse.io/remotecom?error=true). Never a posting.
+	if u.Query().Has("error") {
+		return false
+	}
 	host := strings.ToLower(u.Hostname())
 	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
 		return false

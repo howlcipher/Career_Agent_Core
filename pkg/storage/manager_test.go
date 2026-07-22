@@ -338,6 +338,21 @@ func TestLogManualRequired(t *testing.T) {
 	}
 }
 
+func TestSaveFormMappingRejectsNonJSON(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if err := SaveFormMapping("valid.example.com", `{"fields":{"first_name":"input#fn"}}`); err != nil {
+		t.Errorf("valid JSON mapping should save: %v", err)
+	}
+	if err := SaveFormMapping("prose.example.com", "The form has a first name field..."); err == nil {
+		t.Errorf("non-JSON mapping must be rejected")
+	}
+	if got, _ := GetFormMapping("prose.example.com"); got != "" {
+		t.Errorf("rejected mapping must not be cached, got %q", got)
+	}
+}
+
 func TestEmailProcessedDedup(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

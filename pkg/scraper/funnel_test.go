@@ -248,6 +248,9 @@ func TestIsValidATSUrl(t *testing.T) {
 		{"https://jobs.jobvite.com/acme/search/all", false},
 		// Real Jobvite postings must still pass
 		{"https://jobs.jobvite.com/dwt/job/o79Qzfwp/apply", true},
+		// Expired-posting error redirects must never be discovered as jobs
+		{"https://job-boards.greenhouse.io/remotecom?error=true", false},
+		{"https://jobs.jobvite.com/careers/dwt/jobs?error=404", false},
 	}
 
 	for _, tt := range tests {
