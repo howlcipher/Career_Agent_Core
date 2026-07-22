@@ -129,16 +129,189 @@
             text-transform: uppercase;
         }
 
+        /* --- Live status bar --- */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #555;
+            flex-shrink: 0;
+            transition: background 0.4s ease, box-shadow 0.4s ease;
+        }
+
+        .status-dot.live {
+            background: var(--neon-green);
+            box-shadow: 0 0 8px var(--neon-green), 0 0 16px var(--neon-green);
+            animation: pulse-dot 1.6s ease-in-out infinite;
+        }
+
+        .status-dot.idle {
+            background: var(--neon-blue);
+            box-shadow: 0 0 6px var(--neon-blue);
+        }
+
+        .status-dot.offline {
+            background: var(--neon-red);
+            box-shadow: 0 0 6px var(--neon-red);
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.6; }
+        }
+
+        .status-label {
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-updated {
+            opacity: 0.7;
+        }
+
+        /* --- Activity sweep bar: visually confirms the agent is actively working --- */
+        .activity-bar {
+            width: 100%;
+            max-width: 1200px;
+            height: 4px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.06);
+            overflow: hidden;
+            margin-bottom: 40px;
+            position: relative;
+        }
+
+        .activity-bar-fill {
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 40%;
+            border-radius: 4px;
+            background: linear-gradient(90deg, transparent, var(--neon-blue), var(--neon-purple), transparent);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+
+        .activity-bar-fill.active {
+            opacity: 1;
+            animation: sweep 1.8s ease-in-out infinite;
+        }
+
+        @keyframes sweep {
+            0%   { left: -40%; }
+            100% { left: 100%; }
+        }
+
+        /* --- Last applied card --- */
+        .last-applied {
+            width: 100%;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 22px 28px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .last-applied::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: var(--neon-green);
+        }
+
+        .last-applied .label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 0 0 6px 0;
+        }
+
+        .last-applied .company {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+            margin: 0;
+        }
+
+        .last-applied .title {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin: 4px 0 0 0;
+        }
+
+        .last-applied .when {
+            text-align: right;
+            color: var(--neon-green);
+            font-weight: 600;
+            font-size: 1rem;
+            white-space: nowrap;
+        }
+
+        .last-applied a {
+            color: var(--neon-blue);
+            text-decoration: none;
+        }
+        .last-applied a:hover { text-decoration: underline; }
+
+        .last-applied.empty .company {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 1.1rem;
+        }
+
         @media (max-width: 768px) {
             h1 { font-size: 2rem; }
             .grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
             .card h2 { font-size: 2.5rem; }
+            .last-applied { flex-direction: column; align-items: flex-start; }
+            .last-applied .when { text-align: left; }
         }
     </style>
 </head>
 <body>
     <h1>🚀 Career Agent Live Metrics</h1>
+
+    <div class="status-bar">
+        <span class="status-dot offline" id="status-dot"></span>
+        <span class="status-label" id="status-label">Connecting…</span>
+        <span class="status-updated" id="status-updated"></span>
+    </div>
+    <div class="activity-bar">
+        <div class="activity-bar-fill" id="activity-fill"></div>
+    </div>
+
     <div class="dashboard-container">
+        <div class="last-applied empty" id="last-applied-card">
+            <div>
+                <p class="label">Last Successful Application</p>
+                <p class="company" id="last-applied-company">No applications recorded yet</p>
+                <p class="title" id="last-applied-title"></p>
+            </div>
+            <div class="when" id="last-applied-when"></div>
+        </div>
+
         <div class="grid">
             <div class="card discovered">
                 <h2 id="discovered">0</h2>
@@ -163,12 +336,66 @@
         </div>
     </div>
     <script>
+        const statusDot = document.getElementById('status-dot');
+        const statusLabel = document.getElementById('status-label');
+        const statusUpdated = document.getElementById('status-updated');
+        const activityFill = document.getElementById('activity-fill');
+
+        function setStatus(state, label) {
+            statusDot.className = 'status-dot ' + state;
+            statusLabel.textContent = label;
+        }
+
+        function updateLastApplied(data) {
+            const card = document.getElementById('last-applied-card');
+            const companyEl = document.getElementById('last-applied-company');
+            const titleEl = document.getElementById('last-applied-title');
+            const whenEl = document.getElementById('last-applied-when');
+
+            if (!data.last_applied_company) {
+                card.classList.add('empty');
+                companyEl.textContent = 'No applications recorded yet';
+                titleEl.textContent = '';
+                whenEl.textContent = '';
+                return;
+            }
+
+            card.classList.remove('empty');
+            companyEl.textContent = '';
+            const safeUrl = isSafeHttpUrl(data.last_applied_url) ? data.last_applied_url : null;
+            if (safeUrl) {
+                const link = document.createElement('a');
+                link.href = safeUrl;
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = data.last_applied_company;
+                companyEl.appendChild(link);
+            } else {
+                companyEl.textContent = data.last_applied_company;
+            }
+            titleEl.textContent = data.last_applied_title || '';
+            whenEl.textContent = data.last_applied_at ? '✓ ' + data.last_applied_at : '';
+        }
+
+        // Job postings are scraped from third-party sites, so this data is
+        // untrusted. Only ever build a link for http(s) URLs - never let a
+        // scraped value control an href unvalidated (e.g. a javascript: URL).
+        function isSafeHttpUrl(value) {
+            if (!value) return false;
+            try {
+                const u = new URL(value, window.location.origin);
+                return u.protocol === 'http:' || u.protocol === 'https:';
+            } catch {
+                return false;
+            }
+        }
+
         async function fetchMetrics() {
             try {
                 const res = await fetch('/api/metrics');
                 if (!res.ok) throw new Error('Network response was not ok');
                 const data = await res.json();
-                
+
                 const animateValue = (id, target) => {
                     const el = document.getElementById(id);
                     const current = parseInt(el.innerText, 10) || 0;
@@ -180,8 +407,17 @@
                 animateValue('applied', data.applied);
                 animateValue('skipped', data.skipped);
                 animateValue('failed', data.failed);
+
+                updateLastApplied(data);
+
+                const isActive = data.processing > 0;
+                activityFill.classList.toggle('active', isActive);
+                setStatus(isActive ? 'live' : 'idle', isActive ? 'Live — Working' : 'Live — Idle');
+                statusUpdated.textContent = 'Updated ' + new Date().toLocaleTimeString();
             } catch (err) {
                 console.error('Failed to fetch metrics:', err);
+                setStatus('offline', 'Connection Lost');
+                activityFill.classList.remove('active');
             }
         }
         setInterval(fetchMetrics, 3000);
