@@ -87,6 +87,8 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 **Why it matters:** `*.myworkdayjobs.com` is one of the most common domains in the discovery funnel (GDIT, Cisco, U-Haul, Carrier, ABC Financial all seen this session), so this class silently dominates wasted cycle time the same way #5's `developer.workday.com` docs pages did before they were filtered.
 
+**Second confirmed case 2026-07-21 23:15-23:16 (post-restart batch, all current fixes compiled in):** `redhat.wd5.myworkdayjobs.com/en-US` replayed the identical sequence — Learner Module "successfully mapped" (23:15:56), `failed to fill first_name: label fill for "First Name" failed: Timeout 15000ms` (23:16:41), Vision fallback triggered. Two independent Workday tenants (GDIT, Red Hat) with the same shape in one evening confirms this is the platform's auth-gate, not a per-tenant quirk. With Workday's share of the discovery funnel, this is now the leading candidate for the next fix.
+
 **Suggested direction (not attempted):** detect the auth wall early — before document generation, or at latest before the Learner Module — via cheap signals (Workday domain + presence of "Sign In"/"Create Account" markers, or absence of any text input after the Apply click), then log the job to `applications/manual_submissions.md` with the tailored docs path and mark it `MANUAL_REQUIRED` in `job_funnel` instead of `FAILED_SUBMIT`. A full auto-account-creation flow is a much bigger (and riskier) feature and should be its own decision.
 
 ### 19. Workday URL parsing takes the locale/site segment as the company name
