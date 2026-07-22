@@ -180,3 +180,19 @@ func TestStatusReason_KnownAndUnknownCodes(t *testing.T) {
 		t.Error("expected statusReason to fall back to the raw status for unknown codes")
 	}
 }
+
+func TestServeFavicon(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/favicon.png", nil)
+	rec := httptest.NewRecorder()
+	serveFavicon(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("expected Content-Type image/png, got %q", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("expected non-empty favicon body")
+	}
+}

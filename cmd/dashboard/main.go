@@ -58,6 +58,9 @@ func statusReason(status string) string {
 //go:embed index.html
 var indexHTML embed.FS
 
+//go:embed favicon.png
+var faviconPNG embed.FS
+
 var db *sql.DB
 
 func main() {
@@ -71,6 +74,7 @@ func main() {
 
 	http.HandleFunc("/", serveDashboard)
 	http.HandleFunc("/api/metrics", serveMetrics)
+	http.HandleFunc("/favicon.png", serveFavicon)
 
 	log.Println("🚀 Career Agent Web Dashboard running at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -169,5 +173,15 @@ func serveDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(content)
+}
+
+func serveFavicon(w http.ResponseWriter, r *http.Request) {
+	content, err := faviconPNG.ReadFile("favicon.png")
+	if err != nil {
+		http.Error(w, "Could not load favicon", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
 	w.Write(content)
 }
