@@ -234,6 +234,37 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	return nil
 }
 
+// LogManualRequired appends an account-gated job to the actionable
+// manual-apply queue — deliberately separate from LogFailedSubmission's
+// failure log (improvements.md #21): these are not failures, the tailored
+// documents are already saved under applications/<company>/ and the only
+// missing step is a human creating the ATS account and submitting.
+func LogManualRequired(companyName, jobTitle, applyURL string) error {
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	reportPath := filepath.Join("applications", "manual_queue.md")
+
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		header := "# Manual Apply Queue\n\nThese jobs sit behind an ATS account sign-in, so automation hands them off by design. Tailored documents are already saved in each company's folder under `applications/` — create the account, upload, submit, check the box.\n\n"
+		os.WriteFile(reportPath, []byte(header), 0644)
+	}
+
+	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s) — docs in `applications/%s/`\n", companyName, jobTitle, applyURL, companyName)
+
+	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open manual queue: %w", err)
+	}
+	defer f.Close()
+
+	if _, err = f.WriteString(entry); err != nil {
+		return fmt.Errorf("failed to write to manual queue: %w", err)
+	}
+
+	return nil
+}
+
 // PromptInjectionThreat is a storage-local mirror of promptsec.Threat, kept
 // separate so this package doesn't need to import the security package's
 // third-party dependency just to log what was found.

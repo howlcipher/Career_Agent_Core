@@ -306,6 +306,33 @@ func TestLogFailedSubmission(t *testing.T) {
 	}
 }
 
+func TestLogManualRequired(t *testing.T) {
+	reportPath := filepath.Join("applications", "manual_queue.md")
+	os.MkdirAll("applications", 0755)
+	defer os.Remove(reportPath)
+
+	err := LogManualRequired("GatedCorp", "SRE", "http://gated.example.com/job/1")
+	if err != nil {
+		t.Fatalf("Failed to log manual-required entry: %v", err)
+	}
+
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("Failed to read manual queue file: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "GatedCorp") || !strings.Contains(content, "http://gated.example.com/job/1") {
+		t.Errorf("Manual queue content mismatch: %s", content)
+	}
+	if !strings.Contains(content, "# Manual Apply Queue") {
+		t.Errorf("Missing markdown header in manual queue")
+	}
+	if !strings.Contains(content, "applications/GatedCorp/") {
+		t.Errorf("Entry should link to the saved docs directory: %s", content)
+	}
+}
+
 func TestLogPromptInjectionDetections(t *testing.T) {
 	reportPath := filepath.Join("applications", "prompt_injection_detections.csv")
 	os.MkdirAll("applications", 0755)

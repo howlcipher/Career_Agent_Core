@@ -35,6 +35,10 @@ type Metrics struct {
 	LastFailedTitle   string `json:"last_failed_title,omitempty"`
 	LastFailedReason  string `json:"last_failed_reason,omitempty"`
 	LastFailedAt      string `json:"last_failed_at,omitempty"`
+
+	LastManualCompany string `json:"last_manual_company,omitempty"`
+	LastManualTitle   string `json:"last_manual_title,omitempty"`
+	LastManualAt      string `json:"last_manual_at,omitempty"`
 }
 
 // statusReason maps a raw job_funnel status code to a short human-readable
@@ -164,6 +168,20 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if failedAt.Valid {
 		m.LastFailedAt = failedAt.Time.Local().Format("Jan 2, 3:04 PM")
+	}
+
+	var manualCompany, manualTitle sql.NullString
+	var manualAt sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, last_updated FROM job_funnel
+		WHERE status = 'MANUAL_REQUIRED' ORDER BY last_updated DESC LIMIT 1`).
+		Scan(&manualCompany, &manualTitle, &manualAt)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Failed to query last manual-required job: %v", err)
+	}
+	m.LastManualCompany = manualCompany.String
+	m.LastManualTitle = manualTitle.String
+	if manualAt.Valid {
+		m.LastManualAt = manualAt.Time.Local().Format("Jan 2, 3:04 PM")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

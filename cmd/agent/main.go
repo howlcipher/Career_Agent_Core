@@ -387,8 +387,8 @@ func main() {
 				log.Printf("[Worker-%d] %s requires an account to apply — queued for manual submission: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 				storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
-					log.Printf("[Worker-%d] Also failed to log manual submission for %s: %v", workerID, job.CompanyName, logErr)
+				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL); logErr != nil {
+					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
 				}
 			} else if err != nil {
 				log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
