@@ -174,6 +174,54 @@ func TestIsDeadJobPage(t *testing.T) {
 	}
 }
 
+func TestIsKnownAuthGatedHost(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://gdit.wd5.myworkdayjobs.com/External_Career_Site/job/Any-Location--Remote/Site-Reliability-Engineer_RQ219922-1", true},
+		{"https://redhat.wd5.myworkdayjobs.com/en-US/jobs", true},
+		{"https://myworkdayjobs.com/whatever", true},
+		{"https://boards.greenhouse.io/acme/jobs/12345", false},
+		{"https://jobs.lever.co/acme/abc-def", false},
+		// developer.workday.com is a docs site, not the job-posting domain,
+		// and is already filtered by the FunnelEngine (bug #5) — it must not
+		// match here either.
+		{"https://developer.workday.com/welcome", false},
+		{"https://evil.example.com/myworkdayjobs.com", false},
+		{"not a url at all ://", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := isKnownAuthGatedHost(tt.url)
+		if got != tt.want {
+			t.Errorf("isKnownAuthGatedHost(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestLooksLikeAuthWallContent(t *testing.T) {
+	tests := []struct {
+		content string
+		want    bool
+	}{
+		{"<html><body><h1>Sign In to Apply</h1><input type='password'/></body></html>", true},
+		{"<html><body>Already have an account? Log in here.</body></html>", true},
+		{"<html><body>Create Account to start your application</body></html>", true},
+		{"<html><body>Returning Candidate? Welcome back.</body></html>", true},
+		{"<html><body><form><label>First Name</label><input name='first_name'/></form></body></html>", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := looksLikeAuthWallContent(tt.content)
+		if got != tt.want {
+			t.Errorf("looksLikeAuthWallContent(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
+
 func TestClickApplyIfPresent_NoApplyButton(t *testing.T) {
 	mockLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
 	mockPage := &MockPage{

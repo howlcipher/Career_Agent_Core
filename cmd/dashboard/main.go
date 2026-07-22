@@ -16,6 +16,7 @@ type Metrics struct {
 	Skipped            int    `json:"skipped"`
 	Applied            int    `json:"applied"`
 	Failed             int    `json:"failed"`
+	ManualRequired     int    `json:"manual_required"`
 	LastAppliedCompany string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle   string `json:"last_applied_title,omitempty"`
 	LastAppliedURL     string `json:"last_applied_url,omitempty"`
@@ -50,6 +51,8 @@ func statusReason(status string) string {
 		return "Failed to score the job against your profile"
 	case "FAILED_SUBMIT":
 		return "Reached the application form but failed to submit"
+	case "MANUAL_REQUIRED":
+		return "ATS requires an account — apply manually with the saved tailored docs"
 	default:
 		return status
 	}
@@ -87,6 +90,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'SKIPPED'").Scan(&m.Skipped)
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&m.Applied)
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&m.Failed)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'MANUAL_REQUIRED'").Scan(&m.ManualRequired)
 
 	// applied_jobs only records that a tailored resume/cover letter was
 	// generated and saved (SaveApplication runs early in AttemptSubmit,

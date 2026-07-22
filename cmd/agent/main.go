@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -379,7 +380,17 @@ func main() {
 				return masterResumePath, coverLetterPath, nil
 			}
 
-			if err := submitter.AttemptSubmit(browser, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); err != nil {
+			if err := submitter.AttemptSubmit(browser, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, submitter.ErrAuthWall) {
+				// Bug #18: not an automation failure — the ATS gates its form
+				// behind an account. Tailored docs are already saved; queue
+				// the job for a manual application instead.
+				log.Printf("[Worker-%d] %s requires an account to apply — queued for manual submission: %v", workerID, job.CompanyName, err)
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
+				storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
+				if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
+					log.Printf("[Worker-%d] Also failed to log manual submission for %s: %v", workerID, job.CompanyName, logErr)
+				}
+			} else if err != nil {
 				log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")

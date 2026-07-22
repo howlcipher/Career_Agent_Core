@@ -2,6 +2,7 @@ package submitter
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -105,6 +106,62 @@ var deadJobPhrases = []string{
 	"job listing no longer",
 	"posting is no longer active",
 	"job has been filled",
+}
+
+// ErrAuthWall marks an application flow gated behind account creation or
+// sign-in, where no fillable application form exists pre-auth (bug #18:
+// Workday). Callers should route these to the manual-submission backlog
+// (the tailored documents are already generated and saved) instead of
+// treating them as an automation failure.
+var ErrAuthWall = errors.New("application form is gated behind account sign-in")
+
+// authGatedATSHosts lists ATS platforms whose application flow always requires
+// creating an account or signing in before any form field is reachable, so
+// attempting the Learner Module / fill / Vision chain against them is a
+// guaranteed waste (confirmed live on two Workday tenants, bugs.md #18).
+// Matched as host suffixes.
+var authGatedATSHosts = []string{
+	"myworkdayjobs.com",
+}
+
+// isKnownAuthGatedHost reports whether the apply URL's host belongs to an ATS
+// platform known to gate its entire application flow behind an account.
+func isKnownAuthGatedHost(applyURL string) bool {
+	u, err := url.Parse(applyURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, gated := range authGatedATSHosts {
+		if host == gated || strings.HasSuffix(host, "."+gated) {
+			return true
+		}
+	}
+	return false
+}
+
+var authWallPhrases = []string{
+	"sign in to apply",
+	"log in to apply",
+	"create an account",
+	"create account",
+	"already have an account",
+	"sign in with your account",
+	"returning candidate",
+}
+
+// looksLikeAuthWallContent reports whether page content matches a known
+// sign-in/account-creation gate phrasing. Only meaningful combined with a
+// structural signal (a password input present) — plenty of legitimate
+// application pages mention accounts in passing.
+func looksLikeAuthWallContent(content string) bool {
+	lowerContent := strings.ToLower(content)
+	for _, phrase := range authWallPhrases {
+		if strings.Contains(lowerContent, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // isDeadJobPage reports whether page content matches a known "this posting is
@@ -245,6 +302,17 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	}
 
 	domain := ExtractDomain(applyURL)
+
+	// Bug #18: known account-gated ATS platforms (Workday) have no fillable
+	// form anywhere pre-auth — every mapping/fill/Vision attempt is a
+	// guaranteed 4-10 minute waste. The tailored documents above are still
+	// generated on purpose: they are the payload for the manual application
+	// this job gets routed to.
+	if isKnownAuthGatedHost(applyURL) {
+		log.Printf("[Auto-Submit] %s is a known account-gated ATS — no pre-auth application form exists. Routing to manual submissions with tailored docs ready.", domain)
+		return fmt.Errorf("%w: known account-gated ATS %s", ErrAuthWall, domain)
+	}
+
 	mappingJSON, err := storage.GetFormMapping(domain)
 	if err == nil && mappingJSON != "" {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
@@ -276,6 +344,18 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
+
+				// Bug #18, generic tier: after the Apply click, a sign-in
+				// wall (password input plus account-gate phrasing) means the
+				// real form is behind auth — skip the Learner/fill/Vision
+				// chain and route to manual submission instead.
+				if pwCount, pwErr := page.Locator("input[type='password']").Count(); pwErr == nil && pwCount > 0 {
+					if pageContent, cErr := page.Content(); cErr == nil && looksLikeAuthWallContent(pageContent) {
+						log.Printf("[Auto-Submit] Sign-in wall detected at %s (password field + account-gate phrasing). Routing to manual submissions.", domain)
+						return fmt.Errorf("%w: sign-in wall detected at %s", ErrAuthWall, domain)
+					}
+				}
+
 				target := resolveFillTarget(page)
 				domHTML, _ := target.HTML()
 				prunedHTML, err := parser.PruneDOMToText(domHTML)
