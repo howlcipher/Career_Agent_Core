@@ -283,6 +283,14 @@ func TestIsKnownJunkJobURL(t *testing.T) {
 		{"https://job-boards.greenhouse.io/mixpanel/jobs/7941929", false},
 		// Non-ATS sources (RemoteOK company sites) must pass the blacklist
 		{"https://somestartup.com/careers/backend-engineer", false},
+		// Company board-index pages on path-tenant ATS hosts are never postings
+		{"https://careers.smartrecruiters.com/aristanetworks", true},
+		{"https://jobs.lever.co/mistral", true},
+		{"https://job-boards.greenhouse.io/remotecom", true},
+		{"https://jobs.jobvite.com/cloudone-digital/", true},
+		// Real postings carry more segments and must pass
+		{"https://jobs.smartrecruiters.com/sosi1/3743990013881284-cloud-web-developer", false},
+		{"https://apply.workable.com/azumo/j/DC928C07B2/", false},
 	}
 	for _, tt := range tests {
 		if got := IsKnownJunkJobURL(tt.url); got != tt.want {

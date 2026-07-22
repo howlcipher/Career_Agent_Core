@@ -295,6 +295,25 @@ func IsKnownJunkJobURL(link string) bool {
 	if u.Query().Has("workplaceType") {
 		return true
 	}
+	// On path-tenant ATS hosts, a single-segment path is the company's
+	// board index (careers.smartrecruiters.com/aristanetworks — confirmed
+	// live 2026-07-22 burning a full Learner+Vision cycle), never a
+	// posting: real postings always carry at least one more segment
+	// (/company/<uuid>, /company/jobs/<id>, /company/j/<id>).
+	pathTenantATS := []string{"smartrecruiters.com", "lever.co", "greenhouse.io", "ashbyhq.com", "workable.com", "jobvite.com"}
+	for _, domain := range pathTenantATS {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			segments := 0
+			for _, seg := range strings.Split(u.Path, "/") {
+				if seg != "" {
+					segments++
+				}
+			}
+			if segments <= 1 {
+				return true
+			}
+		}
+	}
 	return false
 }
 
