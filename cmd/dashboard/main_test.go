@@ -23,7 +23,10 @@ func setupTestDB(t *testing.T) {
 	schema := `
 	CREATE TABLE job_funnel (
 		url TEXT PRIMARY KEY,
-		status TEXT
+		company_name TEXT,
+		job_title TEXT,
+		status TEXT,
+		last_updated DATETIME
 	);
 	CREATE TABLE applied_jobs (
 		company_name TEXT,
@@ -109,5 +112,66 @@ func TestServeMetrics_LastApplied_EmptyWhenNoneApplied(t *testing.T) {
 
 	if m.LastAppliedCompany != "" {
 		t.Errorf("expected no last applied company when nothing has genuinely completed, got %q", m.LastAppliedCompany)
+	}
+}
+
+func TestServeMetrics_CurrentlyProcessing_PicksMostRecentlyTouched(t *testing.T) {
+	setupTestDB(t)
+
+	old := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 7, 21, 21, 40, 0, 0, time.UTC)
+
+	// A job stuck at PROCESSING from an earlier, interrupted run - must not
+	// be shown as "currently" active over the genuinely recent one.
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/stuck", "StuckCorp", "Old Role", "PROCESSING", old)
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/active", "ActiveCorp", "New Role", "PROCESSING", recent)
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.CurrentCompany != "ActiveCorp" {
+		t.Errorf("expected the most recently touched PROCESSING job (ActiveCorp), got %q", m.CurrentCompany)
+	}
+	if m.CurrentSince == "" {
+		t.Error("expected current_since to be populated")
+	}
+}
+
+func TestServeMetrics_LastSkippedAndFailed_HaveHumanReadableReasons(t *testing.T) {
+	setupTestDB(t)
+
+	now := time.Now()
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/low-fit", "LowFitCorp", "Role A", "SKIPPED", now)
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/submit-failed", "SubmitFailCorp", "Role B", "FAILED_SUBMIT", now)
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.LastSkippedCompany != "LowFitCorp" || m.LastSkippedReason == "" {
+		t.Errorf("expected a populated skip reason for LowFitCorp, got company=%q reason=%q", m.LastSkippedCompany, m.LastSkippedReason)
+	}
+	if m.LastFailedCompany != "SubmitFailCorp" || m.LastFailedReason == "" {
+		t.Errorf("expected a populated failure reason for SubmitFailCorp, got company=%q reason=%q", m.LastFailedCompany, m.LastFailedReason)
+	}
+}
+
+func TestStatusReason_KnownAndUnknownCodes(t *testing.T) {
+	tests := map[string]bool{ // status -> expect a specific (non-passthrough) reason
+		"SKIPPED":         true,
+		"BLOCKED_CAPTCHA": true,
+		"FAILED_SCORE":    true,
+		"FAILED_SUBMIT":   true,
+	}
+	for status, expectMapped := range tests {
+		reason := statusReason(status)
+		if expectMapped && reason == status {
+			t.Errorf("expected statusReason(%q) to return a human-readable reason, got the raw status back", status)
+		}
+	}
+	// Unknown codes fall back to the raw status rather than an empty string.
+	if statusReason("SOME_FUTURE_STATUS") != "SOME_FUTURE_STATUS" {
+		t.Error("expected statusReason to fall back to the raw status for unknown codes")
 	}
 }

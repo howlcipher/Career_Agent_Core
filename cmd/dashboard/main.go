@@ -20,6 +20,39 @@ type Metrics struct {
 	LastAppliedTitle   string `json:"last_applied_title,omitempty"`
 	LastAppliedURL     string `json:"last_applied_url,omitempty"`
 	LastAppliedAt      string `json:"last_applied_at,omitempty"`
+
+	CurrentCompany string `json:"current_company,omitempty"`
+	CurrentTitle   string `json:"current_title,omitempty"`
+	CurrentSince   string `json:"current_since,omitempty"`
+
+	LastSkippedCompany string `json:"last_skipped_company,omitempty"`
+	LastSkippedTitle   string `json:"last_skipped_title,omitempty"`
+	LastSkippedReason  string `json:"last_skipped_reason,omitempty"`
+	LastSkippedAt      string `json:"last_skipped_at,omitempty"`
+
+	LastFailedCompany string `json:"last_failed_company,omitempty"`
+	LastFailedTitle   string `json:"last_failed_title,omitempty"`
+	LastFailedReason  string `json:"last_failed_reason,omitempty"`
+	LastFailedAt      string `json:"last_failed_at,omitempty"`
+}
+
+// statusReason maps a raw job_funnel status code to a short human-readable
+// explanation, since the DB only stores the status code itself, not a
+// free-text reason (the detailed "why" - e.g. the exact fit score - only
+// ever exists in the transient log file, not persisted anywhere queryable).
+func statusReason(status string) string {
+	switch status {
+	case "SKIPPED":
+		return "Fit score below the required threshold"
+	case "BLOCKED_CAPTCHA":
+		return "Blocked by CAPTCHA / bot protection"
+	case "FAILED_SCORE":
+		return "Failed to score the job against your profile"
+	case "FAILED_SUBMIT":
+		return "Reached the application form but failed to submit"
+	default:
+		return status
+	}
 }
 
 //go:embed index.html
@@ -69,6 +102,60 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if lastAppliedAt.Valid {
 		m.LastAppliedAt = lastAppliedAt.Time.Format("Jan 2, 2006 3:04 PM MST")
+	}
+
+	// Currently processing: the most recently touched PROCESSING row.
+	// last_updated is required here, not id/discovered_at - multiple rows
+	// can be stuck at PROCESSING from an interrupted run (confirmed live
+	// 2026-07-21, see bugs.md #12's data-correction notes), so only
+	// "most recently touched" reliably identifies what's actually active
+	// right now versus an old orphaned entry.
+	var currentCompany, currentTitle sql.NullString
+	var currentSince sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, last_updated FROM job_funnel
+		WHERE status = 'PROCESSING' ORDER BY last_updated DESC LIMIT 1`).
+		Scan(&currentCompany, &currentTitle, &currentSince)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Failed to query currently processing job: %v", err)
+	}
+	m.CurrentCompany = currentCompany.String
+	m.CurrentTitle = currentTitle.String
+	if currentSince.Valid {
+		m.CurrentSince = currentSince.Time.Format("3:04:05 PM")
+	}
+
+	var skippedCompany, skippedTitle, skippedStatus sql.NullString
+	var skippedAt sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated FROM job_funnel
+		WHERE status IN ('SKIPPED', 'BLOCKED_CAPTCHA') ORDER BY last_updated DESC LIMIT 1`).
+		Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Failed to query last skipped job: %v", err)
+	}
+	m.LastSkippedCompany = skippedCompany.String
+	m.LastSkippedTitle = skippedTitle.String
+	if skippedStatus.Valid {
+		m.LastSkippedReason = statusReason(skippedStatus.String)
+	}
+	if skippedAt.Valid {
+		m.LastSkippedAt = skippedAt.Time.Format("Jan 2, 3:04 PM")
+	}
+
+	var failedCompany, failedTitle, failedStatus sql.NullString
+	var failedAt sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated FROM job_funnel
+		WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
+		Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Failed to query last failed job: %v", err)
+	}
+	m.LastFailedCompany = failedCompany.String
+	m.LastFailedTitle = failedTitle.String
+	if failedStatus.Valid {
+		m.LastFailedReason = statusReason(failedStatus.String)
+	}
+	if failedAt.Valid {
+		m.LastFailedAt = failedAt.Time.Format("Jan 2, 3:04 PM")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -64,7 +64,8 @@ func InitDBWithPath(path string) error {
 		status TEXT,
 		fit_score INTEGER,
 		discovered_at DATETIME,
-		applied_at DATETIME
+		applied_at DATETIME,
+		last_updated DATETIME
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +86,44 @@ func InitDBWithPath(path string) error {
 		chunk_text TEXT,
 		embedding_json TEXT
 	);`
-	_, err = db.Exec(createTableQuery)
+	if _, err = db.Exec(createTableQuery); err != nil {
+		return err
+	}
+
+	// CREATE TABLE IF NOT EXISTS never alters an already-existing table, so
+	// a job_funnel table created before last_updated was added to the
+	// schema above needs an explicit migration.
+	return migrateJobFunnelLastUpdated()
+}
+
+func migrateJobFunnelLastUpdated() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasLastUpdated := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "last_updated" {
+			hasLastUpdated = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasLastUpdated {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN last_updated DATETIME")
 	return err
 }
 
@@ -306,7 +344,11 @@ func UpdateFunnelStatus(url, status string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec("UPDATE job_funnel SET status = ? WHERE url = ?", status, url)
+	// Bind time.Now() from Go rather than using SQLite's CURRENT_TIMESTAMP,
+	// which is always UTC with no offset - matches how applied_jobs.applied_at
+	// is already set elsewhere (RecordApplicationInDB), so every timestamp in
+	// this DB carries a consistent, correctly-offset local time.
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?", status, time.Now(), url)
 	return err
 }
 
@@ -314,7 +356,7 @@ func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ? WHERE url = ?", status, fitScore, url)
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now(), url)
 	return err
 }
 

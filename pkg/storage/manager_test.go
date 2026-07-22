@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/csv"
 	"os"
 	"path/filepath"
@@ -367,5 +368,98 @@ func TestLogPromptInjectionDetections(t *testing.T) {
 	// Nothing should be written when there are no threats to log.
 	if err := LogPromptInjectionDetections("https://safe.example.com", "SafeCorp", nil); err != nil {
 		t.Fatalf("LogPromptInjectionDetections with no threats should not error: %v", err)
+	}
+}
+
+func TestUpdateFunnelStatus_SetsLastUpdated(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "http://testcorp.com/last-updated-job"
+	if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatalf("Failed to add to funnel: %v", err)
+	}
+
+	var before sql.NullString
+	db.QueryRow("SELECT last_updated FROM job_funnel WHERE url = ?", url).Scan(&before)
+	if before.Valid {
+		t.Errorf("expected last_updated to be unset before any status update, got %q", before.String)
+	}
+
+	if err := UpdateFunnelStatus(url, "PROCESSING"); err != nil {
+		t.Fatalf("UpdateFunnelStatus failed: %v", err)
+	}
+
+	var after sql.NullString
+	db.QueryRow("SELECT last_updated FROM job_funnel WHERE url = ?", url).Scan(&after)
+	if !after.Valid || after.String == "" {
+		t.Error("expected last_updated to be set after UpdateFunnelStatus")
+	}
+
+	if err := UpdateFunnelStatusWithScore(url, "SKIPPED", 30); err != nil {
+		t.Fatalf("UpdateFunnelStatusWithScore failed: %v", err)
+	}
+	var afterScore sql.NullString
+	db.QueryRow("SELECT last_updated FROM job_funnel WHERE url = ?", url).Scan(&afterScore)
+	if !afterScore.Valid || afterScore.String == "" {
+		t.Error("expected last_updated to be set after UpdateFunnelStatusWithScore")
+	}
+}
+
+// TestMigrateJobFunnelLastUpdated simulates a database created before
+// last_updated existed in the schema (job_funnel without that column) and
+// confirms the migration adds it cleanly, and is safe to run again on a
+// database that already has it (idempotent, matches how InitDBWithPath
+// calls it unconditionally on every startup).
+func TestMigrateJobFunnelLastUpdated(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	// Recreate job_funnel without last_updated, as if this were a database
+	// from before the column was added to the schema.
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to recreate old-schema job_funnel: %v", err)
+	}
+
+	if err := migrateJobFunnelLastUpdated(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		t.Fatalf("failed to inspect schema: %v", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "last_updated" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected last_updated column to exist after migration")
+	}
+
+	// Running it again on an already-migrated table must not error.
+	if err := migrateJobFunnelLastUpdated(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
 	}
 }
