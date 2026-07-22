@@ -65,38 +65,35 @@ func StartTracker(cfg IMAPConfig) error {
 		done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}, messages)
 	}()
 
+	trackedCompanies, err := storage.GetTrackedCompanies()
+	if err != nil {
+		log.Printf("[Tracker] Could not load tracked companies (DB not initialized?): %v — running detection-only, no status updates.", err)
+	}
+
 	for msg := range messages {
 		if msg.Envelope == nil {
 			continue
 		}
+		if storage.WasEmailProcessed(msg.Envelope.MessageId) {
+			continue
+		}
 		subject := strings.ToLower(msg.Envelope.Subject)
-		
-		var senderEmail string
+
+		var senderDomain string
 		if len(msg.Envelope.From) > 0 {
-			senderEmail = msg.Envelope.From[0].MailboxName + "@" + msg.Envelope.From[0].HostName
+			senderDomain = strings.ToLower(msg.Envelope.From[0].HostName)
 		}
-		
+
 		bodyText := extractBody(msg, section)
-		bodyLower := strings.ToLower(bodyText)
 
-		// Analyze email for rejection or interview
-		status := ""
-		if strings.Contains(bodyLower, "unfortunately") || strings.Contains(bodyLower, "not moving forward") || strings.Contains(bodyLower, "decided to pursue other candidates") {
-			status = "REJECTED"
-		} else if strings.Contains(bodyLower, "interview") || strings.Contains(bodyLower, "next steps") || strings.Contains(bodyLower, "availability") {
-			if !strings.Contains(bodyLower, "automated message") {
-				status = "INTERVIEW_REQUESTED"
-			}
-		}
-
+		status := classifyEmail(subject, strings.ToLower(bodyText))
 		if status != "" {
-			parts := strings.Split(senderEmail, "@")
-			if len(parts) == 2 {
-				domain := parts[1]
-				companyGuess := strings.Split(domain, ".")[0]
-				
-				log.Printf("[Tracker] Detected %s from %s (%s). Updating database.", status, companyGuess, subject)
-				updateDBWithTrackerResult(companyGuess, status)
+			company := matchTrackedCompany(trackedCompanies, senderDomain, subject)
+			if company == "" {
+				log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
+			} else {
+				log.Printf("[Tracker] Detected %s for tracked company %q from %s (%s). Updating database.", status, company, senderDomain, subject)
+				updateDBWithTrackerResult(company, status)
 
 				if status == "REJECTED" {
 					llmClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
@@ -104,26 +101,106 @@ func StartTracker(cfg IMAPConfig) error {
 					if err != nil {
 						reason = "Generic templated rejection (no specific reason provided)"
 					}
-					logRejectionFeedback(companyGuess, subject, reason)
+					logRejectionFeedback(company, subject, reason)
 				}
 			}
+		}
+		if err := storage.MarkEmailProcessed(msg.Envelope.MessageId); err != nil {
+			log.Printf("[Tracker] Failed to mark email processed: %v", err)
 		}
 	}
 
 	if err := <-done; err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
-func updateDBWithTrackerResult(companyQuery, status string) {
+// notJobPhrases short-circuit classification: emails that are structurally
+// about something else entirely (receipts, marketing, application-sent
+// confirmations) routinely contain words like "next steps" and must never
+// produce a status (bug #20 — a Google payment receipt and a LinkedIn
+// "application sent" notice were both classified INTERVIEW_REQUESTED).
+var notJobPhrases = []string{
+	"we've received your payment",
+	"received your payment",
+	"payment receipt",
+	"your invoice",
+	"order confirmation",
+	"your application was sent",
+	"application has been submitted",
+	"automated message",
+}
+
+// classifyEmail maps an email (lowercased subject and body) to a funnel
+// status candidate, or "" when the email shouldn't affect any application.
+// It is only a candidate: the caller must still match the email to a
+// company we actually applied to before anything is written.
+func classifyEmail(subjectLower, bodyLower string) string {
+	combined := subjectLower + " " + bodyLower
+	for _, phrase := range notJobPhrases {
+		if strings.Contains(combined, phrase) {
+			return ""
+		}
+	}
+	if strings.Contains(combined, "unfortunately") || strings.Contains(combined, "not moving forward") || strings.Contains(combined, "decided to pursue other candidates") {
+		return "REJECTED"
+	}
+	if strings.Contains(combined, "interview") || strings.Contains(combined, "next steps") || strings.Contains(combined, "availability") {
+		return "INTERVIEW_REQUESTED"
+	}
+	return ""
+}
+
+// genericCompanyLabels are job_funnel company names that must never be
+// matched against email content — URL-parsing artifacts from before bug
+// #19's fix and placeholder values.
+var genericCompanyLabels = map[string]bool{
+	"unknown company": true, "en-us": true, "en_us": true, "en": true,
+	"apply": true, "jobs": true, "careers": true, "external_career_site": true,
+}
+
+// commonWordCompanies are tracked companies whose names are ordinary
+// job-email vocabulary ("Remote" — remote.com): confirmed live 2026-07-22
+// matching a recruiter thread whose subject merely said "remote". These may
+// only match via the sender's domain, never subject text.
+var commonWordCompanies = map[string]bool{
+	"remote": true, "indeed": true, "hired": true, "wellfound": true,
+}
+
+// matchTrackedCompany returns the exact stored company name whose
+// (lowercased) value appears in the sender's domain or the subject line —
+// covering both direct company senders (glimpse.io) and ATS relays
+// (no-reply@greenhouse.io with the company in the subject). Names shorter
+// than 4 characters or in the generic-label list never match — a fuzzy hit
+// on a label like "en" is how junk updates happen (bug #20) — and
+// common-word names only count when they appear in the sender's domain.
+func matchTrackedCompany(companies []string, senderDomain, subjectLower string) string {
+	for _, company := range companies {
+		cl := strings.ToLower(strings.TrimSpace(company))
+		if len(cl) < 4 || genericCompanyLabels[cl] {
+			continue
+		}
+		if strings.Contains(senderDomain, cl) {
+			return company
+		}
+		if !commonWordCompanies[cl] && strings.Contains(subjectLower, cl) {
+			return company
+		}
+	}
+	return ""
+}
+
+func updateDBWithTrackerResult(companyExact, status string) {
 	db := storage.GetDB()
 	if db == nil {
 		return
 	}
-	query := "UPDATE job_funnel SET status = ? WHERE company_name LIKE ? AND status = 'APPLIED'"
-	db.Exec(query, status, "%"+companyQuery+"%")
+	// Exact company match only, and only forward from APPLIED — never
+	// touch rows the email cannot legitimately be about.
+	query := "UPDATE job_funnel SET status = ? WHERE company_name = ? AND status = 'APPLIED'"
+	db.Exec(query, status, companyExact)
 }
 
 func logRejectionFeedback(company, subject, reason string) {

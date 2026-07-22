@@ -338,6 +338,56 @@ func TestLogManualRequired(t *testing.T) {
 	}
 }
 
+func TestEmailProcessedDedup(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	id := "<abc123@mail.example.com>"
+	if WasEmailProcessed(id) {
+		t.Errorf("fresh message ID should not be processed")
+	}
+	if err := MarkEmailProcessed(id); err != nil {
+		t.Fatalf("MarkEmailProcessed failed: %v", err)
+	}
+	if !WasEmailProcessed(id) {
+		t.Errorf("marked message ID should report processed")
+	}
+	// Idempotent re-mark
+	if err := MarkEmailProcessed(id); err != nil {
+		t.Errorf("re-marking should not error: %v", err)
+	}
+	// Empty IDs are never tracked (some messages lack a Message-ID)
+	if err := MarkEmailProcessed(""); err != nil {
+		t.Errorf("empty ID should be a no-op, got %v", err)
+	}
+	if WasEmailProcessed("") {
+		t.Errorf("empty ID must never report processed")
+	}
+}
+
+func TestGetTrackedCompanies(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("AppliedCorp", "SRE", "http://a.example.com/1", "DISCOVERED")
+	UpdateFunnelStatus("http://a.example.com/1", "APPLIED")
+	AddToFunnel("GatedCorp", "SRE", "http://b.example.com/1", "DISCOVERED")
+	UpdateFunnelStatus("http://b.example.com/1", "MANUAL_REQUIRED")
+	AddToFunnel("DiscoveredCorp", "SRE", "http://c.example.com/1", "DISCOVERED")
+
+	companies, err := GetTrackedCompanies()
+	if err != nil {
+		t.Fatalf("GetTrackedCompanies failed: %v", err)
+	}
+	got := strings.Join(companies, ",")
+	if !strings.Contains(got, "AppliedCorp") || !strings.Contains(got, "GatedCorp") {
+		t.Errorf("expected applied and manual-required companies, got %q", got)
+	}
+	if strings.Contains(got, "DiscoveredCorp") {
+		t.Errorf("merely-discovered companies must not be tracked, got %q", got)
+	}
+}
+
 func TestMoveToManualApply(t *testing.T) {
 	src := filepath.Join("applications", "en_US")
 	os.MkdirAll(src, 0755)

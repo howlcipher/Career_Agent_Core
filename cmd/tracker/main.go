@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/tracker"
 	"github.com/joho/godotenv"
 )
@@ -16,6 +17,13 @@ func main() {
 	fmt.Println("==========================================================")
 	
 	godotenv.Load()
+
+	// Bug #20: without this, storage.GetDB() is nil and every tracker
+	// status update (and the processed-email dedup) is a silent no-op.
+	if err := storage.InitDB(); err != nil {
+		log.Fatalf("Failed to initialize SQLite database: %v", err)
+	}
+	defer storage.CloseDB()
 
 	user := os.Getenv("IMAP_USER")
 	pass := os.Getenv("IMAP_APP_PASSWORD")

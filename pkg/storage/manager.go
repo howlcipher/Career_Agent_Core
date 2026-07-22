@@ -85,6 +85,10 @@ func InitDBWithPath(path string) error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		chunk_text TEXT,
 		embedding_json TEXT
+	);
+	CREATE TABLE IF NOT EXISTS processed_emails (
+		message_id TEXT PRIMARY KEY,
+		processed_at DATETIME
 	);`
 	if _, err = db.Exec(createTableQuery); err != nil {
 		return err
@@ -129,6 +133,52 @@ func migrateJobFunnelLastUpdated() error {
 
 func GetDB() *sql.DB {
 	return db
+}
+
+// GetTrackedCompanies returns the distinct company names of jobs whose
+// status could legitimately change from an inbound email — the tracker
+// must never write a status for a company we never applied to (bug #20).
+func GetTrackedCompanies() ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	rows, err := db.Query(`SELECT DISTINCT company_name FROM job_funnel
+		WHERE status IN ('APPLIED', 'INTERVIEW_REQUESTED', 'MANUAL_REQUIRED') AND company_name != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var companies []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		companies = append(companies, c)
+	}
+	return companies, rows.Err()
+}
+
+// WasEmailProcessed reports whether the tracker has already handled this
+// IMAP Message-ID, so re-fetching the same recent messages every cycle
+// doesn't re-detect (and re-log) the same threads (bug #20).
+func WasEmailProcessed(messageID string) bool {
+	if db == nil || messageID == "" {
+		return false
+	}
+	var one int
+	err := db.QueryRow("SELECT 1 FROM processed_emails WHERE message_id = ?", messageID).Scan(&one)
+	return err == nil
+}
+
+// MarkEmailProcessed records an IMAP Message-ID as handled.
+func MarkEmailProcessed(messageID string) error {
+	if db == nil || messageID == "" {
+		return nil
+	}
+	_, err := db.Exec("INSERT INTO processed_emails (message_id, processed_at) VALUES (?, ?) ON CONFLICT(message_id) DO NOTHING",
+		messageID, time.Now().UTC())
+	return err
 }
 
 func HasApplied(url string) bool {
