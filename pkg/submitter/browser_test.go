@@ -86,8 +86,9 @@ func TestAttemptSubmit_NewPageFails(t *testing.T) {
 // Test edge cases of safeFill using a nil Page or mock Page
 type MockPage struct {
 	playwright.Page
-	locatorFunc    func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator
-	getByLabelFunc func(text any) playwright.Locator
+	locatorFunc          func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator
+	getByLabelFunc       func(text any) playwright.Locator
+	getByPlaceholderFunc func(text any) playwright.Locator
 }
 
 func (m *MockPage) Locator(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
@@ -102,6 +103,13 @@ func (m *MockPage) WaitForTimeout(timeout float64) {}
 func (m *MockPage) GetByLabel(text any, options ...playwright.PageGetByLabelOptions) playwright.Locator {
 	if m.getByLabelFunc != nil {
 		return m.getByLabelFunc(text)
+	}
+	return nil
+}
+
+func (m *MockPage) GetByPlaceholder(text any, options ...playwright.PageGetByPlaceholderOptions) playwright.Locator {
+	if m.getByPlaceholderFunc != nil {
+		return m.getByPlaceholderFunc(text)
 	}
 	return nil
 }
@@ -223,6 +231,10 @@ func TestSafeFillWithLabelFallback_LabelTriedFirstWhenAvailable(t *testing.T) {
 			}
 			return labelLocator
 		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			t.Fatalf("placeholder should not be tried when the label fill succeeds")
+			return nil
+		},
 	}
 	target := pageTarget{mockPage}
 
@@ -235,15 +247,48 @@ func TestSafeFillWithLabelFallback_LabelTriedFirstWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestSafeFillWithLabelFallback_FallsBackToSelectorWhenLabelFails(t *testing.T) {
+func TestSafeFillWithLabelFallback_FallsBackToPlaceholderWhenLabelFails(t *testing.T) {
+	placeholderLocator := &MockLocator{fillFunc: func(value string) error { return nil }}
+	labelLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("timeout: label not found") }}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			t.Fatalf("CSS selector should not be tried when the placeholder fallback succeeds")
+			return nil
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return labelLocator
+		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			if text != "First Name" {
+				t.Errorf("expected placeholder lookup for %q, got %q", "First Name", text)
+			}
+			return placeholderLocator
+		},
+	}
+	target := pageTarget{mockPage}
+
+	err := safeFillWithLabelFallback(target, "input#first_name", "First Name", "Ada")
+	if err != nil {
+		t.Errorf("expected nil error when placeholder fallback succeeds, got %v", err)
+	}
+	if placeholderLocator.fillCalls != 1 {
+		t.Errorf("expected the placeholder locator to be filled once, got %d calls", placeholderLocator.fillCalls)
+	}
+}
+
+func TestSafeFillWithLabelFallback_FallsBackToSelectorWhenLabelAndPlaceholderFail(t *testing.T) {
 	selLocator := &MockLocator{fillFunc: func(value string) error { return nil }}
 	labelLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("timeout: label not found") }}
+	placeholderLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("timeout: placeholder not found") }}
 	mockPage := &MockPage{
 		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
 			return selLocator
 		},
 		getByLabelFunc: func(text any) playwright.Locator {
 			return labelLocator
+		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			return placeholderLocator
 		},
 	}
 	target := pageTarget{mockPage}
@@ -257,9 +302,10 @@ func TestSafeFillWithLabelFallback_FallsBackToSelectorWhenLabelFails(t *testing.
 	}
 }
 
-func TestSafeFillWithLabelFallback_BothFail(t *testing.T) {
+func TestSafeFillWithLabelFallback_AllThreeTiersFail(t *testing.T) {
 	selLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("selector timeout") }}
 	labelLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("label timeout") }}
+	placeholderLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("placeholder timeout") }}
 	mockPage := &MockPage{
 		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
 			return selLocator
@@ -267,12 +313,15 @@ func TestSafeFillWithLabelFallback_BothFail(t *testing.T) {
 		getByLabelFunc: func(text any) playwright.Locator {
 			return labelLocator
 		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			return placeholderLocator
+		},
 	}
 	target := pageTarget{mockPage}
 
 	err := safeFillWithLabelFallback(target, "input#wrong-guess", "First Name", "Ada")
 	if err == nil {
-		t.Error("expected an error when both the selector and label fallback fail")
+		t.Error("expected an error when the label, placeholder, and selector fallbacks all fail")
 	}
 }
 

@@ -51,6 +51,13 @@ type fillTarget interface {
 	// obfuscated or vary by vendor theme, making it a more robust fallback
 	// than an LLM-guessed CSS selector.
 	GetByLabelLoc(text string) playwright.Locator
+	// GetByPlaceholderLoc finds an input by its placeholder text. Confirmed
+	// live 2026-07-21 (bug #16): some minimalist ATS widgets (Jobvite,
+	// ApplyToJob) style an input's placeholder to look exactly like a label
+	// to a human, with no real <label>/aria-label association at all - a
+	// case GetByLabelLoc structurally cannot match, since there's no
+	// accessible label to find.
+	GetByPlaceholderLoc(text string) playwright.Locator
 	WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error)
 	HTML() (string, error)
 }
@@ -60,6 +67,9 @@ type pageTarget struct{ page playwright.Page }
 func (t pageTarget) Loc(selector string) playwright.Locator { return t.page.Locator(selector) }
 func (t pageTarget) GetByLabelLoc(text string) playwright.Locator {
 	return t.page.GetByLabel(text)
+}
+func (t pageTarget) GetByPlaceholderLoc(text string) playwright.Locator {
+	return t.page.GetByPlaceholder(text)
 }
 func (t pageTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.page.WaitForSelector(selector, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
@@ -71,6 +81,9 @@ type frameTarget struct{ frame playwright.Frame }
 func (t frameTarget) Loc(selector string) playwright.Locator { return t.frame.Locator(selector) }
 func (t frameTarget) GetByLabelLoc(text string) playwright.Locator {
 	return t.frame.GetByLabel(text)
+}
+func (t frameTarget) GetByPlaceholderLoc(text string) playwright.Locator {
+	return t.frame.GetByPlaceholder(text)
 }
 func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.frame.WaitForSelector(selector, playwright.FrameWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
@@ -505,25 +518,50 @@ func safeFill(target fillTarget, selector, text string) error {
 // theme, whereas a CSS selector can also silently match the wrong element
 // of the same tag/name without erroring at all. CSS selector remains the
 // fallback since not every mapping call successfully identifies a label.
+// safeFillWithLabelFallback tries, in order: the field's accessible label
+// (most robust - tied to what a human sees, not implementation details),
+// then its placeholder text (covers minimalist ATS widgets that style a
+// placeholder to look like a label with no real <label>/aria-label
+// association at all, confirmed live 2026-07-21 as bug #16 on Jobvite and
+// ApplyToJob), then finally the LLM-guessed CSS selector. Each tier is only
+// attempted if the previous one failed or wasn't available.
 func safeFillWithLabelFallback(target fillTarget, selector, labelText, text string) error {
 	if text == "" {
 		return nil
 	}
+
+	var lastErr error
 	if labelText != "" {
-		labelErr := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
-		if labelErr == nil {
+		if err := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)}); err == nil {
 			return nil
+		} else {
+			lastErr = fmt.Errorf("label fill for %q failed: %w", labelText, err)
 		}
-		if selector == "" {
-			return fmt.Errorf("label fallback for %q failed and no selector available: %w", labelText, labelErr)
+
+		if err := target.GetByPlaceholderLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)}); err == nil {
+			log.Printf("[Auto-Submit] Label fill for %q failed; placeholder fallback succeeded", labelText)
+			return nil
+		} else {
+			lastErr = fmt.Errorf("%v; placeholder fill for %q also failed: %w", lastErr, labelText, err)
 		}
-		if err := safeFill(target, selector, text); err != nil {
-			return fmt.Errorf("label fill for %q failed (%v), selector fill also failed: %w", labelText, labelErr, err)
-		}
-		log.Printf("[Auto-Submit] Label fill for %q failed; CSS selector fallback succeeded", labelText)
-		return nil
 	}
-	return safeFill(target, selector, text)
+
+	if selector == "" {
+		if lastErr != nil {
+			return fmt.Errorf("%v; no CSS selector available either", lastErr)
+		}
+		return ErrEmptySelector
+	}
+	if err := safeFill(target, selector, text); err != nil {
+		if lastErr != nil {
+			return fmt.Errorf("%v; CSS selector fill also failed: %w", lastErr, err)
+		}
+		return err
+	}
+	if lastErr != nil {
+		log.Printf("[Auto-Submit] Label and placeholder fill both failed; CSS selector fallback succeeded")
+	}
+	return nil
 }
 
 func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
