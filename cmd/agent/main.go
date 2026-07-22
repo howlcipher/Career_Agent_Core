@@ -179,6 +179,14 @@ func main() {
 					return
 				default:
 				}
+		// Stale backlog rows predate the discovery filters (bugs.md #22), so
+		// known-junk URLs must be caught again at intake or they burn full
+		// scoring/tailoring/Vision cycles on every restart.
+		if scraper.IsKnownJunkJobURL(job.URL) {
+			log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
+			storage.UpdateFunnelStatus(job.URL, "INVALID_URL")
+			continue
+		}
 		storage.UpdateFunnelStatus(job.URL, "PROCESSING")
 		// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
 		// We only need to enforce the hard blocklist here.

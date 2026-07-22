@@ -251,12 +251,42 @@ func TestIsValidATSUrl(t *testing.T) {
 		// Expired-posting error redirects must never be discovered as jobs
 		{"https://job-boards.greenhouse.io/remotecom?error=true", false},
 		{"https://jobs.jobvite.com/careers/dwt/jobs?error=404", false},
+		// Workday corporate subdomains are never postings
+		{"https://digital.workday.com/en-us/whatever", false},
 	}
 
 	for _, tt := range tests {
 		got := isValidATSUrl(tt.url)
 		if got != tt.want {
 			t.Errorf("isValidATSUrl(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestIsKnownJunkJobURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		// All three workday.com corporate subdomains seen live, plus any other
+		{"https://www.workday.com/en-us/company/careers/hiring-programs.html", true},
+		{"https://developer.workday.com/welcome", true},
+		{"https://digital.workday.com/en-us/x", true},
+		{"https://workday.com/anything", true},
+		{"https://job-boards.greenhouse.io/remotecom?error=true", true},
+		{"https://jobs.lever.co/gohighlevel/?workplaceType=remote", true},
+		{"https://jobs.jobvite.com/acme/search", true},
+		{"https://jobs.workable.com/search/global/remote-jobs", true},
+		// Real postings must never be junk — including Workday tenants
+		{"https://gdit.wd5.myworkdayjobs.com/External_Career_Site/job/X/SRE_RQ1", false},
+		{"https://jobs.lever.co/acme/abc-123", false},
+		{"https://job-boards.greenhouse.io/mixpanel/jobs/7941929", false},
+		// Non-ATS sources (RemoteOK company sites) must pass the blacklist
+		{"https://somestartup.com/careers/backend-engineer", false},
+	}
+	for _, tt := range tests {
+		if got := IsKnownJunkJobURL(tt.url); got != tt.want {
+			t.Errorf("IsKnownJunkJobURL(%q) = %v, want %v", tt.url, got, tt.want)
 		}
 	}
 }

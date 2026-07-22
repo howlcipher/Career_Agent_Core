@@ -257,28 +257,57 @@ func companyFromURL(link string) string {
 	return ""
 }
 
+// IsKnownJunkJobURL reports whether a URL is a confirmed-junk shape that can
+// never be an individual job posting. Exported because it guards two layers
+// (bugs.md #22): discovery via isValidATSUrl, and worker intake in cmd/agent
+// — the DISCOVERED backlog predates the discovery filters, so stale junk
+// re-enters the queue on every restart and must be caught again there.
+// Deliberately a blacklist, not the discovery allowlist: queued jobs from
+// non-ATS sources (RemoteOK company sites) are legitimate and must pass.
+func IsKnownJunkJobURL(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return true
+	}
+	// Expired-posting redirects (?error=true / ?error=404) end up in search
+	// indexes and get "discovered" as live jobs — confirmed live 2026-07-22
+	// (job-boards.greenhouse.io/remotecom?error=true). Never a posting.
+	if u.Query().Has("error") {
+		return true
+	}
+	host := strings.ToLower(u.Hostname())
+	// Any workday.com subdomain is Workday's own corporate/docs/marketing
+	// site (www, developer, digital, ... — three seen live), never a job
+	// posting; real postings live on *.myworkdayjobs.com.
+	if host == "workday.com" || strings.HasSuffix(host, ".workday.com") {
+		return true
+	}
+	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
+		return true
+	}
+	// Jobvite tenant search/listing pages are not postings (bugs.md #11,
+	// observed live: jobs.jobvite.com/cloudone-digital/search scored 80 and
+	// burned a full Learner cycle). Real Jobvite postings use /job/<id>.
+	if (host == "jobvite.com" || strings.HasSuffix(host, ".jobvite.com")) && (strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/search") || strings.Contains(u.Path, "/search/")) {
+		return true
+	}
+	// Board-wide listing filters, not individual postings.
+	if u.Query().Has("workplaceType") {
+		return true
+	}
+	return false
+}
+
 func isValidATSUrl(link string) bool {
 	u, err := url.Parse(link)
 	if err != nil {
 		return false
 	}
 	
-	// Expired-posting redirects (?error=true / ?error=404) end up in search
-	// indexes and get "discovered" as live jobs — confirmed live 2026-07-22
-	// (job-boards.greenhouse.io/remotecom?error=true). Never a posting.
-	if u.Query().Has("error") {
+	if IsKnownJunkJobURL(link) {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
-		return false
-	}
-	// Jobvite tenant search/listing pages are not postings (bugs.md #11,
-	// observed live: jobs.jobvite.com/cloudone-digital/search scored 80 and
-	// burned a full Learner cycle). Real Jobvite postings use /job/<id>.
-	if (host == "jobvite.com" || strings.HasSuffix(host, ".jobvite.com")) && (strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/search") || strings.Contains(u.Path, "/search/")) {
-		return false
-	}
 	
 	atsDomains := []string{
 		"greenhouse.io", "lever.co", "ashbyhq.com",
