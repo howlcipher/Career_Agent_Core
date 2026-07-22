@@ -1,11 +1,11 @@
 # Career Agent Core
 
-Career Agent Core is an autonomous AI-driven job application engine written in Go. It discovers remote jobs, filters them against your strict salary and career requirements, and utilizes Gemini Pro to write highly tailored resumes and cover letters using your central AI Knowledge Library.
+Career Agent Core is an autonomous AI-driven job application engine written in Go. It discovers remote jobs, filters them against your strict salary and career requirements, and uses an LLM (local Ollama by default, or Claude/Gemini) to write highly tailored resumes and cover letters using your central AI Knowledge Library.
 
 ## Features
 - **Massive Discovery Engine**: Scrapes Google/Yahoo dorks targeting 16 major Applicant Tracking Systems (Greenhouse, Workday, Lever, Jobvite, BambooHR, etc) using fuzzy keyword matching.
-- **Tech-Stack Agnostic Fit Score**: Uses Gemini to evaluate job descriptions against your profile and constraints (Salary/Remote). Only proceeds if the fit score is 50 or higher. Evaluates based on core competencies, not strict language matching.
-- **AI Tailoring**: Connects to the Gemini 1.5 Pro API to analyze job descriptions and synthesize them with your `USER_PROFILE.md`.
+- **Tech-Stack Agnostic Fit Score**: Uses your configured LLM to evaluate job descriptions against your profile and constraints (Salary/Remote). Only proceeds if the fit score is 50 or higher. Evaluates based on core competencies, not strict language matching.
+- **AI Tailoring**: Analyzes job descriptions and synthesizes them with your `USER_PROFILE.md` via your configured LLM provider (Ollama by default, or Claude/Gemini).
 - **Stealth Writer**: The system prompt is engineered with strict humanizing constraints (banning words like "delve", "tapestry", "synergy") and high burstiness to completely bypass AI detection.
 - **Interview Cheat Sheet**: Automatically generates an `interview_prep.md` alongside your resume containing likely interview questions and tailored talking points.
 - **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
@@ -14,13 +14,13 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
-- **Auto-Submit Framework**: Architecture in place to integrate Playwright for headless browser submission (currently targets LinkedIn Easy Apply).
+- **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers for Greenhouse and Lever, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests, updating your funnels automatically.
-- **Live Metrics Dashboard**: Ships with a beautifully formatted, premium HTTP Web Dashboard to intuitively track your live conversion rates.
+- **Live Web Dashboard**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) showing funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
 - **Playwright Fallback Scraper**: Bypasses SerpApi limits by deploying an undetectable headless DuckDuckGo scraper with `navigator.webdriver` evasion when API credits run out.
-- **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with Gemini, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
-- **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it automatically sends the raw form to Gemini to mathematically map the input selectors. It caches this learned blueprint in SQLite and successfully submits the application, theoretically supporting any job board on the internet.
+- **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with the LLM, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
+- **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it clicks through any "Apply"-gated form, sends the rendered DOM to your configured LLM to map the input selectors, and caches the learned blueprint in SQLite. If a mapped CSS selector turns out to be wrong, it falls back to the field's accessible label (`<label>`/`aria-label`) before finally falling back to a screenshot-based visual mapping (Visual Reasoning) — three independent strategies for the same field before giving up.
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
 - **Resilient Networking**: All LLM API calls are wrapped in strict 60-second context timeouts to prevent workers from hanging indefinitely during network blips or silent connection drops.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
@@ -32,7 +32,7 @@ graph TD
     A[RemoteOK / Google API] -->|Job Feeds| B(pkg/scraper: Funnel Engine)
     B -->|Raw URL| C{cmd/agent: Main Loop}
     
-    C -->|Parse Description| D[pkg/mcp: Gemini API]
+    C -->|Parse Description| D[pkg/mcp: LLM Client - Ollama/Claude/Gemini]
     D -->|Fit Score > 50| C
     
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
@@ -52,10 +52,10 @@ graph TD
 Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](CHANGELOG.md)!
 
 ## Requirements
-- **Go 1.21+**
+- **Go 1.26+** (see `go.mod` for the exact pinned version)
 - **Playwright System Dependencies**: Headless auto-submission requires specific system libraries (like `libicu`). On standard Linux, run the following to install the necessary dependencies before starting the agent:
   ```bash
-  go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps
+  go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install --with-deps
   ```
 
 ### Running on Immutable OS (Bazzite / Fedora Silverblue / SteamOS)
@@ -165,4 +165,4 @@ go run cmd/tracker/main.go
 ```
 
 ## Managing Submissions
-If `auto_submit: true` is enabled in your config but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to dynamic Playwright generation or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.
+If `auto_submit_click: true` is enabled in `profile.yaml` but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to the Dynamic Learner Module, or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.
