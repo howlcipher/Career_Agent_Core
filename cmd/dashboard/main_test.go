@@ -136,6 +136,11 @@ func TestServeMetrics_CurrentlyProcessing_PicksMostRecentlyTouched(t *testing.T)
 	if m.CurrentSince == "" {
 		t.Error("expected current_since to be populated")
 	}
+
+	expected := recent.Local().Format("3:04:05 PM")
+	if m.CurrentSince != expected {
+		t.Errorf("expected current_since to be converted to local time (%q), got %q - a UTC-stored timestamp must not be displayed as-is", expected, m.CurrentSince)
+	}
 }
 
 func TestServeMetrics_LastSkippedAndFailed_HaveHumanReadableReasons(t *testing.T) {

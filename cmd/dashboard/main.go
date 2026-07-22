@@ -101,7 +101,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to query last applied job: %v", err)
 	}
 	if lastAppliedAt.Valid {
-		m.LastAppliedAt = lastAppliedAt.Time.Format("Jan 2, 2006 3:04 PM MST")
+		m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
 	}
 
 	// Currently processing: the most recently touched PROCESSING row.
@@ -121,7 +121,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	m.CurrentCompany = currentCompany.String
 	m.CurrentTitle = currentTitle.String
 	if currentSince.Valid {
-		m.CurrentSince = currentSince.Time.Format("3:04:05 PM")
+		m.CurrentSince = currentSince.Time.Local().Format("3:04:05 PM")
 	}
 
 	var skippedCompany, skippedTitle, skippedStatus sql.NullString
@@ -138,7 +138,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		m.LastSkippedReason = statusReason(skippedStatus.String)
 	}
 	if skippedAt.Valid {
-		m.LastSkippedAt = skippedAt.Time.Format("Jan 2, 3:04 PM")
+		m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")
 	}
 
 	var failedCompany, failedTitle, failedStatus sql.NullString
@@ -155,7 +155,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		m.LastFailedReason = statusReason(failedStatus.String)
 	}
 	if failedAt.Valid {
-		m.LastFailedAt = failedAt.Time.Format("Jan 2, 3:04 PM")
+		m.LastFailedAt = failedAt.Time.Local().Format("Jan 2, 3:04 PM")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

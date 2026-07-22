@@ -406,6 +406,52 @@ func TestUpdateFunnelStatus_SetsLastUpdated(t *testing.T) {
 	}
 }
 
+// TestUpdateFunnelStatus_StoresLastUpdatedAsCanonicalUTC is a regression test
+// for a bug caught live 2026-07-21: last_updated must be stored as canonical
+// UTC (a trailing "Z", not a local offset like "-04:00"), because
+// ORDER BY last_updated DESC is a plain TEXT comparison in SQLite, not a
+// real chronological one. An earlier build stored this column via SQLite's
+// CURRENT_TIMESTAMP (always UTC); a later build briefly stored a
+// *local*-offset time.Time instead. Once local wall-clock time crossed a UTC
+// midnight boundary, an old UTC-format row (e.g. "2026-07-22T01:48:26Z" for
+// 9:48pm EDT) sorted as textually "later" than a genuinely newer
+// local-offset row (e.g. "2026-07-21T21:50:47-04:00"), because "22" > "21"
+// as plain characters - making the dashboard's "currently processing" card
+// show a stuck job from ~20 minutes earlier as if it were the current one.
+// Every write must use the same (UTC) format for the comparison to ever be
+// meaningful, which is what this test locks in.
+func TestUpdateFunnelStatus_StoresLastUpdatedAsCanonicalUTC(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "http://testcorp.com/utc-format-check"
+	if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatalf("Failed to add to funnel: %v", err)
+	}
+
+	if err := UpdateFunnelStatus(url, "PROCESSING"); err != nil {
+		t.Fatalf("UpdateFunnelStatus failed: %v", err)
+	}
+	var raw string
+	if err := db.QueryRow("SELECT last_updated FROM job_funnel WHERE url = ?", url).Scan(&raw); err != nil {
+		t.Fatalf("failed to read back last_updated: %v", err)
+	}
+	if !strings.HasSuffix(raw, "Z") {
+		t.Errorf("expected UpdateFunnelStatus to store last_updated as canonical UTC (trailing Z), got %q", raw)
+	}
+
+	if err := UpdateFunnelStatusWithScore(url, "SKIPPED", 40); err != nil {
+		t.Fatalf("UpdateFunnelStatusWithScore failed: %v", err)
+	}
+	var rawScore string
+	if err := db.QueryRow("SELECT last_updated FROM job_funnel WHERE url = ?", url).Scan(&rawScore); err != nil {
+		t.Fatalf("failed to read back last_updated after score update: %v", err)
+	}
+	if !strings.HasSuffix(rawScore, "Z") {
+		t.Errorf("expected UpdateFunnelStatusWithScore to store last_updated as canonical UTC (trailing Z), got %q", rawScore)
+	}
+}
+
 // TestMigrateJobFunnelLastUpdated simulates a database created before
 // last_updated existed in the schema (job_funnel without that column) and
 // confirms the migration adds it cleanly, and is safe to run again on a

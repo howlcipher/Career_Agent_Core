@@ -344,11 +344,20 @@ func UpdateFunnelStatus(url, status string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	// Bind time.Now() from Go rather than using SQLite's CURRENT_TIMESTAMP,
-	// which is always UTC with no offset - matches how applied_jobs.applied_at
-	// is already set elsewhere (RecordApplicationInDB), so every timestamp in
-	// this DB carries a consistent, correctly-offset local time.
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?", status, time.Now(), url)
+	// Store as canonical UTC (.UTC()), not a local-offset time.Time. This
+	// column is compared with a plain SQL ORDER BY, which does a TEXT
+	// comparison, not a real chronological one - confirmed live 2026-07-21:
+	// an earlier build briefly wrote this column via SQLite's
+	// CURRENT_TIMESTAMP (always UTC, e.g. "2026-07-22T01:48:26Z" after a
+	// UTC date rollover past midnight), then a later build wrote it as a
+	// local-offset string (e.g. "2026-07-21T21:50:47-04:00"). Mixing the two
+	// formats broke ORDER BY last_updated DESC: the UTC string's rolled-over
+	// date sorted as "later" even though it was actually the older row,
+	// making the dashboard's "currently processing" card show a stuck job
+	// from ~20 minutes earlier as if it were the current one. Storing
+	// everything as UTC keeps every row's string directly comparable;
+	// convert to local time only when formatting for display.
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?", status, time.Now().UTC(), url)
 	return err
 }
 
@@ -356,7 +365,7 @@ func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now(), url)
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now().UTC(), url)
 	return err
 }
 
