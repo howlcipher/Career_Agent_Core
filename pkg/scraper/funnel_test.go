@@ -242,12 +242,48 @@ func TestIsValidATSUrl(t *testing.T) {
 		{"https://apply.workable.com/protera/j/5E238E8E8A/", true},
 		{"https://jobs.lever.co/TestCorp/123", true},
 		{"https://example.com/random-page", false},
+		// Jobvite listing/search pages are not postings (bugs.md #11)
+		{"https://jobs.jobvite.com/cloudone-digital/search", false},
+		{"https://jobs.jobvite.com/acme/search/", false},
+		{"https://jobs.jobvite.com/acme/search/all", false},
+		// Real Jobvite postings must still pass
+		{"https://jobs.jobvite.com/dwt/job/o79Qzfwp/apply", true},
 	}
 
 	for _, tt := range tests {
 		got := isValidATSUrl(tt.url)
 		if got != tt.want {
 			t.Errorf("isValidATSUrl(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestCompanyFromURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		// Subdomain-tenant platforms: company is the first host label
+		{"https://gdit.wd5.myworkdayjobs.com/External_Career_Site/job/Any-Location--Remote/SRE_RQ219922-1", "gdit"},
+		{"https://redhat.wd5.myworkdayjobs.com/en-US/jobs/123", "redhat"},
+		{"https://techinsights.applytojob.com/apply/xyz", "techinsights"},
+		{"https://jway-group.breezy.hr/p/419b44576d64-backend-developer", "jway-group"},
+		// Path-tenant platforms: first non-generic, non-locale path segment
+		{"https://boards.eu.greenhouse.io/nebius/jobs/4558243101", "nebius"},
+		{"https://jobs.lever.co/mistral/f76907fd-428a", "mistral"},
+		{"https://jobs.jobvite.com/careers/dwt/jobs", "dwt"},
+		{"https://apply.workable.com/azumo/j/DC928C07B2/", "azumo"},
+		// Locale and generic segments are never a company
+		{"https://uhaul.wd1.myworkdayjobs.com/en-US/Uhauljobs/job/123", "uhaul"},
+		{"https://example.pinpointhq.com/en/postings/abc", "example"},
+		// Nothing plausible: empty result, caller falls back
+		{"https://jobs.example.com/en-US/", ""},
+		{"not a url ://", ""},
+	}
+
+	for _, tt := range tests {
+		if got := companyFromURL(tt.url); got != tt.want {
+			t.Errorf("companyFromURL(%q) = %q, want %q", tt.url, got, tt.want)
 		}
 	}
 }

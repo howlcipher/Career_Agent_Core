@@ -106,6 +106,45 @@ var deadJobPhrases = []string{
 	"job listing no longer",
 	"posting is no longer active",
 	"job has been filled",
+	// Lever renders expired postings as a 404 shell titled
+	// "Not found – 404 error" with an HTTP 200 status (bugs.md #15).
+	"404 error",
+}
+
+// registrableDomain approximates eTLD+1 with the host's last two labels —
+// sufficient for the ATS domains this agent targets (greenhouse.io,
+// lever.co, myworkdayjobs.com, ...), which all sit directly under
+// two-label public suffixes.
+func registrableDomain(host string) string {
+	parts := strings.Split(strings.ToLower(host), ".")
+	if len(parts) <= 2 {
+		return strings.ToLower(host)
+	}
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// deadRedirectReason reports why the post-navigation URL indicates the
+// posting is gone (bugs.md #15): ATS expired-posting redirects append an
+// error query parameter (Greenhouse `?error=true`, Jobvite `?error=404`),
+// and companies that migrate their board off the ATS redirect to their own
+// domain (boards.eu.greenhouse.io -> careers.nebius.com), landing on a
+// generic careers page that will never contain this posting's form. Returns
+// "" when the final URL still plausibly hosts the posting — same-domain
+// redirects (boards.greenhouse.io -> job-boards.greenhouse.io) are allowed
+// through, since board migrations within the ATS can preserve the posting.
+func deadRedirectReason(applyURL, finalURL string) string {
+	from, errFrom := url.Parse(applyURL)
+	to, errTo := url.Parse(finalURL)
+	if errFrom != nil || errTo != nil || to.Host == "" {
+		return ""
+	}
+	if to.Query().Has("error") {
+		return fmt.Sprintf("redirected to an error page (%s)", finalURL)
+	}
+	if registrableDomain(from.Hostname()) != registrableDomain(to.Hostname()) {
+		return fmt.Sprintf("redirected off the posting's ATS domain to %s", to.Hostname())
+	}
+	return ""
 }
 
 // ErrAuthWall marks an application flow gated behind account creation or
@@ -282,7 +321,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// Wait for a brief moment to let bot-protection scripts (like Cloudflare) reveal themselves
 	page.WaitForTimeout(2000)
 	
-	// Check for obvious dead ends
+	// Check for obvious dead ends. Expired postings frequently redirect
+	// instead of rendering a "job closed" message (bugs.md #15), so check
+	// where navigation actually landed before checking page phrasing —
+	// both run before the costly document generation below.
+	if reason := deadRedirectReason(applyURL, page.URL()); reason != "" {
+		return fmt.Errorf("job posting is dead or expired: %s", reason)
+	}
 	content, _ := page.Content()
 	if isDeadJobPage(content) {
 		return fmt.Errorf("job posting is dead or expired")

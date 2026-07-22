@@ -163,6 +163,8 @@ func TestIsDeadJobPage(t *testing.T) {
 		{"<html><body>This position has been filled</body></html>", true},
 		{"<html><body>404 Not Found</body></html>", true},
 		{"<html><body>We are no longer accepting applications for this role</body></html>", true},
+		// Lever's expired-posting shell, confirmed live (bugs.md #15)
+		{"<html><head><title>Not found – 404 error</title></head><body>Sorry, we couldn't find anything here</body></html>", true},
 		{"", false},
 	}
 
@@ -170,6 +172,53 @@ func TestIsDeadJobPage(t *testing.T) {
 		got := isDeadJobPage(tt.content)
 		if got != tt.want {
 			t.Errorf("isDeadJobPage(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
+
+func TestDeadRedirectReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		applyURL string
+		finalURL string
+		wantDead bool
+	}{
+		{"no redirect", "https://jobs.lever.co/acme/abc-123", "https://jobs.lever.co/acme/abc-123", false},
+		{"tracking params added", "https://jobs.lever.co/acme/abc-123", "https://jobs.lever.co/acme/abc-123?lever-origin=applied", false},
+		// Confirmed live (bugs.md #15/#7): Greenhouse expired-posting redirect
+		{"greenhouse error redirect", "https://job-boards.greenhouse.io/remotecom/jobs/7778860003", "https://job-boards.greenhouse.io/remotecom?error=true", true},
+		// Confirmed live (bugs.md #9): Jobvite expired-posting redirect
+		{"jobvite error redirect", "https://jobs.jobvite.com/dwt/job/o79Qzfwp/apply", "https://jobs.jobvite.com/careers/dwt/jobs?error=404", true},
+		// Confirmed live (bugs.md #15): board migrated off the ATS entirely
+		{"off-ATS migration redirect", "https://boards.eu.greenhouse.io/nebius/jobs/4558243101", "https://careers.nebius.com/", true},
+		// Same registrable domain: board migration within the ATS may keep the posting
+		{"within-ATS board migration", "https://boards.greenhouse.io/acme/jobs/123", "https://job-boards.greenhouse.io/acme/jobs/123", false},
+		{"unparseable final URL", "https://jobs.lever.co/acme/abc-123", "", false},
+	}
+
+	for _, tt := range tests {
+		reason := deadRedirectReason(tt.applyURL, tt.finalURL)
+		if gotDead := reason != ""; gotDead != tt.wantDead {
+			t.Errorf("%s: deadRedirectReason(%q, %q) = %q, wantDead=%v", tt.name, tt.applyURL, tt.finalURL, reason, tt.wantDead)
+		}
+	}
+}
+
+func TestRegistrableDomain(t *testing.T) {
+	tests := []struct {
+		host string
+		want string
+	}{
+		{"jobs.lever.co", "lever.co"},
+		{"boards.eu.greenhouse.io", "greenhouse.io"},
+		{"gdit.wd5.myworkdayjobs.com", "myworkdayjobs.com"},
+		{"careers.nebius.com", "nebius.com"},
+		{"lever.co", "lever.co"},
+		{"localhost", "localhost"},
+	}
+	for _, tt := range tests {
+		if got := registrableDomain(tt.host); got != tt.want {
+			t.Errorf("registrableDomain(%q) = %q, want %q", tt.host, got, tt.want)
 		}
 	}
 }

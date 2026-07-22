@@ -182,11 +182,13 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 		if !found[decoded] && isValidATSUrl(decoded) {
 			found[decoded] = true
 			
-			company := "Unknown Company"
-			// Try to extract company from the URL path as a simple fallback
-			parts := strings.Split(decoded, "/")
-			if len(parts) > 3 {
-				company = parts[3]
+			// Bug #19: derive the company from the tenant subdomain or the
+			// first non-locale, non-generic path segment — the old
+			// first-path-segment grab recorded locale codes ("en-US") and
+			// site names ("External_Career_Site") as companies on Workday.
+			company := companyFromURL(decoded)
+			if company == "" {
+				company = "Unknown Company"
 			}
 			
 			log.Printf("[FunnelEngine] Yahoo Fallback Discovered Live Job at %s", decoded)
@@ -202,6 +204,59 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 	}
 }
 
+// subdomainTenantATS lists ATS platforms where the hiring company is the
+// first host label (gdit.wd5.myworkdayjobs.com, techinsights.applytojob.com)
+// rather than a URL path segment.
+var subdomainTenantATS = []string{
+	"myworkdayjobs.com", "applytojob.com", "breezy.hr", "recruitee.com",
+	"pinpointhq.com", "bamboohr.com", "homerun.co",
+}
+
+// genericPathSegments are first path segments that can never be a company
+// name on path-tenant ATS platforms (section names and short locale codes).
+var genericPathSegments = map[string]bool{
+	"jobs": true, "careers": true, "job": true, "apply": true,
+	"search": true, "o": true, "p": true, "j": true,
+}
+
+// localeSegmentRe matches locale-style path segments like "en", "en-US",
+// "fr-ca". Trade-off: a genuine two-letter company slug would be skipped
+// too, falling through to the next segment or the caller's fallback —
+// acceptable versus recording "en-US" as a company (bugs.md #19).
+var localeSegmentRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]{2})?$`)
+
+// companyFromURL extracts the hiring company's identifier from an ATS job
+// URL (bugs.md #19): the tenant host label for subdomain-tenant platforms,
+// otherwise the first path segment that isn't a locale ("en-US") or a
+// generic section name ("careers"). Returns "" when nothing plausible is
+// found so callers can keep their existing fallback.
+func companyFromURL(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, domain := range subdomainTenantATS {
+		if strings.HasSuffix(host, "."+domain) {
+			label := strings.Split(host, ".")[0]
+			if label != "" && label != "www" && label != "jobs" && label != "apply" {
+				return label
+			}
+		}
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "" {
+			continue
+		}
+		lower := strings.ToLower(seg)
+		if genericPathSegments[lower] || localeSegmentRe.MatchString(lower) {
+			continue
+		}
+		return seg
+	}
+	return ""
+}
+
 func isValidATSUrl(link string) bool {
 	u, err := url.Parse(link)
 	if err != nil {
@@ -210,6 +265,12 @@ func isValidATSUrl(link string) bool {
 	
 	host := strings.ToLower(u.Hostname())
 	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
+		return false
+	}
+	// Jobvite tenant search/listing pages are not postings (bugs.md #11,
+	// observed live: jobs.jobvite.com/cloudone-digital/search scored 80 and
+	// burned a full Learner cycle). Real Jobvite postings use /job/<id>.
+	if (host == "jobvite.com" || strings.HasSuffix(host, ".jobvite.com")) && (strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/search") || strings.Contains(u.Path, "/search/")) {
 		return false
 	}
 	
