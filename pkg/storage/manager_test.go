@@ -307,13 +307,15 @@ func TestLogFailedSubmission(t *testing.T) {
 }
 
 func TestLogManualRequired(t *testing.T) {
-	reportPath := filepath.Join("applications", "manual_queue.md")
-	os.MkdirAll("applications", 0755)
+	reportPath := filepath.Join("applications", "needs_manual_apply", "manual_queue.md")
 	defer os.Remove(reportPath)
 
-	err := LogManualRequired("GatedCorp", "SRE", "http://gated.example.com/job/1")
+	err := LogManualRequired("GatedCorp", "SRE", "http://gated.example.com/job/1", "applications/needs_manual_apply/GatedCorp")
 	if err != nil {
 		t.Fatalf("Failed to log manual-required entry: %v", err)
+	}
+	if err := LogManualRequired("NoDocsCorp", "SRE", "http://gated.example.com/job/2", ""); err != nil {
+		t.Fatalf("Failed to log docs-less entry: %v", err)
 	}
 
 	data, err := os.ReadFile(reportPath)
@@ -328,8 +330,52 @@ func TestLogManualRequired(t *testing.T) {
 	if !strings.Contains(content, "# Manual Apply Queue") {
 		t.Errorf("Missing markdown header in manual queue")
 	}
-	if !strings.Contains(content, "applications/GatedCorp/") {
+	if !strings.Contains(content, "applications/needs_manual_apply/GatedCorp/") {
 		t.Errorf("Entry should link to the saved docs directory: %s", content)
+	}
+	if !strings.Contains(content, "docs not found") {
+		t.Errorf("Docs-less entry should say docs not found: %s", content)
+	}
+}
+
+func TestMoveToManualApply(t *testing.T) {
+	src := filepath.Join("applications", "en_US")
+	os.MkdirAll(src, 0755)
+	os.WriteFile(filepath.Join(src, "resume.md"), []byte("resume"), 0644)
+	defer os.RemoveAll(filepath.Join("applications", "needs_manual_apply"))
+	defer os.RemoveAll(src)
+
+	// "en-US" must sanitize to the same "en_US" folder SaveApplication writes
+	dst, err := MoveToManualApply("en-US")
+	if err != nil {
+		t.Fatalf("MoveToManualApply failed: %v", err)
+	}
+	want := filepath.Join("applications", "needs_manual_apply", "en_US")
+	if dst != want {
+		t.Errorf("dst = %q, want %q", dst, want)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "resume.md")); err != nil {
+		t.Errorf("moved docs missing: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("source folder should be gone after move")
+	}
+
+	// Collision: a second job with the same company label must not overwrite
+	os.MkdirAll(src, 0755)
+	os.WriteFile(filepath.Join(src, "resume.md"), []byte("resume2"), 0644)
+	dst2, err := MoveToManualApply("en-US")
+	if err != nil {
+		t.Fatalf("second MoveToManualApply failed: %v", err)
+	}
+	if dst2 != want+"-2" {
+		t.Errorf("collision dst = %q, want %q", dst2, want+"-2")
+	}
+
+	// Missing source is not an error — docs may have failed to save
+	dst3, err := MoveToManualApply("NeverSavedCorp")
+	if err != nil || dst3 != "" {
+		t.Errorf("missing source: got (%q, %v), want (\"\", nil)", dst3, err)
 	}
 }
 

@@ -156,15 +156,21 @@ type Metadata struct {
 	ApplicationDate    time.Time `json:"application_date"`
 }
 
-func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
-	safeCompany := strings.Map(func(r rune) rune {
+// safeCompanyDirName maps a company name to the filesystem-safe directory
+// name SaveApplication uses — shared so every path that references a
+// company's docs folder (the manual-apply move, queue links) agrees with
+// where the docs were actually written.
+func safeCompanyDirName(companyName string) string {
+	return strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			return r
 		}
 		return '_'
 	}, companyName)
+}
 
-	companyDir := filepath.Join("applications", safeCompany)
+func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
+	companyDir := filepath.Join("applications", safeCompanyDirName(companyName))
 	if err := os.MkdirAll(companyDir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -234,23 +240,63 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	return nil
 }
 
+// manualApplyBase is the single home for everything a human needs to act
+// on: the queue file plus each account-gated job's tailored-docs folder.
+var manualApplyBase = filepath.Join("applications", "needs_manual_apply")
+
+// MoveToManualApply relocates a company's saved docs folder from
+// applications/<company>/ into applications/needs_manual_apply/<company>/
+// so account-gated jobs live in one clearly-labeled place. Returns the
+// destination path, or "" if the source folder doesn't exist (docs may
+// have failed to save). A pre-existing destination gets a numeric suffix
+// rather than being overwritten — company-name collisions are real
+// (pre-#19 rows share labels like "en_US").
+func MoveToManualApply(companyName string) (string, error) {
+	safeCompany := safeCompanyDirName(companyName)
+	src := filepath.Join("applications", safeCompany)
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return "", nil
+	}
+	if err := os.MkdirAll(manualApplyBase, 0755); err != nil {
+		return "", fmt.Errorf("failed to create manual-apply dir: %w", err)
+	}
+	dst := filepath.Join(manualApplyBase, safeCompany)
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		dst = filepath.Join(manualApplyBase, fmt.Sprintf("%s-%d", safeCompany, i))
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return "", fmt.Errorf("failed to move docs to manual-apply dir: %w", err)
+	}
+	return dst, nil
+}
+
 // LogManualRequired appends an account-gated job to the actionable
 // manual-apply queue — deliberately separate from LogFailedSubmission's
 // failure log (improvements.md #21): these are not failures, the tailored
-// documents are already saved under applications/<company>/ and the only
-// missing step is a human creating the ATS account and submitting.
-func LogManualRequired(companyName, jobTitle, applyURL string) error {
+// documents are already saved (docsDir, from MoveToManualApply) and the
+// only missing step is a human creating the ATS account and submitting.
+func LogManualRequired(companyName, jobTitle, applyURL, docsDir string) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
-	reportPath := filepath.Join("applications", "manual_queue.md")
+	if err := os.MkdirAll(manualApplyBase, 0755); err != nil {
+		return fmt.Errorf("failed to create manual-apply dir: %w", err)
+	}
+	reportPath := filepath.Join(manualApplyBase, "manual_queue.md")
 
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		header := "# Manual Apply Queue\n\nThese jobs sit behind an ATS account sign-in, so automation hands them off by design. Tailored documents are already saved in each company's folder under `applications/` — create the account, upload, submit, check the box.\n\n"
+		header := "# Manual Apply Queue\n\nThese jobs sit behind an ATS account sign-in, so automation hands them off by design. Tailored documents are already saved in each company's folder alongside this file — create the account, upload, submit, check the box.\n\n"
 		os.WriteFile(reportPath, []byte(header), 0644)
 	}
 
-	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s) — docs in `applications/%s/`\n", companyName, jobTitle, applyURL, companyName)
+	docsNote := "docs not found"
+	if docsDir != "" {
+		docsNote = fmt.Sprintf("docs in `%s/`", docsDir)
+	}
+	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s) — %s\n", companyName, jobTitle, applyURL, docsNote)
 
 	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {

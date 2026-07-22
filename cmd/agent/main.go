@@ -387,7 +387,11 @@ func main() {
 				log.Printf("[Worker-%d] %s requires an account to apply — queued for manual submission: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 				storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL); logErr != nil {
+				docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+				if mvErr != nil {
+					log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
+				}
+				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
 					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
 				}
 			} else if err != nil {
