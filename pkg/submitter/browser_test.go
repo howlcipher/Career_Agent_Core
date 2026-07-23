@@ -89,6 +89,29 @@ type MockPage struct {
 	locatorFunc          func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator
 	getByLabelFunc       func(text any) playwright.Locator
 	getByPlaceholderFunc func(text any) playwright.Locator
+	mainFrame            playwright.Frame
+	frames               []playwright.Frame
+}
+
+func (m *MockPage) MainFrame() playwright.Frame { return m.mainFrame }
+func (m *MockPage) Frames() []playwright.Frame  { return m.frames }
+
+// pwFrame aliases playwright.Frame so it can be embedded under a field name
+// other than "Frame" — same collision-avoidance reason as pwLocator above.
+type pwFrame = playwright.Frame
+
+type MockFrame struct {
+	pwFrame
+	url         string
+	locatorFunc func(selector string, options ...playwright.FrameLocatorOptions) playwright.Locator
+}
+
+func (m *MockFrame) URL() string { return m.url }
+func (m *MockFrame) Locator(selector string, options ...playwright.FrameLocatorOptions) playwright.Locator {
+	if m.locatorFunc != nil {
+		return m.locatorFunc(selector, options...)
+	}
+	return nil
 }
 
 func (m *MockPage) Locator(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
@@ -462,5 +485,96 @@ func TestSafeFillWithLabelFallback_NoLabelAvailable(t *testing.T) {
 	err := safeFillWithLabelFallback(target, "input#wrong-guess", "", "Ada")
 	if err == nil {
 		t.Error("expected an error when the selector fails and no label is available")
+	}
+}
+
+// TestResolveFillTarget_PrefersMainPageWhenItHasInputs covers the common
+// case: a normal, non-embedded application form. No frame should even be
+// consulted once the main page reports a nonzero input count.
+func TestResolveFillTarget_PrefersMainPageWhenItHasInputs(t *testing.T) {
+	mainLocator := &MockLocator{countFunc: func() (int, error) { return 3, nil }}
+	frameLocatorCalled := false
+	mockFrame := &MockFrame{
+		url: "https://example.com/unrelated-iframe",
+		locatorFunc: func(selector string, options ...playwright.FrameLocatorOptions) playwright.Locator {
+			frameLocatorCalled = true
+			return &MockLocator{countFunc: func() (int, error) { return 5, nil }}
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return mainLocator
+		},
+		frames: []playwright.Frame{mockFrame},
+	}
+	mockPage.mainFrame = mockFrame // irrelevant here since the main-page check short-circuits first
+
+	target := resolveFillTarget(mockPage)
+
+	if _, ok := target.(pageTarget); !ok {
+		t.Errorf("expected pageTarget when the main page has inputs, got %T", target)
+	}
+	if frameLocatorCalled {
+		t.Error("frame should never be consulted once the main page already has inputs")
+	}
+}
+
+// TestResolveFillTarget_FallsBackToIframeWithInputs is bug #4's exact
+// repro shape (SmartRecruiters' TechnologyNavigators posting): zero inputs
+// on the main page, one real iframe holding the actual application form.
+func TestResolveFillTarget_FallsBackToIframeWithInputs(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+	// A distinct object identity from any entry in frames, matching how a
+	// real playwright.Page returns its main frame vs. child frames.
+	mainFrame := &MockFrame{url: "https://example.com/apply"}
+	childFrame := &MockFrame{
+		url: "https://example.com/embedded-form",
+		locatorFunc: func(selector string, options ...playwright.FrameLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 4, nil }}
+		},
+	}
+	mockPage.mainFrame = mainFrame
+	mockPage.frames = []playwright.Frame{mainFrame, childFrame}
+
+	target := resolveFillTarget(mockPage)
+
+	ft, ok := target.(frameTarget)
+	if !ok {
+		t.Fatalf("expected frameTarget when only a child frame has inputs, got %T", target)
+	}
+	if ft.frame != childFrame {
+		t.Errorf("expected the frame with inputs to be selected, got frame %q", ft.frame.URL())
+	}
+}
+
+// TestResolveFillTarget_FallsBackToPageWhenNothingHasInputs covers the
+// dead-end case (e.g. a captcha-only frame or a genuinely formless page):
+// no frame should be picked just because it exists, only if it has inputs.
+func TestResolveFillTarget_FallsBackToPageWhenNothingHasInputs(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+	mainFrame := &MockFrame{url: "https://example.com/apply"}
+	// e.g. a DataDome captcha iframe: present, but has no real form fields
+	// the way this test defines "no inputs" (count 0) for this case.
+	captchaFrame := &MockFrame{
+		url: "https://geo.captcha-delivery.com/captcha/",
+		locatorFunc: func(selector string, options ...playwright.FrameLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+	mockPage.mainFrame = mainFrame
+	mockPage.frames = []playwright.Frame{mainFrame, captchaFrame}
+
+	target := resolveFillTarget(mockPage)
+
+	if _, ok := target.(pageTarget); !ok {
+		t.Errorf("expected pageTarget fallback when no frame has inputs, got %T", target)
 	}
 }
