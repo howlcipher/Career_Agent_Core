@@ -109,8 +109,8 @@ func main() {
 					CompanyName: dj.CompanyName,
 					Title:       dj.JobTitle,
 					URL:         dj.URL,
-					Salary:      prof.TargetComp, 
-					Remote:      true,            
+					Salary:      prof.TargetComp,
+					Remote:      true,
 				}
 			}
 			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
@@ -240,19 +240,33 @@ func main() {
 					continue
 				}
 				htmlStr := string(b)
-				
-				// Captcha / Bot protection check
-				lowerHTML := strings.ToLower(htmlStr)
-				if strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required")) || strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile") {
-					log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
-					storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
-					continue
-				}
 
 				pruned, err := parser.PruneDOMToText(htmlStr)
 				if err != nil {
 					log.Printf("[Worker-%d] Failed to prune DOM for %s: %v", workerID, job.CompanyName, err)
 				}
+
+				// Captcha / Bot protection check. A bare "recaptcha"/
+				// "cf-turnstile" substring match is not reliable proof of an
+				// actual block on its own (bug #46, same class as bug #45's
+				// fix to pkg/submitter/browser.go's isCaptchaBlocked): these
+				// anti-spam widgets are standard on legitimate Greenhouse/
+				// Lever/Ashby/Workable job pages, and this check was killing
+				// the large majority of real postings on those platforms
+				// before they ever reached fit-scoring. A genuine
+				// interstitial instead replaces the real page content,
+				// leaving little real text behind once pruned to plain text
+				// — require that corroborating signal for the widget-only
+				// phrases too, same as the explicit Cloudflare phrasing.
+				lowerHTML := strings.ToLower(htmlStr)
+				genuineBlockPhrasing := strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required"))
+				widgetOnlyPhrasing := strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile")
+				if genuineBlockPhrasing || (widgetOnlyPhrasing && len(strings.TrimSpace(pruned)) < 200) {
+					log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
+					storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
+					continue
+				}
+
 				job.Description = pruned
 			} else {
 				log.Printf("[Worker-%d] Failed to fetch job description for %s: %v", workerID, job.CompanyName, err)

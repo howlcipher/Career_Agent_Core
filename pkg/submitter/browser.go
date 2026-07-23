@@ -593,8 +593,25 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
 				execErr = handleLinkedIn(page, resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
+				// Bug #47: the dedicated handlers were never wired to
+				// bug #8's click-to-reveal step, unlike the Learner Module
+				// path — invisible until bug #45's CAPTCHA-detection fix
+				// stopped killing these jobs before they ever reached here.
+				// Confirmed live 2026-07-23: a real Lever posting has zero
+				// form fields until "Apply for this job" is clicked.
+				// clickApplyIfPresent no-ops when no such element exists, so
+				// postings whose form is already on the page are unaffected.
+				clickApplyIfPresent(page)
+				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
 				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
+				// Bug #47, same reasoning as the Greenhouse branch above.
+				clickApplyIfPresent(page)
+				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
 				execErr = handleLever(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
