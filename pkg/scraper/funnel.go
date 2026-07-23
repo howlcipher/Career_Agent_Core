@@ -302,11 +302,22 @@ func IsKnownJunkJobURL(link string) bool {
 	if host == "bamboohr.com" || host == "www.bamboohr.com" {
 		return true
 	}
-	// app.bamboohr.com is BambooHR's own shared login portal (every tenant's
-	// employees log in there), not a job posting — confirmed live
-	// 2026-07-22: app.bamboohr.com/login/ scored 80 and reached AttemptSubmit.
-	if host == "app.bamboohr.com" {
-		return true
+	// BambooHR keeps a growing family of shared corporate subdomains that
+	// aren't job postings — app. (login portal), learn. (product docs),
+	// trust. (compliance portal), developers./documentation. (API docs) all
+	// confirmed live 2026-07-22/23, each burning a full doc-gen + Learner
+	// cycle before this was caught. Denylisting them one at a time kept
+	// missing new ones, so this flips to a positive check instead: every
+	// real posting seen across dozens of tenants uses exactly one of two
+	// path shapes, /jobs/questions... or /careers/<id>. Any other path on
+	// any bamboohr.com subdomain is corporate content, not a posting.
+	if strings.HasSuffix(host, ".bamboohr.com") {
+		path := strings.TrimSuffix(u.Path, "/")
+		looksLikePosting := strings.HasPrefix(path, "/jobs/questions") ||
+			(strings.HasPrefix(path, "/careers/") && len(path) > len("/careers/"))
+		if !looksLikePosting {
+			return true
+		}
 	}
 	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
 		return true
