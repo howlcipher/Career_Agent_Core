@@ -84,7 +84,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 **Fix applied 2026-07-23:** in `pkg/submitter/browser.go`'s `handleGreenhouse`, check `input#submit_app`'s count first (preserves legacy-theme postings unchanged) and fall back to `button[type='submit']` only when the legacy selector has zero matches. Added `TestHandleGreenhouse_SubmitFallsBackWhenLegacySelectorMissing` and `TestHandleGreenhouse_SubmitUsesLegacySelectorWhenPresent` in `pkg/submitter/browser_test.go`, both passing. `go build/vet/test ./...` all pass.
 
-**Not yet verified live** — needs a fresh Greenhouse posting to reach the submit step again to confirm the fallback actually clicks through to a real `APPLIED`.
+**Verified live 2026-07-23 14:47:** requeued the exact same diagnosed job (`job-boards.greenhouse.io/alphasense`) after the fix shipped — it reached `handleGreenhouse` again, and `job_funnel.status` is now `APPLIED`. Third fresh `APPLIED` this session (after two via Lever, `smarsh` and `DexCare`), first via Greenhouse.
 
 ### 48. Lever click-to-reveal (bug #47's fix) doesn't fire on a second real posting — possible page staleness after the long doc-gen wait
 **Symptom:** live 2026-07-23, shortly after #47 shipped and was confirmed working on `smarsh`: a second real Lever posting (`jobs.eu.lever.co/pnlfin/024459c9-ba1b-4e36-b173-72b4f46a72d4`, Finom) went through the same code path and failed with the identical `form failed to render in time: playwright: timeout: Timeout 30000ms exceeded` #47 was supposed to have fixed — but with no `Clicked an Apply-labeled element` log line beforehand, meaning `clickApplyIfPresent`'s locator found zero matches this time (not a click failure, a *no-match* result).
