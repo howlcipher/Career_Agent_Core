@@ -28,7 +28,8 @@ type FunnelEngine struct {
 func NewFunnelEngine(roles []string) *FunnelEngine {
 	return &FunnelEngine{
 		// Common ATS providers that often host remote roles
-		TargetATS: []string{"greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com", "recruitee.com", "apply.workable.com", "boards.eu.greenhouse.io", "jobs.jobvite.com", "applytojob.com", "myworkdayjobs.com", "pinpointhq.com", "homerun.co"},
+		// breezy.hr excluded (bugs.md): 212 discovered live, 48 FAILED_SUBMIT, 0 APPLIED — worst-performing source, no fill strategy has ever worked against it.
+		TargetATS: []string{"greenhouse.io", "lever.co", "workday.com", "jobs.ashbyhq.com", "bamboohr.com", "workable.com", "smartrecruiters.com", "recruitee.com", "apply.workable.com", "boards.eu.greenhouse.io", "jobs.jobvite.com", "applytojob.com", "myworkdayjobs.com", "pinpointhq.com", "homerun.co"},
 		Roles:     roles,
 	}
 }
@@ -282,6 +283,16 @@ func IsKnownJunkJobURL(link string) bool {
 	if host == "workday.com" || strings.HasSuffix(host, ".workday.com") {
 		return true
 	}
+	// homerun.co's own marketing/content pages (hiring-kits, interview
+	// question templates, job-description templates, ...) live on the bare
+	// www.homerun.co domain and get rediscovered as postings repeatedly
+	// (confirmed live 2026-07-20 through 2026-07-22, same two URLs each
+	// time, occasionally crashing Playwright with "target closed" when
+	// treated like an application form). Real postings are always on a
+	// company subdomain, e.g. solvedex.homerun.co/golang-software-engineer.
+	if host == "homerun.co" || host == "www.homerun.co" {
+		return true
+	}
 	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
 		return true
 	}
@@ -330,7 +341,7 @@ func isValidATSUrl(link string) bool {
 	
 	atsDomains := []string{
 		"greenhouse.io", "lever.co", "ashbyhq.com",
-		"breezy.hr", "bamboohr.com", "workable.com", "smartrecruiters.com",
+		"bamboohr.com", "workable.com", "smartrecruiters.com",
 		"recruitee.com", "jobvite.com", "applytojob.com", "myworkdayjobs.com",
 		"pinpointhq.com", "homerun.co",
 	}

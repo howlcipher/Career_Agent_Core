@@ -27,7 +27,7 @@ func TestExtractDomain(t *testing.T) {
 }
 
 func TestTemplateMatchingLoop(t *testing.T) {
-	p := NewPipeline(nil, nil, nil)
+	p := NewPipeline(nil, nil, nil, nil)
 	
 	// Test matching a known template
 	jobURL := "https://lever.co/jobs/123"

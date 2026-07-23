@@ -132,7 +132,7 @@ func main() {
 	}()
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-	pipeline := submitter.NewPipeline(filter, client, browser)
+	pipeline := submitter.NewPipeline(filter, client, client, browser)
 
 	// Local Embedded RAG Ingestion
 	existingChunks, err := storage.GetAllCareerChunks()
@@ -310,6 +310,7 @@ func main() {
 			"target_compensation": prof.TargetComp,
 			"remote_only":         prof.RemoteOnly,
 			"cover_letter_tone":   prof.CoverLetterTone,
+			"location":            piiData.Address,
 		}
 
 		var score int
@@ -388,7 +389,7 @@ func main() {
 				return masterResumePath, coverLetterPath, nil
 			}
 
-			if err := submitter.AttemptSubmit(browser, filter, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, submitter.ErrAuthWall) {
+			if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, submitter.ErrAuthWall) {
 				// Bug #18: not an automation failure — the ATS gates its form
 				// behind an account. Tailored docs are already saved; queue
 				// the job for a manual application instead.

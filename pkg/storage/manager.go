@@ -546,7 +546,12 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
-	rows, err := db.Query("SELECT company_name, job_title, url FROM job_funnel WHERE status = 'DISCOVERED'")
+	// breezy.hr excluded (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source) and
+	// myworkdayjobs.com deprioritized (account-gated, can only ever reach MANUAL_REQUIRED,
+	// was monopolizing worker cycles ahead of platforms that can actually reach APPLIED).
+	rows, err := db.Query(`SELECT company_name, job_title, url FROM job_funnel
+		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
+		ORDER BY CASE WHEN url LIKE '%myworkdayjobs.com%' THEN 1 ELSE 0 END, id`)
 	if err != nil {
 		return nil, err
 	}

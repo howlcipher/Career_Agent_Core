@@ -18,6 +18,17 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
+// fillActionTimeoutMs bounds each individual fill/click/upload Playwright
+// action. Was a flat 15000 (bugs.md): confirmed live 2026-07-22 that a single
+// clean agent instance, no duplicate processes, still hit this on 3
+// consecutive fill tiers (label/placeholder/CSS selector) in the same ~45s
+// window immediately after the local Ollama model finished a heavy
+// generation burst (200%+ CPU) — the same "hardcoded timeout too tight for
+// genuinely slow-but-honest work under real load" shape as bug #6's Ollama
+// client timeout fix, not the iframe/selector-strategy problems bugs #4/#14
+// already addressed. Doubled for headroom against that CPU contention.
+const fillActionTimeoutMs = 30000
+
 // toStoredThreats converts promptsec's threat type to storage's own mirror,
 // so pkg/storage doesn't need to depend on the security package's
 // third-party dependency just to log what was found.
@@ -112,6 +123,11 @@ var deadJobPhrases = []string{
 	// SmartRecruiters renders a "Sorry, this job has expired" banner on the
 	// otherwise-normal posting page (confirmed live 2026-07-22, Arista).
 	"job has expired",
+	// Workable's own expiry wording (confirmed live 2026-07-22, GoMining
+	// SecOps Engineer posting) — didn't match any existing phrase, so the
+	// pipeline burned a full generation + Learner Module cycle trying to
+	// fill a form on a page with no form at all.
+	"this job is not available anymore",
 }
 
 // registrableDomain approximates eTLD+1 with the host's last two labels —
@@ -273,6 +289,97 @@ func isDeadJobPage(content string) bool {
 	return false
 }
 
+// dismissCookieBanner clicks past a cookie-consent banner if one is present.
+// Confirmed live 2026-07-22 (Workable/European Dynamics posting): the
+// banner's own backdrop div intercepts pointer events across the click
+// target area, so the real "Apply now" button reports visible/enabled/stable
+// yet every click retries and times out — a genuine interaction blocker, not
+// a timing issue, and no amount of increasing fillActionTimeoutMs helps.
+// Consent-detection in isCaptchaBlocked-style content checks doesn't catch
+// this: the banner's markup uses obfuscated CSS-module classes
+// (styles__backdrop--1TOnJ), not literal "cookie"/"consent" substrings.
+// Prefers a decline/reject option when offered, falling back to accept —
+// this is a one-shot headless session with no persistent identity to
+// protect, so the choice only matters for unblocking the click; declining
+// is preferred only because it's not always offered, and this project is
+// otherwise privacy-conscious (pii.yaml, scripts/sanitize_jobs.go).
+func dismissCookieBanner(page playwright.Page) {
+	declineLocator := page.Locator("button:has-text('Decline'), button:has-text('Reject'), a:has-text('Decline'), a:has-text('Reject')").First()
+	if count, err := declineLocator.Count(); err == nil && count > 0 {
+		if err := declineLocator.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)}); err == nil {
+			log.Printf("[Auto-Submit] Dismissed a cookie-consent banner (declined)")
+			page.WaitForTimeout(500)
+			return
+		}
+	}
+	acceptLocator := page.Locator("button:has-text('Accept all'), button:has-text('Accept All'), button:has-text('Accept'), a:has-text('Accept all'), a:has-text('Accept')").First()
+	if count, err := acceptLocator.Count(); err == nil && count > 0 {
+		if err := acceptLocator.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)}); err == nil {
+			log.Printf("[Auto-Submit] Dismissed a cookie-consent banner (accepted)")
+			page.WaitForTimeout(500)
+		}
+	}
+}
+
+// resolveConsentGateIfPresent handles Jobvite's "Data Consent" step (confirmed
+// live 2026-07-22, CMG Financial posting): after the Apply click, the page
+// shows only a single <select> ("Location of Residence and Language") with
+// zero real form fields anywhere on the page or in any frame — the
+// application form doesn't exist in the DOM at all until an option is
+// chosen, which is why the Learner Module and every fill tier found nothing
+// to map or fill no matter how long the timeout. Confirmed live that
+// selecting an option alone (no extra click needed) immediately reveals the
+// real form (24 fields). Prefers an option matching the candidate's actual
+// state/country from pii so the (often California-privacy-specific)
+// disclosure the applicant is shown stays honest, falling back to the first
+// non-placeholder option if no match is found. No-ops if the page already
+// has real fields, so single-page ATS forms are never affected.
+func resolveConsentGateIfPresent(page playwright.Page, pii *config.PII) {
+	inputCount, err := page.Locator("input").Count()
+	if err != nil || inputCount > 0 {
+		return
+	}
+	selectLocator := page.Locator("select").First()
+	count, err := selectLocator.Count()
+	if err != nil || count == 0 {
+		return
+	}
+
+	preferred := ""
+	if pii != nil && pii.Address != "" && !strings.Contains(strings.ToLower(pii.Address), ", ca ") && !strings.Contains(strings.ToLower(pii.Address), "california") {
+		preferred = "non-california"
+	}
+
+	options, err := selectLocator.Locator("option").All()
+	if err != nil || len(options) == 0 {
+		return
+	}
+	selectedIndex := -1
+	if preferred != "" {
+		for i, opt := range options {
+			text, _ := opt.TextContent()
+			if strings.Contains(strings.ToLower(text), preferred) {
+				selectedIndex = i
+				break
+			}
+		}
+	}
+	if selectedIndex == -1 {
+		// Skip index 0 - it's almost always a "Select..." placeholder.
+		if len(options) < 2 {
+			return
+		}
+		selectedIndex = 1
+	}
+
+	if _, err := selectLocator.SelectOption(playwright.SelectOptionValues{Indexes: &[]int{selectedIndex}}); err != nil {
+		log.Printf("[Auto-Submit] Found a likely consent-gate <select> but failed to choose an option: %v", err)
+		return
+	}
+	log.Printf("[Auto-Submit] Selected an option on a location/consent gate to reveal the application form")
+	page.WaitForTimeout(2000)
+}
+
 // clickApplyIfPresent looks for a visible "Apply"-labeled clickable element on the
 // top-level page and clicks it, giving click-to-reveal application forms (a
 // fancybox/lightbox modal, an in-page form injected by JS, etc.) a chance to render
@@ -280,7 +387,11 @@ func isDeadJobPage(content string) bool {
 // fields. No-ops silently if no such element is found, since most ATS platforms
 // already show the form directly without requiring a click.
 func clickApplyIfPresent(page playwright.Page) {
-	locator := page.Locator("button:has-text('Apply'), a:has-text('Apply')").First()
+	// SmartRecruiters uses "I'm interested" instead of any "Apply" wording
+	// (confirmed live 2026-07-22, Oteemo posting) — the original selector
+	// silently found nothing on that platform, so the fill logic always
+	// targeted the public job-description page, which has no form at all.
+	locator := page.Locator("button:has-text('Apply'), a:has-text('Apply'), button:has-text(\"I'm interested\"), a:has-text(\"I'm interested\")").First()
 	count, err := locator.Count()
 	if err != nil || count == 0 {
 		return
@@ -317,7 +428,7 @@ func resolveFillTarget(page playwright.Page) fillTarget {
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
 	bCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
@@ -377,7 +488,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 	// Wait for a brief moment to let bot-protection scripts (like Cloudflare) reveal themselves
 	page.WaitForTimeout(2000)
-	
+	dismissCookieBanner(page)
+
 	// Check for obvious dead ends. Expired postings frequently redirect
 	// instead of rendering a "job closed" message (bugs.md #15), so check
 	// where navigation actually landed before checking page phrasing —
@@ -452,6 +564,18 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
 
+				// Bug #23 follow-up: the reveal click above can navigate to a
+				// new URL that's gated by a bot-protection challenge the
+				// earlier isCaptchaBlocked check (run before this click,
+				// against the public job-description page) never saw —
+				// confirmed live 2026-07-22: SmartRecruiters' "I'm interested"
+				// button navigates to a oneclick-ui apply URL behind
+				// geo.captcha-delivery.com. Bail now instead of burning a
+				// Learner Module + Vision cycle on an unfillable page.
+				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
+
 				// Bug #18, generic tier: after the Apply click, a sign-in
 				// wall (password input plus account-gate phrasing) means the
 				// real form is behind auth — skip the Learner/fill/Vision
@@ -463,6 +587,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					}
 				}
 
+				resolveConsentGateIfPresent(page, pii)
+
 				target := resolveFillTarget(page)
 				domHTML, _ := target.HTML()
 				prunedHTML, err := parser.PruneDOMToText(domHTML)
@@ -472,10 +598,21 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 				if filter != nil {
 					if safe, threats, err := filter.CheckPayloadDetailed(prunedHTML); !safe {
-						if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
-							log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
+						if judge != nil {
+							if isSafe, verifyErr := judge.VerifySafeJobDescription(prunedHTML); verifyErr == nil && isSafe {
+								log.Printf("[Auto-Submit] Security filter flagged job description, but LLM verified it as SAFE.")
+							} else {
+								if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
+									log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
+								}
+								return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
+							}
+						} else {
+							if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
+								log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
+							}
+							return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
 						}
-						return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
 					}
 				}
 
@@ -516,7 +653,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
-				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
+				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
 			}
@@ -692,7 +829,7 @@ func safeFill(target fillTarget, selector, text string) error {
 	if text == "" {
 		return nil
 	}
-	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)})
+	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one
@@ -719,13 +856,13 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 
 	var lastErr error
 	if labelText != "" {
-		if err := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)}); err == nil {
+		if err := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
 			return nil
 		} else {
 			lastErr = fmt.Errorf("label fill for %q failed: %w", labelText, err)
 		}
 
-		if err := target.GetByPlaceholderLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(15000)}); err == nil {
+		if err := target.GetByPlaceholderLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
 			log.Printf("[Auto-Submit] Label fill for %q failed; placeholder fallback succeeded", labelText)
 			return nil
 		} else {
@@ -785,7 +922,7 @@ func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappin
 				err = fileInput.First().SetInputFiles([]playwright.InputFile{{
 					Name:   "resume.pdf",
 					Buffer: fileBytes,
-				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(15000)})
+				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 				if err != nil {
 					return fmt.Errorf("failed to upload resume: %w", err)
 				}
@@ -797,7 +934,7 @@ func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappin
 
 	if autoSubmitClick {
 		if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
-			err := target.Loc(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(15000)})
+			err := target.Loc(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 			if err != nil {
 				return fmt.Errorf("failed to click submit: %w", err)
 			}

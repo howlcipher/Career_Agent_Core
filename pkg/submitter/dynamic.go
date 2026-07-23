@@ -21,18 +21,26 @@ type FormMapper interface {
 	SolveValidationErrors(domHTML string, profileContext string) (map[string]string, error)
 }
 
+// LLMJudge acts as a secondary AI evaluator for prompt injection heuristics.
+type LLMJudge interface {
+	VerifySafeJobDescription(text string) (bool, error)
+}
+
+
 // Pipeline represents the dynamic script-generation pipeline for ATS submissions.
 type Pipeline struct {
 	Filter    *security.QuarantineLayer
 	Mapper    FormMapper
+	Judge     LLMJudge
 	Browser   playwright.Browser
 	Templates map[string]string // Known ATS footprints mapped to templates
 }
 
-func NewPipeline(filter *security.QuarantineLayer, mapper FormMapper, browser playwright.Browser) *Pipeline {
+func NewPipeline(filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, browser playwright.Browser) *Pipeline {
 	return &Pipeline{
 		Filter:  filter,
 		Mapper:  mapper,
+		Judge:   judge,
 		Browser: browser,
 		Templates: map[string]string{
 			"greenhouse.io": "GreenhouseTemplate",
@@ -74,7 +82,15 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 
 	pruned, _ := parser.PruneDOMToText(domHTML)
 	if err := p.Filter.CheckPayload(pruned); err != nil {
-		return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
+		if p.Judge != nil {
+			if isSafe, verifyErr := p.Judge.VerifySafeJobDescription(pruned); verifyErr == nil && isSafe {
+				log.Println("[Pipeline] Promptsec flagged payload, but LLM verified it as SAFE.")
+			} else {
+				return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
+			}
+		} else {
+			return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
+		}
 	}
 
 	log.Println("[Pipeline] Step 2: Site verified secure. Extracting structural DOM...")

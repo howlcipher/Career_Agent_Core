@@ -25,7 +25,7 @@ func TestAttemptSubmit_NewContextFails(t *testing.T) {
 		},
 	}
 	
-	err := AttemptSubmit(mockBrowser, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
 	
 	if err == nil {
 		t.Errorf("Expected error when NewContext fails, got nil")
@@ -71,7 +71,7 @@ func TestAttemptSubmit_NewPageFails(t *testing.T) {
 		},
 	}
 	
-	err := AttemptSubmit(mockBrowser, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
 	
 	if err == nil {
 		t.Errorf("Expected error when NewPage fails, got nil")
