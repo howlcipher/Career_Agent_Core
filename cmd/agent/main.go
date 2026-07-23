@@ -97,6 +97,16 @@ func main() {
 	filter := security.NewQuarantineLayer()
 	jobChan := make(chan scraper.Job, 2000)
 
+	// TARGET_JOB_URL restricts this run to exactly one already-DISCOVERED
+	// job and skips fresh FunnelEngine discovery, for verifying a fix
+	// end-to-end in minutes instead of waiting on normal queue order or
+	// disturbing a separately-running full batch (bugs.md's Operational Trap
+	// section — used live 2026-07-23 to verify bugs #46-#49). The target job
+	// must already be in DISCOVERED status (see cmd/requeue), and if it
+	// previously reached document generation, its applied_jobs dedup row
+	// must be cleared too or HasApplied will skip it as a duplicate.
+	targetJobURL := os.Getenv("TARGET_JOB_URL")
+
 	discoveredJobs, err := storage.GetDiscoveredJobs()
 	var producerWg sync.WaitGroup
 
@@ -104,7 +114,12 @@ func main() {
 		producerWg.Add(1)
 		go func() {
 			defer producerWg.Done()
+			matched := 0
 			for _, dj := range discoveredJobs {
+				if targetJobURL != "" && dj.URL != targetJobURL {
+					continue
+				}
+				matched++
 				jobChan <- scraper.Job{
 					CompanyName: dj.CompanyName,
 					Title:       dj.JobTitle,
@@ -113,7 +128,11 @@ func main() {
 					Remote:      true,
 				}
 			}
-			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
+			if targetJobURL != "" {
+				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) (of %d discovered) into the queue.", matched, len(discoveredJobs))
+			} else {
+				log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
+			}
 		}()
 	}
 
@@ -121,6 +140,9 @@ func main() {
 	producerWg.Add(1)
 	go func() {
 		defer producerWg.Done()
+		if targetJobURL != "" {
+			return
+		}
 		if err := funnelEngine.DiscoverJobs(jobChan); err != nil {
 			log.Printf("[Agent] Funnel discovery error: %v", err)
 		}
