@@ -542,16 +542,37 @@ type FunnelJob struct {
 	URL         string
 }
 
+// sourcePriorityCASE ranks jobs by how likely their platform is to actually
+// reach APPLIED, based on live outcome data rather than guesswork (bugs.md
+// #45-#48, 2026-07-23 session). Tier 0: Greenhouse/Lever, dedicated handlers
+// confirmed working end-to-end (a real Lever posting reached APPLIED the
+// same session #47 shipped). Tier 1: other platforms with dedicated or
+// Learner-Module handling and a real on-page form once #45/#46's CAPTCHA
+// false-positives stopped killing them early (Ashby, Workable, Pinpoint,
+// Homerun) — not yet individually proven to reach APPLIED, but not known to
+// have a structural blocker either. Tier 2 (default): everything else,
+// including platforms with a known extra friction point that isn't fully
+// solved (SmartRecruiters' persistent DataDome CAPTCHA even post-click,
+// Jobvite's consent gate, applytojob.com's repeated resume-selector
+// failures). Tier 3: myworkdayjobs.com, unchanged from before — account-
+// gated, can only ever reach MANUAL_REQUIRED. This ordering will go stale
+// as more bugs are fixed or new ones found; re-derive it from fresh
+// cmd/requeue -stats output rather than trusting this comment indefinitely.
+const sourcePriorityCASE = `CASE
+		WHEN url LIKE '%myworkdayjobs.com%' THEN 3
+		WHEN url LIKE '%greenhouse%' OR url LIKE '%lever.co%' THEN 0
+		WHEN url LIKE '%ashbyhq%' OR url LIKE '%workable%' OR url LIKE '%pinpointhq%' OR url LIKE '%homerun.co%' THEN 1
+		ELSE 2
+	END`
+
 func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
-	// breezy.hr excluded (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source) and
-	// myworkdayjobs.com deprioritized (account-gated, can only ever reach MANUAL_REQUIRED,
-	// was monopolizing worker cycles ahead of platforms that can actually reach APPLIED).
+	// breezy.hr excluded entirely (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source).
 	rows, err := db.Query(`SELECT company_name, job_title, url FROM job_funnel
 		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
-		ORDER BY CASE WHEN url LIKE '%myworkdayjobs.com%' THEN 1 ELSE 0 END, id`)
+		ORDER BY ` + sourcePriorityCASE + `, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -567,6 +588,75 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 		jobs = append(jobs, j)
 	}
 	return jobs, nil
+}
+
+// SourceOutcomeStat is one row of the per-URL-pattern outcome breakdown
+// cmd/requeue reports, mirroring the ad hoc query used to find bugs #45/#46
+// (2026-07-23): grouping job_funnel by outcome status per platform is what
+// actually revealed those CAPTCHA false positives, rather than guesswork.
+type SourceOutcomeStat struct {
+	Total   int
+	Applied int
+	Captcha int
+	Failed  int
+	Manual  int
+}
+
+// SourceOutcomeBreakdown reports outcome counts for job_funnel rows whose
+// URL matches urlPattern (a SQL LIKE pattern, e.g. "%lever.co%").
+func SourceOutcomeBreakdown(urlPattern string) (SourceOutcomeStat, error) {
+	var s SourceOutcomeStat
+	if db == nil {
+		return s, fmt.Errorf("db not initialized")
+	}
+	err := db.QueryRow(`SELECT
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'FAILED_SUBMIT' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','PROCESSED_MANUAL')`,
+		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual)
+	return s, err
+}
+
+// RequeueByURLPattern resets job_funnel rows matching urlPattern and
+// currently in fromStatus back to DISCOVERED, so a fix that makes them
+// newly fillable actually gets a retry — GetDiscoveredJobs only ever pulls
+// status='DISCOVERED', so without this a fixed bug's backlog sits idle
+// forever (confirmed live 2026-07-23: this exact gap kept bugs #45/#46's
+// fix from producing a fresh APPLIED until 830 stale BLOCKED_CAPTCHA rows
+// were manually reset). Returns the number of rows changed.
+func RequeueByURLPattern(urlPattern, fromStatus string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	result, err := db.Exec(`UPDATE job_funnel SET status = 'DISCOVERED' WHERE status = ? AND url LIKE ?`, fromStatus, urlPattern)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ClearApplicationRecordsByURLPattern deletes applied_jobs rows matching
+// urlPattern. HasApplied checks applied_jobs, which gets a row as soon as
+// tailored documents are saved — before the actual submit attempt runs —
+// so a job that generated real documents but then failed to submit (e.g.
+// FAILED_SUBMIT, not BLOCKED_CAPTCHA) will be skipped as "already applied"
+// on a requeue unless its dedup record is cleared too (confirmed live
+// 2026-07-23 re-testing the Lever "smarsh" posting). Not needed when
+// requeuing BLOCKED_CAPTCHA rows, since both known CAPTCHA checks run
+// before document generation. Returns the number of rows deleted.
+func ClearApplicationRecordsByURLPattern(urlPattern string) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	result, err := db.Exec(`DELETE FROM applied_jobs WHERE url LIKE ?`, urlPattern)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 type CareerChunk struct {

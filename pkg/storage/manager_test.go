@@ -647,3 +647,97 @@ func TestMigrateJobFunnelLastUpdated(t *testing.T) {
 		t.Errorf("second migration call should be a no-op, got error: %v", err)
 	}
 }
+
+func TestSourceOutcomeBreakdown(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
+	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/b", "BLOCKED_CAPTCHA")
+	AddToFunnel("C", "T", "http://jobs.lever.co/c", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/c", "FAILED_SUBMIT")
+	AddToFunnel("D", "T", "http://boards.greenhouse.io/d", "DISCOVERED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/d", "APPLIED")
+
+	stat, err := SourceOutcomeBreakdown("%lever.co%")
+	if err != nil {
+		t.Fatalf("SourceOutcomeBreakdown failed: %v", err)
+	}
+	if stat.Total != 3 || stat.Applied != 1 || stat.Captcha != 1 || stat.Failed != 1 {
+		t.Errorf("unexpected stat for lever.co pattern: %+v", stat)
+	}
+
+	empty, err := SourceOutcomeBreakdown("%nonexistent-ats%")
+	if err != nil {
+		t.Fatalf("SourceOutcomeBreakdown on an empty match failed: %v", err)
+	}
+	if empty.Total != 0 || empty.Applied != 0 {
+		t.Errorf("expected all-zero stat for a pattern with no matches, got %+v", empty)
+	}
+}
+
+func TestRequeueByURLPattern(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "BLOCKED_CAPTCHA")
+	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/b", "FAILED_SUBMIT")
+	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/c", "BLOCKED_CAPTCHA")
+
+	n, err := RequeueByURLPattern("%lever.co%", "BLOCKED_CAPTCHA")
+	if err != nil {
+		t.Fatalf("RequeueByURLPattern failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected exactly 1 row requeued, got %d", n)
+	}
+
+	jobs, _ := GetDiscoveredJobs()
+	if len(jobs) != 1 || jobs[0].URL != "http://jobs.lever.co/a" {
+		t.Errorf("expected only the requeued lever BLOCKED_CAPTCHA row back in DISCOVERED, got %+v", jobs)
+	}
+
+	var greenhouseStatus string
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://boards.greenhouse.io/c").Scan(&greenhouseStatus)
+	if greenhouseStatus != "BLOCKED_CAPTCHA" {
+		t.Errorf("a matching status but non-matching URL pattern must not be requeued, got status %q", greenhouseStatus)
+	}
+
+	var leverFailedStatus string
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://jobs.lever.co/b").Scan(&leverFailedStatus)
+	if leverFailedStatus != "FAILED_SUBMIT" {
+		t.Errorf("a matching URL pattern but non-matching status must not be requeued, got status %q", leverFailedStatus)
+	}
+}
+
+func TestClearApplicationRecordsByURLPattern(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	RecordApplicationInDB("A", "T", "http://jobs.lever.co/a")
+	RecordApplicationInDB("B", "T", "http://boards.greenhouse.io/b")
+
+	if !HasApplied("http://jobs.lever.co/a") {
+		t.Fatal("expected HasApplied to be true before clearing")
+	}
+
+	n, err := ClearApplicationRecordsByURLPattern("%lever.co%")
+	if err != nil {
+		t.Fatalf("ClearApplicationRecordsByURLPattern failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected exactly 1 row cleared, got %d", n)
+	}
+
+	if HasApplied("http://jobs.lever.co/a") {
+		t.Error("expected HasApplied to be false after clearing its dedup record")
+	}
+	if !HasApplied("http://boards.greenhouse.io/b") {
+		t.Error("a non-matching URL's dedup record must not be cleared")
+	}
+}
