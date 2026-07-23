@@ -78,10 +78,16 @@ type pageTarget struct{ page playwright.Page }
 
 func (t pageTarget) Loc(selector string) playwright.Locator { return t.page.Locator(selector) }
 func (t pageTarget) GetByLabelLoc(text string) playwright.Locator {
-	return t.page.GetByLabel(text)
+	// .First() avoids a Playwright strict-mode violation when more than one
+	// element matches the same label text (confirmed live 2026-07-22,
+	// Workable/Dispel: getByLabel('Phone') resolved to 2 elements — a
+	// visible field plus a hidden/duplicate one sharing the label). Filling
+	// isn't order-sensitive here: any element with the right label is an
+	// acceptable fill target, so narrowing beats failing outright.
+	return t.page.GetByLabel(text).First()
 }
 func (t pageTarget) GetByPlaceholderLoc(text string) playwright.Locator {
-	return t.page.GetByPlaceholder(text)
+	return t.page.GetByPlaceholder(text).First()
 }
 func (t pageTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.page.WaitForSelector(selector, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
@@ -92,10 +98,10 @@ type frameTarget struct{ frame playwright.Frame }
 
 func (t frameTarget) Loc(selector string) playwright.Locator { return t.frame.Locator(selector) }
 func (t frameTarget) GetByLabelLoc(text string) playwright.Locator {
-	return t.frame.GetByLabel(text)
+	return t.frame.GetByLabel(text).First()
 }
 func (t frameTarget) GetByPlaceholderLoc(text string) playwright.Locator {
-	return t.frame.GetByPlaceholder(text)
+	return t.frame.GetByPlaceholder(text).First()
 }
 func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error) {
 	return t.frame.WaitForSelector(selector, playwright.FrameWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})

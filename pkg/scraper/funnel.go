@@ -293,6 +293,21 @@ func IsKnownJunkJobURL(link string) bool {
 	if host == "homerun.co" || host == "www.homerun.co" {
 		return true
 	}
+	// Same pattern as homerun.co above: BambooHR's own marketing site
+	// (www.bamboohr.com/integrations/..., /careers/, /pricing/, ...) gets
+	// discovered as a posting (confirmed live 2026-07-22, "integrations"
+	// listings page burned a 16-minute doc-gen cycle). Real BambooHR
+	// postings are always on a company subdomain, e.g.
+	// cxm.bamboohr.com/jobs/questions?id=169.
+	if host == "bamboohr.com" || host == "www.bamboohr.com" {
+		return true
+	}
+	// app.bamboohr.com is BambooHR's own shared login portal (every tenant's
+	// employees log in there), not a job posting — confirmed live
+	// 2026-07-22: app.bamboohr.com/login/ scored 80 and reached AttemptSubmit.
+	if host == "app.bamboohr.com" {
+		return true
+	}
 	if (host == "workable.com" || strings.HasSuffix(host, ".workable.com")) && strings.Contains(u.Path, "/search/") {
 		return true
 	}
@@ -323,6 +338,43 @@ func IsKnownJunkJobURL(link string) bool {
 			if segments <= 1 {
 				return true
 			}
+		}
+	}
+	// On applytojob.com (a subdomain-tenant platform, company.applytojob.com),
+	// a bare "/apply" path with nothing after it is the company's full
+	// "Current Openings" board index, never an individual posting — confirmed
+	// live 2026-07-22 (holafly.applytojob.com/apply: 20 unrelated open roles
+	// listed, no matching title anywhere, zero form fields). Real postings
+	// carry a job ID and title slug, e.g.
+	// /apply/z4xS0fd5C5/Senior-Backend-Engineer. Historically 0 APPLIED
+	// across 176 attempts on this platform — this is very likely why.
+	if strings.HasSuffix(host, ".applytojob.com") {
+		segments := 0
+		for _, seg := range strings.Split(u.Path, "/") {
+			if seg != "" {
+				segments++
+			}
+		}
+		if segments <= 1 {
+			return true
+		}
+	}
+	// Same pattern again on recruitee.com (also subdomain-tenant): real
+	// postings use /o/<slug> (2 segments); a bare single segment is either
+	// the tenant's landing page (confirmed live 2026-07-22,
+	// greatminds.recruitee.com/homepage — burned a full doc-gen + Learner
+	// cycle) or, per several /o-only URLs seen earlier this session
+	// (sensysgatsogroup, trafilea, primeworks), the job-board index under
+	// the /o prefix itself.
+	if strings.HasSuffix(host, ".recruitee.com") {
+		segments := 0
+		for _, seg := range strings.Split(u.Path, "/") {
+			if seg != "" {
+				segments++
+			}
+		}
+		if segments <= 1 {
+			return true
 		}
 	}
 	return false
