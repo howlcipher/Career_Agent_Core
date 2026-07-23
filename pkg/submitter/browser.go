@@ -806,7 +806,18 @@ func handleGreenhouse(target fillTarget, resumePath string, pii *config.PII, aut
 	}
 
 	if autoSubmitClick {
-		if err := target.Loc("input#submit_app").Click(); err != nil {
+		// Bug #49: input#submit_app only exists on Greenhouse's legacy embed
+		// theme. Confirmed live 2026-07-23 (job-boards.greenhouse.io/
+		// alphasense): a modern-board posting has zero elements matching
+		// that ID at all — the real control is a plain, unidentified
+		// <button type="submit">Submit application</button>. Try the legacy
+		// selector first so postings that do use it are unaffected, then
+		// fall back to the type-submit button.
+		submitLoc := target.Loc("input#submit_app")
+		if count, _ := submitLoc.Count(); count == 0 {
+			submitLoc = target.Loc("button[type='submit']")
+		}
+		if err := submitLoc.Click(); err != nil {
 			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}

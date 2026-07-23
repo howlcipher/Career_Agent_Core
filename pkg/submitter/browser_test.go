@@ -123,6 +123,10 @@ func (m *MockPage) Locator(selector string, options ...playwright.PageLocatorOpt
 
 func (m *MockPage) WaitForTimeout(timeout float64) {}
 
+func (m *MockPage) WaitForSelector(selector string, options ...playwright.PageWaitForSelectorOptions) (playwright.ElementHandle, error) {
+	return nil, nil
+}
+
 func (m *MockPage) GetByLabel(text any, options ...playwright.PageGetByLabelOptions) playwright.Locator {
 	if m.getByLabelFunc != nil {
 		return m.getByLabelFunc(text)
@@ -630,5 +634,70 @@ func TestIsCaptchaBlocked_ExplicitBlockWordingStillWins(t *testing.T) {
 
 	if !isCaptchaBlocked(mockPage, "Please verify you are human before continuing.") {
 		t.Error("expected explicit block wording to be treated as blocked even with a high field count")
+	}
+}
+
+// TestHandleGreenhouse_SubmitFallsBackWhenLegacySelectorMissing is bug #49's
+// repro shape (job-boards.greenhouse.io/alphasense, confirmed live
+// 2026-07-23): a modern-board posting has zero elements matching the legacy
+// input#submit_app selector, only a plain button[type='submit'].
+func TestHandleGreenhouse_SubmitFallsBackWhenLegacySelectorMissing(t *testing.T) {
+	legacyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	fallbackLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			switch selector {
+			case "input#submit_app":
+				return legacyLocator
+			case "button[type='submit']":
+				return fallbackLocator
+			default:
+				// first_name/last_name/email/phone fields and the resume
+				// file input: not under test here, just need to not panic.
+				return &MockLocator{}
+			}
+		},
+	}
+	target := pageTarget{mockPage}
+
+	if err := handleGreenhouse(target, "", nil, true); err != nil {
+		t.Fatalf("expected no error when the fallback submit selector matches, got: %v", err)
+	}
+	if fallbackLocator.clickCalls != 1 {
+		t.Errorf("expected the fallback button[type='submit'] locator to be clicked once, got %d calls", fallbackLocator.clickCalls)
+	}
+	if legacyLocator.clickCalls != 0 {
+		t.Errorf("expected the legacy input#submit_app locator to never be clicked when it has zero matches, got %d calls", legacyLocator.clickCalls)
+	}
+}
+
+// TestHandleGreenhouse_SubmitUsesLegacySelectorWhenPresent confirms postings
+// still on Greenhouse's legacy embed theme (where input#submit_app does
+// exist) are unaffected by bug #49's fallback.
+func TestHandleGreenhouse_SubmitUsesLegacySelectorWhenPresent(t *testing.T) {
+	legacyLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	fallbackLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			switch selector {
+			case "input#submit_app":
+				return legacyLocator
+			case "button[type='submit']":
+				return fallbackLocator
+			default:
+				return &MockLocator{}
+			}
+		},
+	}
+	target := pageTarget{mockPage}
+
+	if err := handleGreenhouse(target, "", nil, true); err != nil {
+		t.Fatalf("expected no error when the legacy submit selector matches, got: %v", err)
+	}
+	if legacyLocator.clickCalls != 1 {
+		t.Errorf("expected the legacy input#submit_app locator to be clicked once, got %d calls", legacyLocator.clickCalls)
+	}
+	if fallbackLocator.clickCalls != 0 {
+		t.Errorf("expected the fallback locator to never be consulted when the legacy selector already matches, got %d calls", fallbackLocator.clickCalls)
 	}
 }
