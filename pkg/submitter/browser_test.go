@@ -578,3 +578,57 @@ func TestResolveFillTarget_FallsBackToPageWhenNothingHasInputs(t *testing.T) {
 		t.Errorf("expected pageTarget fallback when no frame has inputs, got %T", target)
 	}
 }
+
+// TestIsCaptchaBlocked_GenuineInterstitialWithFewMainFields is bug #23's
+// original repro shape (AbbVie/SmartRecruiters): the page itself has almost
+// no real fields, and its only real frame is a known challenge host.
+func TestIsCaptchaBlocked_GenuineInterstitialWithFewMainFields(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+		frames: []playwright.Frame{
+			&MockFrame{url: "https://geo.captcha-delivery.com/captcha/?cid=abc"},
+		},
+	}
+
+	if !isCaptchaBlocked(mockPage, "") {
+		t.Error("expected a page with zero real fields and a challenge-host frame to be treated as blocked")
+	}
+}
+
+// TestIsCaptchaBlocked_RealFormWithBenignCaptchaWidget is the false-positive
+// this fix targets, confirmed live 2026-07-23 on real Greenhouse/Lever
+// postings: a large, genuinely fillable form that also embeds a standard
+// invisible reCAPTCHA/hCaptcha anti-spam widget must NOT be treated as
+// blocked just because that widget's iframe host matches captchaFrameHosts.
+func TestIsCaptchaBlocked_RealFormWithBenignCaptchaWidget(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 21, nil }}
+		},
+		frames: []playwright.Frame{
+			&MockFrame{url: "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha-enclave.html"},
+		},
+	}
+
+	if isCaptchaBlocked(mockPage, "") {
+		t.Error("expected a page with a real, large form to not be treated as blocked just because a captcha widget iframe is present")
+	}
+}
+
+// TestIsCaptchaBlocked_ExplicitBlockWordingStillWins ensures the text-based
+// check remains authoritative regardless of field count — a page could in
+// principle serve both a genuine interstitial and some unrelated fields.
+func TestIsCaptchaBlocked_ExplicitBlockWordingStillWins(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 21, nil }}
+		},
+		frames: []playwright.Frame{},
+	}
+
+	if !isCaptchaBlocked(mockPage, "Please verify you are human before continuing.") {
+		t.Error("expected explicit block wording to be treated as blocked even with a high field count")
+	}
+}

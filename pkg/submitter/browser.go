@@ -217,13 +217,33 @@ func isCaptchaContent(content string) bool {
 	return false
 }
 
+// captchaWidgetFieldThreshold: a genuine bot-protection interstitial (e.g.
+// DataDome) replaces the real page content, leaving little or nothing real
+// behind — the original repro (bug #23, AbbVie/SmartRecruiters) was a page
+// with zero real form fields. A standard invisible reCAPTCHA/hCaptcha
+// anti-spam checkbox, by contrast, is a normal part of many legitimate ATS
+// application forms and sits alongside a real, large, fillable form.
+// Confirmed live 2026-07-23: real Greenhouse/Lever forms with 21-40 fields
+// all still embed one of these widget iframes, and were being misdetected
+// as blocked before this fix, most likely the dominant reason live batches
+// rarely reached a fresh APPLIED. A form with more than this many real
+// fields on the main page is treated as evidence the page is not blocked,
+// regardless of which frames are present.
+const captchaWidgetFieldThreshold = 5
+
 // isCaptchaBlocked combines the content check with a frame scan: DataDome's
 // interstitial has almost no text of its own — the giveaway is the challenge
 // iframe's source host (confirmed live 2026-07-22 on AbbVie/SmartRecruiters:
-// a 12-element page whose only real frame was geo.captcha-delivery.com).
+// a 12-element page whose only real frame was geo.captcha-delivery.com). The
+// frame-host signal alone is not trusted when the main page already has a
+// real form (see captchaWidgetFieldThreshold) — only the explicit
+// block-wording check still applies in that case.
 func isCaptchaBlocked(page playwright.Page, content string) bool {
 	if isCaptchaContent(content) {
 		return true
+	}
+	if mainFieldCount, err := page.Locator("input, textarea, select").Count(); err == nil && mainFieldCount > captchaWidgetFieldThreshold {
+		return false
 	}
 	for _, f := range page.Frames() {
 		frameURL := strings.ToLower(f.URL())
