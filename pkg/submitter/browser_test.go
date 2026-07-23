@@ -167,6 +167,9 @@ func TestIsDeadJobPage(t *testing.T) {
 		{"<html><head><title>Not found – 404 error</title></head><body>Sorry, we couldn't find anything here</body></html>", true},
 		// SmartRecruiters expired banner, confirmed live (Arista, 2026-07-22)
 		{"<html><body><button>Sorry, this job has expired</button></body></html>", true},
+		// ApplyToJob/JazzHR expiry wording, root cause of bugs.md #39
+		// (Bright Vision Technologies, confirmed live 2026-07-23)
+		{"<html><body>This position is no longer available.</body></html>", true},
 		{"", false},
 	}
 

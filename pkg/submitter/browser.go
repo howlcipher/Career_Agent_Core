@@ -134,6 +134,16 @@ var deadJobPhrases = []string{
 	// pipeline burned a full generation + Learner Module cycle trying to
 	// fill a form on a page with no form at all.
 	"this job is not available anymore",
+	// ApplyToJob/JazzHR's expiry wording (root cause of bugs.md #39,
+	// confirmed live 2026-07-23 via a standalone script against a fresh
+	// brightvisiontechnologies.applytojob.com posting): a plain "position"
+	// wording that "job is no longer available" doesn't match. Previously
+	// this dead page sailed all the way to the Vision fallback, which then
+	// had no real form to map and either hallucinated a fully plausible but
+	// fake selector set or returned empty fields/labels (ErrEmptySelector) -
+	// same root-cause class as the Jobvite/Workable/SmartRecruiters gaps
+	// above, just a different exact phrase.
+	"position is no longer available",
 }
 
 // registrableDomain approximates eTLD+1 with the host's last two labels —
