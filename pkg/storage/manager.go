@@ -544,24 +544,25 @@ type FunnelJob struct {
 
 // sourcePriorityCASE ranks jobs by how likely their platform is to actually
 // reach APPLIED, based on live outcome data rather than guesswork (bugs.md
-// #45-#48, 2026-07-23 session). Tier 0: Greenhouse/Lever, dedicated handlers
+// #45-#50, 2026-07-23 session). Tier 0: Greenhouse/Lever, dedicated handlers
 // confirmed working end-to-end (a real Lever posting reached APPLIED the
 // same session #47 shipped). Tier 1: other platforms with dedicated or
 // Learner-Module handling and a real on-page form once #45/#46's CAPTCHA
-// false-positives stopped killing them early (Ashby, Workable, Pinpoint,
-// Homerun) — not yet individually proven to reach APPLIED, but not known to
-// have a structural blocker either. Tier 2 (default): everything else,
-// including platforms with a known extra friction point that isn't fully
-// solved (SmartRecruiters' persistent DataDome CAPTCHA even post-click,
-// Jobvite's consent gate, applytojob.com's repeated resume-selector
-// failures). Tier 3: myworkdayjobs.com, unchanged from before — account-
-// gated, can only ever reach MANUAL_REQUIRED. This ordering will go stale
-// as more bugs are fixed or new ones found; re-derive it from fresh
-// cmd/requeue -stats output rather than trusting this comment indefinitely.
+// false-positives stopped killing them early (Ashby, Pinpoint, Homerun) —
+// not yet individually proven to reach APPLIED, but not known to have a
+// structural blocker either. Tier 2 (default): everything else, including
+// platforms with a known extra friction point that isn't fully solved
+// (SmartRecruiters' persistent DataDome CAPTCHA even post-click, Jobvite's
+// consent gate, applytojob.com's repeated resume-selector failures). Tier 3:
+// myworkdayjobs.com and workable.com — both confirmed account-gated (bug
+// #18, bug #50), can only ever reach MANUAL_REQUIRED regardless of fill
+// logic. This ordering will go stale as more bugs are fixed or new ones
+// found; re-derive it from fresh cmd/requeue -stats output rather than
+// trusting this comment indefinitely.
 const sourcePriorityCASE = `CASE
-		WHEN url LIKE '%myworkdayjobs.com%' THEN 3
+		WHEN url LIKE '%myworkdayjobs.com%' OR url LIKE '%workable%' THEN 3
 		WHEN url LIKE '%greenhouse%' OR url LIKE '%lever.co%' THEN 0
-		WHEN url LIKE '%ashbyhq%' OR url LIKE '%workable%' OR url LIKE '%pinpointhq%' OR url LIKE '%homerun.co%' THEN 1
+		WHEN url LIKE '%ashbyhq%' OR url LIKE '%pinpointhq%' OR url LIKE '%homerun.co%' THEN 1
 		ELSE 2
 	END`
 

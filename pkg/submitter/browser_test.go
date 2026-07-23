@@ -291,6 +291,10 @@ func TestIsKnownAuthGatedHost(t *testing.T) {
 		{"https://evil.example.com/myworkdayjobs.com", false},
 		{"not a url at all ://", false},
 		{"", false},
+		{"https://jobs.workable.com/view/abc123/senior-engineer-at-acme", true},
+		{"https://apply.workable.com/acme/j/ABC123/", true},
+		{"https://workable.com/whatever", true},
+		{"https://evil.example.com/workable.com", false},
 	}
 
 	for _, tt := range tests {

@@ -270,6 +270,12 @@ var ErrAuthWall = errors.New("application form is gated behind account sign-in")
 // Matched as host suffixes.
 var authGatedATSHosts = []string{
 	"myworkdayjobs.com",
+	// Confirmed live 2026-07-23 (bug #50): probed multiple real
+	// jobs.workable.com postings and found a "log in"/"sign in" gate before
+	// any form field on every one — 0 APPLIED across 12 attempts this
+	// session, same structural shape as Workday, not a fill-selector
+	// problem worth chasing.
+	"workable.com",
 }
 
 // isKnownAuthGatedHost reports whether the apply URL's host belongs to an ATS
