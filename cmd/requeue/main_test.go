@@ -1,6 +1,43 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+)
+
+func TestCountForStatus(t *testing.T) {
+	stat := storage.SourceOutcomeStat{Total: 100, Applied: 39, Captcha: 5, Failed: 10, Manual: 2}
+
+	tests := []struct {
+		status  string
+		want    int
+		wantErr bool
+	}{
+		{status: "BLOCKED_CAPTCHA", want: 5},
+		{status: "FAILED_SUBMIT", want: 10},
+		{status: "APPLIED", want: 39},
+		{status: "NOT_A_REAL_STATUS", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			got, err := countForStatus(stat, tt.status)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("countForStatus(%q) expected an error, got nil", tt.status)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("countForStatus(%q) unexpected error: %v", tt.status, err)
+			}
+			if got != tt.want {
+				t.Errorf("countForStatus(%q) = %d, want %d", tt.status, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestResolvePatterns_NamedSources(t *testing.T) {
 	patterns, err := resolvePatterns("lever,greenhouse", "")

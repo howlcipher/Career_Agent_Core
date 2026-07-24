@@ -57,7 +57,7 @@ func main() {
 	statsOnly := flag.Bool("stats", false, "report per-source outcome counts and exit without changing anything")
 	sourceList := flag.String("source", "", "comma-separated source names to target (see -list-sources); required unless combined with -stats and omitted (then all known sources are reported)")
 	pattern := flag.String("pattern", "", "raw SQL LIKE pattern to target instead of a named -source (e.g. '%example.com%')")
-	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA or FAILED_SUBMIT)")
+	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED)")
 	confirm := flag.Bool("confirm", false, "actually apply the requeue; without this, only a dry-run count is printed")
 	clearDedup := flag.Bool("clear-dedup", false, "also delete matching applied_jobs rows (needed for FAILED_SUBMIT requeues, not BLOCKED_CAPTCHA)")
 	listSources := flag.Bool("list-sources", false, "print known -source names and their patterns, then exit")
@@ -100,14 +100,9 @@ func main() {
 			log.Printf("[%s] stats query failed: %v", name, err)
 			continue
 		}
-		var current int
-		switch *fromStatus {
-		case "BLOCKED_CAPTCHA":
-			current = stat.Captcha
-		case "FAILED_SUBMIT":
-			current = stat.Failed
-		default:
-			log.Fatalf("-status must be BLOCKED_CAPTCHA or FAILED_SUBMIT, got %q", *fromStatus)
+		current, err := countForStatus(stat, *fromStatus)
+		if err != nil {
+			log.Fatalf("%v", err)
 		}
 
 		if !*confirm {
@@ -130,6 +125,25 @@ func main() {
 			}
 			fmt.Printf("[%s] cleared %d applied_jobs dedup row(s)\n", name, d)
 		}
+	}
+}
+
+// countForStatus maps a -status value to the matching field on a
+// SourceOutcomeStat. APPLIED (2026-07-24, bug #53) is distinct in intent
+// from BLOCKED_CAPTCHA/FAILED_SUBMIT: those recover jobs already known to
+// have failed, while requeuing APPLIED deliberately risks a real duplicate
+// submission for jobs that turn out to have been genuine successes, so
+// -clear-dedup should be used deliberately here, not routinely.
+func countForStatus(stat storage.SourceOutcomeStat, fromStatus string) (int, error) {
+	switch fromStatus {
+	case "BLOCKED_CAPTCHA":
+		return stat.Captcha, nil
+	case "FAILED_SUBMIT":
+		return stat.Failed, nil
+	case "APPLIED":
+		return stat.Applied, nil
+	default:
+		return 0, fmt.Errorf("-status must be BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED, got %q", fromStatus)
 	}
 }
 

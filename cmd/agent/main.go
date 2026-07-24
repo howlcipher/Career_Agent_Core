@@ -29,6 +29,25 @@ import (
 	"sync"
 )
 
+// parseTargetJobURLs splits TARGET_JOB_URL's comma-separated value into a
+// membership set. Returns nil (not an empty map) for an empty/unset input,
+// so callers can distinguish "no filter" from "filter matches nothing" with
+// a plain len() check.
+func parseTargetJobURLs(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	urls := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			urls[part] = true
+		}
+	}
+	return urls
+}
+
 func main() {
 	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
 	flag.Parse()
@@ -97,15 +116,19 @@ func main() {
 	filter := security.NewQuarantineLayer()
 	jobChan := make(chan scraper.Job, 2000)
 
-	// TARGET_JOB_URL restricts this run to exactly one already-DISCOVERED
-	// job and skips fresh FunnelEngine discovery, for verifying a fix
-	// end-to-end in minutes instead of waiting on normal queue order or
-	// disturbing a separately-running full batch (bugs.md's Operational Trap
-	// section — used live 2026-07-23 to verify bugs #46-#49). The target job
-	// must already be in DISCOVERED status (see cmd/requeue), and if it
-	// previously reached document generation, its applied_jobs dedup row
-	// must be cleared too or HasApplied will skip it as a duplicate.
-	targetJobURL := os.Getenv("TARGET_JOB_URL")
+	// TARGET_JOB_URL restricts this run to a specific set of already-
+	// DISCOVERED jobs and skips fresh FunnelEngine discovery, for verifying
+	// a fix end-to-end in minutes instead of waiting on normal queue order
+	// or disturbing a separately-running full batch (bugs.md's Operational
+	// Trap section — used live 2026-07-23 to verify bugs #46-#49). Accepts
+	// a comma-separated list (2026-07-24: generalized from a single URL to
+	// re-verify a whole batch of requeued jobs, e.g. bug #53's affected
+	// APPLIED rows, without waiting on normal source-priority ordering).
+	// Every target job must already be in DISCOVERED status (see
+	// cmd/requeue), and if it previously reached document generation, its
+	// applied_jobs dedup row must be cleared too or HasApplied will skip it
+	// as a duplicate.
+	targetJobURLs := parseTargetJobURLs(os.Getenv("TARGET_JOB_URL"))
 
 	discoveredJobs, err := storage.GetDiscoveredJobs()
 	var producerWg sync.WaitGroup
@@ -116,7 +139,7 @@ func main() {
 			defer producerWg.Done()
 			matched := 0
 			for _, dj := range discoveredJobs {
-				if targetJobURL != "" && dj.URL != targetJobURL {
+				if len(targetJobURLs) > 0 && !targetJobURLs[dj.URL] {
 					continue
 				}
 				matched++
@@ -128,8 +151,8 @@ func main() {
 					Remote:      true,
 				}
 			}
-			if targetJobURL != "" {
-				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) (of %d discovered) into the queue.", matched, len(discoveredJobs))
+			if len(targetJobURLs) > 0 {
+				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) (of %d discovered, %d targeted) into the queue.", matched, len(discoveredJobs), len(targetJobURLs))
 			} else {
 				log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(discoveredJobs))
 			}
@@ -140,7 +163,7 @@ func main() {
 	producerWg.Add(1)
 	go func() {
 		defer producerWg.Done()
-		if targetJobURL != "" {
+		if len(targetJobURLs) > 0 {
 			return
 		}
 		if err := funnelEngine.DiscoverJobs(jobChan); err != nil {
