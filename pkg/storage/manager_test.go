@@ -715,6 +715,41 @@ func TestRequeueByURLPattern(t *testing.T) {
 	}
 }
 
+// TestReapStaleProcessingJobs is the live-confirmed shape from 2026-07-24:
+// 235 job_funnel rows stuck in PROCESSING accumulated over three days,
+// each one orphaned by a run killed mid-job, never retried since
+// GetDiscoveredJobs only pulls DISCOVERED.
+func TestReapStaleProcessingJobs(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "PROCESSING")
+	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/b", "PROCESSING")
+	AddToFunnel("C", "T", "http://jobs.lever.co/c", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/c", "APPLIED")
+
+	n, err := ReapStaleProcessingJobs()
+	if err != nil {
+		t.Fatalf("ReapStaleProcessingJobs failed: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected exactly 2 PROCESSING rows reaped, got %d", n)
+	}
+
+	jobs, _ := GetDiscoveredJobs()
+	if len(jobs) != 2 {
+		t.Errorf("expected both reaped rows back in DISCOVERED, got %d: %+v", len(jobs), jobs)
+	}
+
+	var appliedStatus string
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://jobs.lever.co/c").Scan(&appliedStatus)
+	if appliedStatus != "APPLIED" {
+		t.Errorf("a genuinely APPLIED row must not be touched, got status %q", appliedStatus)
+	}
+}
+
 func TestClearApplicationRecordsByURLPattern(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

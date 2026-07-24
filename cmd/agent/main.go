@@ -100,6 +100,16 @@ func main() {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
 	}
 	defer storage.CloseDB()
+
+	// Any row still PROCESSING at startup can only be orphaned from a
+	// previous run being killed mid-job (confirmed live 2026-07-24: 235
+	// rows accumulated over three days) -- this fresh process hasn't
+	// touched anything yet, so none of them can be its own.
+	if reaped, err := storage.ReapStaleProcessingJobs(); err != nil {
+		log.Printf("[Agent] Failed to reap stale PROCESSING rows: %v", err)
+	} else if reaped > 0 {
+		log.Printf("[Agent] Reset %d stale PROCESSING row(s) (orphaned by a previous run) back to DISCOVERED.", reaped)
+	}
 	if err := playwright.Install(); err != nil {
 		log.Fatalf("Failed to install Playwright: %v", err)
 	}

@@ -566,6 +566,29 @@ const sourcePriorityCASE = `CASE
 		ELSE 2
 	END`
 
+// ReapStaleProcessingJobs resets every job_funnel row stuck in PROCESSING
+// back to DISCOVERED. Confirmed live 2026-07-24: 235 rows accumulated
+// since 2026-07-21, one for every time a run got killed (kill -9, the only
+// reliable way documented in bugs.md's Operational Trap notes) while a job
+// was mid-flight. GetDiscoveredJobs only ever pulls status='DISCOVERED', so
+// none of these could ever be retried again -- and the dashboard's raw
+// PROCESSING count made it look like hundreds of jobs were actively being
+// worked, when a single-worker run can only ever have one truly in flight.
+// Callers should invoke this once, right after InitDB and before any job
+// gets marked PROCESSING by the caller's own run -- a freshly-started
+// process cannot have produced any of the rows it would reset, regardless
+// of worker count, since it hasn't processed anything yet.
+func ReapStaleProcessingJobs() (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	result, err := db.Exec(`UPDATE job_funnel SET status = 'DISCOVERED' WHERE status = 'PROCESSING'`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
