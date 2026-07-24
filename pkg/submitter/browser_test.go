@@ -91,10 +91,17 @@ type MockPage struct {
 	getByPlaceholderFunc func(text any) playwright.Locator
 	mainFrame            playwright.Frame
 	frames               []playwright.Frame
+	urlValue             string
+	contentValue         string
 }
 
 func (m *MockPage) MainFrame() playwright.Frame { return m.mainFrame }
 func (m *MockPage) Frames() []playwright.Frame  { return m.frames }
+func (m *MockPage) URL() string                 { return m.urlValue }
+func (m *MockPage) Content() (string, error)    { return m.contentValue, nil }
+func (m *MockPage) WaitForLoadState(options ...playwright.PageWaitForLoadStateOptions) error {
+	return nil
+}
 
 // pwFrame aliases playwright.Frame so it can be embedded under a field name
 // other than "Frame" — same collision-avoidance reason as pwLocator above.
@@ -762,5 +769,56 @@ func TestIsSubmissionConfirmed(t *testing.T) {
 				t.Errorf("isSubmissionConfirmed(%q, %q, ...) reason = %q, want %q", applyURL, tt.currentURL, reason, tt.wantReason)
 			}
 		})
+	}
+}
+
+func TestConfirmOrError_SkipsCheckWhenNotAutoSubmitting(t *testing.T) {
+	page := &MockPage{urlValue: "https://jobs.lever.co/acme/abc-123", contentValue: "<html><body>Apply for this job</body></html>"}
+	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123", false); err != nil {
+		t.Errorf("expected no error when autoSubmitClick is false, got: %v", err)
+	}
+}
+
+func TestConfirmOrError_ConfirmsOnStrongEvidence(t *testing.T) {
+	page := &MockPage{
+		urlValue:     "https://jobs.lever.co/acme/abc-123/apply",
+		contentValue: "<html><body>Thank you for applying!</body></html>",
+	}
+	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", true); err != nil {
+		t.Errorf("expected no error on confirmation phrase, got: %v", err)
+	}
+}
+
+// TestConfirmOrError_CatchesNativeValidationBlock is the exact live-repro
+// shape found 2026-07-24: a real Lever posting has native HTML5 `required`
+// fields with no formnovalidate override, so a blank required field makes
+// the browser block the submit client-side -- no navigation, no error text
+// rendered anywhere in the DOM. Before this fix, confirmOrError's caller
+// compared against the *original job-posting URL* rather than the URL
+// right before this click, and since bug #47's click-to-reveal step always
+// changes that first, the "URL changed" fallback fired regardless of
+// whether the submit click did anything at all. Passing the correct
+// pre-click URL (post-reveal-click, e.g. the /apply page) must catch this.
+func TestConfirmOrError_CatchesNativeValidationBlock(t *testing.T) {
+	urlBeforeClick := "https://jobs.lever.co/acme/abc-123/apply"
+	page := &MockPage{
+		// Native validation blocked the click: no navigation occurred.
+		urlValue:     urlBeforeClick,
+		contentValue: "<html><body>Apply for this job</body></html>",
+	}
+	err := confirmOrError(page, "Acme", urlBeforeClick, true)
+	if err == nil {
+		t.Fatal("expected an error when the URL never changed from the pre-click baseline, got nil")
+	}
+}
+
+func TestConfirmOrError_ErrorsOnValidationErrorText(t *testing.T) {
+	page := &MockPage{
+		urlValue:     "https://jobs.lever.co/acme/abc-123/apply?step=review",
+		contentValue: "<html><body>This field is required: Last Name</body></html>",
+	}
+	err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", true)
+	if err == nil {
+		t.Fatal("expected an error on validation-error page content, got nil")
 	}
 }

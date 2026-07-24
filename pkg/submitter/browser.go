@@ -331,6 +331,40 @@ func isSubmissionConfirmed(applyURL, currentURL, pageContent string) (bool, subm
 	return true, reasonURLChangedNoError
 }
 
+// confirmOrError waits for the page to settle after a submit click and
+// applies isSubmissionConfirmed, returning a descriptive error when the
+// evidence doesn't support a genuine success. urlBeforeClick must be the
+// page's URL immediately before the submit click being verified, not the
+// original job-posting URL — bug #47's click-to-reveal step means those
+// two can differ by the time any handler even attempts a submit, which
+// would otherwise make "the URL changed" trivially true regardless of
+// whether the click itself did anything (bug #52 follow-up).
+//
+// Bug #52 follow-up, second gap: this used to only run for the Lever/
+// Greenhouse/LinkedIn dispatch path in AttemptSubmit's loop. The cached-
+// mapping fast path and both AttemptVisionSubmit call sites returned
+// success straight from handleDynamic's bare error value, with no
+// confirmation evidence at all — the same unverified-success pattern bug
+// #51 fixed, just never extended past three of the many ATS paths. Every
+// path that can result in APPLIED now goes through this same check.
+func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, autoSubmitClick bool) error {
+	if !autoSubmitClick {
+		return nil
+	}
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State:   playwright.LoadStateNetworkidle,
+		Timeout: playwright.Float(10000),
+	})
+	currentURL := page.URL()
+	pageContent, _ := page.Content()
+	if confirmed, reason := isSubmissionConfirmed(urlBeforeClick, currentURL, pageContent); confirmed {
+		log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
+		return nil
+	} else {
+		return fmt.Errorf("submission not confirmed for %s: %s (at %s)", companyName, reason, currentURL)
+	}
+}
+
 // ErrAuthWall marks an application flow gated behind account creation or
 // sign-in, where no fillable application form exists pre-auth (bug #18:
 // Workday). Callers should route these to the manual-submission backlog
@@ -653,6 +687,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	if err == nil && mappingJSON != "" {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
 		cachedTarget := resolveFillTarget(page)
+		urlBeforeClick := page.URL()
 		dynErr := handleDynamic(cachedTarget, resumePath, pii, mappingJSON, autoSubmitClick)
 		if dynErr != nil {
 			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
@@ -663,15 +698,20 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			}
 			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
 		}
-		return nil
+		return confirmOrError(page, companyName, urlBeforeClick, autoSubmitClick)
 	}
 	urlLower := strings.ToLower(applyURL)
 	var execErr error
 	var initialAttemptComplete bool
+	// urlBeforeSubmitClick tracks the page's URL immediately before each
+	// attempt's own submit click, so confirmation compares against the
+	// right baseline instead of the original applyURL -- see confirmOrError.
+	urlBeforeSubmitClick := applyURL
 
 	for attempt := 1; attempt <= 3; attempt++ {
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
+				urlBeforeSubmitClick = page.URL()
 				execErr = handleLinkedIn(page, resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
 				// Bug #47: the dedicated handlers were never wired to
@@ -686,6 +726,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
+				urlBeforeSubmitClick = page.URL()
 				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
 				// Bug #47, same reasoning as the Greenhouse branch above.
@@ -693,6 +734,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
+				urlBeforeSubmitClick = page.URL()
 				execErr = handleLever(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
@@ -754,16 +796,21 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if err == nil && newMappingJSON != "" {
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
+					urlBeforeSubmitClick = page.URL()
 					execErr = handleDynamic(target, resumePath, pii, newMappingJSON, autoSubmitClick)
 					if execErr != nil {
 						log.Printf("[Auto-Submit] Dynamic fill failed for %s after Learner Module mapping. Invalidating cache. Falling back to Vision module. Error: %v", domain, execErr)
 						storage.DeleteFormMapping(domain)
-						execErr = AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+						// AttemptVisionSubmit confirms its own submission
+						// internally (bug #52 follow-up) -- return its result
+						// directly rather than letting it re-enter this loop's
+						// own confirmation check against a now-stale baseline.
+						return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
 					}
 				} else {
 					log.Printf("[Learner Module] Failed to map form: %v", err)
 					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
-					execErr = AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+					return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
 				}
 			} else {
 				execErr = fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
@@ -787,6 +834,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
+				urlBeforeSubmitClick = page.URL()
 				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
@@ -805,7 +853,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			currentURL := page.URL()
 			pageContent, _ := page.Content()
-			if confirmed, reason := isSubmissionConfirmed(applyURL, currentURL, pageContent); confirmed {
+			if confirmed, reason := isSubmissionConfirmed(urlBeforeSubmitClick, currentURL, pageContent); confirmed {
 				log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
 				return nil
 			}

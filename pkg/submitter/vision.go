@@ -40,5 +40,13 @@ func AttemptVisionSubmit(page playwright.Page, target fillTarget, companyName, a
 	}
 
 	// Now execute the standard dynamic handler using the newly generated visual mapping
-	return handleDynamic(target, resumePath, pii, mappingJSON, autoSubmitClick)
+	urlBeforeClick := page.URL()
+	if err := handleDynamic(target, resumePath, pii, mappingJSON, autoSubmitClick); err != nil {
+		return err
+	}
+
+	// Bug #52 follow-up: this path used to return success straight from
+	// handleDynamic's bare error value, with no confirmation evidence at
+	// all -- confirm it the same way every other ATS path now does.
+	return confirmOrError(page, companyName, urlBeforeClick, autoSubmitClick)
 }
