@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -94,6 +96,7 @@ type MockPage struct {
 	frames               []playwright.Frame
 	urlValue             string
 	contentValue         string
+	screenshotFunc       func() ([]byte, error)
 }
 
 func (m *MockPage) MainFrame() playwright.Frame { return m.mainFrame }
@@ -133,6 +136,25 @@ func (m *MockPage) WaitForTimeout(timeout float64) {}
 
 func (m *MockPage) WaitForSelector(selector string, options ...playwright.PageWaitForSelectorOptions) (playwright.ElementHandle, error) {
 	return nil, nil
+}
+
+// Goto/Route/SetDefaultTimeout/AddInitScript/Close/Screenshot are no-op
+// overrides needed to drive a full AttemptSubmit call end to end (bugs #8,
+// #10, #14's closing tests) -- earlier tests only ever reached the very top
+// of AttemptSubmit (NewContext/NewPage failures), so these were never
+// exercised on MockPage before.
+func (m *MockPage) Goto(url string, options ...playwright.PageGotoOptions) (playwright.Response, error) {
+	return nil, nil
+}
+func (m *MockPage) Route(url any, handler func(playwright.Route), times ...int) error { return nil }
+func (m *MockPage) SetDefaultTimeout(timeout float64)                                 {}
+func (m *MockPage) AddInitScript(script playwright.Script) error                      { return nil }
+func (m *MockPage) Close(options ...playwright.PageCloseOptions) error                { return nil }
+func (m *MockPage) Screenshot(options ...playwright.PageScreenshotOptions) ([]byte, error) {
+	if m.screenshotFunc != nil {
+		return m.screenshotFunc()
+	}
+	return []byte("fake-png-bytes"), nil
 }
 
 func (m *MockPage) GetByLabel(text any, options ...playwright.PageGetByLabelOptions) playwright.Locator {
@@ -186,6 +208,37 @@ func (m *MockLocator) Click(options ...playwright.LocatorClickOptions) error {
 		return m.clickFunc(options...)
 	}
 	return nil
+}
+
+// MockMapper implements FormMapper for tests that need to exercise the full
+// AttemptSubmit orchestration (bugs #8, #10, #14's closing tests), where the
+// exact DOM/screenshot passed in doesn't matter -- only the mapping (or
+// failure) each stage returns.
+type MockMapper struct {
+	extractFormMappingFunc       func(domHTML, profileContext string) (string, error)
+	extractFormMappingVisionFunc func(screenshotBytes []byte) (string, error)
+	solveValidationErrorsFunc    func(domHTML, profileContext string) (map[string]string, error)
+}
+
+func (m *MockMapper) ExtractFormMapping(domHTML, profileContext string) (string, error) {
+	if m.extractFormMappingFunc != nil {
+		return m.extractFormMappingFunc(domHTML, profileContext)
+	}
+	return "", fmt.Errorf("not implemented")
+}
+
+func (m *MockMapper) ExtractFormMappingVision(screenshotBytes []byte) (string, error) {
+	if m.extractFormMappingVisionFunc != nil {
+		return m.extractFormMappingVisionFunc(screenshotBytes)
+	}
+	return "", fmt.Errorf("not implemented")
+}
+
+func (m *MockMapper) SolveValidationErrors(domHTML, profileContext string) (map[string]string, error) {
+	if m.solveValidationErrorsFunc != nil {
+		return m.solveValidationErrorsFunc(domHTML, profileContext)
+	}
+	return nil, fmt.Errorf("not implemented")
 }
 
 func TestIsDeadJobPage(t *testing.T) {
@@ -902,5 +955,190 @@ func TestLikelyExceedsModelContext(t *testing.T) {
 				t.Errorf("likelyExceedsModelContext(len=%d) = %v, want %v", len(tt.dom)+len(tt.profile), got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAttemptSubmit_ClickToRevealPlusLabelFallback_EndToEndSuccess closes
+// bugs #8 and #14 together, by driving the real AttemptSubmit orchestration
+// end to end instead of just their individual helper functions in
+// isolation (clickApplyIfPresent, safeFillWithLabelFallback are each already
+// covered alone). bugs.md records both fixes firing correctly live but
+// never producing the "full end-to-end outcome" -- a genuine confirmed
+// submission through this specific path -- despite four days of real batch
+// runs. This reproduces the original repro shape directly (bug #8: zero
+// form fields until an "Apply" element is clicked, on Breezy.hr/
+// SmartRecruiters; bug #14: the Learner Module's CSS-selector guesses are
+// wrong but its identified accessible labels are correct) and confirms the
+// fix handles it, the same "verify the mechanism directly" fallback bug #4
+// used once its own live repro became structurally unreachable.
+func TestAttemptSubmit_ClickToRevealPlusLabelFallback_EndToEndSuccess(t *testing.T) {
+	const applyURL = "https://jway-group.breezy.hr/p/419b44576d64-backend-developer"
+	revealed := false
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Backend Developer role. Apply below.</body></html>",
+	}
+	mockPage.locatorFunc = func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+		switch selector {
+		case "button:has-text('Apply'), a:has-text('Apply'), button:has-text(\"I'm interested\"), a:has-text(\"I'm interested\")":
+			return &MockLocator{
+				countFunc: func() (int, error) { return 1, nil },
+				clickFunc: func(options ...playwright.LocatorClickOptions) error {
+					revealed = true
+					return nil
+				},
+			}
+		case "input, textarea, select", "input":
+			return &MockLocator{countFunc: func() (int, error) {
+				if revealed {
+					return 6, nil
+				}
+				return 0, nil
+			}}
+		case "input[type='password']":
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		case "input#zzz-wrong-first", "input#zzz-wrong-last", "input#zzz-wrong-email", "input#zzz-wrong-phone":
+			return &MockLocator{fillFunc: func(value string) error {
+				return fmt.Errorf("no such element (the Learner Module's CSS-selector guess was wrong, as bug #14 assumes it might be)")
+			}}
+		case "button#apply-submit":
+			return &MockLocator{clickFunc: func(options ...playwright.LocatorClickOptions) error {
+				mockPage.urlValue = applyURL + "/thank-you"
+				return nil
+			}}
+		default:
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+	}
+	mockPage.getByLabelFunc = func(text any) playwright.Locator {
+		return &MockLocator{fillFunc: func(value string) error { return nil }}
+	}
+	mockPage.getByPlaceholderFunc = func(text any) playwright.Locator {
+		t.Fatalf("placeholder tier should never be tried when the label fill succeeds (field %v)", text)
+		return nil
+	}
+
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+
+	mapper := &MockMapper{
+		extractFormMappingFunc: func(domHTML, profileContext string) (string, error) {
+			return `{
+				"fields": {
+					"first_name": "input#zzz-wrong-first",
+					"last_name": "input#zzz-wrong-last",
+					"email": "input#zzz-wrong-email",
+					"phone": "input#zzz-wrong-phone",
+					"submit_button": "button#apply-submit"
+				},
+				"labels": {
+					"first_name": "First Name",
+					"last_name": "Last Name",
+					"email": "Email",
+					"phone": "Phone"
+				}
+			}`, nil
+		},
+	}
+
+	pii := &config.PII{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com", Phone: "555-0100"}
+	resumePath := t.TempDir() + "/resume.pdf"
+	generateDocs := func() (string, string, error) { return resumePath, resumePath, nil }
+
+	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Jway Group", applyURL, generateDocs, pii, "profile context", true, true)
+
+	if err != nil {
+		t.Fatalf("expected a confirmed successful submission, got error: %v", err)
+	}
+	if !revealed {
+		t.Error("expected clickApplyIfPresent to have clicked the Apply element (bug #8)")
+	}
+}
+
+// TestAttemptSubmit_VisionFallback_EndToEndSuccess closes bug #10: a genuine
+// Learner Module fill failure (not just an outright mapping-generation
+// error) must trigger AttemptVisionSubmit, and that fallback must be able to
+// carry the submission all the way to a confirmed success. bugs.md #10
+// records the trigger firing live (e.g. the GDIT Workday case) but never
+// the "outcome half" -- a real job actually completing via this path --
+// since every live case observed so far happened to land on a page with no
+// fillable form at all. Written for the same reason as the paired #8/#14
+// test above: a direct structural reproduction in lieu of scarce, hard-to-
+// control live traffic.
+func TestAttemptSubmit_VisionFallback_EndToEndSuccess(t *testing.T) {
+	const applyURL = "https://jobs.example-ats.com/acme/senior-engineer"
+	resumePath := t.TempDir() + "/resume.pdf"
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Senior Engineer role. <form><input id='first_name'></form></body></html>",
+	}
+	mockPage.locatorFunc = func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+		switch selector {
+		case "input, textarea, select":
+			return &MockLocator{countFunc: func() (int, error) { return 6, nil }}
+		case "input[type='password']":
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		case "input#totally-wrong-first":
+			return &MockLocator{fillFunc: func(value string) error {
+				return fmt.Errorf("no such element (the Learner Module's mapping guess was wrong, as bug #10 assumes it might be)")
+			}}
+		case "input#real-first", "input#real-last", "input#real-email", "input#real-phone":
+			return &MockLocator{fillFunc: func(value string) error { return nil }}
+		case "button#real-submit":
+			return &MockLocator{clickFunc: func(options ...playwright.LocatorClickOptions) error {
+				mockPage.urlValue = applyURL + "/success"
+				return nil
+			}}
+		default:
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+	}
+
+	visionCalled := false
+	mapper := &MockMapper{
+		extractFormMappingFunc: func(domHTML, profileContext string) (string, error) {
+			// A plausible-looking mapping that is simply wrong against the
+			// real page -- bugs.md #10's exact observed shape: the Learner
+			// Module "succeeds" (no error, non-empty JSON) but the fill
+			// itself fails.
+			return `{"fields": {"first_name": "input#totally-wrong-first"}, "labels": {}}`, nil
+		},
+		extractFormMappingVisionFunc: func(screenshotBytes []byte) (string, error) {
+			visionCalled = true
+			if len(screenshotBytes) == 0 {
+				t.Error("expected a non-empty screenshot to be passed to the Vision mapper")
+			}
+			return `{
+				"fields": {
+					"first_name": "input#real-first",
+					"last_name": "input#real-last",
+					"email": "input#real-email",
+					"phone": "input#real-phone",
+					"submit_button": "button#real-submit"
+				},
+				"labels": {}
+			}`, nil
+		},
+	}
+
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+
+	pii := &config.PII{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com", Phone: "555-0100"}
+	generateDocs := func() (string, string, error) { return resumePath, resumePath, nil }
+
+	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Acme", applyURL, generateDocs, pii, "profile context", true, true)
+
+	if err != nil {
+		t.Fatalf("expected the Vision fallback to carry the submission to a confirmed success, got error: %v", err)
+	}
+	if !visionCalled {
+		t.Error("expected ExtractFormMappingVision to be called after the Learner Module fill genuinely failed (bug #10)")
 	}
 }
