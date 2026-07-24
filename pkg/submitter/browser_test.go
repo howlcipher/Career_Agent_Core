@@ -2,6 +2,7 @@ package submitter
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"github.com/mxschmitt/playwright-go"
 )
@@ -875,5 +876,31 @@ func TestConfirmOrError_ErrorsOnValidationErrorText(t *testing.T) {
 	err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", true)
 	if err == nil {
 		t.Fatal("expected an error on validation-error page content, got nil")
+	}
+}
+
+// TestLikelyExceedsModelContext is the live-confirmed shape from bugs.md
+// #52's later recurrences: Reddit's 54,917-char prompt needed 18,572
+// tokens against a 6,144-token context window (~2.96 chars/token) -- well
+// past the character-based circuit breaker limit's own separate 75k
+// ceiling. This threshold exists specifically to catch that gap before
+// ever calling the LLM.
+func TestLikelyExceedsModelContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		dom     string
+		profile string
+		want    bool
+	}{
+		{name: "small form, small profile", dom: strings.Repeat("x", 5000), profile: strings.Repeat("y", 1000), want: false},
+		{name: "combined length just over the threshold", dom: strings.Repeat("x", 13000), profile: strings.Repeat("y", 1001), want: true},
+		{name: "Reddit's real repro size (54,917 chars)", dom: strings.Repeat("x", 54917), profile: "", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := likelyExceedsModelContext(tt.dom, tt.profile); got != tt.want {
+				t.Errorf("likelyExceedsModelContext(len=%d) = %v, want %v", len(tt.dom)+len(tt.profile), got, tt.want)
+			}
+		})
 	}
 }

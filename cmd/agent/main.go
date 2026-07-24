@@ -509,6 +509,22 @@ func main() {
 				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
 					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
 				}
+			} else if errors.Is(err, submitter.ErrFormTooLargeForModel) {
+				// Bug #52's later recurrences: this form's content would
+				// exceed the local model's context window regardless of how
+				// much the DOM gets trimmed. Same manual-routing outcome as
+				// ErrAuthWall -- tailored docs are already saved -- rather
+				// than burning a doomed LLM call.
+				log.Printf("[Worker-%d] %s's form is too large for the local model — queued for manual submission: %v", workerID, job.CompanyName, err)
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
+				storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
+				docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+				if mvErr != nil {
+					log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
+				}
+				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
+					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
+				}
 			} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
 				// Bug #23: not a submit failure — the site is bot-walled.
 				log.Printf("[Worker-%d] %s is behind a bot-protection challenge — marked BLOCKED_CAPTCHA: %v", workerID, job.CompanyName, err)

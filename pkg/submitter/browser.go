@@ -372,6 +372,34 @@ func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, au
 // treating them as an automation failure.
 var ErrAuthWall = errors.New("application form is gated behind account sign-in")
 
+// ErrFormTooLargeForModel marks a form whose mapping/fill prompt would
+// exceed the local model's context window. Confirmed live 2026-07-24
+// (bugs.md #52's later recurrences, Reddit and Akuity): a form can pass
+// the character-based circuit breaker (pkg/mcp's payloadSafetyLimits) and
+// still get rejected by Ollama itself ("exceeds the available context
+// size"), since HTML content runs roughly 3 characters per token, well
+// short of the 1:1 assumption a pure character limit implies. Callers
+// should route these to manual submission the same way ErrAuthWall does,
+// rather than burning a doomed LLM call (and the ~20-40 min of doc-gen
+// that already happened before it) only to fail with an ugly HTTP 400.
+var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's context window")
+
+// maxPromptCharsForModelContext is a conservative character budget for any
+// single prompt sent to the local model, derived from two real failures:
+// Reddit's 54,917-char prompt needed 18,572 tokens (~2.96 chars/token) and
+// Akuity's needed 16,604 tokens at a similar ratio, both well past the
+// observed 6,144-token context window. Assumes 2.5 chars/token (more
+// conservative than either real sample) and reserves ~400 tokens for the
+// system prompt and EEO profile context that don't appear in this count,
+// leaving (6144-400)*2.5 ≈ 14,000 characters. Checked before either
+// ExtractFormMapping or SolveValidationErrors is called, on the exact
+// content that will make up their prompt (DOM plus profile context).
+const maxPromptCharsForModelContext = 14000
+
+func likelyExceedsModelContext(domContent, profileContext string) bool {
+	return len(domContent)+len(profileContext) > maxPromptCharsForModelContext
+}
+
 // authGatedATSHosts lists ATS platforms whose application flow always requires
 // creating an account or signing in before any form field is reachable, so
 // attempting the Learner Module / fill / Vision chain against them is a
@@ -792,7 +820,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					}
 				}
 
-				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)
+				fullProfileContext := pii.EEO.Summary() + "\n\n" + profileContext
+				if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
+					return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, domain)
+				}
+				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML, fullProfileContext)
 				if err == nil && newMappingJSON != "" {
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
@@ -826,7 +858,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				prunedHTML = stripped
 			}
 
-			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)
+			fullProfileContext := pii.EEO.Summary() + "\n\n" + profileContext
+			if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
+				return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, ExtractDomain(applyURL))
+			}
+			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, fullProfileContext)
 			if fixErr != nil {
 				return fmt.Errorf("failed to solve validation errors: %w", fixErr)
 			}
