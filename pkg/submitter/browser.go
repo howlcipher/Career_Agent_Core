@@ -806,7 +806,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			currentURL := page.URL()
 			pageContent, _ := page.Content()
 			if confirmed, reason := isSubmissionConfirmed(applyURL, currentURL, pageContent); confirmed {
-				log.Printf("[Auto-Submit] Submission confirmed for %s (%s)", companyName, reason)
+				log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
 				return nil
 			}
 
