@@ -256,6 +256,66 @@ func isCaptchaBlocked(page playwright.Page, content string) bool {
 	return false
 }
 
+// submissionConfirmationPhrases are common ATS post-submit confirmation
+// wordings, checked directly against page content rather than relying
+// solely on a URL change. Some platforms show a success message via AJAX
+// without ever changing the URL (a bare "URL changed" check would wrongly
+// treat that as a failure and retry a submission that already succeeded).
+var submissionConfirmationPhrases = []string{
+	"thank you for applying",
+	"application received",
+	"application has been submitted",
+	"successfully submitted",
+	"we've received your application",
+	"we have received your application",
+	"your application has been sent",
+	"application submitted",
+}
+
+// submissionErrorPhrases are common validation-error wordings. Bug #51:
+// "the URL changed after clicking submit" alone is not proof of success --
+// a validation-error page or a redirect back to the listing also changes
+// the URL, and would previously have been misclassified as APPLIED.
+var submissionErrorPhrases = []string{
+	"required field",
+	"please fill",
+	"please complete",
+	"please correct",
+	"this field is required",
+	"cannot be blank",
+	"is required",
+}
+
+// isSubmissionConfirmed decides whether a post-submit-click page state
+// represents a genuine success, given the URL before/after the click and
+// the resulting page's content. Preferred signal: explicit confirmation
+// wording anywhere on the page (works even when the URL never changed).
+// Fallback: the URL itself reads like a confirmation page. Last resort:
+// the URL changed at all AND the page doesn't show validation-error
+// wording -- weaker, but still requires the absence of an error signal
+// rather than trusting navigation alone (bug #51).
+func isSubmissionConfirmed(applyURL, currentURL, pageContent string) bool {
+	lowerContent := strings.ToLower(pageContent)
+	for _, phrase := range submissionConfirmationPhrases {
+		if strings.Contains(lowerContent, phrase) {
+			return true
+		}
+	}
+	lowerURL := strings.ToLower(currentURL)
+	if strings.Contains(lowerURL, "thank") || strings.Contains(lowerURL, "success") || strings.Contains(lowerURL, "confirmation") {
+		return true
+	}
+	if currentURL == applyURL {
+		return false
+	}
+	for _, phrase := range submissionErrorPhrases {
+		if strings.Contains(lowerContent, phrase) {
+			return false
+		}
+	}
+	return true
+}
+
 // ErrAuthWall marks an application flow gated behind account creation or
 // sign-in, where no fillable application form exists pre-auth (bug #18:
 // Workday). Callers should route these to the manual-submission backlog
@@ -729,10 +789,11 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			})
 
 			currentURL := page.URL()
-			if currentURL != applyURL || strings.Contains(strings.ToLower(currentURL), "thank") || strings.Contains(strings.ToLower(currentURL), "success") || strings.Contains(strings.ToLower(currentURL), "confirmation") {
+			pageContent, _ := page.Content()
+			if isSubmissionConfirmed(applyURL, currentURL, pageContent) {
 				return nil
 			}
-			
+
 			log.Printf("[Auto-Submit] Submission failed validation. Retrying...")
 		} else {
 			return nil
