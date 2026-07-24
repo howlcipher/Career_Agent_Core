@@ -874,7 +874,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
 				urlBeforeSubmitClick = page.URL()
-				execErr = submitLocator.First().Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+				execErr = firstVisibleLocator(submitLocator, count).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
 			}
@@ -1059,6 +1059,29 @@ type FormMapping struct {
 	// proactively on the first fill pass instead of only reactively via
 	// SolveValidationErrors after a validation failure.
 	Answers map[string]string `json:"answers"`
+}
+
+// firstVisibleLocator returns the first of loc's count matches that is
+// actually visible, falling back to the first match if none report visible
+// (or IsVisible itself errors) -- better to attempt a click and get a clear
+// timeout than to silently give up when visibility detection is unreliable.
+//
+// Root cause this guards against, confirmed live 2026-07-24 (a real Lever
+// posting, "Nova"): a broad selector like "button[type='submit']" can match
+// a hidden auxiliary button belonging to an anti-spam widget (observed:
+// <button type="submit" class="hidden" id="hcaptchaSubmitBtn">, part of
+// Lever's hCaptcha embed) before it ever reaches the real, visible submit
+// button later in the DOM. blindly clicking .First() then hangs for the
+// full click timeout on an element Playwright will never consider
+// clickable, misreporting a real, fixable failure as a generic timeout.
+func firstVisibleLocator(loc playwright.Locator, count int) playwright.Locator {
+	for i := 0; i < count; i++ {
+		candidate := loc.Nth(i)
+		if visible, err := candidate.IsVisible(); err == nil && visible {
+			return candidate
+		}
+	}
+	return loc.First()
 }
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")

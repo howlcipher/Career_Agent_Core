@@ -178,11 +178,13 @@ type pwLocator = playwright.Locator
 
 type MockLocator struct {
 	pwLocator
-	countFunc  func() (int, error)
-	clickFunc  func(options ...playwright.LocatorClickOptions) error
-	clickCalls int
-	fillFunc   func(value string) error
-	fillCalls  int
+	countFunc     func() (int, error)
+	clickFunc     func(options ...playwright.LocatorClickOptions) error
+	clickCalls    int
+	fillFunc      func(value string) error
+	fillCalls     int
+	nthFunc       func(index int) playwright.Locator
+	isVisibleFunc func() (bool, error)
 }
 
 func (m *MockLocator) First() playwright.Locator { return m }
@@ -192,6 +194,24 @@ func (m *MockLocator) Count() (int, error) {
 		return m.countFunc()
 	}
 	return 0, nil
+}
+
+// Nth defaults to returning the receiver itself (matching First()'s
+// existing default) for tests that don't care about multi-match ordering;
+// tests exercising firstVisibleLocator set nthFunc explicitly to return a
+// distinct MockLocator per index.
+func (m *MockLocator) Nth(index int) playwright.Locator {
+	if m.nthFunc != nil {
+		return m.nthFunc(index)
+	}
+	return m
+}
+
+func (m *MockLocator) IsVisible(options ...playwright.LocatorIsVisibleOptions) (bool, error) {
+	if m.isVisibleFunc != nil {
+		return m.isVisibleFunc()
+	}
+	return true, nil
 }
 
 func (m *MockLocator) Fill(value string, options ...playwright.LocatorFillOptions) error {
@@ -428,6 +448,50 @@ func TestSafeFill_Empty(t *testing.T) {
 	err = safeFill(target, "selector", "")
 	if err != nil {
 		t.Errorf("safeFill with empty text should return nil, got %v", err)
+	}
+}
+
+// TestFirstVisibleLocator_SkipsHiddenCaptchaButton reproduces a real live
+// failure (2026-07-24, a Lever posting "Nova"): the submit-button selector
+// matched a hidden <button type="submit" id="hcaptchaSubmitBtn"> before the
+// real, visible submit button later in the DOM, and blindly clicking
+// .First() hung for the full click timeout on an element Playwright would
+// never consider clickable.
+func TestFirstVisibleLocator_SkipsHiddenCaptchaButton(t *testing.T) {
+	hidden := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+	visible := &MockLocator{isVisibleFunc: func() (bool, error) { return true, nil }}
+
+	root := &MockLocator{
+		nthFunc: func(index int) playwright.Locator {
+			if index == 0 {
+				return hidden
+			}
+			return visible
+		},
+	}
+
+	got := firstVisibleLocator(root, 2)
+	if got != playwright.Locator(visible) {
+		t.Error("expected firstVisibleLocator to skip the hidden index-0 match and return the visible index-1 match")
+	}
+}
+
+func TestFirstVisibleLocator_FallsBackToFirstWhenNoneVisible(t *testing.T) {
+	hiddenA := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+	hiddenB := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+
+	root := &MockLocator{
+		nthFunc: func(index int) playwright.Locator {
+			if index == 0 {
+				return hiddenA
+			}
+			return hiddenB
+		},
+	}
+
+	got := firstVisibleLocator(root, 2)
+	if got != playwright.Locator(root) {
+		t.Error("expected firstVisibleLocator to fall back to loc.First() (the root locator) when no match reports visible")
 	}
 }
 
