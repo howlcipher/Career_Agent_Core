@@ -52,7 +52,8 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 	log.Println("[FunnelEngine] Starting live job discovery via SerpApi...")
 	
 	f.discoverWithRemoteOK(jobChan)
-	
+	f.discoverWithHackerNews(jobChan)
+
 	useFallback := false
 
 

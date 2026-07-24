@@ -54,15 +54,25 @@ func TestDiscoverJobs(t *testing.T) {
 	}))
 	defer roTs.Close()
 
+	// Mock HN Algolia (no "Who is hiring" thread found, so it's a no-op —
+	// dedicated HN coverage lives in hackernews_test.go).
+	hnTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(hnStorySearchResponse{})
+	}))
+	defer hnTs.Close()
+
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
 	origSerp := serpAPIBaseURL
 	origRO := remoteOKBaseURL
+	origHN := hnAlgoliaBaseURL
 	serpAPIBaseURL = serpTs.URL
 	remoteOKBaseURL = roTs.URL
+	hnAlgoliaBaseURL = hnTs.URL
 	defer func() {
 		serpAPIBaseURL = origSerp
 		remoteOKBaseURL = origRO
+		hnAlgoliaBaseURL = origHN
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -141,18 +151,27 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	}))
 	defer roTs.Close()
 
+	// Mock HN Algolia (no-op, see TestDiscoverJobs for the same pattern).
+	hnTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(hnStorySearchResponse{})
+	}))
+	defer hnTs.Close()
+
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
 	origSerp := serpAPIBaseURL
 	origYahoo := yahooBaseURL
 	origRO := remoteOKBaseURL
+	origHN := hnAlgoliaBaseURL
 	serpAPIBaseURL = serpTs.URL
 	yahooBaseURL = yahooTs.URL
 	remoteOKBaseURL = roTs.URL
+	hnAlgoliaBaseURL = hnTs.URL
 	defer func() {
 		serpAPIBaseURL = origSerp
 		yahooBaseURL = origYahoo
 		remoteOKBaseURL = origRO
+		hnAlgoliaBaseURL = origHN
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
