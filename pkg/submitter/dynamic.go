@@ -16,7 +16,7 @@ import (
 
 // FormMapper extracts Playwright selector mappings from a DOM
 type FormMapper interface {
-	ExtractFormMapping(domHTML string) (string, error)
+	ExtractFormMapping(domHTML string, profileContext string) (string, error)
 	ExtractFormMappingVision(screenshotBytes []byte) (string, error)
 	SolveValidationErrors(domHTML string, profileContext string) (map[string]string, error)
 }
@@ -155,7 +155,7 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 			prunedDOM = domHTML
 		}
 
-		mappingJSON, err := p.Mapper.ExtractFormMapping(prunedDOM)
+		mappingJSON, err := p.Mapper.ExtractFormMapping(prunedDOM, "")
 		if err != nil {
 			log.Printf("[Learner Module] LLM mapping failed: %v", err)
 			return "DynamicGeneratedScript_Failed", err
@@ -201,7 +201,7 @@ func (p *Pipeline) ProcessDomain(domain string) (string, error) {
 }
 
 func (p *Pipeline) AnalyzeAndMapForm(htmlContent, domain string) (string, error) {
-	mappingJSON, err := p.Mapper.ExtractFormMapping(htmlContent)
+	mappingJSON, err := p.Mapper.ExtractFormMapping(htmlContent, "")
 	if err != nil {
 		return "", fmt.Errorf("LLM failed to map form: %w", err)
 	}

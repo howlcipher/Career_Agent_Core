@@ -202,9 +202,17 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 	return resumeOut, coverOut, prepOut, nil
 }
 
-// ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright
-func (c *Client) ExtractFormMapping(domHTML string) (string, error) {
-	systemDirective := `You are an expert web scraper and DOM analyst. You will be provided with the HTML source of a job application form.
+// ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright.
+//
+// profileContext (added 2026-07-24, improvements.md #16) lets this proactively
+// find and answer any custom screening questions on the form during the
+// first fill pass, instead of only reacting to them after a validation
+// failure via SolveValidationErrors -- which was both wasteful (re-scanning
+// the whole form from scratch at retry time contributed to bug #52's
+// oversized payloads) and incomplete (a custom question that wasn't
+// strictly required got silently skipped rather than answered at all).
+func (c *Client) ExtractFormMapping(domHTML string, profileContext string) (string, error) {
+	systemDirective := `You are an expert web scraper and DOM analyst. You will be provided with the HTML source of a job application form and the applicant's profile.
 Your task is to identify the precise CSS selectors needed by Playwright to fill out this form.
 Map the following logical fields to their corresponding CSS selectors (prefer id, name, or specific data-qa attributes):
 - first_name
@@ -217,21 +225,33 @@ Map the following logical fields to their corresponding CSS selectors (prefer id
 
 Also identify each field's visible accessible label text where one exists - the text of an associated <label> element, or an aria-label/aria-labelledby value (e.g. "First Name", "Email Address"). This is used as a fallback if the CSS selector guess turns out to be wrong, so include it whenever the form has one, even if you are confident in the selector.
 
+Additionally, identify any custom screening/application questions on this form beyond the standard fields above (e.g. "Why do you want to work here?", "Describe your experience with X", "Are you authorized to work in the US?", free-text/numeric/dropdown questions specific to this employer). For each one found, assign it a unique key (custom_q_1, custom_q_2, ...) and:
+- Add its CSS selector to "fields" under that key.
+- Add its visible question text to "labels" under that key.
+- Add a generated answer to "answers" under that key, grounded ONLY in facts given in the applicant profile below. Write like the applicant would actually write it: first person, natural sentence rhythm, no corporate filler or generic enthusiasm that isn't backed by a real fact from the profile. If the question genuinely cannot be answered from the given facts, use "N/A" rather than inventing one.
+
+CRITICAL RULE: never invent a value for any field asking about race, ethnicity, gender, sex, veteran/military status, disability status, sexual orientation, or any other legally sensitive demographic/EEO category. Only answer such a field using an exact value given in the "EEO / voluntary self-identification answers" section of the profile context below. If that section says a category was not provided, you MUST select or type its decline option (e.g. "Decline to answer", "Prefer not to say") instead of guessing. This rule overrides the general instruction to answer every question.
+
 Return a JSON object in this exact format:
 {
   "fields": {
     "first_name": "selector",
     "last_name": "selector",
+    "custom_q_1": "selector",
     ...
   },
   "labels": {
     "first_name": "visible label text, or omit if none exists",
-    "last_name": "visible label text, or omit if none exists",
+    "custom_q_1": "visible question text",
+    ...
+  },
+  "answers": {
+    "custom_q_1": "generated answer text",
     ...
   }
 }`
 
-	prompt := fmt.Sprintf("Analyze this DOM and extract the input selectors:\n\n%s", domHTML)
+	prompt := fmt.Sprintf("Applicant Profile:\n%s\n\nAnalyze this DOM and extract the input selectors:\n\n%s", profileContext, domHTML)
 
 	if err := incrementAndLogAPICall("ExtractFormMapping", len(prompt)); err != nil {
 		return "", err

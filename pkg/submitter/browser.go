@@ -792,7 +792,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					}
 				}
 
-				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML)
+				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)
 				if err == nil && newMappingJSON != "" {
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
@@ -1013,6 +1013,13 @@ type FormMapping struct {
 	// Fields turns out to be wrong - WCAG-compliant ATS forms reliably
 	// expose a stable label even when raw name/id attributes don't.
 	Labels map[string]string `json:"labels"`
+	// Answers holds a generated response for each custom screening question
+	// the mapper found beyond the standard fields (keyed custom_q_1,
+	// custom_q_2, ... matching the same key in Fields/Labels). Added
+	// 2026-07-24 (improvements.md #16) so custom questions get answered
+	// proactively on the first fill pass instead of only reactively via
+	// SolveValidationErrors after a validation failure.
+	Answers map[string]string `json:"answers"`
 }
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
@@ -1124,6 +1131,18 @@ func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappin
 			}
 		} else {
 			return fmt.Errorf("resume input selector not found")
+		}
+	}
+
+	// Custom screening questions (improvements.md #16, 2026-07-24): best-
+	// effort, unlike the required fields above -- if one fails to fill, the
+	// ATS's own validation (or SolveValidationErrors' retry pass) is the
+	// backstop, same as it already is for a question this proactive pass
+	// never found at all. One bad selector shouldn't abort an otherwise
+	// fillable submission.
+	for key, answer := range mapping.Answers {
+		if err := safeFillWithLabelFallback(target, mapping.Fields[key], mapping.Labels[key], answer); err != nil {
+			log.Printf("[Auto-Submit] Failed to fill custom question %q: %v", mapping.Labels[key], err)
 		}
 	}
 

@@ -812,6 +812,61 @@ func TestConfirmOrError_CatchesNativeValidationBlock(t *testing.T) {
 	}
 }
 
+// TestHandleDynamic_FillsCustomQuestionAnswers covers improvements.md #16:
+// a mapping with an "answers" entry (a custom screening question the
+// proactive first-pass mapper found and generated a grounded response for)
+// should get filled the same way a standard field does, via the label
+// fallback chain.
+func TestHandleDynamic_FillsCustomQuestionAnswers(t *testing.T) {
+	var filledWith string
+	mockPage := &MockPage{
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				filledWith = value
+				return nil
+			}}
+		},
+	}
+
+	mappingJSON := `{
+		"fields": {"custom_q_1": "#q1"},
+		"labels": {"custom_q_1": "Why do you want to work here?"},
+		"answers": {"custom_q_1": "I've followed the team's infrastructure work for years and want to contribute directly."}
+	}`
+
+	if err := handleDynamic(pageTarget{page: mockPage}, "", nil, mappingJSON, false); err != nil {
+		t.Fatalf("handleDynamic returned an unexpected error: %v", err)
+	}
+	if filledWith != "I've followed the team's infrastructure work for years and want to contribute directly." {
+		t.Errorf("expected the custom question's answer to be filled, got %q", filledWith)
+	}
+}
+
+// TestHandleDynamic_CustomQuestionFillFailureDoesNotAbort ensures a bad
+// selector on one optional custom question doesn't fail the whole
+// submission -- the ATS's own validation (or SolveValidationErrors' retry
+// pass) is the backstop, same as for a question this pass never found.
+func TestHandleDynamic_CustomQuestionFillFailureDoesNotAbort(t *testing.T) {
+	mockPage := &MockPage{
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("no such element") }}
+		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("no such element") }}
+		},
+	}
+
+	mappingJSON := `{
+		"fields": {"custom_q_1": ""},
+		"labels": {"custom_q_1": "Why do you want to work here?"},
+		"answers": {"custom_q_1": "Some generated answer."}
+	}`
+
+	if err := handleDynamic(pageTarget{page: mockPage}, "", nil, mappingJSON, false); err != nil {
+		t.Errorf("expected a failed custom-question fill to not abort the submission, got error: %v", err)
+	}
+}
+
 func TestConfirmOrError_ErrorsOnValidationErrorText(t *testing.T) {
 	page := &MockPage{
 		urlValue:     "https://jobs.lever.co/acme/abc-123/apply?step=review",
