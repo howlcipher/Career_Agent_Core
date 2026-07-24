@@ -590,6 +590,23 @@
                 <tbody id="source-breakdown-body"></tbody>
             </table>
         </div>
+
+        <div class="source-breakdown" id="variant-breakdown-section" style="display:none;">
+            <h3>Conversion by Cover-Letter Tone Variant</h3>
+            <table id="variant-breakdown-table">
+                <thead>
+                    <tr>
+                        <th>Variant</th>
+                        <th>Applied</th>
+                        <th>Interviews</th>
+                        <th>Rejections</th>
+                        <th>Pending</th>
+                        <th>Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="variant-breakdown-body"></tbody>
+            </table>
+        </div>
     </div>
     <script>
         const statusDot = document.getElementById('status-dot');
@@ -705,6 +722,27 @@
             section.style.display = 'block';
         }
 
+        function updateVariantBreakdown(byVariant) {
+            const section = document.getElementById('variant-breakdown-section');
+            const body = document.getElementById('variant-breakdown-body');
+            if (!Array.isArray(byVariant) || byVariant.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            body.textContent = '';
+            for (const row of byVariant) {
+                const tr = document.createElement('tr');
+                const cells = [row.variant, row.total_applied, row.interviews, row.rejections, row.pending, row.interview_rate_pct || '—'];
+                for (const value of cells) {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    tr.appendChild(td);
+                }
+                body.appendChild(tr);
+            }
+            section.style.display = 'block';
+        }
+
         async function fetchMetrics() {
             try {
                 const res = await fetch('/api/metrics');
@@ -733,6 +771,7 @@
                 updateMiniStatus('last-failed', data.last_failed_company, data.last_failed_reason, data.last_failed_at, 'None yet', data.last_failed_processing_time);
                 updateMiniStatus('last-manual', data.last_manual_company, data.last_manual_title, data.last_manual_at, 'None yet', data.last_manual_processing_time);
                 updateSourceBreakdown(data.by_source);
+                updateVariantBreakdown(data.by_variant);
 
                 const isActive = data.processing > 0;
                 activityFill.classList.toggle('active', isActive);

@@ -884,6 +884,137 @@ func TestGetConversionStatsBySource(t *testing.T) {
 	}
 }
 
+// TestMigrateJobFunnelToneVariant mirrors the other job_funnel migration
+// tests: confirms tone_variant (improvements.md #13) gets added to a
+// database created before that column existed, and is a safe no-op on an
+// already-migrated table.
+func TestMigrateJobFunnelToneVariant(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME,
+		last_updated DATETIME,
+		fit_similarity REAL
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to recreate old-schema job_funnel: %v", err)
+	}
+
+	if err := migrateJobFunnelToneVariant(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		t.Fatalf("failed to inspect schema: %v", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "tone_variant" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected tone_variant column to exist after migration")
+	}
+
+	if err := migrateJobFunnelToneVariant(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+func TestUpdateToneVariant(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("A", "T", "http://a.com/1", "DISCOVERED")
+	if err := UpdateToneVariant("http://a.com/1", "variant_1"); err != nil {
+		t.Fatalf("UpdateToneVariant failed: %v", err)
+	}
+
+	var variant string
+	if err := db.QueryRow("SELECT tone_variant FROM job_funnel WHERE url = ?", "http://a.com/1").Scan(&variant); err != nil {
+		t.Fatalf("failed to read back tone_variant: %v", err)
+	}
+	if variant != "variant_1" {
+		t.Errorf("expected tone_variant %q, got %q", "variant_1", variant)
+	}
+}
+
+func TestGetConversionStatsByVariant(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	empty, err := GetConversionStatsByVariant()
+	if err != nil {
+		t.Fatalf("GetConversionStatsByVariant on an empty DB failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected no rows on an empty DB, got %+v", empty)
+	}
+
+	AddToFunnel("A", "T", "http://a.com/1", "DISCOVERED")
+	UpdateToneVariant("http://a.com/1", "variant_0")
+	UpdateFunnelStatus("http://a.com/1", "APPLIED")
+	UpdateFunnelStatus("http://a.com/1", "INTERVIEW_REQUESTED")
+
+	AddToFunnel("B", "T", "http://b.com/1", "DISCOVERED")
+	UpdateToneVariant("http://b.com/1", "variant_0")
+	UpdateFunnelStatus("http://b.com/1", "APPLIED")
+
+	AddToFunnel("C", "T", "http://c.com/1", "DISCOVERED")
+	UpdateToneVariant("http://c.com/1", "variant_1")
+	UpdateFunnelStatus("http://c.com/1", "APPLIED")
+	UpdateFunnelStatus("http://c.com/1", "REJECTED")
+
+	// Never tagged with a variant (e.g. applied before this feature existed)
+	// — must be grouped under "unspecified", not silently dropped.
+	AddToFunnel("D", "T", "http://d.com/1", "DISCOVERED")
+	UpdateFunnelStatus("http://d.com/1", "APPLIED")
+
+	// Discovered but never applied — must not count toward any variant.
+	AddToFunnel("E", "T", "http://e.com/1", "DISCOVERED")
+
+	stats, err := GetConversionStatsByVariant()
+	if err != nil {
+		t.Fatalf("GetConversionStatsByVariant failed: %v", err)
+	}
+	if len(stats) != 3 {
+		t.Fatalf("expected 3 groups (variant_0, variant_1, unspecified), got %d: %+v", len(stats), stats)
+	}
+
+	byLabel := map[string]VariantConversionStat{}
+	for _, s := range stats {
+		byLabel[s.Variant] = s
+	}
+	if v, ok := byLabel["variant_0"]; !ok || v.TotalApplied != 2 || v.Interviews != 1 || v.Pending != 1 {
+		t.Errorf("unexpected variant_0 stats: %+v (ok=%v)", v, ok)
+	}
+	if v, ok := byLabel["variant_1"]; !ok || v.TotalApplied != 1 || v.Rejections != 1 {
+		t.Errorf("unexpected variant_1 stats: %+v (ok=%v)", v, ok)
+	}
+	if v, ok := byLabel["unspecified"]; !ok || v.TotalApplied != 1 || v.Pending != 1 {
+		t.Errorf("unexpected unspecified stats: %+v (ok=%v)", v, ok)
+	}
+}
+
 func TestRequeueByURLPattern(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

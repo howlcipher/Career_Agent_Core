@@ -66,7 +66,8 @@ func InitDBWithPath(path string) error {
 		discovered_at DATETIME,
 		applied_at DATETIME,
 		last_updated DATETIME,
-		fit_similarity REAL
+		fit_similarity REAL,
+		tone_variant TEXT
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +102,10 @@ func InitDBWithPath(path string) error {
 	if err := migrateJobFunnelLastUpdated(); err != nil {
 		return err
 	}
-	return migrateJobFunnelFitSimilarity()
+	if err := migrateJobFunnelFitSimilarity(); err != nil {
+		return err
+	}
+	return migrateJobFunnelToneVariant()
 }
 
 func migrateJobFunnelLastUpdated() error {
@@ -166,6 +170,40 @@ func migrateJobFunnelFitSimilarity() error {
 	}
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN fit_similarity REAL")
+	return err
+}
+
+// migrateJobFunnelToneVariant adds job_funnel.tone_variant (improvements.md
+// #13) to a database created before that column existed, same idempotent
+// pattern as the other job_funnel migrations above.
+func migrateJobFunnelToneVariant() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasToneVariant := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "tone_variant" {
+			hasToneVariant = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasToneVariant {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN tone_variant TEXT")
 	return err
 }
 
@@ -826,6 +864,66 @@ func GetConversionStatsBySource() ([]SourceConversionStat, error) {
 	for rows.Next() {
 		var s SourceConversionStat
 		if err := rows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			return nil, err
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = float64(s.Interviews) / float64(s.TotalApplied)
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// UpdateToneVariant records which cover-letter tone variant (improvements.md
+// #13) was actually used for a job, so its eventual outcome can be joined
+// back against the variant that produced it via GetConversionStatsByVariant.
+// Deliberately does not touch last_updated, same reasoning as
+// UpdateFitSimilarity — this is metadata about how the application was
+// generated, not a funnel status transition.
+func UpdateToneVariant(url, variant string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec(`UPDATE job_funnel SET tone_variant = ? WHERE url = ?`, variant, url)
+	return err
+}
+
+// VariantConversionStat is one cover-letter tone variant's slice of
+// GetConversionStats (improvements.md #13).
+type VariantConversionStat struct {
+	Variant string
+	ConversionStats
+}
+
+// GetConversionStatsByVariant reports GetConversionStats grouped by
+// tone_variant, ordered by TotalApplied descending. Rows with no recorded
+// variant (tone A/B testing not configured, or applied before this feature
+// existed) are grouped under "unspecified" rather than silently dropped, so
+// this total always reconciles with GetConversionStats's TotalApplied.
+func GetConversionStatsByVariant() ([]VariantConversionStat, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := db.Query(`SELECT
+		COALESCE(NULLIF(tone_variant, ''), 'unspecified') AS variant,
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+		GROUP BY variant
+		HAVING COUNT(*) > 0
+		ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []VariantConversionStat
+	for rows.Next() {
+		var s VariantConversionStat
+		if err := rows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
 			return nil, err
 		}
 		if s.TotalApplied > 0 {

@@ -420,11 +420,17 @@ func main() {
 			continue
 		}
 
+		toneVariantLabel, selectedTone, hasToneVariant := config.SelectToneVariant(prof.CoverLetterTones)
+		coverLetterTone := prof.CoverLetterTone
+		if hasToneVariant {
+			coverLetterTone = selectedTone
+		}
+
 		profileConstraints := map[string]interface{}{
 			"salary_floor":        prof.SalaryFloor,
 			"target_compensation": prof.TargetComp,
 			"remote_only":         prof.RemoteOnly,
-			"cover_letter_tone":   prof.CoverLetterTone,
+			"cover_letter_tone":   coverLetterTone,
 			"location":            piiData.Address,
 		}
 
@@ -495,6 +501,11 @@ func main() {
 				if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
 					log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
 					return "", "", err
+				}
+				if hasToneVariant {
+					if err := storage.UpdateToneVariant(job.URL, toneVariantLabel); err != nil {
+						log.Printf("[Worker-%d] Failed to record tone variant for %s: %v", workerID, job.CompanyName, err)
+					}
 				}
 
 				log.Printf("[Worker-%d] Successfully generated and saved application for %s", workerID, job.CompanyName)

@@ -48,11 +48,25 @@ type Metrics struct {
 	LastManualAt             string `json:"last_manual_at,omitempty"`
 	LastManualProcessingTime string `json:"last_manual_processing_time,omitempty"`
 
-	TotalApplied     int                    `json:"total_applied_tracked"`
-	Interviews       int                    `json:"interviews"`
-	Rejections       int                    `json:"rejections"`
-	InterviewRatePct string                 `json:"interview_rate_pct,omitempty"`
-	BySource         []SourceConversionStat `json:"by_source,omitempty"`
+	TotalApplied     int                     `json:"total_applied_tracked"`
+	Interviews       int                     `json:"interviews"`
+	Rejections       int                     `json:"rejections"`
+	InterviewRatePct string                  `json:"interview_rate_pct,omitempty"`
+	BySource         []SourceConversionStat  `json:"by_source,omitempty"`
+	ByVariant        []VariantConversionStat `json:"by_variant,omitempty"`
+}
+
+// VariantConversionStat is one cover-letter tone variant's interview-
+// conversion slice (improvements.md #13), mirroring
+// pkg/storage.VariantConversionStat's shape — same "query its own local db
+// connection" reasoning as SourceConversionStat above.
+type VariantConversionStat struct {
+	Variant       string `json:"variant"`
+	TotalApplied  int    `json:"total_applied"`
+	Interviews    int    `json:"interviews"`
+	Rejections    int    `json:"rejections"`
+	Pending       int    `json:"pending"`
+	InterviewRate string `json:"interview_rate_pct"`
 }
 
 // SourceConversionStat is one ATS platform's interview-conversion slice,
@@ -307,6 +321,38 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
 			}
 			m.BySource = append(m.BySource, s)
+		}
+	}
+
+	// Conversion-by-tone-variant (improvements.md #13). Rows never tagged
+	// with a variant (A/B testing not configured, or applied before this
+	// feature existed) are grouped under "unspecified" so this total always
+	// reconciles with m.TotalApplied above.
+	variantRows, err := db.Query(`SELECT
+		COALESCE(NULLIF(tone_variant, ''), 'unspecified') AS variant,
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+		GROUP BY variant
+		HAVING COUNT(*) > 0
+		ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		log.Printf("Failed to query conversion stats by variant: %v", err)
+	} else {
+		defer variantRows.Close()
+		for variantRows.Next() {
+			var s VariantConversionStat
+			if err := variantRows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+				log.Printf("Failed to scan conversion-by-variant row: %v", err)
+				continue
+			}
+			if s.TotalApplied > 0 {
+				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+			}
+			m.ByVariant = append(m.ByVariant, s)
 		}
 	}
 

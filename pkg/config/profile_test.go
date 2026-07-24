@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -73,6 +74,72 @@ cover_letter_tone: "professional"
 	}
 	if profile.CoverLetterTone != "professional" {
 		t.Errorf("Expected CoverLetterTone 'professional', got '%s'", profile.CoverLetterTone)
+	}
+}
+
+func TestLoadProfile_CoverLetterTones(t *testing.T) {
+	yamlData := `
+cover_letter_tone: "professional"
+cover_letter_tones:
+  - "confident and direct"
+  - "warm and conversational"
+`
+	tmpFile, err := os.CreateTemp("", "profile_*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.Write([]byte(yamlData)); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	profile, err := LoadProfile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("LoadProfile failed: %v", err)
+	}
+	if len(profile.CoverLetterTones) != 2 {
+		t.Fatalf("expected 2 cover letter tone variants, got %d: %v", len(profile.CoverLetterTones), profile.CoverLetterTones)
+	}
+
+	// CoverLetterTone (singular) must remain untouched — it's still the
+	// fallback for profiles that never opt into cover_letter_tones.
+	if profile.CoverLetterTone != "professional" {
+		t.Errorf("expected the singular CoverLetterTone to be unaffected, got %q", profile.CoverLetterTone)
+	}
+}
+
+func TestSelectToneVariant(t *testing.T) {
+	if _, _, ok := SelectToneVariant(nil); ok {
+		t.Error("expected ok=false for zero tones")
+	}
+	if _, _, ok := SelectToneVariant([]string{"only one"}); ok {
+		t.Error("expected ok=false for a single tone — nothing to A/B test against")
+	}
+
+	tones := []string{"confident and direct", "warm and conversational", "formal"}
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		label, tone, ok := SelectToneVariant(tones)
+		if !ok {
+			t.Fatal("expected ok=true for 3 tones")
+		}
+		found := false
+		for j, want := range tones {
+			if tone == want {
+				found = true
+				if label != fmt.Sprintf("variant_%d", j) {
+					t.Errorf("expected label %q for tone %q, got %q", fmt.Sprintf("variant_%d", j), tone, label)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("returned tone %q is not one of the configured variants %v", tone, tones)
+		}
+		seen[label] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("expected random selection to produce more than one distinct variant across 50 calls, got %v", seen)
 	}
 }
 
