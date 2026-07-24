@@ -302,6 +302,20 @@ func IsKnownJunkJobURL(link string) bool {
 	if host == "bamboohr.com" || host == "www.bamboohr.com" {
 		return true
 	}
+	// SmartRecruiters' and Pinpoint's own API-documentation subdomains
+	// (developers.smartrecruiters.com/docs/..., developers.pinpointhq.com
+	// /docs/mcp) get discovered and scored as postings, same class as
+	// BambooHR's corporate-subdomain problem above — confirmed live
+	// 2026-07-24, three developers.smartrecruiters.com/docs/* URLs and one
+	// developers.pinpointhq.com/docs/* URL all marked BLOCKED_CAPTCHA
+	// rather than ever being recognized as non-postings. Unlike
+	// smartrecruiters.com's other tenant subdomains (jobs., careers., both
+	// already caught by the path-segment check below) and pinpointhq.com's
+	// genuine per-company subdomains, "developers" is never a real tenant
+	// name on either platform.
+	if host == "developers.smartrecruiters.com" || host == "developers.pinpointhq.com" {
+		return true
+	}
 	// BambooHR keeps a growing family of shared corporate subdomains that
 	// aren't job postings — app. (login portal), learn. (product docs),
 	// trust. (compliance portal), developers./documentation. (API docs) all

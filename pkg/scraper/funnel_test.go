@@ -291,6 +291,12 @@ func TestIsKnownJunkJobURL(t *testing.T) {
 		// Real postings carry more segments and must pass
 		{"https://jobs.smartrecruiters.com/sosi1/3743990013881284-cloud-web-developer", false},
 		{"https://apply.workable.com/azumo/j/DC928C07B2/", false},
+		// SmartRecruiters'/Pinpoint's own API-docs subdomains, never a
+		// tenant, confirmed live 2026-07-24 (bugs.md #54's investigation)
+		{"https://developers.smartrecruiters.com/docs/the-smartrecruiters-platform", true},
+		{"https://developers.pinpointhq.com/docs/mcp", true},
+		// A genuine Pinpoint company tenant subdomain must still pass
+		{"https://sunking.pinpointhq.com/postings/c578e9a7-9035-48e4-85b5-6a7abd10b87e", false},
 	}
 	for _, tt := range tests {
 		if got := IsKnownJunkJobURL(tt.url); got != tt.want {
