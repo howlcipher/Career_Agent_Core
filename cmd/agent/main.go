@@ -214,23 +214,32 @@ func main() {
 	pipeline := submitter.NewPipeline(filter, client, client, browser)
 
 	// Local Embedded RAG Ingestion
+	const profilePath = "/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md"
 	existingChunks, err := storage.GetAllCareerChunks()
 	if err != nil {
 		log.Printf("[Agent] [RAG] Failed to get career chunks from storage: %v", err)
 	}
-	if len(existingChunks) == 0 {
-		log.Println("[RAG] Knowledge Library cache empty. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
-		mdContent, err := parser.ReadMarkdown("/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md")
-		if err == nil {
-			chunks := parser.ChunkMarkdown(mdContent)
-			for _, text := range chunks {
-				if strings.TrimSpace(text) == "" { continue }
-				emb, err := client.GetEmbedding(text)
-				if err == nil {
-					storage.SaveCareerChunk(text, emb)
-				}
-			}
-			log.Printf("[RAG] Successfully embedded and cached %d career chunks.", len(chunks))
+	needsIngest := len(existingChunks) == 0
+	if !needsIngest {
+		// A changed OLLAMA_EMBED_MODEL (or provider switch) silently breaks
+		// CosineSimilarity-based retrieval otherwise — its own mismatched-size
+		// guard returns 0 for every comparison with no error surfaced. Probe
+		// the currently configured model's actual dimension and compare
+		// against what's already stored (bugs.md: "stale RAG chunk dimension").
+		if probeEmb, err := client.GetEmbedding("dimension probe"); err != nil {
+			log.Printf("[Agent] [RAG] Failed to probe embedding dimension: %v", err)
+		} else if parser.CareerChunksNeedReingest(existingChunks, len(probeEmb)) {
+			log.Printf("[RAG] Stored career chunks use a different embedding dimension than the current model (%d-dim) — re-ingesting.", len(probeEmb))
+			needsIngest = true
+		}
+	}
+	if needsIngest {
+		log.Println("[RAG] Knowledge Library cache empty or stale. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
+		n, err := parser.IngestResumeChunks(client.GetEmbedding, profilePath)
+		if err != nil {
+			log.Printf("[RAG] Failed to ingest resume chunks: %v", err)
+		} else {
+			log.Printf("[RAG] Successfully embedded and cached %d career chunks.", n)
 		}
 	} else {
 		log.Printf("[RAG] Found %d career chunks in local SQLite Vector DB.", len(existingChunks))

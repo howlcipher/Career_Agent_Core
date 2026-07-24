@@ -8,6 +8,64 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
+// IngestResumeChunks clears any existing career_chunks and re-chunks/re-embeds
+// profilePath's markdown content via embed (typically client.GetEmbedding),
+// one chunk per top-level/H2 section (ChunkMarkdown). Returns the number of
+// chunks successfully embedded and saved.
+//
+// A full clear-and-rebuild, not an incremental update: partial/stale state
+// (e.g. chunks embedded by a since-changed embedding model, see
+// CareerChunksNeedReingest) is worse than an empty cache, which callers
+// already handle as "ingest from scratch."
+func IngestResumeChunks(embed func(text string) ([]float32, error), profilePath string) (int, error) {
+	mdContent, err := ReadMarkdown(profilePath)
+	if err != nil {
+		return 0, err
+	}
+	if err := storage.ClearCareerChunks(); err != nil {
+		return 0, err
+	}
+
+	saved := 0
+	for _, text := range ChunkMarkdown(mdContent) {
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		emb, err := embed(text)
+		if err != nil {
+			continue
+		}
+		if err := storage.SaveCareerChunk(text, emb); err != nil {
+			continue
+		}
+		saved++
+	}
+	return saved, nil
+}
+
+// CareerChunksNeedReingest reports whether existing career chunks' embedding
+// dimension no longer matches freshDim (the dimension the currently
+// configured embed model actually produces). A mismatch means the embed
+// model changed since the chunks were last ingested — CosineSimilarity
+// silently scores every such comparison 0 (its own mismatched-size guard)
+// rather than erroring, so retrieval quietly degrades to an arbitrary order
+// instead of failing loudly. Confirmed live 2026-07-24: 8 stored chunks at
+// 3072 dimensions while the configured OLLAMA_EMBED_MODEL (nomic-embed-text)
+// actually produces 768 — see bugs.md's "stale RAG chunk dimension" entry.
+// Empty existing chunks are not a mismatch; that's the "never ingested yet"
+// case callers already handle separately.
+func CareerChunksNeedReingest(existing []storage.CareerChunk, freshDim int) bool {
+	if len(existing) == 0 {
+		return false
+	}
+	for _, c := range existing {
+		if len(c.Embedding) != freshDim {
+			return true
+		}
+	}
+	return false
+}
+
 // ChunkMarkdown splits a markdown document into logical chunks based on headers.
 func ChunkMarkdown(content string) []string {
 	// A naive split on Level 1 and Level 2 headers
@@ -52,6 +110,21 @@ func CosineSimilarity(a, b []float32) float32 {
 type ScoredChunk struct {
 	Chunk storage.CareerChunk
 	Score float32
+}
+
+// BestSimilarity returns the highest cosine similarity between queryEmbedding
+// and any of the given chunks' embeddings, or 0 if chunks is empty. Used by
+// cmd/rankjobs (improvements.md #22) to score a job's title/company against
+// the resume as a whole via its best-matching chunk, rather than an average
+// that would get diluted by resume sections irrelevant to any given job.
+func BestSimilarity(queryEmbedding []float32, chunks []storage.CareerChunk) float32 {
+	var best float32
+	for _, c := range chunks {
+		if s := CosineSimilarity(queryEmbedding, c.Embedding); s > best {
+			best = s
+		}
+	}
+	return best
 }
 
 // RetrieveTopK searches the local SQLite chunks and returns the Top K most semantically relevant chunks.

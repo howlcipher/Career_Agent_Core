@@ -648,6 +648,133 @@ func TestMigrateJobFunnelLastUpdated(t *testing.T) {
 	}
 }
 
+// TestMigrateJobFunnelFitSimilarity mirrors TestMigrateJobFunnelLastUpdated:
+// confirms the migration adds fit_similarity (improvements.md #22) to a
+// database created before that column existed, and is a safe no-op to run
+// again on an already-migrated table.
+func TestMigrateJobFunnelFitSimilarity(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME,
+		last_updated DATETIME
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to recreate old-schema job_funnel: %v", err)
+	}
+
+	if err := migrateJobFunnelFitSimilarity(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		t.Fatalf("failed to inspect schema: %v", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "fit_similarity" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected fit_similarity column to exist after migration")
+	}
+
+	if err := migrateJobFunnelFitSimilarity(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+func TestGetJobsMissingFitSimilarity(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	AddToFunnel("A", "Job A", "http://a.com/1", "DISCOVERED")
+	AddToFunnel("B", "Job B", "http://b.com/1", "DISCOVERED")
+	AddToFunnel("C", "Job C", "http://c.com/1", "DISCOVERED")
+
+	if err := UpdateFitSimilarity("http://b.com/1", 0.9); err != nil {
+		t.Fatalf("UpdateFitSimilarity failed: %v", err)
+	}
+
+	missing, err := GetJobsMissingFitSimilarity(0)
+	if err != nil {
+		t.Fatalf("GetJobsMissingFitSimilarity failed: %v", err)
+	}
+	if len(missing) != 2 {
+		t.Fatalf("expected 2 jobs missing fit_similarity, got %d: %+v", len(missing), missing)
+	}
+	for _, j := range missing {
+		if j.URL == "http://b.com/1" {
+			t.Errorf("job already scored via UpdateFitSimilarity should not appear in missing list: %+v", j)
+		}
+	}
+
+	limited, err := GetJobsMissingFitSimilarity(1)
+	if err != nil {
+		t.Fatalf("GetJobsMissingFitSimilarity with limit failed: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("expected limit=1 to return exactly 1 job, got %d", len(limited))
+	}
+}
+
+// TestGetDiscoveredJobsOrdersByFitSimilarityWithinTier confirms
+// improvements.md #22's ordering change: within the same sourcePriorityCASE
+// tier, a higher fit_similarity sorts first, and a NULL (not yet backfilled)
+// score sorts last — never breaking the pre-#22 behavior for unscored rows.
+func TestGetDiscoveredJobsOrdersByFitSimilarityWithinTier(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	// All three on the same greenhouse.io host, so they share a
+	// sourcePriorityCASE tier (0) and the tie-break is purely fit_similarity.
+	AddToFunnel("Low", "Job Low", "http://greenhouse.io/low", "DISCOVERED")
+	AddToFunnel("High", "Job High", "http://greenhouse.io/high", "DISCOVERED")
+	AddToFunnel("Unscored", "Job Unscored", "http://greenhouse.io/unscored", "DISCOVERED")
+
+	if err := UpdateFitSimilarity("http://greenhouse.io/low", 0.2); err != nil {
+		t.Fatalf("UpdateFitSimilarity failed: %v", err)
+	}
+	if err := UpdateFitSimilarity("http://greenhouse.io/high", 0.8); err != nil {
+		t.Fatalf("UpdateFitSimilarity failed: %v", err)
+	}
+
+	jobs, err := GetDiscoveredJobs()
+	if err != nil {
+		t.Fatalf("GetDiscoveredJobs failed: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected 3 discovered jobs, got %d", len(jobs))
+	}
+	got := []string{jobs[0].URL, jobs[1].URL, jobs[2].URL}
+	want := []string{"http://greenhouse.io/high", "http://greenhouse.io/low", "http://greenhouse.io/unscored"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("expected order %v, got %v", want, got)
+			break
+		}
+	}
+}
+
 func TestSourceOutcomeBreakdown(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

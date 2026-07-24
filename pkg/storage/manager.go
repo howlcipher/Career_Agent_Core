@@ -65,7 +65,8 @@ func InitDBWithPath(path string) error {
 		fit_score INTEGER,
 		discovered_at DATETIME,
 		applied_at DATETIME,
-		last_updated DATETIME
+		last_updated DATETIME,
+		fit_similarity REAL
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +98,10 @@ func InitDBWithPath(path string) error {
 	// CREATE TABLE IF NOT EXISTS never alters an already-existing table, so
 	// a job_funnel table created before last_updated was added to the
 	// schema above needs an explicit migration.
-	return migrateJobFunnelLastUpdated()
+	if err := migrateJobFunnelLastUpdated(); err != nil {
+		return err
+	}
+	return migrateJobFunnelFitSimilarity()
 }
 
 func migrateJobFunnelLastUpdated() error {
@@ -128,6 +132,40 @@ func migrateJobFunnelLastUpdated() error {
 	}
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN last_updated DATETIME")
+	return err
+}
+
+// migrateJobFunnelFitSimilarity adds job_funnel.fit_similarity (improvements.md
+// #22) to a database created before that column existed, same idempotent
+// pattern as migrateJobFunnelLastUpdated above.
+func migrateJobFunnelFitSimilarity() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasFitSimilarity := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "fit_similarity" {
+			hasFitSimilarity = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasFitSimilarity {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN fit_similarity REAL")
 	return err
 }
 
@@ -589,6 +627,16 @@ func ReapStaleProcessingJobs() (int64, error) {
 	return result.RowsAffected()
 }
 
+// GetDiscoveredJobs orders the queue by sourcePriorityCASE first (platform
+// reachability — a topically perfect job is still worthless if its ATS can
+// only ever reach MANUAL_REQUIRED or worse), then by fit_similarity DESC as
+// a tie-break within each tier (improvements.md #22: an embedding-similarity
+// score between the job's title/company and the resume, backfilled
+// out-of-band by cmd/rankjobs since computing it inline here would mean an
+// embedding call per query). COALESCE(fit_similarity, -1) means a
+// not-yet-backfilled row (NULL) sorts after every scored row in its tier,
+// falling back to the pre-#22 id-only order — so this change is additive,
+// never a regression, for rows cmd/rankjobs hasn't reached yet.
 func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -596,7 +644,7 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	// breezy.hr excluded entirely (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source).
 	rows, err := db.Query(`SELECT company_name, job_title, url FROM job_funnel
 		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
-		ORDER BY ` + sourcePriorityCASE + `, id`)
+		ORDER BY ` + sourcePriorityCASE + `, COALESCE(fit_similarity, -1) DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -612,6 +660,53 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 		jobs = append(jobs, j)
 	}
 	return jobs, nil
+}
+
+// GetJobsMissingFitSimilarity returns DISCOVERED job_funnel rows whose
+// fit_similarity has not yet been backfilled (improvements.md #22), oldest
+// first, capped at limit (0 = unlimited). Used by cmd/rankjobs so repeated
+// runs make forward progress through the backlog instead of re-scoring the
+// same rows.
+func GetJobsMissingFitSimilarity(limit int) ([]FunnelJob, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	query := `SELECT company_name, job_title, url FROM job_funnel
+		WHERE status = 'DISCOVERED' AND fit_similarity IS NULL AND url NOT LIKE '%breezy.hr%'
+		ORDER BY id`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []FunnelJob
+	for rows.Next() {
+		var j FunnelJob
+		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL); err != nil {
+			log.Printf("[Storage] Error scanning fit-similarity-missing job row: %v", err)
+			continue
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
+// UpdateFitSimilarity stores a job's resume-similarity score (improvements.md
+// #22), computed by cmd/rankjobs from an embedding of the job's title/company
+// against the resume's career_chunks. Deliberately does not touch
+// last_updated — this is a background ranking signal, not a funnel status
+// transition, and mixing it into the same timestamp would make the
+// dashboard's "time to process" cards misread a re-ranking as new activity.
+func UpdateFitSimilarity(url string, score float32) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := db.Exec(`UPDATE job_funnel SET fit_similarity = ? WHERE url = ?`, score, url)
+	return err
 }
 
 // SourceOutcomeStat is one row of the per-URL-pattern outcome breakdown
