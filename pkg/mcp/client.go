@@ -15,12 +15,31 @@ const SystemPrompt = "You are an expert technical recruiter. Analyze the job des
 
 var apiCallCount uint64
 
+const defaultPayloadSafetyLimit = 50000
+
+// payloadSafetyLimits overrides defaultPayloadSafetyLimit for specific call
+// types. SolveValidationErrors only ever receives the already-scoped-to-
+// the-form, already-attribute-stripped DOM (PruneDOMToForm +
+// StripPresentationalAttrs, bugs.md #52) -- confirmed live 2026-07-24 that
+// a real, large screening form (35 fields) still lands around 52-55k chars
+// even after both passes, genuinely proportional to field count rather
+// than bloat. 75k stays far below the ~103-145k this call site saw before
+// either fix existed, so a regression back toward sending whole pages
+// would still trip the breaker.
+var payloadSafetyLimits = map[string]int{
+	"SolveValidationErrors": 75000,
+}
+
 func incrementAndLogAPICall(callType string, payloadLen int) error {
 	count := atomic.AddUint64(&apiCallCount, 1)
 	log.Printf("[API Metrics] %s API Call #%d executed. Payload length: %d characters.", callType, count, payloadLen)
 
-	if payloadLen > 50000 {
-		return fmt.Errorf("CIRCUIT BREAKER TRIGGERED: Payload size %d exceeds safety limit (50k chars). Aborting to prevent runaway LLM costs.", payloadLen)
+	limit := defaultPayloadSafetyLimit
+	if override, ok := payloadSafetyLimits[callType]; ok {
+		limit = override
+	}
+	if payloadLen > limit {
+		return fmt.Errorf("CIRCUIT BREAKER TRIGGERED: Payload size %d exceeds safety limit (%dk chars). Aborting to prevent runaway LLM costs.", payloadLen, limit/1000)
 	}
 	return nil
 }
