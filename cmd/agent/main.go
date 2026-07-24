@@ -48,6 +48,30 @@ func parseTargetJobURLs(raw string) map[string]bool {
 	return urls
 }
 
+// clientRenderedSPAHosts lists ATS platforms whose job content is rendered
+// entirely client-side, so a bare (non-JS-executing) net/http fetch always
+// sees an empty shell regardless of whether the posting is actually
+// reachable — confirmed live 2026-07-24 on Ashby (see the captcha-check
+// comment below). Matched as host suffixes, same convention as
+// authGatedATSHosts in pkg/submitter/browser.go.
+var clientRenderedSPAHosts = []string{
+	"ashbyhq.com",
+}
+
+func isClientRenderedSPAHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, spa := range clientRenderedSPAHosts {
+		if host == spa || strings.HasSuffix(host, "."+spa) {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
 	flag.Parse()
@@ -305,7 +329,20 @@ func main() {
 				// phrases too, same as the explicit Cloudflare phrasing.
 				lowerHTML := strings.ToLower(htmlStr)
 				genuineBlockPhrasing := strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required"))
-				widgetOnlyPhrasing := strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile")
+				// Bug: the "little real text behind" corroborating signal
+				// assumes a legitimate page has server-rendered visible text
+				// in a bare (non-JS-executing) fetch. Confirmed live
+				// 2026-07-24 on two real, unblocked, currently-open Ashby
+				// postings: raw HTML ~42KB, 0 chars of visible text after
+				// pruning, "recaptcha" present in its script bundle — Ashby
+				// renders everything client-side, so this exact shape is
+				// what *every* Ashby posting looks like to a non-JS fetch,
+				// genuinely blocked or not. This check cannot tell the two
+				// apart without executing JavaScript, so for known
+				// client-rendered platforms, only the explicit block
+				// phrasing above is trusted — same reasoning as
+				// authGatedATSHosts in pkg/submitter/browser.go.
+				widgetOnlyPhrasing := !isClientRenderedSPAHost(job.URL) && (strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile"))
 				if genuineBlockPhrasing || (widgetOnlyPhrasing && len(strings.TrimSpace(pruned)) < 200) {
 					log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
 					storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")

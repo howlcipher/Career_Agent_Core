@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestIsClientRenderedSPAHost(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{url: "https://jobs.ashbyhq.com/real/0a975026-0f03-449d-8bae-d6ccd53b84c3", want: true},
+		{url: "https://pragmatike.ashbyhq.com/some-job", want: true},
+		{url: "https://job-boards.greenhouse.io/reddit/jobs/8044767", want: false},
+		{url: "https://jobs.lever.co/acme/abc-123", want: false},
+		{url: "not a valid url", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			if got := isClientRenderedSPAHost(tt.url); got != tt.want {
+				t.Errorf("isClientRenderedSPAHost(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseTargetJobURLs(t *testing.T) {
 	tests := []struct {
 		name string
