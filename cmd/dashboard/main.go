@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -19,28 +21,54 @@ type Metrics struct {
 	ManualRequired     int    `json:"manual_required"`
 	BlockedCaptcha     int    `json:"blocked_captcha"`
 	InvalidURL         int    `json:"invalid_url"`
-	LastAppliedCompany string `json:"last_applied_company,omitempty"`
-	LastAppliedTitle   string `json:"last_applied_title,omitempty"`
-	LastAppliedURL     string `json:"last_applied_url,omitempty"`
-	LastAppliedAt      string `json:"last_applied_at,omitempty"`
+	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
+	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
+	LastAppliedURL            string `json:"last_applied_url,omitempty"`
+	LastAppliedAt             string `json:"last_applied_at,omitempty"`
+	LastAppliedProcessingTime string `json:"last_applied_processing_time,omitempty"`
 
 	CurrentCompany string `json:"current_company,omitempty"`
 	CurrentTitle   string `json:"current_title,omitempty"`
 	CurrentSince   string `json:"current_since,omitempty"`
 
-	LastSkippedCompany string `json:"last_skipped_company,omitempty"`
-	LastSkippedTitle   string `json:"last_skipped_title,omitempty"`
-	LastSkippedReason  string `json:"last_skipped_reason,omitempty"`
-	LastSkippedAt      string `json:"last_skipped_at,omitempty"`
+	LastSkippedCompany        string `json:"last_skipped_company,omitempty"`
+	LastSkippedTitle          string `json:"last_skipped_title,omitempty"`
+	LastSkippedReason         string `json:"last_skipped_reason,omitempty"`
+	LastSkippedAt             string `json:"last_skipped_at,omitempty"`
+	LastSkippedProcessingTime string `json:"last_skipped_processing_time,omitempty"`
 
-	LastFailedCompany string `json:"last_failed_company,omitempty"`
-	LastFailedTitle   string `json:"last_failed_title,omitempty"`
-	LastFailedReason  string `json:"last_failed_reason,omitempty"`
-	LastFailedAt      string `json:"last_failed_at,omitempty"`
+	LastFailedCompany        string `json:"last_failed_company,omitempty"`
+	LastFailedTitle          string `json:"last_failed_title,omitempty"`
+	LastFailedReason         string `json:"last_failed_reason,omitempty"`
+	LastFailedAt             string `json:"last_failed_at,omitempty"`
+	LastFailedProcessingTime string `json:"last_failed_processing_time,omitempty"`
 
-	LastManualCompany string `json:"last_manual_company,omitempty"`
-	LastManualTitle   string `json:"last_manual_title,omitempty"`
-	LastManualAt      string `json:"last_manual_at,omitempty"`
+	LastManualCompany        string `json:"last_manual_company,omitempty"`
+	LastManualTitle          string `json:"last_manual_title,omitempty"`
+	LastManualAt             string `json:"last_manual_at,omitempty"`
+	LastManualProcessingTime string `json:"last_manual_processing_time,omitempty"`
+}
+
+// formatDuration renders how long a job sat in the pipeline (discovered_at
+// to the terminal status's last_updated/applied_at) as a short human string.
+// discovered_at predates last_updated by anywhere from minutes to several
+// days in this single-worker, frequently-restarted system, so days must be
+// called out explicitly rather than overflowing into a huge hour count.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "under a minute"
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
 }
 
 // statusReason maps a raw job_funnel status code to a short human-readable
@@ -108,18 +136,21 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	// submission itself succeeded. job_funnel.status only reaches APPLIED
 	// after the full AttemptSubmit call returns without error. Join both so
 	// "last applied" only ever shows a job that genuinely completed.
-	var lastAppliedAt sql.NullTime
-	err := db.QueryRow(`SELECT aj.company_name, aj.job_title, aj.url, aj.applied_at
+	var lastAppliedAt, lastAppliedDiscoveredAt sql.NullTime
+	err := db.QueryRow(`SELECT aj.company_name, aj.job_title, aj.url, aj.applied_at, jf.discovered_at
 		FROM applied_jobs aj
 		JOIN job_funnel jf ON jf.url = aj.url
 		WHERE jf.status IN ('APPLIED', 'PROCESSED_MANUAL')
 		ORDER BY aj.applied_at DESC LIMIT 1`).
-		Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt)
+		Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt, &lastAppliedDiscoveredAt)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Failed to query last applied job: %v", err)
 	}
 	if lastAppliedAt.Valid {
 		m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
+	}
+	if lastAppliedAt.Valid && lastAppliedDiscoveredAt.Valid {
+		m.LastAppliedProcessingTime = formatDuration(lastAppliedAt.Time.Sub(lastAppliedDiscoveredAt.Time))
 	}
 
 	// Currently processing: the most recently touched PROCESSING row.
@@ -143,15 +174,15 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var skippedCompany, skippedTitle, skippedStatus sql.NullString
-	var skippedAt sql.NullTime
+	var skippedAt, skippedDiscoveredAt sql.NullTime
 	// Narrowed to just SKIPPED (was SKIPPED + BLOCKED_CAPTCHA) now that
 	// BLOCKED_CAPTCHA has its own dedicated tile -- this widget's status
 	// used to disagree with the Skipped tile's own count, which never
 	// included BLOCKED_CAPTCHA (confirmed live 2026-07-24, bugs.md #55's
 	// investigation).
-	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated FROM job_funnel
+	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
 		WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt)
+		Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Failed to query last skipped job: %v", err)
 	}
@@ -163,12 +194,15 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	if skippedAt.Valid {
 		m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")
 	}
+	if skippedAt.Valid && skippedDiscoveredAt.Valid {
+		m.LastSkippedProcessingTime = formatDuration(skippedAt.Time.Sub(skippedDiscoveredAt.Time))
+	}
 
 	var failedCompany, failedTitle, failedStatus sql.NullString
-	var failedAt sql.NullTime
-	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated FROM job_funnel
+	var failedAt, failedDiscoveredAt sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
 		WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt)
+		Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt, &failedDiscoveredAt)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Failed to query last failed job: %v", err)
 	}
@@ -180,12 +214,15 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	if failedAt.Valid {
 		m.LastFailedAt = failedAt.Time.Local().Format("Jan 2, 3:04 PM")
 	}
+	if failedAt.Valid && failedDiscoveredAt.Valid {
+		m.LastFailedProcessingTime = formatDuration(failedAt.Time.Sub(failedDiscoveredAt.Time))
+	}
 
 	var manualCompany, manualTitle sql.NullString
-	var manualAt sql.NullTime
-	err = db.QueryRow(`SELECT company_name, job_title, last_updated FROM job_funnel
+	var manualAt, manualDiscoveredAt sql.NullTime
+	err = db.QueryRow(`SELECT company_name, job_title, last_updated, discovered_at FROM job_funnel
 		WHERE status = 'MANUAL_REQUIRED' ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&manualCompany, &manualTitle, &manualAt)
+		Scan(&manualCompany, &manualTitle, &manualAt, &manualDiscoveredAt)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Failed to query last manual-required job: %v", err)
 	}
@@ -193,6 +230,9 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	m.LastManualTitle = manualTitle.String
 	if manualAt.Valid {
 		m.LastManualAt = manualAt.Time.Local().Format("Jan 2, 3:04 PM")
+	}
+	if manualAt.Valid && manualDiscoveredAt.Valid {
+		m.LastManualProcessingTime = formatDuration(manualAt.Time.Sub(manualDiscoveredAt.Time))
 	}
 
 	w.Header().Set("Content-Type", "application/json")

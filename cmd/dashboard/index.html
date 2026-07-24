@@ -327,6 +327,13 @@
             margin-top: 6px;
         }
 
+        .mini-status .duration {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-style: italic;
+            margin-top: 2px;
+        }
+
         .mini-status.empty .company {
             color: var(--text-muted);
             font-weight: 500;
@@ -396,6 +403,14 @@
             white-space: nowrap;
         }
 
+        .last-applied .duration {
+            color: var(--text-muted);
+            font-weight: 400;
+            font-style: italic;
+            font-size: 0.8rem;
+            margin-top: 2px;
+        }
+
         .last-applied a {
             color: var(--neon-blue);
             text-decoration: none;
@@ -442,7 +457,10 @@
                 <p class="company" id="last-applied-company">No applications recorded yet</p>
                 <p class="title" id="last-applied-title"></p>
             </div>
-            <div class="when" id="last-applied-when"></div>
+            <div class="when">
+                <div id="last-applied-when"></div>
+                <div class="duration" id="last-applied-duration"></div>
+            </div>
         </div>
 
         <div class="secondary-row">
@@ -451,18 +469,21 @@
                 <p class="company" id="last-skipped-company">None yet</p>
                 <p class="reason" id="last-skipped-reason"></p>
                 <p class="at" id="last-skipped-at"></p>
+                <p class="duration" id="last-skipped-duration"></p>
             </div>
             <div class="mini-status failed empty" id="last-failed-card">
                 <p class="label">Last Failed</p>
                 <p class="company" id="last-failed-company">None yet</p>
                 <p class="reason" id="last-failed-reason"></p>
                 <p class="at" id="last-failed-at"></p>
+                <p class="duration" id="last-failed-duration"></p>
             </div>
             <div class="mini-status manual empty" id="last-manual-card">
                 <p class="label">Needs Manual Apply</p>
                 <p class="company" id="last-manual-company">None yet</p>
                 <p class="reason" id="last-manual-reason"></p>
                 <p class="at" id="last-manual-at"></p>
+                <p class="duration" id="last-manual-duration"></p>
             </div>
         </div>
 
@@ -517,12 +538,14 @@
             const companyEl = document.getElementById('last-applied-company');
             const titleEl = document.getElementById('last-applied-title');
             const whenEl = document.getElementById('last-applied-when');
+            const durationEl = document.getElementById('last-applied-duration');
 
             if (!data.last_applied_company) {
                 card.classList.add('empty');
                 companyEl.textContent = 'No applications recorded yet';
                 titleEl.textContent = '';
                 whenEl.textContent = '';
+                durationEl.textContent = '';
                 return;
             }
 
@@ -541,6 +564,8 @@
             }
             titleEl.textContent = data.last_applied_title || '';
             whenEl.textContent = data.last_applied_at ? '✓ ' + data.last_applied_at : '';
+            durationEl.textContent = data.last_applied_processing_time
+                ? 'Time to process: ' + data.last_applied_processing_time : '';
         }
 
         // Job postings are scraped from third-party sites, so this data is
@@ -568,23 +593,26 @@
             document.getElementById('working-on-since').textContent = data.current_since ? 'since ' + data.current_since : '';
         }
 
-        function updateMiniStatus(prefix, company, reason, at, emptyText) {
+        function updateMiniStatus(prefix, company, reason, at, emptyText, processingTime) {
             const card = document.getElementById(prefix + '-card');
             const companyEl = document.getElementById(prefix + '-company');
             const reasonEl = document.getElementById(prefix + '-reason');
             const atEl = document.getElementById(prefix + '-at');
+            const durationEl = document.getElementById(prefix + '-duration');
 
             if (!company) {
                 card.classList.add('empty');
                 companyEl.textContent = emptyText;
                 reasonEl.textContent = '';
                 atEl.textContent = '';
+                durationEl.textContent = '';
                 return;
             }
             card.classList.remove('empty');
             companyEl.textContent = company;
             reasonEl.textContent = reason || '';
             atEl.textContent = at || '';
+            durationEl.textContent = processingTime ? 'Time to process: ' + processingTime : '';
         }
 
         async function fetchMetrics() {
@@ -610,9 +638,9 @@
 
                 updateLastApplied(data);
                 updateWorkingOn(data);
-                updateMiniStatus('last-skipped', data.last_skipped_company, data.last_skipped_reason, data.last_skipped_at, 'None yet');
-                updateMiniStatus('last-failed', data.last_failed_company, data.last_failed_reason, data.last_failed_at, 'None yet');
-                updateMiniStatus('last-manual', data.last_manual_company, data.last_manual_title, data.last_manual_at, 'None yet');
+                updateMiniStatus('last-skipped', data.last_skipped_company, data.last_skipped_reason, data.last_skipped_at, 'None yet', data.last_skipped_processing_time);
+                updateMiniStatus('last-failed', data.last_failed_company, data.last_failed_reason, data.last_failed_at, 'None yet', data.last_failed_processing_time);
+                updateMiniStatus('last-manual', data.last_manual_company, data.last_manual_title, data.last_manual_at, 'None yet', data.last_manual_processing_time);
 
                 const isActive = data.processing > 0;
                 activityFill.classList.toggle('active', isActive);

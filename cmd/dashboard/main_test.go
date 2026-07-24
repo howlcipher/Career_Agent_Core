@@ -26,7 +26,8 @@ func setupTestDB(t *testing.T) {
 		company_name TEXT,
 		job_title TEXT,
 		status TEXT,
-		last_updated DATETIME
+		last_updated DATETIME,
+		discovered_at DATETIME
 	);
 	CREATE TABLE applied_jobs (
 		company_name TEXT,
@@ -195,6 +196,71 @@ func TestServeMetrics_LastSkipped_ExcludesBlockedCaptcha(t *testing.T) {
 
 	if m.LastSkippedCompany != "SkippedCorp" {
 		t.Errorf("expected last-skipped to only ever reflect a genuine SKIPPED row, got company=%q (BlockedCorp is more recent but BLOCKED_CAPTCHA)", m.LastSkippedCompany)
+	}
+}
+
+// TestServeMetrics_ProcessingTime_ComputedFromDiscoveredToTerminal covers
+// the user's request to see how long each job actually sat in the pipeline
+// (discovered_at to the terminal status), since the Manual Queue tile's raw
+// count alone hid that some of these rows were discovered days before they
+// were finally marked MANUAL_REQUIRED (confirmed live 2026-07-24: real rows
+// spanned over 7 days from discovery to resolution).
+func TestServeMetrics_ProcessingTime_ComputedFromDiscoveredToTerminal(t *testing.T) {
+	setupTestDB(t)
+
+	discovered := time.Date(2026, 7, 15, 0, 18, 32, 0, time.UTC)
+	resolved := discovered.Add(7*24*time.Hour + 19*time.Hour + 22*time.Minute)
+
+	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, last_updated, discovered_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"https://jobs.example.com/manual", "SlowCorp", "DevOps Engineer", "MANUAL_REQUIRED", resolved, discovered)
+	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, last_updated, discovered_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"https://jobs.example.com/skipped", "QuickCorp", "Engineer", "SKIPPED", discovered.Add(90*time.Second), discovered)
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.LastManualProcessingTime != "7d 19h" {
+		t.Errorf("expected last manual processing time %q, got %q", "7d 19h", m.LastManualProcessingTime)
+	}
+	if m.LastSkippedProcessingTime != "1m" {
+		t.Errorf("expected last skipped processing time %q, got %q", "1m", m.LastSkippedProcessingTime)
+	}
+}
+
+// TestServeMetrics_ProcessingTime_EmptyWhenDiscoveredAtMissing guards
+// against a nil-pointer/garbage-duration when discovered_at was never
+// backfilled for an older row (the column was added after some rows
+// already existed) - processing time must be omitted, not shown as a
+// bogus multi-decade duration.
+func TestServeMetrics_ProcessingTime_EmptyWhenDiscoveredAtMissing(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, last_updated)
+		VALUES (?, ?, ?, ?, ?)`,
+		"https://jobs.example.com/no-discovered-at", "LegacyCorp", "Engineer", "FAILED_SUBMIT", time.Now())
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.LastFailedProcessingTime != "" {
+		t.Errorf("expected empty processing time when discovered_at is NULL, got %q", m.LastFailedProcessingTime)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "under a minute"},
+		{5 * time.Minute, "5m"},
+		{2*time.Hour + 15*time.Minute, "2h 15m"},
+		{3*24*time.Hour + 4*time.Hour, "3d 4h"},
+	}
+	for _, tt := range tests {
+		if got := formatDuration(tt.d); got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
 	}
 }
 
