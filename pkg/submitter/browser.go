@@ -758,7 +758,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			log.Printf("[Auto-Submit] Attempt %d: Solving validation errors...", attempt)
 			target := resolveFillTarget(page)
 			domHTML, _ := target.HTML()
-			prunedHTML, err := parser.PruneDOM(domHTML)
+			prunedHTML, err := parser.PruneDOMToForm(domHTML)
 			if err != nil { prunedHTML = domHTML }
 
 			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)

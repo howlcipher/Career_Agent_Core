@@ -42,6 +42,51 @@ func PruneDOM(rawHTML string) (string, error) {
 	return buf.String(), nil
 }
 
+// PruneDOMToForm behaves like PruneDOM but, when a <form> element is present,
+// renders only that element instead of the whole document. A page's full body
+// (nav, footer, marketing copy, unrelated widgets) contributes nothing toward
+// solving a validation error and can push modern ATS pages well past LLM
+// payload safety limits. Falls back to the full pruned document when no
+// <form> element is found, so callers stay safe against forms assembled
+// without a real <form> tag.
+func PruneDOMToForm(rawHTML string) (string, error) {
+	pruned, err := PruneDOM(rawHTML)
+	if err != nil {
+		return "", err
+	}
+
+	doc, err := html.Parse(strings.NewReader(pruned))
+	if err != nil {
+		return "", err
+	}
+
+	var form *html.Node
+	var traverse func(*html.Node)
+	traverse = func(n *html.Node) {
+		if form != nil {
+			return
+		}
+		if n.Type == html.ElementNode && strings.ToLower(n.Data) == "form" {
+			form = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			traverse(c)
+		}
+	}
+	traverse(doc)
+
+	if form == nil {
+		return pruned, nil
+	}
+
+	var buf bytes.Buffer
+	if err := html.Render(&buf, form); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // PruneDOMToText extracts only the visible plain text from an HTML string to drastically save LLM tokens.
 func PruneDOMToText(rawHTML string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(rawHTML))
