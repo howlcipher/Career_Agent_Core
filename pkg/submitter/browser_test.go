@@ -713,44 +713,53 @@ func TestIsSubmissionConfirmed(t *testing.T) {
 		currentURL string
 		content    string
 		want       bool
+		wantReason submissionConfirmationReason
 	}{
 		{
 			name:       "explicit confirmation text on the same URL (AJAX-style success)",
 			currentURL: applyURL,
 			content:    "<html><body>Thank you for applying! We'll be in touch.</body></html>",
 			want:       true,
+			wantReason: reasonConfirmationPhrase,
 		},
 		{
 			name:       "URL itself looks like a confirmation page",
 			currentURL: "https://jobs.lever.co/acme/abc-123/thank-you",
 			content:    "<html><body>Some generic content</body></html>",
 			want:       true,
+			wantReason: reasonConfirmationURL,
 		},
 		{
 			name:       "same URL, no confirmation text, no error text -- bug #51's exact false-positive shape avoided",
 			currentURL: applyURL,
 			content:    "<html><body>Apply for this job</body></html>",
 			want:       false,
+			wantReason: reasonURLUnchanged,
 		},
 		{
 			name:       "URL changed but the destination is a validation-error page -- bug #51's repro",
 			currentURL: "https://jobs.lever.co/acme/abc-123?step=review",
 			content:    "<html><body>This field is required: Last Name</body></html>",
 			want:       false,
+			wantReason: reasonErrorPhrase,
 		},
 		{
 			name:       "URL changed with no error signal -- the original, weaker heuristic, still allowed as a last resort",
 			currentURL: "https://jobs.lever.co/acme/careers",
 			content:    "<html><body>Browse our other open roles</body></html>",
 			want:       true,
+			wantReason: reasonURLChangedNoError,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isSubmissionConfirmed(applyURL, tt.currentURL, tt.content)
+			got, reason := isSubmissionConfirmed(applyURL, tt.currentURL, tt.content)
 			if got != tt.want {
 				t.Errorf("isSubmissionConfirmed(%q, %q, ...) = %v, want %v", applyURL, tt.currentURL, got, tt.want)
+			}
+			if reason != tt.wantReason {
+				t.Errorf("isSubmissionConfirmed(%q, %q, ...) reason = %q, want %q", applyURL, tt.currentURL, reason, tt.wantReason)
 			}
 		})
 	}

@@ -286,6 +286,21 @@ var submissionErrorPhrases = []string{
 	"is required",
 }
 
+// submissionConfirmationReason names which tier of isSubmissionConfirmed's
+// evidence ladder decided the outcome, so callers can log how strong the
+// evidence for a given APPLIED status actually is instead of a bare bool
+// (bug #52 follow-up: the user asked whether APPLIED could be a false
+// positive, and there was no way to answer that from the log alone).
+type submissionConfirmationReason string
+
+const (
+	reasonConfirmationPhrase submissionConfirmationReason = "confirmation phrase found on page"
+	reasonConfirmationURL    submissionConfirmationReason = "URL looks like a confirmation page"
+	reasonURLUnchanged       submissionConfirmationReason = "URL did not change after submit"
+	reasonErrorPhrase        submissionConfirmationReason = "validation-error wording found on page"
+	reasonURLChangedNoError  submissionConfirmationReason = "URL changed, no confirmation or error wording found (weakest signal)"
+)
+
 // isSubmissionConfirmed decides whether a post-submit-click page state
 // represents a genuine success, given the URL before/after the click and
 // the resulting page's content. Preferred signal: explicit confirmation
@@ -294,26 +309,26 @@ var submissionErrorPhrases = []string{
 // the URL changed at all AND the page doesn't show validation-error
 // wording -- weaker, but still requires the absence of an error signal
 // rather than trusting navigation alone (bug #51).
-func isSubmissionConfirmed(applyURL, currentURL, pageContent string) bool {
+func isSubmissionConfirmed(applyURL, currentURL, pageContent string) (bool, submissionConfirmationReason) {
 	lowerContent := strings.ToLower(pageContent)
 	for _, phrase := range submissionConfirmationPhrases {
 		if strings.Contains(lowerContent, phrase) {
-			return true
+			return true, reasonConfirmationPhrase
 		}
 	}
 	lowerURL := strings.ToLower(currentURL)
 	if strings.Contains(lowerURL, "thank") || strings.Contains(lowerURL, "success") || strings.Contains(lowerURL, "confirmation") {
-		return true
+		return true, reasonConfirmationURL
 	}
 	if currentURL == applyURL {
-		return false
+		return false, reasonURLUnchanged
 	}
 	for _, phrase := range submissionErrorPhrases {
 		if strings.Contains(lowerContent, phrase) {
-			return false
+			return false, reasonErrorPhrase
 		}
 	}
-	return true
+	return true, reasonURLChangedNoError
 }
 
 // ErrAuthWall marks an application flow gated behind account creation or
@@ -790,7 +805,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			currentURL := page.URL()
 			pageContent, _ := page.Content()
-			if isSubmissionConfirmed(applyURL, currentURL, pageContent) {
+			if confirmed, reason := isSubmissionConfirmed(applyURL, currentURL, pageContent); confirmed {
+				log.Printf("[Auto-Submit] Submission confirmed for %s (%s)", companyName, reason)
 				return nil
 			}
 
