@@ -17,6 +17,8 @@ type Metrics struct {
 	Applied            int    `json:"applied"`
 	Failed             int    `json:"failed"`
 	ManualRequired     int    `json:"manual_required"`
+	BlockedCaptcha     int    `json:"blocked_captcha"`
+	InvalidURL         int    `json:"invalid_url"`
 	LastAppliedCompany string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle   string `json:"last_applied_title,omitempty"`
 	LastAppliedURL     string `json:"last_applied_url,omitempty"`
@@ -57,6 +59,8 @@ func statusReason(status string) string {
 		return "Reached the application form but failed to submit"
 	case "MANUAL_REQUIRED":
 		return "ATS requires an account — apply manually with the saved tailored docs"
+	case "INVALID_URL":
+		return "Not a real posting (board index, marketing page, or expired-redirect URL)"
 	default:
 		return status
 	}
@@ -95,6 +99,8 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&m.Applied)
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&m.Failed)
 	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'MANUAL_REQUIRED'").Scan(&m.ManualRequired)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'BLOCKED_CAPTCHA'").Scan(&m.BlockedCaptcha)
+	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'INVALID_URL'").Scan(&m.InvalidURL)
 
 	// applied_jobs only records that a tailored resume/cover letter was
 	// generated and saved (SaveApplication runs early in AttemptSubmit,
@@ -138,8 +144,13 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 	var skippedCompany, skippedTitle, skippedStatus sql.NullString
 	var skippedAt sql.NullTime
+	// Narrowed to just SKIPPED (was SKIPPED + BLOCKED_CAPTCHA) now that
+	// BLOCKED_CAPTCHA has its own dedicated tile -- this widget's status
+	// used to disagree with the Skipped tile's own count, which never
+	// included BLOCKED_CAPTCHA (confirmed live 2026-07-24, bugs.md #55's
+	// investigation).
 	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated FROM job_funnel
-		WHERE status IN ('SKIPPED', 'BLOCKED_CAPTCHA') ORDER BY last_updated DESC LIMIT 1`).
+		WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
 		Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt)
 	if err != nil && err != sql.ErrNoRows {
 		log.Printf("Failed to query last skipped job: %v", err)

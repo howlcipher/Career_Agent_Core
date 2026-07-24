@@ -19,6 +19,8 @@
             --neon-red: #ff3366;
             --neon-yellow: #ffcc00;
             --neon-orange: #ff8800;
+            --neon-pink: #ff2ee6;
+            --neon-teal: #00e0c0;
         }
 
         body { 
@@ -86,6 +88,8 @@
         .card.skipped::before { background: var(--neon-yellow); }
         .card.failed::before { background: var(--neon-red); }
         .card.manual::before { background: var(--neon-orange); }
+        .card.blocked::before { background: var(--neon-pink); }
+        .card.invalid::before { background: var(--neon-teal); }
 
         .card:hover {
             transform: translateY(-5px);
@@ -110,6 +114,12 @@
         .card.manual:hover { border-color: rgba(255, 136, 0, 0.4); box-shadow: 0 10px 30px rgba(255, 136, 0, 0.15); }
         .card.manual:hover::before { box-shadow: 0 0 15px var(--neon-orange); }
 
+        .card.blocked:hover { border-color: rgba(255, 46, 230, 0.4); box-shadow: 0 10px 30px rgba(255, 46, 230, 0.15); }
+        .card.blocked:hover::before { box-shadow: 0 0 15px var(--neon-pink); }
+
+        .card.invalid:hover { border-color: rgba(0, 224, 192, 0.4); box-shadow: 0 10px 30px rgba(0, 224, 192, 0.15); }
+        .card.invalid:hover::before { box-shadow: 0 0 15px var(--neon-teal); }
+
         .card h2 { 
             font-family: 'Outfit', sans-serif;
             font-size: 3rem; 
@@ -126,6 +136,8 @@
         .card.skipped:hover h2 { color: var(--neon-yellow); }
         .card.failed:hover h2 { color: var(--neon-red); }
         .card.manual:hover h2 { color: var(--neon-orange); }
+        .card.blocked:hover h2 { color: var(--neon-pink); }
+        .card.invalid:hover h2 { color: var(--neon-teal); }
 
         .card p { 
             color: var(--text-muted); 
@@ -479,6 +491,14 @@
                 <h2 id="manual-required">0</h2>
                 <p>Manual Queue</p>
             </div>
+            <div class="card blocked">
+                <h2 id="blocked-captcha">0</h2>
+                <p>Blocked (CAPTCHA)</p>
+            </div>
+            <div class="card invalid">
+                <h2 id="invalid-url">0</h2>
+                <p>Invalid URL</p>
+            </div>
         </div>
     </div>
     <script>
@@ -585,6 +605,8 @@
                 animateValue('skipped', data.skipped);
                 animateValue('failed', data.failed);
                 animateValue('manual-required', data.manual_required);
+                animateValue('blocked-captcha', data.blocked_captcha);
+                animateValue('invalid-url', data.invalid_url);
 
                 updateLastApplied(data);
                 updateWorkingOn(data);

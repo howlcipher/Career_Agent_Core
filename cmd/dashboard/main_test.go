@@ -60,11 +60,25 @@ func TestServeMetrics_Counts(t *testing.T) {
 	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://c.example.com", "SKIPPED")
 	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://d.example.com", "APPLIED")
 	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://e.example.com", "FAILED_SUBMIT")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://f.example.com", "BLOCKED_CAPTCHA")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://g.example.com", "INVALID_URL")
 
 	m := fetchMetricsFromTestServer(t)
 
 	if m.Discovered != 1 || m.Processing != 1 || m.Skipped != 1 || m.Applied != 1 || m.Failed != 1 {
 		t.Errorf("unexpected counts: %+v", m)
+	}
+	// BLOCKED_CAPTCHA and INVALID_URL each get their own dedicated tile
+	// (bugs.md #55) rather than being silently absent from every metric --
+	// confirmed live 2026-07-24: 337 real rows (9% of the whole table) had
+	// no tile at all before this fix.
+	if m.BlockedCaptcha != 1 || m.InvalidURL != 1 {
+		t.Errorf("expected BlockedCaptcha=1 and InvalidURL=1, got %+v", m)
+	}
+	// Neither of these two statuses should be double-counted into Skipped
+	// or Failed.
+	if m.Skipped != 1 {
+		t.Errorf("expected BLOCKED_CAPTCHA to not inflate the Skipped count, got %d", m.Skipped)
 	}
 }
 
@@ -162,12 +176,35 @@ func TestServeMetrics_LastSkippedAndFailed_HaveHumanReadableReasons(t *testing.T
 	}
 }
 
+// TestServeMetrics_LastSkipped_ExcludesBlockedCaptcha is a regression test
+// for bugs.md #55's investigation: the "last skipped" widget used to
+// include BLOCKED_CAPTCHA rows, disagreeing with the Skipped tile's own
+// count (which never did) -- now that BLOCKED_CAPTCHA has its own tile,
+// "last skipped" must only ever reflect a genuine SKIPPED row.
+func TestServeMetrics_LastSkipped_ExcludesBlockedCaptcha(t *testing.T) {
+	setupTestDB(t)
+
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/skipped", "SkippedCorp", "Role A", "SKIPPED", older)
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+		"https://jobs.example.com/blocked", "BlockedCorp", "Role B", "BLOCKED_CAPTCHA", newer)
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.LastSkippedCompany != "SkippedCorp" {
+		t.Errorf("expected last-skipped to only ever reflect a genuine SKIPPED row, got company=%q (BlockedCorp is more recent but BLOCKED_CAPTCHA)", m.LastSkippedCompany)
+	}
+}
+
 func TestStatusReason_KnownAndUnknownCodes(t *testing.T) {
 	tests := map[string]bool{ // status -> expect a specific (non-passthrough) reason
 		"SKIPPED":         true,
 		"BLOCKED_CAPTCHA": true,
 		"FAILED_SCORE":    true,
 		"FAILED_SUBMIT":   true,
+		"INVALID_URL":     true,
 	}
 	for status, expectMapped := range tests {
 		reason := statusReason(status)
