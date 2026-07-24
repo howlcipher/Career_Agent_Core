@@ -678,6 +678,85 @@ func TestSourceOutcomeBreakdown(t *testing.T) {
 	}
 }
 
+func TestGetConversionStats(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	empty, err := GetConversionStats()
+	if err != nil {
+		t.Fatalf("GetConversionStats on an empty DB failed: %v", err)
+	}
+	if empty.TotalApplied != 0 || empty.InterviewRate != 0 {
+		t.Errorf("expected all-zero stats on an empty DB, got %+v", empty)
+	}
+
+	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "INTERVIEW_REQUESTED")
+	AddToFunnel("B", "T", "http://boards.greenhouse.io/b", "DISCOVERED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/b", "APPLIED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/b", "REJECTED")
+	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/c", "APPLIED")
+	AddToFunnel("D", "T", "http://jobs.lever.co/d", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/d", "SKIPPED")
+
+	stats, err := GetConversionStats()
+	if err != nil {
+		t.Fatalf("GetConversionStats failed: %v", err)
+	}
+	if stats.TotalApplied != 3 || stats.Interviews != 1 || stats.Rejections != 1 || stats.Pending != 1 {
+		t.Errorf("unexpected stats: %+v", stats)
+	}
+	if stats.InterviewRate != 1.0/3.0 {
+		t.Errorf("expected InterviewRate 1/3, got %v", stats.InterviewRate)
+	}
+}
+
+func TestGetConversionStatsBySource(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	empty, err := GetConversionStatsBySource()
+	if err != nil {
+		t.Fatalf("GetConversionStatsBySource on an empty DB failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected no rows on an empty DB, got %+v", empty)
+	}
+
+	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
+	UpdateFunnelStatus("http://jobs.lever.co/a", "INTERVIEW_REQUESTED")
+	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("http://jobs.lever.co/b", "APPLIED")
+	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/c", "APPLIED")
+	UpdateFunnelStatus("http://boards.greenhouse.io/c", "REJECTED")
+	// Discovered but never applied - must not count toward any source.
+	AddToFunnel("D", "T", "http://myworkdayjobs.com/d", "DISCOVERED")
+
+	bySource, err := GetConversionStatsBySource()
+	if err != nil {
+		t.Fatalf("GetConversionStatsBySource failed: %v", err)
+	}
+	if len(bySource) != 2 {
+		t.Fatalf("expected exactly 2 sources (Lever, Greenhouse), got %d: %+v", len(bySource), bySource)
+	}
+	// Ordered by TotalApplied DESC: Lever (2) before Greenhouse (1).
+	if bySource[0].Source != "Lever" || bySource[0].TotalApplied != 2 || bySource[0].Interviews != 1 || bySource[0].Pending != 1 {
+		t.Errorf("unexpected Lever stats: %+v", bySource[0])
+	}
+	if bySource[1].Source != "Greenhouse" || bySource[1].TotalApplied != 1 || bySource[1].Rejections != 1 {
+		t.Errorf("unexpected Greenhouse stats: %+v", bySource[1])
+	}
+	for _, s := range bySource {
+		if s.Source == "Workday" {
+			t.Errorf("Workday has zero applied rows and must not appear, got %+v", s)
+		}
+	}
+}
+
 func TestRequeueByURLPattern(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

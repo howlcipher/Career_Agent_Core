@@ -47,6 +47,26 @@ type Metrics struct {
 	LastManualTitle          string `json:"last_manual_title,omitempty"`
 	LastManualAt             string `json:"last_manual_at,omitempty"`
 	LastManualProcessingTime string `json:"last_manual_processing_time,omitempty"`
+
+	TotalApplied     int                    `json:"total_applied_tracked"`
+	Interviews       int                    `json:"interviews"`
+	Rejections       int                    `json:"rejections"`
+	InterviewRatePct string                 `json:"interview_rate_pct,omitempty"`
+	BySource         []SourceConversionStat `json:"by_source,omitempty"`
+}
+
+// SourceConversionStat is one ATS platform's interview-conversion slice,
+// mirroring pkg/storage.SourceConversionStat's shape — not imported directly
+// since cmd/dashboard queries its own local db connection rather than
+// initializing pkg/storage's package-level one (see every other query in
+// serveMetrics for the established pattern this follows).
+type SourceConversionStat struct {
+	Source        string `json:"source"`
+	TotalApplied  int    `json:"total_applied"`
+	Interviews    int    `json:"interviews"`
+	Rejections    int    `json:"rejections"`
+	Pending       int    `json:"pending"`
+	InterviewRate string `json:"interview_rate_pct"`
 }
 
 // formatDuration renders how long a job sat in the pipeline (discovered_at
@@ -233,6 +253,61 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if manualAt.Valid && manualDiscoveredAt.Valid {
 		m.LastManualProcessingTime = formatDuration(manualAt.Time.Sub(manualDiscoveredAt.Time))
+	}
+
+	// Conversion-rate analytics (improvements.md #15): pkg/tracker only ever
+	// moves a job_funnel row from APPLIED to REJECTED or INTERVIEW_REQUESTED
+	// (never a distinct OFFER status), so "ever applied" = status IN
+	// ('APPLIED','REJECTED','INTERVIEW_REQUESTED').
+	var interviews, rejections int
+	err = db.QueryRow(`SELECT
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
+		Scan(&m.TotalApplied, &interviews, &rejections)
+	if err != nil {
+		log.Printf("Failed to query conversion stats: %v", err)
+	}
+	m.Interviews = interviews
+	m.Rejections = rejections
+	if m.TotalApplied > 0 {
+		m.InterviewRatePct = fmt.Sprintf("%.1f%%", float64(interviews)/float64(m.TotalApplied)*100)
+	}
+
+	sourceRows, err := db.Query(`SELECT
+		CASE
+			WHEN url LIKE '%greenhouse%' THEN 'Greenhouse'
+			WHEN url LIKE '%lever.co%' THEN 'Lever'
+			WHEN url LIKE '%myworkdayjobs.com%' THEN 'Workday'
+			WHEN url LIKE '%smartrecruiters%' THEN 'SmartRecruiters'
+			WHEN url LIKE '%ashbyhq%' THEN 'Ashby'
+			ELSE 'Other'
+		END AS source,
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+		GROUP BY source
+		HAVING COUNT(*) > 0
+		ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		log.Printf("Failed to query conversion stats by source: %v", err)
+	} else {
+		defer sourceRows.Close()
+		for sourceRows.Next() {
+			var s SourceConversionStat
+			if err := sourceRows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+				log.Printf("Failed to scan conversion-by-source row: %v", err)
+				continue
+			}
+			if s.TotalApplied > 0 {
+				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+			}
+			m.BySource = append(m.BySource, s)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

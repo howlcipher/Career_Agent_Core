@@ -645,6 +645,102 @@ func SourceOutcomeBreakdown(urlPattern string) (SourceOutcomeStat, error) {
 	return s, err
 }
 
+// atsSourceCASE labels a job_funnel row by ATS platform for conversion
+// reporting. Deliberately a separate expression from sourcePriorityCASE
+// above (that one ranks by success-likelihood tier; this one just names the
+// platform) — reusing it here would conflate two unrelated concerns.
+const atsSourceCASE = `CASE
+		WHEN url LIKE '%greenhouse%' THEN 'Greenhouse'
+		WHEN url LIKE '%lever.co%' THEN 'Lever'
+		WHEN url LIKE '%myworkdayjobs.com%' THEN 'Workday'
+		WHEN url LIKE '%smartrecruiters%' THEN 'SmartRecruiters'
+		WHEN url LIKE '%ashbyhq%' THEN 'Ashby'
+		ELSE 'Other'
+	END`
+
+// ConversionStats is the interview-conversion breakdown for job_funnel rows
+// that were ever actually applied to. pkg/tracker/imap.go only ever moves a
+// row from APPLIED to REJECTED or INTERVIEW_REQUESTED (never a distinct
+// OFFER status), so "ever applied" = status IN ('APPLIED','REJECTED',
+// 'INTERVIEW_REQUESTED') and Pending means still APPLIED with no email
+// response detected yet.
+type ConversionStats struct {
+	TotalApplied  int
+	Interviews    int
+	Rejections    int
+	Pending       int
+	InterviewRate float64 // Interviews / TotalApplied, 0-1 range; 0 if TotalApplied == 0
+}
+
+// GetConversionStats reports the overall interview-conversion rate across
+// every tracked application (improvements.md #15).
+func GetConversionStats() (ConversionStats, error) {
+	var s ConversionStats
+	if db == nil {
+		return s, fmt.Errorf("db not initialized")
+	}
+	err := db.QueryRow(`SELECT
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
+		Scan(&s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending)
+	if err != nil {
+		return s, err
+	}
+	if s.TotalApplied > 0 {
+		s.InterviewRate = float64(s.Interviews) / float64(s.TotalApplied)
+	}
+	return s, nil
+}
+
+// SourceConversionStat is one ATS platform's slice of GetConversionStats.
+type SourceConversionStat struct {
+	Source string
+	ConversionStats
+}
+
+// GetConversionStatsBySource reports GetConversionStats grouped by ATS
+// platform (atsSourceCASE), ordered by TotalApplied descending. Platforms
+// with zero tracked applications are omitted — most sources never appear
+// here since job_funnel.company_name only gets tracked by pkg/tracker for
+// rows that actually reached APPLIED.
+func GetConversionStatsBySource() ([]SourceConversionStat, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := db.Query(`SELECT
+		`+atsSourceCASE+` AS source,
+		COUNT(*),
+		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel
+		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+		GROUP BY source
+		HAVING COUNT(*) > 0
+		ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []SourceConversionStat
+	for rows.Next() {
+		var s SourceConversionStat
+		if err := rows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			return nil, err
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = float64(s.Interviews) / float64(s.TotalApplied)
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
 // RequeueByURLPattern resets job_funnel rows matching urlPattern and
 // currently in fromStatus back to DISCOVERED, so a fix that makes them
 // newly fillable actually gets a retry — GetDiscoveredJobs only ever pulls

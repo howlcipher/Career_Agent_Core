@@ -21,6 +21,7 @@
             --neon-orange: #ff8800;
             --neon-pink: #ff2ee6;
             --neon-teal: #00e0c0;
+            --neon-cyan: #00ffee;
         }
 
         body { 
@@ -90,6 +91,7 @@
         .card.manual::before { background: var(--neon-orange); }
         .card.blocked::before { background: var(--neon-pink); }
         .card.invalid::before { background: var(--neon-teal); }
+        .card.interview::before { background: var(--neon-cyan); }
 
         .card:hover {
             transform: translateY(-5px);
@@ -120,6 +122,9 @@
         .card.invalid:hover { border-color: rgba(0, 224, 192, 0.4); box-shadow: 0 10px 30px rgba(0, 224, 192, 0.15); }
         .card.invalid:hover::before { box-shadow: 0 0 15px var(--neon-teal); }
 
+        .card.interview:hover { border-color: rgba(0, 255, 238, 0.4); box-shadow: 0 10px 30px rgba(0, 255, 238, 0.15); }
+        .card.interview:hover::before { box-shadow: 0 0 15px var(--neon-cyan); }
+
         .card h2 { 
             font-family: 'Outfit', sans-serif;
             font-size: 3rem; 
@@ -138,6 +143,7 @@
         .card.manual:hover h2 { color: var(--neon-orange); }
         .card.blocked:hover h2 { color: var(--neon-pink); }
         .card.invalid:hover h2 { color: var(--neon-teal); }
+        .card.interview:hover h2 { color: var(--neon-cyan); }
 
         .card p { 
             color: var(--text-muted); 
@@ -146,6 +152,48 @@
             font-weight: 500;
             letter-spacing: 1px;
             text-transform: uppercase;
+        }
+
+        /* --- Conversion-by-platform breakdown table --- */
+        .source-breakdown {
+            width: 100%;
+            margin-top: 30px;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 24px 28px;
+        }
+
+        .source-breakdown h3 {
+            font-family: 'Outfit', sans-serif;
+            margin: 0 0 16px 0;
+            font-size: 1.1rem;
+            color: var(--neon-cyan);
+        }
+
+        .source-breakdown table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .source-breakdown th {
+            text-align: left;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.75rem;
+            padding: 6px 12px;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .source-breakdown td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--card-border);
+            color: var(--text-main);
         }
 
         /* --- Live status bar --- */
@@ -520,6 +568,27 @@
                 <h2 id="invalid-url">0</h2>
                 <p>Invalid URL</p>
             </div>
+            <div class="card interview">
+                <h2 id="interview-rate">—</h2>
+                <p>Interview Rate</p>
+            </div>
+        </div>
+
+        <div class="source-breakdown" id="source-breakdown-section" style="display:none;">
+            <h3>Conversion by Platform</h3>
+            <table id="source-breakdown-table">
+                <thead>
+                    <tr>
+                        <th>Platform</th>
+                        <th>Applied</th>
+                        <th>Interviews</th>
+                        <th>Rejections</th>
+                        <th>Pending</th>
+                        <th>Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="source-breakdown-body"></tbody>
+            </table>
         </div>
     </div>
     <script>
@@ -615,6 +684,27 @@
             durationEl.textContent = processingTime ? 'Time to process: ' + processingTime : '';
         }
 
+        function updateSourceBreakdown(bySource) {
+            const section = document.getElementById('source-breakdown-section');
+            const body = document.getElementById('source-breakdown-body');
+            if (!Array.isArray(bySource) || bySource.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            body.textContent = '';
+            for (const row of bySource) {
+                const tr = document.createElement('tr');
+                const cells = [row.source, row.total_applied, row.interviews, row.rejections, row.pending, row.interview_rate_pct || '—'];
+                for (const value of cells) {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    tr.appendChild(td);
+                }
+                body.appendChild(tr);
+            }
+            section.style.display = 'block';
+        }
+
         async function fetchMetrics() {
             try {
                 const res = await fetch('/api/metrics');
@@ -635,12 +725,14 @@
                 animateValue('manual-required', data.manual_required);
                 animateValue('blocked-captcha', data.blocked_captcha);
                 animateValue('invalid-url', data.invalid_url);
+                document.getElementById('interview-rate').textContent = data.interview_rate_pct || '—';
 
                 updateLastApplied(data);
                 updateWorkingOn(data);
                 updateMiniStatus('last-skipped', data.last_skipped_company, data.last_skipped_reason, data.last_skipped_at, 'None yet', data.last_skipped_processing_time);
                 updateMiniStatus('last-failed', data.last_failed_company, data.last_failed_reason, data.last_failed_at, 'None yet', data.last_failed_processing_time);
                 updateMiniStatus('last-manual', data.last_manual_company, data.last_manual_title, data.last_manual_at, 'None yet', data.last_manual_processing_time);
+                updateSourceBreakdown(data.by_source);
 
                 const isActive = data.processing > 0;
                 activityFill.classList.toggle('active', isActive);
