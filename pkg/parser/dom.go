@@ -87,6 +87,59 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 	return buf.String(), nil
 }
 
+// presentationalAttrs are attributes that carry no information an LLM needs
+// to identify a form field or generate a selector for it -- pure styling,
+// state, or screen-reader wiring. aria-label/aria-labelledby are kept
+// deliberately: ExtractFormMapping and SolveValidationErrors both rely on
+// them as a fallback label source for fields with no <label for>.
+var presentationalAttrs = map[string]bool{
+	"class": true, "style": true, "role": true, "tabindex": true,
+	"autocomplete": true, "spellcheck": true, "inputmode": true,
+	"aria-describedby": true, "aria-hidden": true, "aria-invalid": true,
+	"aria-required": true, "aria-expanded": true, "aria-controls": true,
+	"aria-activedescendant": true, "aria-live": true, "aria-atomic": true,
+}
+
+// StripPresentationalAttrs removes attributes that bloat a form's HTML
+// without helping an LLM fill it out -- confirmed live 2026-07-24 (bugs.md
+// #52's Reddit/Greenhouse recurrence): a single, genuinely large custom-
+// question-heavy form can still exceed the 50k-char circuit breaker even
+// after PruneDOMToForm's element-level scoping, because modern ATS themes
+// wrap every field in several layers of styling divs and accessibility
+// attributes. Stripping just the presentational ones cut that specific
+// form's payload from 98,255 to 33,629 characters (66%) with no loss of
+// selector-relevant information (id/name/type/value/for/aria-label all
+// kept, same as every attribute not in presentationalAttrs).
+func StripPresentationalAttrs(rawHTML string) (string, error) {
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return "", err
+	}
+
+	var traverse func(*html.Node)
+	traverse = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			var kept []html.Attribute
+			for _, a := range n.Attr {
+				if !presentationalAttrs[strings.ToLower(a.Key)] {
+					kept = append(kept, a)
+				}
+			}
+			n.Attr = kept
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			traverse(c)
+		}
+	}
+	traverse(doc)
+
+	var buf bytes.Buffer
+	if err := html.Render(&buf, doc); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // PruneDOMToText extracts only the visible plain text from an HTML string to drastically save LLM tokens.
 func PruneDOMToText(rawHTML string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(rawHTML))

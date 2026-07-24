@@ -822,6 +822,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			domHTML, _ := target.HTML()
 			prunedHTML, err := parser.PruneDOMToForm(domHTML)
 			if err != nil { prunedHTML = domHTML }
+			if stripped, err := parser.StripPresentationalAttrs(prunedHTML); err == nil {
+				prunedHTML = stripped
+			}
 
 			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, pii.EEO.Summary()+"\n\n"+profileContext)
 			if fixErr != nil {
