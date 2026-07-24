@@ -6,9 +6,9 @@ Reusable task prompts for any agent working in this repository. Each `.md` file 
 
 | Prompt | Purpose |
 | --- | --- |
-| `work_next_item.md` | Work the single highest-priority open item across `bugs.md` and `improvements.md`, end to end, per the Working Protocol, checking the Usability Gate first |
+| `work_next_item.md` | Work the single highest-priority open item across `bugs.md` and `improvements.md` (free items only — `improvements_paywall.md` is out of scope), end to end, per the Working Protocol, checking the Usability Gate first |
 | `resume_task.md` | Resume an interrupted task from its journal in `documentation/task_journals/` |
-| `groom_backlogs.md` | Re-evaluate, re-rank, and clean up both backlogs and stale journals without implementing anything |
+| `groom_backlogs.md` | Re-evaluate, re-rank, and clean up `bugs.md`, `improvements.md`, `improvements_paywall.md`, and stale journals without implementing anything |
 
 ## Invocation
 

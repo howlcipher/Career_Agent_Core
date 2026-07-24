@@ -1,6 +1,6 @@
 # Groom the Backlogs
 
-Maintenance pass over `bugs.md`, `improvements.md`, and `documentation/task_journals/`. Do not implement any backlog item during this pass.
+Maintenance pass over `bugs.md`, `improvements.md`, `improvements_paywall.md`, and `documentation/task_journals/`. Do not implement any backlog item during this pass. `improvements_paywall.md` mirrors `improvements.md`'s format and gets the same re-evaluation/re-scoring treatment (steps 2-4 below) — it just holds items that need a paid signup/subscription/API key, so `/work_next_item` skips it by default. If a groom pass finds an item in `improvements.md` that turns out to need a paid service (or vice versa), move its row and Details section to the correct file in the same commit.
 
 **Subagents and delegation:** when re-verification fans out across many items or files, you may parallelize it with subagents or delegate it, subject to the delegation policy in `work_next_item.md`: read-only verification subagents (e.g. Claude Code's Explore agent) are allowed but bill the same plan as the session, so for limit-saving prefer headless Antigravity (`agy -p`) or local Ollama for self-contained verification briefs. All edits to the backlog documents, rankings, and journals stay in this session, and every claim a subagent or delegate reports must be spot-checked (grep the actual code) before it changes a row.
 

@@ -2,11 +2,13 @@
 
 Work exactly one item end to end, leaving the repository in a state where this chat can be cleared and the next session starts with zero context.
 
+This prompt's scope is `bugs.md` and `improvements.md` only — both are 100% free to work autonomously. `improvements_paywall.md` is a separate, sibling backlog for items needing a paid signup/subscription/API key; it is out of scope here unless the user explicitly names an item from it in the current session.
+
 ## 1. Select
 
 - Check `documentation/task_journals/` first (ignore `TEMPLATE.md`). If a journal for an in-flight item exists, resume that item instead of starting a new one (or run `/resume_task` directly).
 - **Check the Usability Gate** at the top of `bugs.md`. If it is not yet `MET`, work the highest-priority open row in `bugs.md`'s Ranked Backlog instead of anything in `improvements.md`, unless the user explicitly names an improvement to work on anyway.
-- If the gate is met, or `bugs.md` has no open rows, read the ranked table in `improvements.md` and pick the single highest-priority open item.
+- If the gate is met, or `bugs.md` has no open rows, read the ranked table in `improvements.md` and pick the single highest-priority open item. **Never read from `improvements_paywall.md`** — it holds items that need a paid signup/subscription/API key, kept out of this prompt's default scope on purpose. Only work an item from it if the user explicitly names it in the current session.
 - **Below-floor gate:** never silently pick an item flagged `⚠️ below floor`. Skip past it to the highest-scoring above-floor item, and tell the user which flagged items were skipped so they can confirm one, re-scope it, or close it. Work a below-floor item only on the user's explicit confirmation in the current session.
 - **Live-run gate checks:** if every listed item is done but the Usability Gate's four live end-to-end checkboxes are still unchecked, that IS the next item — attempt the relevant live run (fresh Ollama install, a real `cmd/agent` batch run, `cmd/dashboard`, or `cmd/tracker`) and either check the box with a dated verification note or file the bug it surfaces.
 

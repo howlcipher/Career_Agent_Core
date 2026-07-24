@@ -1,5 +1,5 @@
 ---
-description: Re-evaluate and clean up both backlogs and stale journals
+description: Re-evaluate and clean up all backlogs and stale journals
 ---
 
 Follow the canonical prompt below, loaded from `.agents/prompts/groom_backlogs.md`:

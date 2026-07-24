@@ -12,20 +12,21 @@ If your runtime does not resolve that import, read `../ai_knowledge_library/AGEN
 
 ## Project-Specific Backlog
 
-This repo tracks its own two backlogs, mirroring the library's format and Working Protocol:
+This repo tracks its own three backlogs, mirroring the library's format and Working Protocol:
 
 - **`bugs.md`** — ranked defect backlog. Open with the **Usability Gate** at the top, which defines what "100% usable" means for this project. While the gate is unmet, closing bugs here outranks all Pending rows in `improvements.md`.
-- **`improvements.md`** — ranked feature/enhancement backlog, plus the full Working Protocol (model selection, delegation, testing, commit/push) that both backlogs share.
+- **`improvements.md`** — ranked feature/enhancement backlog, plus the full Working Protocol (model selection, delegation, testing, commit/push) that all three backlogs share. Every item in it is free to build.
+- **`improvements_paywall.md`** — sibling backlog, same format, for improvements that need a paid signup/subscription/API key. Kept separate so `/work_next_item` only ever autonomously picks free work; an item here is only worked on the user's explicit request.
 
-Read the Working Protocol in `improvements.md` before working any item from either file.
+Read the Working Protocol in `improvements.md` before working any item from any of the three files.
 
 ## Project-Local Prompts
 
 Reusable task prompts live in `.agents/prompts/`; its `README.md` is the index. Invoke them via Claude Code slash commands (`.claude/commands/`) or Gemini CLI commands (`.gemini/commands/`) — both are thin wrappers that point at the canonical prompt file. Edit the canonical prompt only.
 
-- `/work_next_item` — work the single highest-priority open item across `bugs.md` and `improvements.md`.
+- `/work_next_item` — work the single highest-priority open item across `bugs.md` and `improvements.md` (free items only; `improvements_paywall.md` is out of scope unless the user names an item from it).
 - `/resume_task` — resume an interrupted task from its journal in `documentation/task_journals/`.
-- `/groom_backlogs` — re-evaluate, re-rank, and clean both backlogs without implementing anything.
+- `/groom_backlogs` — re-evaluate, re-rank, and clean all three backlogs without implementing anything.
 
 ## Test Commands
 
@@ -43,4 +44,4 @@ There is no Makefile; run these directly from the repo root. `go test ./...` is 
 
 - No paid API keys are assumed present. `LLM_PROVIDER` defaults to local Ollama (`.env.example`); Claude and Gemini providers require keys the user must supply and are not assumed available for autonomous agent work.
 - `pii.yaml`, `.env`, `applications.db`, and `career_agent.log` hold real personal data and credentials — never print their contents into a commit, journal, or backlog entry.
-- Anything free and already installed may be used autonomously (a linter, an existing CLI, a local model). Anything paid, requiring signup, or needing a new install must be discussed with the user first (e.g. `2captcha`/`capsolver` for CAPTCHA solving, mentioned in `improvements.md`).
+- Anything free and already installed may be used autonomously (a linter, an existing CLI, a local model). Anything paid, requiring signup, or needing a new install must be discussed with the user first (e.g. `2captcha`/`capsolver` for CAPTCHA solving, tracked in `improvements_paywall.md`).
