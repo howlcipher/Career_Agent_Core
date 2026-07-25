@@ -17,4 +17,6 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 **Moved here 2026-07-24** from `improvements.md` (was item 17 there too) at the user's request, to keep paid-service items out of `/work_next_item`'s default scope. No change to the item itself.
 
+**Re-scored 2026-07-25 (`/groom_backlogs`):** score unchanged at 1.25 (Value 5 × Decay 1.0 ÷ Effort 4) — above the ROI floor on merit, but **still gated on a paid key and therefore still out of scope for autonomous work**, per this file's whole reason for existing. Re-confirmed against current code that no solving integration exists: `pkg/submitter/browser.go` detects CAPTCHAs (`isCaptchaBlocked`, bugs #23/#45/#46) and routes to `BLOCKED_CAPTCHA`, but nothing attempts a solve. Unchanged otherwise; only work it if the user provisions a key and names the item.
+
 **Model reassessed 2026-07-24 (`/groom_backlogs` pass):** checked against the current Claude lineup (Opus 5, Sonnet 5, Fable 5, Haiku 4.5) — Sonnet 5 stays. This is a medium-complexity API integration (a new provider client plus a detect-and-solve flow wired into two existing submit paths), not the kind of deep architectural work that would justify Opus 5, and not trivial enough for Haiku 4.5.

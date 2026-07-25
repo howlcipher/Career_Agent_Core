@@ -51,12 +51,33 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 11 | [Multi-step form logic (Workday-style)](#11-multi-step-form-logic-workday-style) | Closed (2026-07-24, user-confirmed) | — | — | — | Closed at the user's explicit confirmation: Workday (this item's original motivating platform) is already routed to `MANUAL_REQUIRED` before any form is ever reached (bugs.md #18/#50), and Taleo (the only other named platform) has never once appeared across this project's entire live history — no live path exists that would ever exercise this code |
 | 12 | [Niche data source scrapers](#12-niche-data-source-scrapers) | Done (2026-07-24, partial — see note) | — | Fable 5 | Gemini 3 Pro | Shipped HN "Who is Hiring" (confirmed live: 228 real postings from the current thread alone); Otta/Wellfound/YC deferred with live evidence, not assumption — see Details |
 | 13 | [Adaptive resume A/B testing](#13-adaptive-resume-ab-testing) | Done (2026-07-24, partial — see note) | — | Sonnet 5 | Gemini 3 Pro | Shipped variant generation/tagging/reporting; the "adaptive" weighted-selection policy deferred — no real outcome data exists yet to base it on |
+| 24 | [Per-call-type model selection — run ScoreJob on a smaller, faster model](#24-per-call-type-model-selection--run-scorejob-on-a-smaller-faster-model) | Pending | 0.88 = 7×0.5÷4 | Opus 5 | Gemini 3 Pro | **Filed 2026-07-25 (groom).** With #23 removing the tailoring call, `ScoreJob` is now the *sole* remaining bottleneck — measured live at ~9m49s of a ~10m job cycle. One `OLLAMA_MODEL` serves every text call, so scoring cannot be made cheap without also downgrading form mapping. Per-role model slots already exist for vision and embeddings, so the pattern is established |
 | 14 | [Local LoRA fine-tuning loop](#14-local-lora-fine-tuning-loop) | Pending ⚠️ below floor | 0.43 = 3×1.0÷7 | Opus 5 | Gemini 3 Pro | Large effort (dataset collection, training loop, eval); real payoff is speculative until items 13/15 establish what "good" looks like — confirm before working |
 | 19 | [Prompt-injection/hidden-content detection CSV log](#19-prompt-injection-hidden-content-detection-csv-log) | Done | — | — | — | User-requested 2026-07-21: turn the QuarantineLayer's transient block-and-log into a reviewable record of what was actually found on scraped career pages |
 | 23 | [Static master cover letter, reused across every application](#23-static-master-cover-letter-reused-across-every-application) | Done (2026-07-24) | — | Opus 5 | Gemini 3 Pro | User-requested: one generic, job-agnostic letter for every application instead of a per-job LLM-generated one. Skips the single most expensive step in the pipeline (~15-20+ min/job). Surfaced and fixed bugs #61/#62 along the way — cover letters had never actually been reaching employers at all |
 | 22 | [Rank the discovery queue by resume-fit similarity, not just source-priority](#22-rank-the-discovery-queue-by-resume-fit-similarity-not-just-source-priority) | Done (2026-07-24) | — | Sonnet 5 | Gemini 3 Pro | Shipped as designed in the investigation: title/company embedding vs. resume `career_chunks`, backfilled out-of-band via `cmd/rankjobs`, blended as a secondary sort key after `sourcePriorityCASE` |
 
 ## Details
+
+### 24. Per-call-type model selection — run ScoreJob on a smaller, faster model
+**Filed 2026-07-25 (`/groom_backlogs`), from live measurement rather than theory.** Item #23 removed `ProcessJobApplication` (the 15-20+ min/job tailoring call) from the pipeline. That promoted `ScoreJob` to the sole remaining bottleneck, and the first job after the restart measured it precisely:
+
+```
+00:20:25 [Worker-1] Fetching job description for Reddit...
+00:30:14 [Worker-1] Fit Score Pipeline: Reddit scored 90! Proceeding with application.
+00:30:19 [Worker-1] Using master resume for Reddit (no per-job tailoring, cover letter disabled)
+00:30:21 [Auto-Submit] Detected Greenhouse ATS. Filling out fields...
+```
+
+Document generation is now **0 seconds** (was 15-20 minutes); scoring is **9m49s** of a ~10m cycle. Against the ~3000-job backlog, scoring is effectively the entire cost of the system now.
+
+**Why it can't just be changed today:** `pkg/mcp/provider_ollama.go` resolves one `OLLAMA_MODEL` (`envOr("OLLAMA_MODEL", "llama3.1")`) and uses it for every text call — `ScoreJob`, `ExtractFormMapping`, and `SolveValidationErrors` alike. Pointing that at a small model to make scoring cheap would simultaneously downgrade form mapping and validation-error solving, which are the correctness-critical paths (they choose selectors and answer real screening questions, including EEO-sensitive ones). **The pattern to follow already exists in the same struct:** `visionModel` and `embedModel` are separate per-role slots (`OLLAMA_VISION_MODEL`, `OLLAMA_EMBED_MODEL`). This item adds the same idea for text, e.g. an `OLLAMA_FAST_MODEL` used by `ScoreJob` only, defaulting to `OLLAMA_MODEL` so the change is inert until configured.
+
+**Scope:** add the model slot and route `ScoreJob` through it; keep every other text call on the strong model. **The real work is validation, not plumbing** — scoring decides whether to apply at all, so a smaller model that scores badly means applying to unsuitable jobs or skipping good ones. Ship it with a real comparison: run both models over the same sample of already-scored jobs and check the scores agree closely enough (especially around the `< 50` skip threshold) before switching the default. Effort 4 reflects that validation requirement, not the code.
+
+**Scoring:** Value 7 (throughput on the dominant cost, against a ~3000-job backlog), Decay 0.5 (second item on the "reduce per-job LLM time" curve, after #23 shipped), Effort 4 → **0.88**, above the 0.5 floor and currently the highest-scoring Pending row in this backlog.
+
+**No new install or spend required:** `qwen3:30b-instruct`, `qwen2.5vl:7b`, and `nomic-embed-text` are already pulled locally; a smaller text model would need one `ollama pull`, which is free and local. Confirm the specific model with the user before pulling.
 
 ### 23. Static master cover letter, reused across every application (Done 2026-07-24)
 **Request 2026-07-24:** user asked for one generic cover letter written from the master resume, reused across all jobs, avoiding specifics like the job title, and for the per-job custom cover letter to be toggled off.
@@ -94,6 +115,14 @@ Tests added: `TestFillCoverLetter_PrefersUploadOverPasteWhenMappingPointsAtTexta
 **Typed as `*bool`, deliberately:** a plain `bool` would make Go's zero value mean "off", silently disabling cover letters for any profile written before this field existed. `nil` means send. `TestLoadProfile_SendCoverLetter` and `TestShouldSendCoverLetter_ZeroValueProfileSends` both pin that.
 
 **Current live configuration** (`use_master_cover_letter: true` + `send_cover_letter: false`) is the fastest available: `ProcessJobApplication` is skipped entirely, and no cover letter is attached. Applications go out with `master_resume.pdf` alone.
+
+**Verified live end to end 2026-07-25 (`/groom_backlogs`), on the restarted 82-job run (PID `3486446`, HEAD `375fcdb`):**
+```
+00:30:19 [Auto-Submit] Verified page is live. Generating tailored documents...
+00:30:19 [Worker-1] Using master resume for Reddit (no per-job tailoring, cover letter disabled)
+00:30:21 [Auto-Submit] Detected Greenhouse ATS. Filling out fields...
+```
+Document generation completed in **0 seconds** against a 15-20 minute baseline, the config resolved exactly as intended (master resume, no tailoring, no cover letter), and the run proceeded straight into form filling with no cover-letter interaction attempted anywhere. This also promoted `ScoreJob` to the sole remaining bottleneck at ~9m49s of the same cycle, filed as item #24.
 
 **Two known caveats, neither blocking:** (1) the PDF has a fixed date ("July 20, 2026") baked into it, which will read as stale over time — regenerate the PDF periodically. (2) `ledongthuc/pdf`'s text extraction drops some line breaks ("July 20, 2026Hiring Manager"), so *pasted* letters read slightly run-together; uploads are unaffected since the file goes as-is, and upload is the more common shape on real ATS forms (Greenhouse and Lever's own cover letter controls among them).
 
@@ -160,6 +189,8 @@ Tests: `TestLoadProfile_CoverLetterTones`, `TestSelectToneVariant`, `TestMigrate
 Collect scored jobs (fit score, outcome) into a training dataset and periodically fine-tune a local model on the user's specific preferences, reducing reliance on prompting alone. Genuinely large scope: dataset export from `applications.db`, a training pipeline (likely outside Go — this would shell out to a Python/PEFT toolchain), eval harness to confirm the fine-tuned model doesn't regress scoring quality, and a rollout/rollback mechanism. Real payoff depends on having enough labeled outcome data, which items 13 and 15 would start accumulating. **2026-07-19 scoring note:** below the 0.5 ROI floor at Value 3 (speculative payoff, no labeled data yet) ÷ Effort 7 (large, cross-language build). Flagged ⚠️; do not work without explicit user confirmation. Recommend deferring until items 13/15 ship and real outcome data exists to justify the effort.
 
 **Re-verified 2026-07-24 (`/groom_backlogs` pass):** both prerequisite items now shipped (15 on 2026-07-24, 13 the same day, partial — variant tagging/reporting exist, its own "adaptive" weighting is deferred for the identical reason this item is: no real outcome data yet). The blocking condition itself is unchanged, though — the live DB still has zero `APPLIED`/`REJECTED`/`INTERVIEW_REQUESTED` rows (82-job re-verification still in progress, still hasn't produced a fresh terminal outcome). Score and floor status unchanged; the prerequisite *infrastructure* is now fully in place, so once real conversion data starts accumulating (from the 82-job run resolving, or from ordinary live traffic afterward), this item's Value should be re-scored up from the current speculative 3 — revisit then rather than waiting on any further code to ship first.
+
+**Re-verified 2026-07-25 (`/groom_backlogs`):** live DB *still* shows zero `APPLIED`/`REJECTED`/`INTERVIEW_REQUESTED` rows (query returned no rows at all), so the blocking condition is unchanged for a third consecutive groom. Score stays 0.43, still ⚠️ below the 0.5 floor. **Recommendation to the user is now explicit:** leave this deferred until the 82-job run produces real terminal outcomes — it is the only thing that can supply the labeled data this item's Value depends on, and re-scoring it before then would be guessing. Do not work it without confirmation.
 
 **Re-verified again 2026-07-24 (later `/groom_backlogs` pass, same day):** live DB still shows zero `APPLIED`/`REJECTED`/`INTERVIEW_REQUESTED` rows — no change from the note above, the 82-job run hadn't produced a terminal outcome as of this check either. **Model reassessed:** stepped up from Fable 5 to Opus 5. Fable 5 was originally carried over as this repo's typical "small effort" model choice, but this item is Effort 7 (large) — a cross-language pipeline (Go orchestration shelling out to Python/PEFT), training-loop design, and an eval harness to guard against scoring-quality regressions is genuine hard architecture work, not a fit for the smaller-task tier. Opus 5 is the better match whenever this item is actually picked up.
 
