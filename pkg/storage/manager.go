@@ -1076,3 +1076,45 @@ func anyNonEmptyString(m map[string]interface{}) bool {
 	}
 	return false
 }
+
+// GetKnownATSCompanies returns distinct company slugs for boards on the given
+// ATS host, extracted from URLs the funnel has already collected. Ordered by
+// how many postings each company has contributed, so a bounded pass spends its
+// budget on employers this profile actually matches rather than one-offs.
+//
+// improvements.md #26: the slug is the path segment immediately after the ATS
+// host, which is how both Greenhouse (job-boards.greenhouse.io/<slug>/jobs/id)
+// and Lever (jobs.lever.co/<slug>/uuid) address a company board.
+func GetKnownATSCompanies(atsHost string, limit int) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := db.Query(`
+		SELECT slug, COUNT(*) AS n FROM (
+			SELECT substr(
+				substr(url, instr(url, ?) + length(?)),
+				1,
+				instr(substr(url, instr(url, ?) + length(?)) || '/', '/') - 1
+			) AS slug
+			FROM job_funnel
+			WHERE url LIKE '%' || ? || '%'
+		)
+		WHERE slug != '' AND slug NOT LIKE '%.%' AND slug NOT LIKE '%?%'
+		GROUP BY slug ORDER BY n DESC LIMIT ?`,
+		atsHost+"/", atsHost+"/", atsHost+"/", atsHost+"/", atsHost+"/", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var slug string
+		var n int
+		if err := rows.Scan(&slug, &n); err != nil {
+			return nil, err
+		}
+		out = append(out, slug)
+	}
+	return out, rows.Err()
+}

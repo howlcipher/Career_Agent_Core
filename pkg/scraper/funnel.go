@@ -53,6 +53,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 	
 	f.discoverWithRemoteOK(jobChan)
 	f.discoverWithHackerNews(jobChan)
+	f.discoverWithATSFeeds(jobChan)
 
 	useFallback := false
 
