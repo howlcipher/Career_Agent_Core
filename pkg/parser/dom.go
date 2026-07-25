@@ -95,11 +95,19 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 var presentationalAttrs = map[string]bool{
 	"class": true, "style": true, "role": true, "tabindex": true,
 	"autocomplete": true, "spellcheck": true, "inputmode": true,
-	"aria-describedby": true, "aria-hidden": true,
+	"aria-hidden": true,
 	// aria-invalid is deliberately NOT stripped (bugs.md #64). It is the one
 	// attribute that says which field a form actually rejected, so removing
 	// it left SolveValidationErrors no way to tell a failing field from a
 	// passing one — forcing it to re-send the entire form on every retry.
+	//
+	// aria-describedby / aria-errormessage are deliberately NOT stripped
+	// either (bugs.md #70). They are the WCAG-standard link from a rejected
+	// control to the element holding the page's own explanation of why it
+	// bounced. Stripping them severed that link before PruneDOMToInvalidFields
+	// could follow it, leaving the model with "this field is invalid" and no
+	// statement of what would make it valid — so it guessed, the same field
+	// bounced again, and the retry loop burned all three attempts.
 	"aria-required": true, "aria-expanded": true, "aria-controls": true,
 	"aria-activedescendant": true, "aria-live": true, "aria-atomic": true,
 }
@@ -212,12 +220,20 @@ func PruneDOMToInvalidFields(formHTML string) (out string, narrowed bool, err er
 
 	var invalid []*html.Node
 	ids := map[string]bool{}
+	// errorRefs maps an invalid control's id to the set of element ids holding
+	// its error text, per bugs.md #70.
+	errorRefs := map[string][]string{}
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode && isInvalidControl(n) {
 			invalid = append(invalid, n)
-			if id := attrValue(n, "id"); id != "" {
+			id := attrValue(n, "id")
+			if id != "" {
 				ids[id] = true
+			}
+			// Both attributes are space-separated id lists per WCAG.
+			for _, attr := range []string{"aria-describedby", "aria-errormessage"} {
+				errorRefs[id] = append(errorRefs[id], strings.Fields(attrValue(n, attr))...)
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -230,29 +246,60 @@ func PruneDOMToInvalidFields(formHTML string) (out string, narrowed bool, err er
 		return formHTML, false, nil
 	}
 
-	// Labels are collected separately: a <label for=...> is usually a sibling
-	// or ancestor of its control, not a descendant, so it would be lost by
-	// rendering the control alone -- and the label text is exactly what lets
-	// the model work out what value the field wants.
-	var labels []*html.Node
-	var walkLabels func(*html.Node)
-	walkLabels = func(n *html.Node) {
-		if n.Type == html.ElementNode && strings.ToLower(n.Data) == "label" {
-			if f := attrValue(n, "for"); f != "" && ids[f] {
-				labels = append(labels, n)
+	// Labels and error elements are collected separately: a <label for=...> is
+	// usually a sibling or ancestor of its control, not a descendant, so it
+	// would be lost by rendering the control alone -- and the label text is
+	// exactly what lets the model work out what value the field wants. The
+	// error element is likewise a sibling, and says why the value it already
+	// has was rejected.
+	labelsFor := map[string][]*html.Node{}
+	nodesByID := map[string]*html.Node{}
+	var walkRelated func(*html.Node)
+	walkRelated = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			if strings.ToLower(n.Data) == "label" {
+				if f := attrValue(n, "for"); f != "" && ids[f] {
+					labelsFor[f] = append(labelsFor[f], n)
+				}
+			}
+			if id := attrValue(n, "id"); id != "" {
+				nodesByID[id] = n
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walkLabels(c)
+			walkRelated(c)
 		}
 	}
-	walkLabels(doc)
+	walkRelated(doc)
 
+	// Emit label, control, then error text together per rejected field, so the
+	// model never has to re-associate them by id across a flat list.
 	var buf bytes.Buffer
 	buf.WriteString("<form>")
-	for _, n := range append(labels, invalid...) {
-		if err := html.Render(&buf, n); err != nil {
+	emitted := map[*html.Node]bool{}
+	render := func(n *html.Node) error {
+		if n == nil || emitted[n] {
+			return nil
+		}
+		emitted[n] = true
+		return html.Render(&buf, n)
+	}
+	for _, ctrl := range invalid {
+		id := attrValue(ctrl, "id")
+		for _, l := range labelsFor[id] {
+			if err := render(l); err != nil {
+				return formHTML, false, nil
+			}
+		}
+		if err := render(ctrl); err != nil {
 			return formHTML, false, nil
+		}
+		for _, ref := range errorRefs[id] {
+			// An error element nested inside the control was already emitted
+			// with it; render() de-duplicates that case.
+			if err := render(nodesByID[ref]); err != nil {
+				return formHTML, false, nil
+			}
 		}
 	}
 	buf.WriteString("</form>")

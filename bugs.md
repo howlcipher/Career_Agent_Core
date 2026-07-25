@@ -39,6 +39,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 70 | [The validation-retry loop strips the page's own error text, so the model never learns why a field bounced](#70-the-validation-retry-loop-strips-the-pages-own-error-text-so-the-model-never-learns-why-a-field-bounced) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on the highest-fit job in the 82-cohort (Reddit, scored **90**), which burned **17.5 minutes** and 3 LLM calls to fail with `failed to submit application after 3 validation error attempts`. `aria-describedby` was stripped as "presentational" *before* `PruneDOMToInvalidFields` ran, so the link from a rejected control to its error message was severed, and the message element was then dropped as neither control nor label. The model was told a field was invalid but never what would make it valid, so it re-guessed the same value each attempt. Compounded by an empty fix map falling through to a re-submit of a byte-identical form. This is the terminal step of the whole pipeline — it fails *after* discovery, scoring and fill have all succeeded |
 | 69 | [Discovery stored the searched role as job_title and discarded the real headline](#69-discovery-stored-the-searched-role-as-job_title-and-discarded-the-real-headline) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found while auditing throughput: **55 distinct titles across 3,131 waiting rows**. The SerpAPI path called `AddToFunnel(company, role, ...)` — storing the *search term* — while `result.Title` (the real headline) was logged one line earlier and thrown away. Beyond misleading logs and dashboard, this degraded improvements.md #22, which ranks the queue by embedding title+company: every job found under the same role got a near-identical embedding |
 | 68 | [SaveFormMapping cached semantically-empty mappings, burning a Learner Module call per visit](#68-saveformmapping-cached-semantically-empty-mappings-burning-a-learner-module-call-per-visit) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Bug #21 guards against non-JSON, but an all-null mapping is *valid* JSON. Found live: **7 of 60** cached mappings had every selector null, including `smartrecruiters.com`, `pinpointhq.com` and `applytojob.com`. Each visit to those domains loaded the useless mapping, failed every fill, invalidated the cache and burned a fresh Learner Module call to regenerate the same nulls |
 | 67 | [The initial fill path never received #65/#66's fixes, so required dropdowns always failed the first pass](#67-the-initial-fill-path-never-received-6566s-fixes-so-required-dropdowns-always-failed-the-first-pass) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | #65 (dispatch by control type) and #66 (bare-identifier resolution) were both wired only into the validation-*retry* path. `handleDynamic`'s first pass still used `Fill()`-only `safeFill`, so a required `<select>` could never be set on the first attempt and every such form was forced into an avoidable, expensive retry cycle — and custom screening questions that are dropdowns could not be answered at all |
@@ -98,6 +99,38 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 70. The validation-retry loop strips the page's own error text, so the model never learns why a field bounced (Resolved 2026-07-25)
+
+**Caught live, in the act**, while monitoring the 82-job re-verification run on 2026-07-25. Reddit (`job-boards.greenhouse.io/reddit/jobs/8044767`) scored **90** — the highest-fit job in the entire cohort — and then died at the last step:
+
+```
+12:14:55 Fit Score Pipeline: Reddit scored 90! Proceeding with application.
+12:15:03 Submission failed validation. Retrying...
+12:15:03 Narrowed validation retry to the rejected fields only (53366 -> 5363 chars)
+12:27:16 Submission failed validation. Retrying...
+12:27:16 Narrowed validation retry to the rejected fields only (53228 -> 5439 chars)
+12:32:28 Submission failed validation. Retrying...
+12:32:28 Auto-Submit failed for Reddit: failed to submit application after 3 validation error attempts
+```
+
+**17.5 minutes and 3 LLM calls for nothing.** The tell is in the numbers: between attempts the form barely changed (53366 → 53228) and the narrowed slice *grew* (5363 → 5439). If the fixes were landing, the invalid-field set should shrink. It did not — the same fields were being rejected every time.
+
+**Root cause — two independent defects on the same path:**
+
+1. **`aria-describedby` was in `presentationalAttrs`** (`pkg/parser/dom.go`), stripped as bloat by `StripPresentationalAttrs`. But that runs at `pkg/submitter/browser.go` *before* `PruneDOMToInvalidFields`. `aria-describedby` is the WCAG-standard pointer from a rejected control to the element holding the page's explanation of the rejection. Stripping it severed the link; the pruner then dropped the error element itself, since it is neither an invalid control nor a `<label>`. Net effect: the model received `<input name="phone" aria-invalid="true">` with the label "Phone" and **no statement of what was wrong with it** — so it re-proposed a plausible value, which bounced identically. #64's narrowing made this strictly worse: before it, the full form at least carried the error text somewhere in the payload.
+
+2. **An empty fix map fell through to a re-submit.** The guard read `if !appliedAny && len(fixesMap) > 0`. When the model proposed *nothing* (a legitimate outcome — `SolveValidationErrors` returns a nil map for a `null`/`{}` response with no error), `len(fixesMap) == 0`, the guard did not fire, and control fell straight through to the submit click — re-submitting a byte-identical form and burning another ~6-12 minutes. Note the comment already sitting above that block from #65 states the exact failure mode ("the next attempt re-sends an identical payload and the loop is guaranteed to exhaust itself"); the guard just did not cover the empty case.
+
+**Fix:**
+- Removed `aria-describedby` from `presentationalAttrs`, with the same style of carve-out comment `aria-invalid` already carries.
+- `PruneDOMToInvalidFields` now follows `aria-describedby` **and** `aria-errormessage` (both space-separated id lists per WCAG) and emits **label → control → error text grouped per rejected field**, so the model never has to re-associate them by id across a flat list.
+- Empty fix map is now a hard failure (`model proposed no fixes for the rejected fields`) instead of a futile re-submit.
+- Added an `Attempt N applied X/Y validation fix(es) to: <selectors>` log line. **Selectors only, never values** — the values come from the PII profile and the log is not a place for them. Without this, a non-converging retry loop is undiagnosable from logs, which is exactly why this bug survived until someone watched it happen in real time.
+
+**Tests:** `TestPruneDOMToInvalidFields_KeepsAriaDescribedByErrorText` and `TestPruneDOMToInvalidFields_KeepsAriaErrorMessageText` (both verified failing before the fix — the error text was provably absent from the output). `TestStripPresentationalAttrs_RemovesStylingAndStateAttrs` had its `aria-describedby` assertion removed and replaced with a pointer to the new tests, so the carve-out cannot be silently reverted.
+
+**Severity Blocker, not Major:** this is the terminal step of the entire pipeline. It fails *after* discovery, scoring, document generation and form fill have all succeeded, on the jobs the agent rated highest — and it consumes the single most expensive resource in the system (~6 min of inference per wasted attempt, on a machine where all LLM calls serialise).
 
 ### 69. Discovery stored the searched role as job_title and discarded the real headline (Resolved 2026-07-25)
 **Found while auditing why throughput is the binding constraint** (3,131 jobs waiting at ~10 min each ≈ 22 days of continuous compute). Checking whether cheap title-based pre-filtering could skip irrelevant rows turned up something odd: `SELECT COUNT(DISTINCT job_title)` over the 3,131 waiting rows returned **55** — suspiciously close to the length of the configured roles list, and the sample was "Senior Backend Engineer" repeated ten times over.

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/danielthedm/promptsec"
@@ -912,17 +913,35 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// discard the outcome. A silently-failed fix leaves the field
 			// exactly as invalid as it was, so the next attempt re-sends an
 			// identical payload and the loop is guaranteed to exhaust itself.
+			// bugs.md #70: an empty fix map is a dead end, not a no-op. The
+			// previous guard only fired when the model proposed fixes that all
+			// failed to apply; proposing *nothing* fell straight through to the
+			// submit click below, re-submitting a byte-identical form, failing
+			// validation identically, and burning another ~6-12 minutes of
+			// inference. Bail out immediately instead.
+			if len(fixesMap) == 0 {
+				return fmt.Errorf("model proposed no fixes for the rejected fields")
+			}
+
+			// Selectors only, never values: the values are drawn from the PII
+			// profile and this log is not a place for them. The selector list
+			// is what makes a non-converging retry loop diagnosable -- the same
+			// selectors recurring across attempts means the fix is not landing.
 			appliedAny := false
+			applied := make([]string, 0, len(fixesMap))
 			for selector, value := range fixesMap {
 				if err := applyValidationFix(target, selector, value); err != nil {
 					log.Printf("[Auto-Submit] Validation fix for %q failed: %v", selector, err)
 					continue
 				}
+				applied = append(applied, selector)
 				appliedAny = true
 			}
-			if !appliedAny && len(fixesMap) > 0 {
+			if !appliedAny {
 				return fmt.Errorf("none of the %d proposed validation fixes could be applied", len(fixesMap))
 			}
+			sort.Strings(applied)
+			log.Printf("[Auto-Submit] Attempt %d applied %d/%d validation fix(es) to: %s", attempt, len(applied), len(fixesMap), strings.Join(applied, ", "))
 
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {

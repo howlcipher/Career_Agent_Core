@@ -123,7 +123,12 @@ func TestStripPresentationalAttrs_RemovesStylingAndStateAttrs(t *testing.T) {
 	// stripping it forced SolveValidationErrors to re-send the entire form on
 	// every retry. Its retention is pinned by
 	// TestStripPresentationalAttrs_KeepsAriaInvalid.
-	for _, attr := range []string{"class=", "style=", "role=", "tabindex=", "autocomplete=", "spellcheck=", "inputmode=", "aria-describedby=", "aria-hidden=", "aria-required="} {
+	//
+	// aria-describedby was likewise removed from this list in bugs.md #70: it
+	// points at the element holding the page's own reason for rejecting the
+	// field, which PruneDOMToInvalidFields now follows. Its retention is
+	// pinned by TestPruneDOMToInvalidFields_KeepsAriaDescribedByErrorText.
+	for _, attr := range []string{"class=", "style=", "role=", "tabindex=", "autocomplete=", "spellcheck=", "inputmode=", "aria-hidden=", "aria-required="} {
 		if strings.Contains(output, attr) {
 			t.Errorf("expected %s to be stripped, got: %s", attr, output)
 		}
@@ -242,5 +247,51 @@ func TestStripPresentationalAttrs_KeepsAriaInvalid(t *testing.T) {
 	}
 	if strings.Contains(out, "class=") {
 		t.Errorf("presentational attrs should still be stripped, got: %s", out)
+	}
+}
+
+// bugs.md #70: the narrowed retry payload kept the rejected control and its
+// label but dropped the page's own error text, which is the only thing that
+// says *why* the field bounced. "Phone" plus aria-invalid tells the model the
+// field is wrong; "Please enter a valid phone number, e.g. +1 555 555 5555"
+// tells it what to actually write.
+func TestPruneDOMToInvalidFields_KeepsAriaDescribedByErrorText(t *testing.T) {
+	form := `<form>
+		<label for="ph">Phone</label>
+		<input id="ph" name="phone" aria-invalid="true" aria-describedby="ph-err">
+		<div id="ph-err">Please enter a valid phone number</div>
+		<label for="fn">First Name</label><input id="fn" name="first_name" value="Will">
+	</form>`
+
+	out, narrowed, err := PruneDOMToInvalidFields(form)
+	if err != nil {
+		t.Fatalf("PruneDOMToInvalidFields: %v", err)
+	}
+	if !narrowed {
+		t.Fatal("expected the payload to be narrowed, got narrowed=false")
+	}
+	if !strings.Contains(out, "Please enter a valid phone number") {
+		t.Errorf("the page's own error text must be kept — it is the only statement of why the field was rejected. got: %s", out)
+	}
+	if strings.Contains(out, `name="first_name"`) {
+		t.Errorf("fields that passed validation must still be dropped, got: %s", out)
+	}
+}
+
+// aria-errormessage is the other half of the WCAG pairing and some themes use
+// it instead of aria-describedby.
+func TestPruneDOMToInvalidFields_KeepsAriaErrorMessageText(t *testing.T) {
+	form := `<form>
+		<label for="vs">Visa Status</label>
+		<select id="vs" name="visa" aria-invalid="true" aria-errormessage="vs-err"><option value="">Select</option></select>
+		<span id="vs-err">This question is required.</span>
+	</form>`
+
+	out, _, err := PruneDOMToInvalidFields(form)
+	if err != nil {
+		t.Fatalf("PruneDOMToInvalidFields: %v", err)
+	}
+	if !strings.Contains(out, "This question is required.") {
+		t.Errorf("aria-errormessage text must be kept, got: %s", out)
 	}
 }
