@@ -1627,3 +1627,83 @@ func TestApplyValidationFix_FillsPlainTextInputs(t *testing.T) {
 		t.Errorf("expected the text input to be filled, got %q", filled)
 	}
 }
+
+// bugs.md #66: SolveValidationErrors returns bare id/name values, not CSS
+// selectors. Playwright reads a bare word as a tag name, so "country" matched
+// nothing and the form could never be corrected.
+func TestResolveFieldLocator_RecoversBareIdentifiers(t *testing.T) {
+	tried := []string{}
+	page := &MockPage{
+		locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			tried = append(tried, sel)
+			// Only the id form exists on this page, mirroring a real
+			// Greenhouse custom question.
+			if sel == "#question_9558065008" {
+				return &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	if _, err := resolveFieldLocator(pageTarget{page: page}, "question_9558065008"); err != nil {
+		t.Fatalf("expected the bare identifier to resolve via its id form, got: %v", err)
+	}
+	if len(tried) < 2 || tried[0] != "question_9558065008" {
+		t.Errorf("the raw string must be tried first so valid selectors are unaffected; tried=%v", tried)
+	}
+}
+
+func TestResolveFieldLocator_RecoversViaNameAttribute(t *testing.T) {
+	page := &MockPage{
+		locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			if sel == `[name="country"]` {
+				return &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+	if _, err := resolveFieldLocator(pageTarget{page: page}, "country"); err != nil {
+		t.Fatalf("expected resolution via the name attribute, got: %v", err)
+	}
+}
+
+// A real CSS selector must be used as-is and never mangled into "##foo".
+func TestResolveFieldLocator_LeavesRealSelectorsAlone(t *testing.T) {
+	tried := []string{}
+	page := &MockPage{
+		locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			tried = append(tried, sel)
+			return &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+		},
+	}
+	if _, err := resolveFieldLocator(pageTarget{page: page}, "#first_name"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tried) != 1 || tried[0] != "#first_name" {
+		t.Errorf("a valid CSS selector must be tried once, unchanged; tried=%v", tried)
+	}
+}
+
+func TestResolveFieldLocator_ErrorsWhenNothingMatches(t *testing.T) {
+	page := &MockPage{
+		locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+	if _, err := resolveFieldLocator(pageTarget{page: page}, "nope"); err == nil {
+		t.Error("expected an error when no form of the selector matches")
+	}
+}
+
+func TestLooksLikeCSSSelector(t *testing.T) {
+	for _, s := range []string{"#id", ".cls", "[name='x']", "input[type=text]", "div > p"} {
+		if !looksLikeCSSSelector(s) {
+			t.Errorf("%q should be recognised as a CSS selector", s)
+		}
+	}
+	for _, s := range []string{"country", "question_9558065008", "candidate-location"} {
+		if looksLikeCSSSelector(s) {
+			t.Errorf("%q is a bare identifier, not a CSS selector", s)
+		}
+	}
+}

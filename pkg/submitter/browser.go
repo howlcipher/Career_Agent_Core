@@ -1159,6 +1159,45 @@ func safeFill(target fillTarget, selector, text string) error {
 	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 }
 
+// looksLikeCSSSelector reports whether s already carries CSS syntax. A bare
+// word does not: Playwright reads it as a *tag name*, so "country" searches
+// for a <country> element and matches nothing.
+func looksLikeCSSSelector(s string) bool {
+	return strings.ContainsAny(s, "#.[]>:,= \t")
+}
+
+// resolveFieldLocator finds the element a fix refers to, tolerating the model
+// returning a bare id/name value instead of a real CSS selector.
+//
+// bugs.md #66: SolveValidationErrors routinely returns identifiers verbatim —
+// confirmed live, 12 of 12 fixes on one Greenhouse form came back as
+// "question_9558065008", "country", "candidate-location" — because that is
+// what the id/name attributes literally say in the DOM it was shown. Passed
+// straight to Loc() every one matched nothing, so the form could never be
+// corrected and the job burned all three attempts. Tries the string as given
+// first (so genuinely-correct selectors are unaffected), then the id and name
+// interpretations.
+func resolveFieldLocator(target fillTarget, selector string) (playwright.Locator, error) {
+	candidates := []string{selector}
+	if !looksLikeCSSSelector(selector) {
+		candidates = append(candidates,
+			"#"+selector,
+			fmt.Sprintf("[name=%q]", selector),
+			fmt.Sprintf("[id=%q]", selector),
+			fmt.Sprintf("[data-qa=%q]", selector),
+		)
+	}
+	for _, c := range candidates {
+		loc := target.Loc(c)
+		count, err := loc.Count()
+		if err != nil || count == 0 {
+			continue
+		}
+		return firstVisibleLocator(loc, count), nil
+	}
+	return nil, fmt.Errorf("selector matched no element (tried %d form(s) of %q)", len(candidates), selector)
+}
+
 // applyValidationFix sets a value on whatever kind of control the selector
 // actually resolves to, instead of assuming everything is a text input.
 //
@@ -1177,15 +1216,10 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 	if value == "" {
 		return nil
 	}
-	loc := target.Loc(selector)
-	count, err := loc.Count()
+	el, err := resolveFieldLocator(target, selector)
 	if err != nil {
-		return fmt.Errorf("could not resolve selector: %w", err)
+		return err
 	}
-	if count == 0 {
-		return fmt.Errorf("selector matched no element")
-	}
-	el := firstVisibleLocator(loc, count)
 
 	kind, evalErr := el.Evaluate("el => el.tagName.toLowerCase() + '|' + ((el.type || '').toLowerCase())", nil)
 	shape, _ := kind.(string)
