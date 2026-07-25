@@ -996,12 +996,13 @@ func TestConfirmOrError_ErrorsOnValidationErrorText(t *testing.T) {
 	}
 }
 
-// TestLikelyExceedsModelContext is the live-confirmed shape from bugs.md
-// #52's later recurrences: Reddit's 54,917-char prompt needed 18,572
-// tokens against a 6,144-token context window (~2.96 chars/token) -- well
-// past the character-based circuit breaker limit's own separate 75k
-// ceiling. This threshold exists specifically to catch that gap before
-// ever calling the LLM.
+// TestLikelyExceedsModelContext covers the live-confirmed shapes from
+// bugs.md #52/#57/#60: Reddit's 54,917-char prompt originally needed 18,572
+// tokens against the then-6,144-token context window (~2.96 chars/token).
+// After #60 raised the Ollama server to a 32,768-token context (with
+// OLLAMA_KV_CACHE_TYPE=q8_0), Reddit's real repro size now comfortably fits
+// -- confirmed here so a regression back to a too-small threshold would be
+// caught by this same test rather than only rediscovered live.
 func TestLikelyExceedsModelContext(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1010,8 +1011,9 @@ func TestLikelyExceedsModelContext(t *testing.T) {
 		want    bool
 	}{
 		{name: "small form, small profile", dom: strings.Repeat("x", 5000), profile: strings.Repeat("y", 1000), want: false},
-		{name: "combined length just over the threshold", dom: strings.Repeat("x", 13000), profile: strings.Repeat("y", 1001), want: true},
-		{name: "Reddit's real repro size (54,917 chars)", dom: strings.Repeat("x", 54917), profile: "", want: true},
+		{name: "combined length just over the threshold", dom: strings.Repeat("x", 79000), profile: strings.Repeat("y", 1001), want: true},
+		{name: "Reddit's real repro size (54,917 chars) now fits under the raised context window (bugs.md #60)", dom: strings.Repeat("x", 54917), profile: "", want: false},
+		{name: "a form genuinely larger than even the raised budget still trips the breaker", dom: strings.Repeat("x", 90000), profile: "", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

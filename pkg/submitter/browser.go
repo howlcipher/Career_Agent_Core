@@ -387,14 +387,33 @@ var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's
 // maxPromptCharsForModelContext is a conservative character budget for any
 // single prompt sent to the local model, derived from two real failures:
 // Reddit's 54,917-char prompt needed 18,572 tokens (~2.96 chars/token) and
-// Akuity's needed 16,604 tokens at a similar ratio, both well past the
-// observed 6,144-token context window. Assumes 2.5 chars/token (more
-// conservative than either real sample) and reserves ~400 tokens for the
-// system prompt and EEO profile context that don't appear in this count,
-// leaving (6144-400)*2.5 ≈ 14,000 characters. Checked before either
-// ExtractFormMapping or SolveValidationErrors is called, on the exact
-// content that will make up their prompt (DOM plus profile context).
-const maxPromptCharsForModelContext = 14000
+// Akuity's needed 16,604 tokens at a similar ratio. Assumes 2.5 chars/token
+// (more conservative than either real sample) and reserves ~400 tokens for
+// the system prompt and EEO profile context that don't appear in this count.
+//
+// Raised 2026-07-24 (found live during the 82-job re-verification: every
+// single MANUAL_REQUIRED outcome in that run was this exact circuit breaker
+// firing — 13/13, the dominant blocker to reaching a real APPLIED). Root
+// cause was an unnecessarily conservative Ollama server config, not a real
+// model limitation: the running model (qwen3:30b-instruct, qwen3moe
+// architecture) uses GQA with only 4 KV heads, making its context memory
+// cost unusually cheap (~96KB/token at f16). The server was pinned to
+// OLLAMA_CONTEXT_LENGTH=6144 via a systemd override
+// (~/.config/systemd/user/ollama.service.d/override.conf) despite the model
+// architecturally supporting up to 262,144 tokens. Raised the server to
+// 32768 alongside OLLAMA_KV_CACHE_TYPE=q8_0 (quantizes the KV cache,
+// roughly halving its already-cheap per-token cost, near-lossless in
+// practice) — confirmed live: system memory headroom actually *improved*
+// after the restart (15GB available vs. 4.8GB before) despite the ~5x
+// larger context, since the KV cache was never the dominant memory cost
+// here (the 30.5B model's weights are, at a fixed ~17GB regardless of
+// context length). This constant must stay in sync with that server config
+// — (32768-400)*2.5 ≈ 80,000 characters, rounded down for margin.
+//
+// Checked before either ExtractFormMapping or SolveValidationErrors is
+// called, on the exact content that will make up their prompt (DOM plus
+// profile context).
+const maxPromptCharsForModelContext = 80000
 
 func likelyExceedsModelContext(domContent, profileContext string) bool {
 	return len(domContent)+len(profileContext) > maxPromptCharsForModelContext
