@@ -91,6 +91,26 @@ Signals that this is a real defect, not just a hard form:
 1. The page DOM barely changed between attempts (53366 → 53228 chars) and the narrowed slice *grew* (5363 → 5439) — consistent with the same fields being rejected each time, i.e. the LLM's fix is not landing.
 2. **Nothing logs *which* fields were rejected or what the model tried to set them to.** That is itself a gap — it makes this class of failure undiagnosable from logs alone, and this is the single most expensive failure mode in the pipeline (~6 min per wasted attempt).
 
+## Required-field audit of Reddit's form (2026-07-25 15:54, probe, no submit)
+
+Enumerated every control Greenhouse marks required, by reading `aria-required`/`requiredInput` rather than clicking submit — clicking it on a real posting could file an incomplete application under the user's name. **20 required fields.** Mapped against what the agent can now supply:
+
+| Field | Label | Source | Status |
+| --- | --- | --- | --- |
+| `first_name`/`last_name`/`email`/`phone` | — | `handleGreenhouse` | covered |
+| `candidate-location` / `country` | Location (City), Country | improvements #28 + bugs #78/#79 | covered |
+| `question_67942415` | LinkedIn Profile | `links.linkedin` (#29) | covered |
+| `question_67942417` | Current/most recent company | `work.current_employer` (#29) | covered |
+| `question_67942420` | "I agree" acknowledgement | model picks the agree option | expected to resolve |
+| `430`-`434`, `436` | gender identity, transgender experience, sexual orientation, disability, veteran, ethnicity | EEO section, intentionally blank | model must pick the decline option |
+| **`question_67942416`** | **How did you hear about this job?** | **`work.how_did_you_hear` — BLANK** | **blocking** |
+| **`question_67942418`** | **Authorized to work in the U.S.?** | **`work.authorized_to_work_us` — BLANK** | **blocking** |
+| **`question_67942419`** | **Require immigration sponsorship?** | **`work.requires_sponsorship` — BLANK** | **blocking** |
+
+**This is the concrete consequence of #29's deliberate blanks.** Two of the three blockers are the legal attestations left for the user by design; the third is a preference. Until they are set, this specific application cannot complete no matter how well the combobox machinery works — the model has no grounded value and is instructed not to fabricate one. Reported to the user with the exact keys.
+
+`gdpr_demographic_data_consent_given_1` is already pre-checked by the page.
+
 ## Next Step
 
 **Keep monitoring PID `3778859` and keep fixing what surfaces.** That is the standing instruction for this session; it does not complete until the user says so.
