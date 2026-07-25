@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/danielthedm/promptsec"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
@@ -1491,10 +1492,57 @@ func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
 	if !combo {
 		return false, nil
 	}
+	// bugs.md #77: wait for an option to exist before committing. react-select
+	// populates its menu asynchronously (Greenhouse's Location field queries a
+	// geocoder), so an Enter sent immediately after Fill lands while the menu
+	// is still empty, highlights nothing, and commits nothing -- which is
+	// exactly what #76's newly-working read-back caught it doing.
+	waitForComboboxOptions(el)
 	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
 		return false, err
 	}
 	return locatorHasValue(el)
+}
+
+// comboboxOptionCountJS counts the options currently rendered for a combobox.
+// react-select renders its menu in a portal as often as inline, so this looks
+// document-wide rather than only inside the widget's own subtree.
+const comboboxOptionCountJS = `el => document.querySelectorAll('[role="option"], .select__option').length`
+
+// waitForComboboxOptions blocks until the widget has at least one selectable
+// option, or the budget runs out. Best-effort by design: on timeout the caller
+// still tries Enter, and the read-back afterwards is what actually decides
+// whether anything committed.
+func waitForComboboxOptions(el playwright.Locator) {
+	const (
+		budget = 5 * time.Second
+		tick   = 250 * time.Millisecond
+	)
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		got, err := el.Evaluate(comboboxOptionCountJS, nil)
+		if err != nil {
+			return
+		}
+		if n, ok := toInt(got); ok && n > 0 {
+			return
+		}
+		time.Sleep(tick)
+	}
+}
+
+// toInt normalises the number Playwright hands back from Evaluate, which
+// arrives as int or float64 depending on the value.
+func toInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // fillGreenhouseCombobox types each candidate into a geocoded autocomplete

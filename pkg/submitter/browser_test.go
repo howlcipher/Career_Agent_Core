@@ -2133,3 +2133,58 @@ func TestFillGreenhouseCombobox_NoCandidatesIsANoOp(t *testing.T) {
 		t.Error("expected no page interaction when there are no candidates")
 	}
 }
+
+// bugs.md #77: react-select populates its menu asynchronously (Greenhouse's
+// Location field queries a geocoder), so an Enter sent immediately after Fill
+// lands while the menu is still empty and commits nothing. Caught live once
+// #76 made the read-back actually work: 11 of 15 fixes "reported success but
+// left the control empty", including candidate-location and country, with no
+// commit line at all.
+func TestCommitComboboxOnLocator_WaitsForOptionsBeforePressingEnter(t *testing.T) {
+	optionsReady := false
+	pressedBeforeOptions := false
+	var pressed int
+
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			switch {
+			case strings.HasPrefix(script, "el => !!("):
+				return true, nil // is a combobox
+			case strings.Contains(script, "role=\"option\""):
+				// Menu is empty on the first poll, populated afterwards.
+				if !optionsReady {
+					optionsReady = true
+					return float64(0), nil
+				}
+				return float64(3), nil
+			default:
+				if pressed > 0 {
+					return "Macomb Township, MI", nil
+				}
+				return "", nil
+			}
+		},
+		pressFunc: func(string) error {
+			if !optionsReady {
+				pressedBeforeOptions = true
+			}
+			pressed++
+			return nil
+		},
+	}
+
+	committed, err := commitComboboxOnLocator(loc)
+	if err != nil {
+		t.Fatalf("commitComboboxOnLocator: %v", err)
+	}
+	if pressedBeforeOptions {
+		t.Error("Enter was pressed before any option existed — it can only commit nothing")
+	}
+	if pressed != 1 {
+		t.Errorf("expected exactly one Enter, got %d", pressed)
+	}
+	if !committed {
+		t.Error("expected the selection to read back as committed")
+	}
+}

@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 77 | [Enter was pressed before react-select had loaded any option, so the commit selected nothing](#77-enter-was-pressed-before-react-select-had-loaded-any-option-so-the-commit-selected-nothing) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | Caught the moment #76 made the read-back work: `Attempt 2: 11 fix(es) reported success but left the control empty ... 430, 431, 432, 433, 434, 436, candidate-location, country, question_67942418/19/20` — with **no** commit line, so `commitComboboxOnLocator` pressed Enter and still committed nothing. react-select populates its menu asynchronously (Greenhouse's Location field queries a geocoder), so an Enter fired immediately after `Fill()` arrives while the menu is empty, highlights nothing and selects nothing. Real progress in the same run though: the narrowed payload **shrank for the first time**, 8249 → 5988 chars |
 | 76 | [#74's own read-back checked el.value first, silently disabling the combobox commit it had just added](#76-74s-own-read-back-checked-elvalue-first-silently-disabling-the-combobox-commit-it-had-just-added) | Blocker | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | **A defect in #74's fix, caught live by the absence of an expected log line.** Reddit logged `Attempt 2 applied 15/15 validation fix(es)` with **no** `committed N autocomplete selection(s)` line and **no** `left the control empty` line — so `verifyFixLanded` reported every field as landed and the commit step never ran once. Cause: the value read checked `el.value` before the combobox branch, and a react-select search input genuinely holds the typed text after `Fill()`. #74 was therefore inert on exactly the fields it was written for, and #75 inherited the same inertness |
 | 75 | [#74's combobox commit was wired into the retry path but not the initial fill, guaranteeing a wasted retry cycle](#75-74s-combobox-commit-was-wired-into-the-retry-path-but-not-the-initial-fill-guaranteeing-a-wasted-retry-cycle) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | The identical structural gap **#67** found, one layer up: `safeFillWithLabelFallback`'s three tiers all use plain `Fill()`, so a react-select field is typed into but never committed on the first pass. Since `Location (City)` and `Country` are required on every Greenhouse form, the first submit was **guaranteed** to bounce and force a full validation-retry cycle — ~12 minutes of inference on this machine — to commit something a single keypress could have done immediately. Confirmed live at 13:36: the run carrying #74 still bounced on attempt 1 with the narrowed payload at exactly 8249 chars, unchanged from the run before it |
 | 74 | [react-select comboboxes were filled but never committed, so their validated value stayed empty](#74-react-select-comboboxes-were-filled-but-never-committed-so-their-validated-value-stayed-empty) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | #72's autocomplete hypothesis, confirmed structurally by fetching Reddit's real Greenhouse markup: `Location (City)` and `Country` are **react-select** widgets (`select__control`, `select__input-container[data-value]`, `react-select-candidate-location-live-region`). The `<input id="candidate-location">` is a *search* box — the chosen value lives in widget state and renders into a sibling `.select__single-value`. `Fill()` types the search text and commits nothing, so the value the form validates stays empty, and reading `el.value` back reports `""` whether or not a selection succeeded. These are required fields, so the form could never pass |
@@ -111,6 +112,32 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 77. Enter was pressed before react-select had loaded any option, so the commit selected nothing (Resolved 2026-07-25, live confirmation pending)
+
+**Caught the moment #76 made the read-back actually work.** The run carrying #76 produced a line that had never appeared before:
+
+```
+14:17:51 Attempt 2 applied 15/15 validation fix(es) to: 430 ... candidate-location, country ...
+14:17:51 Attempt 2: 11 fix(es) reported success but left the control empty (autocomplete/combobox suspected):
+         430, 431, 432, 433, 434, 436, candidate-location, country, question_67942418, question_67942419, question_67942420
+14:17:53 Narrowed validation retry to the rejected fields only (54359 -> 5988 chars)
+```
+
+Two things to read off this:
+
+1. **#76 works.** Before it, all 15 fields reported as landed; now 11 are correctly identified as still empty. The diagnostic is finally telling the truth.
+2. **The commit still does nothing.** Those 11 went to `notLanded`, not to the committed list — so `commitComboboxOnLocator` ran, pressed Enter, and re-read an *empty* control. Enter is reaching the widget and selecting nothing.
+
+**Root cause:** react-select populates its menu asynchronously. Greenhouse's Location field is geocoder-backed, so options arrive over the network. `Fill()` returns as soon as the text is typed, and the Enter that follows lands while the menu is still empty — nothing is highlighted, so nothing is selected. The custom-question fields (`430`-`436`, `question_679424xx`) are react-select too and fail identically.
+
+**Fix:** `waitForComboboxOptions` polls for `[role="option"], .select__option` before the keypress, on a 5s budget at 250ms intervals. It searches document-wide because react-select renders its menu in a portal as often as inline. Best-effort: on timeout the Enter is still attempted, and the read-back afterwards remains the thing that actually decides whether anything committed — so a slow or genuinely optionless widget degrades to the previous behaviour rather than erroring.
+
+**Genuine progress in the same run, worth recording:** the narrowed invalid-field payload **shrank for the first time in this entire investigation** — 8249 → 5988 chars, −28%. Every previous attempt held flat or grew (8249 → 8334). Four of the 15 fields are now being satisfied. The direction finally reversed.
+
+**Method note, again:** this was very nearly missed. The `left the control empty` line was **not** in the log-monitor's filter, so it never surfaced as a notification — it was found only by grepping the log directly after the payload size dropped unexpectedly. Filter widened. **An absent notification is not evidence of an absent event; check the filter before concluding anything from silence.**
+
+**Tests:** `TestCommitComboboxOnLocator_WaitsForOptionsBeforePressingEnter`.
 
 ### 76. #74's own read-back checked el.value first, silently disabling the combobox commit it had just added (Resolved 2026-07-25, live confirmation pending)
 
