@@ -1064,8 +1064,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			sort.Strings(applied)
 			log.Printf("[Auto-Submit] Attempt %d applied %d/%d validation fix(es) to: %s", attempt, len(applied), len(fixesMap), strings.Join(applied, ", "))
 
-			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
-			if count, _ := submitLocator.Count(); count > 0 {
+			submitLocator, count := findSubmitControl(target)
+			if count > 0 {
 				// bugs.md #71: when none of the matches is visible, do not fall
 				// back to .First(). That match is known-hidden (typically
 				// Lever's <button type="submit" class="hidden"
@@ -1311,6 +1311,58 @@ func firstVisibleLocator(loc playwright.Locator, count int) playwright.Locator {
 		return candidate
 	}
 	return loc.First()
+}
+
+// submitControlSelectors are tried in order, most specific first, and the
+// first group with a visible match wins.
+//
+// bugs.md #87: the previous single selector put `button:has-text('Apply')` in
+// the same alternation as the real submit controls, and CSS alternations have
+// no precedence -- matches come back in DOM order. Measured on a live
+// Greenhouse form:
+//
+//	[0] visible BUTTON type=button  "Apply"                      <- clicked
+//	[1] visible BUTTON type=button  "Quick Apply with MyGreenhouse"
+//	[2] visible BUTTON type=submit  "Submit application"          <- the real one
+//
+// So every retry "submitted" by clicking the click-to-reveal Apply button,
+// which does nothing at that point. The page never changed, the same fields
+// stayed flagged, and all three attempts failed identically -- in the same
+// second, because no navigation ever happened.
+//
+// "Apply" is deliberately absent here. It reveals a form; it never submits
+// one. Keeping it as a last resort would just restore the bug on any form
+// where the reveal button remains in the DOM.
+var submitControlSelectors = []string{
+	"button[type='submit'], input[type='submit']",
+	"button:has-text('Submit application'), button:has-text('Submit Application')",
+	"button:has-text('Submit'), input[value='Submit']",
+}
+
+// findSubmitControl returns the highest-precedence locator that has at least
+// one visible match, with its match count.
+func findSubmitControl(target fillTarget) (playwright.Locator, int) {
+	var firstNonEmpty playwright.Locator
+	firstCount := 0
+	for _, sel := range submitControlSelectors {
+		loc := target.Loc(sel)
+		count, err := loc.Count()
+		if err != nil || count == 0 {
+			continue
+		}
+		if firstNonEmpty == nil {
+			firstNonEmpty, firstCount = loc, count
+		}
+		if _, ok := firstVisibleSubmit(loc, count); ok {
+			return loc, count
+		}
+	}
+	// Nothing visible anywhere: hand back the first group that matched at all
+	// so the caller reports "found N but none visible" rather than "not found".
+	if firstNonEmpty != nil {
+		return firstNonEmpty, firstCount
+	}
+	return target.Loc(submitControlSelectors[0]), 0
 }
 
 // firstVisibleSubmit is firstVisibleLocator without the .First() fallback: it

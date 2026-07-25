@@ -2094,3 +2094,58 @@ func TestComboboxJS_DetectsLeverStyleTypeaheads(t *testing.T) {
 		t.Error("option enumeration must cover Lever's .dropdown-location results")
 	}
 }
+
+// bugs.md #87: CSS alternations have no precedence — matches come back in DOM
+// order. Putting `button:has-text('Apply')` alongside the real submit controls
+// meant every retry "submitted" by clicking the click-to-reveal Apply button.
+// Measured on a live Greenhouse form:
+//
+//	[0] visible BUTTON type=button  "Apply"                      <- clicked
+//	[1] visible BUTTON type=button  "Quick Apply with MyGreenhouse"
+//	[2] visible BUTTON type=submit  "Submit application"          <- the real one
+func TestSubmitControlSelectors_PreferRealSubmitControlsAndNeverApply(t *testing.T) {
+	if len(submitControlSelectors) == 0 {
+		t.Fatal("no submit selectors configured")
+	}
+	first := submitControlSelectors[0]
+	if !strings.Contains(first, "type='submit'") {
+		t.Errorf("the highest-precedence group must be real submit controls, got %q", first)
+	}
+	for _, sel := range submitControlSelectors {
+		if strings.Contains(sel, "'Apply'") || strings.Contains(sel, "\"Apply\"") {
+			t.Errorf("Apply reveals a form, it never submits one — must not appear in %q", sel)
+		}
+	}
+}
+
+// The prioritised lookup must skip a group whose matches are all invisible and
+// keep going, rather than settling for it.
+func TestFindSubmitControl_SkipsAGroupWithNoVisibleMatch(t *testing.T) {
+	hidden := &MockLocator{
+		countFunc:     func() (int, error) { return 1, nil },
+		isVisibleFunc: func() (bool, error) { return false, nil },
+	}
+	visible := &MockLocator{
+		countFunc:     func() (int, error) { return 1, nil },
+		isVisibleFunc: func() (bool, error) { return true, nil },
+	}
+	var asked []string
+	page := &MockPage{locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+		asked = append(asked, sel)
+		if len(asked) == 1 {
+			return hidden // first group matches but is invisible
+		}
+		return visible
+	}}
+
+	loc, count := findSubmitControl(pageTarget{page: page})
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+	if _, ok := firstVisibleSubmit(loc, count); !ok {
+		t.Error("expected the returned group to have a visible match")
+	}
+	if len(asked) < 2 {
+		t.Errorf("expected the lookup to move past the invisible group, selectors tried: %v", asked)
+	}
+}

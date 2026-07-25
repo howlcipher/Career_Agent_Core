@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 87 | [The submit locator clicked the click-to-reveal "Apply" button, so no retry ever actually submitted](#87-the-submit-locator-clicked-the-click-to-reveal-apply-button-so-no-retry-ever-actually-submitted) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The one that was silently blocking everything.** Orkes (Greenhouse, 85) applied `2/2` fixes — both verifiably settable by probe — and still failed all 3 attempts, with `applied` and `Submission failed validation` in the **same second**, too fast for any navigation. The submit locator put `button:has-text('Apply')` in the same CSS alternation as the real controls, and alternations have **no precedence** — matches return in DOM order. Measured live: `[0] Apply (type=button)`, `[1] Quick Apply with MyGreenhouse`, `[2] Submit application (type=submit)`. Every retry clicked index 0, the click-to-reveal button, which does nothing once the form is open. The page never changed, the same fields stayed flagged, and all three attempts failed identically |
 | 86 | [Lever's location typeahead was invisible to combobox detection, so every Lever application failed](#86-levers-location-typeahead-was-invisible-to-combobox-detection-so-every-lever-application-failed) | Blocker | Resolved (2026-07-25, root-caused, fixed, verified against the live form) | — | Opus 5 | Gemini 3 Pro | Nova (Lever, score 65) failed all 3 attempts applying **7/7 fixes** each time. Probed the real form: only **3 fields are required** — name, email, `location-input` — and the resume upload is *optional*. Lever's location widget has **none of react-select's markers**: no `role`, no `aria-*`, no `select__` classes. It is a plain `<input name="location">` beside a hidden `<input name="selectedLocation">` that holds the committed value. Detection returned `false`, so it was filled with text while `selectedLocation` stayed empty — and that hidden field is what the form validates. **Clicking the option does not work either**: it loses a blur race, leaving both the visible input and the hidden field empty. Keyboard selection is blur-safe |
 | 85 | [Four early-exit paths left rows stranded in PROCESSING, invisible to every future queue](#85-four-early-exit-paths-left-rows-stranded-in-processing-invisible-to-every-future-queue) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Spotted from the cohort monitor: `PROCESSING=4` on a **single-worker** run. The stranded rows clustered in pairs at exactly the moments a job was skipped — each was `Duplicate check: Already applied ... Skipping.` The worker sets `PROCESSING` at the top of the loop, and four `continue` paths exit without ever clearing it. `GetDiscoveredJobs` selects only `DISCOVERED`, so a stranded row never returns to any queue; #55's startup reaper masked it by resetting them, whereupon they were re-picked, skipped, and stranded again — a silent loop that corrupts cohort accounting and the dashboard's in-flight metrics |
 | 84 | [#82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT](#84-82s-manual-routing-branch-was-never-applied-so-refused-jobs-were-written-off-as-failed_submit) | Major | Resolved (2026-07-25, confirmed live 18:10 — clean A/B on the same job) | — | Opus 5 | Gemini 3 Pro | **My own error, caught live.** #82's guard worked perfectly — ClickHouse was refused in **0 seconds** with `work authorization, visa sponsorship` — but the job landed in `FAILED_SUBMIT`, not `MANUAL_REQUIRED`, and the routing log line never appeared. The `cmd/agent` edit adding that branch **silently failed to apply**; `go build` still passed because the submitter half compiled fine, and I verified the build instead of verifying the edit. Consequence: a job that is perfectly applicable-by-hand was written off as a failure, its tailored documents never moved to the manual-apply folder and no manual-queue entry logged |
@@ -121,6 +122,41 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 87. The submit locator clicked the click-to-reveal "Apply" button, so no retry ever actually submitted (Resolved 2026-07-25)
+
+**This is the defect that was silently invalidating the whole retry path**, and it took the previous eight fixes to expose it — until fields could actually be filled, nothing downstream of them was reachable.
+
+Orkes (Greenhouse, fit 85) applied **`2/2` fixes** on every attempt and failed all three. The two fields were `LinkedIn Profile` (plain required text) and `Are you located in Australia or Europe?` (a Yes/No react-select). Probing proved both were satisfiable, in either order, with no interference:
+
+```
+order A: LinkedIn="https://linkedin.com/in/wylelias"  combobox="No"
+order B: LinkedIn="https://linkedin.com/in/wylelias"  combobox="No"
+```
+
+The tell was in the timestamps: `applied 2/2` and `Submission failed validation` landed in the **same second**. A real submit plus a `networkidle` wait cannot complete that fast — so nothing was being submitted at all.
+
+**Root cause:** the locator was a single CSS alternation —
+
+```
+input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')
+```
+
+CSS alternations carry **no precedence**; Playwright returns matches in **DOM order**. Measured on the live form:
+
+```
+[0] visible BUTTON type=button  "Apply"                      <- firstVisibleSubmit picked this
+[1] visible BUTTON type=button  "Quick Apply with MyGreenhouse"
+[2] visible BUTTON type=submit  "Submit application"          <- the real one
+```
+
+Every retry "submitted" by clicking the click-to-reveal **Apply** button — a `type=button` that does nothing once the form is already open. The page never changed, so the same fields stayed flagged and each attempt was a byte-for-byte repeat.
+
+**This also re-frames earlier entries.** #70-#81 were all real and all necessary, but their fixes could never have produced a completed application on such a form: the fields were being filled correctly and then never submitted. The recurring "applied N/N and still rejected" signature that drove #72, #80 and #81 had *two* causes, and this was the second.
+
+**Fix:** replaced the flat alternation with `submitControlSelectors`, tried in precedence order — real `type='submit'` controls first, then "Submit application", then "Submit" — with `findSubmitControl` returning the first group that has a visible match. **"Apply" is deliberately absent entirely**: it reveals a form, it never submits one, and keeping it even as a last resort would restore this bug on any form where the reveal button stays in the DOM.
+
+**Tests:** `TestSubmitControlSelectors_PreferRealSubmitControlsAndNeverApply` (asserts the precedence and that "Apply" never appears), `TestFindSubmitControl_SkipsAGroupWithNoVisibleMatch`.
 
 ### 86. Lever's location typeahead was invisible to combobox detection, so every Lever application failed (Resolved 2026-07-25, verified against the live form)
 
