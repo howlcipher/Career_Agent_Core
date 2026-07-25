@@ -86,7 +86,18 @@ print('eval_count:',d.get('eval_count'))"
 
 **Benchmark fidelity caveat:** `scorebench` passes the **full résumé text** as `parsedDocument`, whereas production passes `tailoredContext` (RAG top-5 chunks). So benchmark prompts run somewhat larger than live ones — the smallest job (5,594-char description) still produced a **13,388-char payload**, meaning roughly 7.8k chars of that is rubric + résumé + constraints, i.e. **fixed overhead independent of the posting**. Both models receive identical input, so the *score comparison* is unaffected; only absolute timings skew slightly pessimistic. Worth noting that this fixed overhead limits how much improvements.md #25's description trimming can save on short postings.
 
-30B baseline on the identical cached inputs is running now (`r30b.json`). What matters in the comparison is **agreement across the `<50` skip threshold**, not exact score parity — the threshold is the only thing that changes behavior.
+**RESULT (2026-07-25 ~02:05): the model swap FAILED validation and was rejected. `OLLAMA_FAST_MODEL` is deliberately left unset.**
+
+| description | 4B | 30B | same decision? |
+| --- | --- | --- | --- |
+| 5,614 ch | 95 | 80 | yes |
+| 6,624 ch | **85** | **0** | **NO** |
+| 8,003 ch | 95 | 85 | yes |
+
+- **Accuracy: 2/3 threshold agreement, failing in the worst direction.** The 30B's `0` was right — that posting (EDO, `job-boards.greenhouse.io/edo/jobs/5132798007`) states *"hybrid work policy of three days in the office"* and asks *"are you available to work on-site three days per week"*. With `remote_only: true`, rubric rule 2 takes 80 from the 80 baseline = 0. **The 4B missed it and said 85**, which would have applied to a job the candidate cannot take. It scored higher on all three (+15/+85/+10) — systematically lenient, and leniency means false-positive applications.
+- **Speed: no gain at all.** Cold timings — 30B `421/358/420s`, 4B's one clean cold figure `367s`. Indistinguishable. **Reason:** `qwen3moe.expert_count = 128`, `expert_used_count = 8` — the incumbent is an MoE activating ~3B parameters per token, so a 4B *dense* model does *more* work per token, not less. **The premise of #24 does not hold on this hardware: there is no smaller-and-faster text model to swap to, because the model in use is already effectively 3B-active.**
+
+Full write-up lives in `improvements.md` #24. The `fast` routing stays in the codebase, inert and tested, ready if a genuinely faster model ever appears.
 
 ## Work completed under this goal
 
