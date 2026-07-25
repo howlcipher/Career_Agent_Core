@@ -851,7 +851,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					}
 				}
 
-				fullProfileContext := pii.EEO.Summary() + "\n\n" + profileContext
+				fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
 				if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 					return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, domain)
 				}
@@ -903,7 +903,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				prunedHTML = narrowed
 			}
 
-			fullProfileContext := pii.EEO.Summary() + "\n\n" + profileContext
+			fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
 			if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 				return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, ExtractDomain(applyURL))
 			}

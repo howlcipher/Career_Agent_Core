@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -127,5 +128,56 @@ func TestPII_LocationSearchCandidates(t *testing.T) {
 func TestPII_LocationSearchCandidates_EmptyWithoutCity(t *testing.T) {
 	if got := (PII{State: "MI", FullState: "Michigan"}).LocationSearchCandidates(); got != nil {
 		t.Errorf("expected no candidates without a city, got %v", got)
+	}
+}
+
+// improvements.md #29: every fact configured here removes a guess the model
+// would otherwise make on a real application form.
+func TestApplicationFacts_RendersConfiguredFactsAndOmitsBlanks(t *testing.T) {
+	p := PII{
+		FirstName: "A", LastName: "B", City: "Macomb Township", FullState: "Michigan",
+		Links: Links{GitHub: "https://github.com/x"},
+		Work: WorkFacts{
+			CurrentEmployer: "Acme",
+			// AuthorizedToWorkUS deliberately blank.
+		},
+		Experience: []Job{{Title: "Engineer", Employer: "Acme", StartDate: "Feb 2023", EndDate: "Present"}},
+		Education:  []Education{{Degree: "B.S.", School: "CSU", Status: "Completed"}},
+	}
+	got := p.ApplicationFacts()
+
+	for _, want := range []string{
+		"Full name: A B",
+		"GitHub: https://github.com/x",
+		"Current employer: Acme",
+		"Experience 1: Engineer, Acme, Feb 2023 to Present",
+		"Education 1: B.S., CSU, Completed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// A blank legal attestation must not render as an answer at all.
+	if strings.Contains(got, "Authorized to work") {
+		t.Error("a blank field must be omitted entirely, not rendered as empty")
+	}
+}
+
+// A date range must survive verbatim. strings.Trim(s, "to") treats "to" as a
+// character SET, which silently turned "Feb 2023 to Present" into
+// "Feb 2023 to Presen" -- caught by eyeballing the real rendered output.
+func TestApplicationFacts_DoesNotChewTheEndOfPresent(t *testing.T) {
+	p := PII{Experience: []Job{{Employer: "Acme", StartDate: "Feb 2023", EndDate: "Present"}}}
+	got := p.ApplicationFacts()
+	if !strings.Contains(got, "Feb 2023 to Present") || strings.Contains(got, "Presen,") || strings.Contains(got, "Presen\n") {
+		t.Errorf("date range mangled:\n%s", got)
+	}
+}
+
+// Only one side of a range configured must not leave a dangling separator.
+func TestApplicationFacts_HandlesAOneSidedDateRange(t *testing.T) {
+	p := PII{Experience: []Job{{Employer: "Acme", StartDate: "Feb 2023"}}}
+	if got := p.ApplicationFacts(); strings.Contains(got, "Feb 2023 to") {
+		t.Errorf("dangling separator:\n%s", got)
 	}
 }

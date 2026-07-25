@@ -29,7 +29,173 @@ type PII struct {
 	Country     string `yaml:"country"`
 	FullCountry string `yaml:"full_country"`
 
+	// Application facts. Every field here exists to remove a guess: whatever
+	// is set is handed to the model as fact, so it never has to infer an
+	// answer a form is asking for. All optional -- anything blank is simply
+	// omitted, and the model falls back to reasoning or to declining.
+	Links      Links       `yaml:"links"`
+	Work       WorkFacts   `yaml:"work"`
+	Education  []Education `yaml:"education"`
+	Experience []Job       `yaml:"experience"`
+
 	EEO EEO `yaml:"eeo"`
+}
+
+// Links holds the profile URLs application forms ask for by name.
+type Links struct {
+	LinkedIn  string `yaml:"linkedin"`
+	GitHub    string `yaml:"github"`
+	Portfolio string `yaml:"portfolio"`
+	Website   string `yaml:"website"`
+	Twitter   string `yaml:"twitter"`
+}
+
+// WorkFacts holds the recurring screening answers.
+//
+// The legally-loaded ones (authorization, sponsorship, clearance, criminal
+// history) are deliberately left for the user to fill in: they are
+// attestations on a real job application, and a plausible-looking guess is
+// exactly the wrong thing for an agent to supply.
+type WorkFacts struct {
+	AuthorizedToWorkUS  string `yaml:"authorized_to_work_us"`
+	RequiresSponsorship string `yaml:"requires_sponsorship"`
+	VisaStatus          string `yaml:"visa_status"`
+	SecurityClearance   string `yaml:"security_clearance"`
+	CriminalHistory     string `yaml:"criminal_history"`
+	Over18              string `yaml:"over_18"`
+
+	CurrentEmployer    string `yaml:"current_employer"`
+	CurrentTitle       string `yaml:"current_title"`
+	YearsExperience    string `yaml:"years_experience"`
+	DesiredSalary      string `yaml:"desired_salary"`
+	NoticePeriod       string `yaml:"notice_period"`
+	EarliestStart      string `yaml:"earliest_start_date"`
+	RemotePreference   string `yaml:"remote_preference"`
+	WillingToRelocate  string `yaml:"willing_to_relocate"`
+	WillingToTravel    string `yaml:"willing_to_travel"`
+	HowDidYouHear      string `yaml:"how_did_you_hear"`
+	PreviouslyEmployed string `yaml:"previously_employed_here"`
+	ReferredBy         string `yaml:"referred_by"`
+	Pronouns           string `yaml:"pronouns"`
+	Languages          string `yaml:"languages"`
+	DriversLicense     string `yaml:"drivers_license"`
+	Certifications     string `yaml:"certifications"`
+}
+
+// Education is one school entry.
+type Education struct {
+	School       string `yaml:"school"`
+	Degree       string `yaml:"degree"`
+	FieldOfStudy string `yaml:"field_of_study"`
+	StartYear    string `yaml:"start_year"`
+	EndYear      string `yaml:"end_year"`
+	Status       string `yaml:"status"`
+}
+
+// Job is one employment-history entry.
+type Job struct {
+	Employer  string `yaml:"employer"`
+	Title     string `yaml:"title"`
+	Location  string `yaml:"location"`
+	StartDate string `yaml:"start_date"`
+	EndDate   string `yaml:"end_date"`
+}
+
+// ApplicationFacts renders every configured fact as prompt context.
+//
+// The point is to convert questions the model would otherwise reason about
+// into lookups. Blank fields are omitted entirely rather than rendered as
+// empty, so an unset field reads as "not provided" instead of as an answer.
+func (p PII) ApplicationFacts() string {
+	var b strings.Builder
+	b.WriteString("Known applicant facts (use these EXACT values verbatim when a form asks for them; do not invent a different answer):\n")
+
+	add := func(label, value string) {
+		if v := strings.TrimSpace(value); v != "" {
+			fmt.Fprintf(&b, "- %s: %s\n", label, v)
+		}
+	}
+
+	add("Full name", strings.TrimSpace(p.FirstName+" "+p.LastName))
+	add("Email", p.Email)
+	add("Phone", p.Phone)
+	add("Street address", p.Street)
+	add("City", p.City)
+	add("State", p.FullState)
+	add("State abbreviation", p.State)
+	add("ZIP/postal code", p.Zip)
+	add("Country", p.FullCountry)
+
+	add("LinkedIn", p.Links.LinkedIn)
+	add("GitHub", p.Links.GitHub)
+	add("Portfolio", p.Links.Portfolio)
+	add("Website", p.Links.Website)
+	add("Twitter/X", p.Links.Twitter)
+
+	w := p.Work
+	add("Authorized to work in the US", w.AuthorizedToWorkUS)
+	add("Requires visa sponsorship", w.RequiresSponsorship)
+	add("Visa status", w.VisaStatus)
+	add("Security clearance", w.SecurityClearance)
+	add("Criminal history", w.CriminalHistory)
+	add("Over 18", w.Over18)
+	add("Current employer", w.CurrentEmployer)
+	add("Current job title", w.CurrentTitle)
+	add("Years of experience", w.YearsExperience)
+	add("Desired salary", w.DesiredSalary)
+	add("Notice period", w.NoticePeriod)
+	add("Earliest start date", w.EarliestStart)
+	add("Remote work preference", w.RemotePreference)
+	add("Willing to relocate", w.WillingToRelocate)
+	add("Willing to travel", w.WillingToTravel)
+	add("How did you hear about us", w.HowDidYouHear)
+	add("Previously employed here", w.PreviouslyEmployed)
+	add("Referred by", w.ReferredBy)
+	add("Pronouns", w.Pronouns)
+	add("Languages", w.Languages)
+	add("Driver's license", w.DriversLicense)
+	add("Certifications", w.Certifications)
+
+	// joinRange builds "start to end" while tolerating either side being blank.
+	// Deliberately not strings.Trim with a "to"/"-" cutset: that treats the
+	// argument as a *character set*, so Trim("Feb 2023 to Present", "to")
+	// silently produced "Feb 2023 to Presen".
+	joinRange := func(start, end, sep string) string {
+		start, end = strings.TrimSpace(start), strings.TrimSpace(end)
+		switch {
+		case start != "" && end != "":
+			return start + sep + end
+		case start != "":
+			return start
+		default:
+			return end
+		}
+	}
+	nonEmpty := func(in ...string) []string {
+		var out []string
+		for _, s := range in {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	for i, e := range p.Education {
+		parts := nonEmpty(e.Degree, e.FieldOfStudy, e.School, e.Status, joinRange(e.StartYear, e.EndYear, "-"))
+		if len(parts) > 0 {
+			fmt.Fprintf(&b, "- Education %d: %s\n", i+1, strings.Join(parts, ", "))
+		}
+	}
+	for i, j := range p.Experience {
+		parts := nonEmpty(j.Title, j.Employer, j.Location, joinRange(j.StartDate, j.EndDate, " to "))
+		if len(parts) > 0 {
+			fmt.Fprintf(&b, "- Experience %d: %s\n", i+1, strings.Join(parts, ", "))
+		}
+	}
+
+	b.WriteString("Anything not listed above was not provided: reason from the resume context, or choose the form's decline option. Never fabricate a value for it.\n")
+	return b.String()
 }
 
 // UnmarshalYAML lower-cases every mapping key before decoding, so `City`,
