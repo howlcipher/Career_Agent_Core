@@ -146,6 +146,23 @@ Filling `work.authorized_to_work_us` and `work.requires_sponsorship` is now the 
 
 **Probe footnote:** `page.Locator("#430")` returned NO ELEMENT — `#430` is invalid CSS, exactly the defect bugs.md #73 fixed in the agent. The agent resolves it via `[id="430"]`; the probe needed the same treatment. An independent re-confirmation of #73 from a completely different direction.
 
+## The attestation block is cross-ATS, not a Greenhouse quirk (2026-07-25 18:26)
+
+Four consecutive high-scoring jobs, **all refused on the same two questions**, and one of them is not Greenhouse:
+
+| Job | Score | ATS | Blocked on |
+| --- | --- | --- | --- |
+| Reddit | 90 | Greenhouse | work authorization + visa sponsorship |
+| ClickHouse | 90 | Greenhouse | work authorization + visa sponsorship |
+| **DexCare** | **90** | **Lever** | work authorization + visa sponsorship |
+| Stack AV | 80 | Greenhouse | visa sponsorship only |
+
+I had been describing `work.authorized_to_work_us` / `work.requires_sponsorship` as "the last blocker for Greenhouse". **That was too narrow.** Lever asks them too, so these are standard US hiring questions and the block applies to the pipeline as a whole — including the ~3,100-job backlog behind this cohort, which will behave identically.
+
+Note Stack AV matched **only** `visa sponsorship`, not both: #82's detection is discriminating per form rather than blanket-matching, which was the main false-positive risk.
+
+**Economics:** each refusal still costs ~10 minutes of fit-scoring first, because a form's questions are unknowable until it is loaded, and all LLM calls serialise on this host. So until those two keys are set, the queue converts ~10 minutes of compute per job into a manual-review entry rather than an application.
+
 ## Required-field audit of Reddit's form (2026-07-25 15:54, probe, no submit)
 
 Enumerated every control Greenhouse marks required, by reading `aria-required`/`requiredInput` rather than clicking submit — clicking it on a real posting could file an incomplete application under the user's name. **20 required fields.** Mapped against what the agent can now supply:
