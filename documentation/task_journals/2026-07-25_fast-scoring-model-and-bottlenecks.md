@@ -78,6 +78,26 @@ print('eval_count:',d.get('eval_count'))"
 ```
 `eval_count` is the decisive number: a bare "42" should be ~1-5 tokens. Anything in the hundreds means reasoning tokens are being generated and paid for.
 
+## Benchmark status and a measurement trap worth remembering
+
+**4B scores on the 3-job set (5,594 / 6,624 / 8,003 chars): 95, 85, 95.**
+
+**The timings from that run are contaminated — do not cite them.** The same run reported 1s, 367s, 2s. A 1-second result for a ~1,400-token prompt is impossible on this CPU; those two jobs had been scored by the earlier (killed) 6-job run, so Ollama served them from a warm prompt cache. Only the 367s figure reflects real cold work. **Any future benchmark here must either use jobs never scored before or restart the Ollama server between runs**, or it will measure the cache instead of the model.
+
+30B baseline on the identical cached inputs is running now (`r30b.json`). What matters in the comparison is **agreement across the `<50` skip threshold**, not exact score parity — the threshold is the only thing that changes behavior.
+
+## Work completed under this goal
+
+- **`bugs.md` #64** (filed, fixed, pushed `6f0b8a5`) — the validation-retry bottleneck. See its Details section.
+- **`improvements.md` #25** (filed, shipped, pushed `41cab70`) — trim over-long descriptions before scoring, middle-out so the rubric's salary/location rules keep their evidence.
+- **Ruled out, with evidence, rather than filed as noise:**
+  - *Reasoning tokens* — disproven by direct probe (`eval_count: 3`).
+  - *"could not launch browser" (60 occurrences)* — all 60 fall inside a single two-hour window on 2026-07-16 (28 in hour 11, 32 in hour 12). That is the already-documented environment incident, not an ongoing defect.
+  - *"Zero APPLIED ever"* — corrected above; it is the deliberate reset of the 82 cohort.
+
 ## Next Step
 
-Awaiting the 4B benchmark (`results_4b.json`); then run the identical cached set against `qwen3:30b-instruct` for the baseline, compare agreement — **especially across the `<50` skip threshold, which is what actually changes behavior** — and set `OLLAMA_FAST_MODEL` only if agreement holds. Then rebuild and restart the 82-job run with #63/#64 and whatever model decision follows.
+1. When `r30b.json` lands, compare against the 4B's `95, 85, 95` — **agreement across the `<50` threshold is the pass/fail criterion**, not exact parity.
+2. If agreement holds, set `OLLAMA_FAST_MODEL="qwen3:4b-instruct"` in `.env` (the routing already shipped in `55ee4a7`; the variable is all that is left). If it does not hold, leave it unset and record why — the routing is inert either way, so nothing breaks by declining.
+3. Rebuild `cmd/agent` from HEAD and **restart the 82-job run**, which has been stopped since ~00:52. It gains #63 (fit scores now persist), #64 (validation retries no longer time out on large forms), and #25 (shorter scoring prompts). Follow the restart procedure in `2026-07-21_verify-bug4-iframe-fill-live-batch.md` — audit non-terminal rows, clear dedup rows for anything requeued, `kill -9`, rebuild to a fresh binary path, relaunch with the full `TARGET_JOB_URL` list, re-arm a monitor.
+4. Optional follow-up flagged in #25: no sampled job exceeded the 9,000-char cap, so the trim path is untested against live scores. Worth one comparison on a genuinely long posting.
