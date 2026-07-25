@@ -41,7 +41,22 @@ So for a **Greenhouse or Lever job that fills cleanly — the bulk of the queue 
   - **Correction, made before this claim went any further:** the 0 is *expected and self-inflicted*, not evidence that nothing ever worked. All 82 historically-`APPLIED` rows were deliberately reset to `DISCOVERED` at the start of this re-verification effort — that is the entire cohort in `applied_urls_verify82.txt`. A genuine, confirmed `APPLIED` was also produced 2026-07-23 (a real Lever posting at `jobs.lever.co/smarsh/...`, which is what flipped the Usability Gate's live-batch box). The honest statement is: **82 applications were recorded historically but on evidence bug #53 later showed was unreliable, one application is confirmed genuine, and the re-verification of the 82 is still unanswered.** Do not repeat "nothing has ever applied" — it is wrong.
 - Historical failure reasons (rotated log, 622 scored jobs) are dominated by **119× "form failed to render in time"** and **60× "could not launch browser: target closed"**. Both predate most of this week's fixes, so the counts are not current evidence — but "could not launch browser" is a resource/stability class that no bug so far has addressed and is worth watching for recurrence.
 
-## Open lead: reasoning-mode tokens may be the real cost (unverified — verify before acting)
+## ~~Open lead~~ **DISPROVEN 2026-07-25 ~01:40 — do not chase this again**
+
+The reasoning-token hypothesis below is **wrong**. Probed directly once Ollama was free:
+```
+content        : '42'
+thinking field : ''
+eval_count     : 3      <- tokens generated
+prompt_eval    : 17
+```
+Three generated tokens, no `thinking` content, clean output. The `-instruct` variants are non-reasoning, and Ollama is not defaulting thinking on. **No tokens are being wasted on chain-of-thought, and setting `"think": false` would change nothing.** (The probe's 255s `total_duration` was queue wait behind the benchmark process being killed, not inference — do not read it as a latency measurement.)
+
+**What the cost actually is: prompt processing, and it is CPU-bound.** Working from the two measurements now in hand — the 30B did ~3,900 prompt tokens in 9m38s (**~6.8 tok/s**), and the 4B averaged ~3.8 min on comparable prompts (**roughly 17 tok/s**). So the 4B is about **2.5x faster**, which is a real but far more modest win than the model-size ratio suggests. Both are limited by how fast this CPU can ingest the prompt, not by how fast they emit an answer.
+
+**The corollary worth acting on:** since cost scales with prompt length, the cheapest remaining lever is sending `ScoreJob` a shorter prompt. It currently receives the full job description (5.5k-14k chars in the sampled set) plus the full résumé text. Trimming the description for scoring purposes is likely a larger, cheaper win than any further model change — but it must be measured against score agreement first, since salary and location details sometimes appear late in a posting.
+
+### Original hypothesis (kept for the record, now falsified)
 
 **Hypothesis, strongly grounded but not yet confirmed.** `pkg/mcp/provider_ollama.go`'s `ollamaChatRequest` has **no `think` field**, and a repo-wide grep confirms `think` is never set on any request. Both configured models advertise the `thinking` capability (`ollama show qwen3:30b-instruct` → `Capabilities: tools, thinking, completion`). If Ollama defaults thinking **on** for these models, then every call in the pipeline generates a chain-of-thought block before its actual answer.
 
