@@ -41,6 +41,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 73 | [A CSS id selector cannot start with a digit, so Greenhouse's numeric custom-question ids were unfillable half the time](#73-a-css-id-selector-cannot-start-with-a-digit-so-greenhouses-numeric-custom-question-ids-were-unfillable-half-the-time) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on Reddit's third and final attempt: 6 of 15 fixes failed with `selector matched no element` for `input#430`, `input#431`, `input#432`, `input#433`, `input#434`, `input#436`. `#430` is a **CSS syntax error** — an id selector cannot begin with a digit — yet Greenhouse numbers its custom-question controls exactly that way. `resolveFieldLocator` only tried its attribute-form fallbacks when the selector did *not* look like CSS, and `input#430` contains `#`, so it was used verbatim and matched nothing. The model sent bare `430` on attempt 2 (resolved fine) and `input#430` on attempt 3 (dead), so the same field alternated between fillable and unfillable across attempts of the same job |
 | 72 | [The retry loop counts empty-valued and non-landing fixes as applied, reporting progress it is not making](#72-the-retry-loop-counts-empty-valued-and-non-landing-fixes-as-applied-reporting-progress-it-is-not-making) | Major | Resolved (2026-07-25, accounting fixed; root cause of the underlying non-convergence still under live investigation) | — | Opus 5 | Gemini 3 Pro | Found immediately after #70 shipped, from the diagnostic #70 added: Reddit logged `Attempt 2 applied 15/15 validation fix(es)` and **still bounced**, with the narrowed payload essentially unchanged (8249 → 8334 chars) — i.e. the same fields were still invalid. Two accounting defects make that tally untrustworthy: `applyValidationFix` returns `nil` for an empty value (correct for the *initial* fill path, a lie in the retry path), and a `nil` return only means Playwright accepted the call, not that the control ended up set |
 | 71 | [firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click](#71-firstvisiblelocators-first-fallback-reintroduces-the-very-hang-it-was-written-to-prevent-at-the-submit-click) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found auditing the cohort's `FAILED_SUBMIT` rows during #70's restart: Zimperium (Lever, scored **85**) died on `playwright: timeout: Timeout 30000ms exceeded` waiting for `locator(...).first()`. The `.first()` in Playwright's own call log is the proof — `firstVisibleLocator` found *no* visible match, fell back to `loc.First()`, and the caller clicked a match already known to be invisible (#59's hidden `hcaptchaSubmitBtn`). Guaranteed to burn the full action timeout and then misreport "no visible submit button here" as a generic timeout, which is why it read as CPU/network flakiness |
 | 70 | [The validation-retry loop strips the page's own error text, so the model never learns why a field bounced](#70-the-validation-retry-loop-strips-the-pages-own-error-text-so-the-model-never-learns-why-a-field-bounced) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on the highest-fit job in the 82-cohort (Reddit, scored **90**), which burned **17.5 minutes** and 3 LLM calls to fail with `failed to submit application after 3 validation error attempts`. `aria-describedby` was stripped as "presentational" *before* `PruneDOMToInvalidFields` ran, so the link from a rejected control to its error message was severed, and the message element was then dropped as neither control nor label. The model was told a field was invalid but never what would make it valid, so it re-guessed the same value each attempt. Compounded by an empty fix map falling through to a re-submit of a byte-identical form. This is the terminal step of the whole pipeline — it fails *after* discovery, scoring and fill have all succeeded |
@@ -103,6 +104,31 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 73. A CSS id selector cannot start with a digit, so Greenhouse's numeric custom-question ids were unfillable half the time (Resolved 2026-07-25)
+
+**Caught live on Reddit's third and final attempt**, minutes after #72 shipped:
+
+```
+13:13:54 Validation fix for "input#434" failed: selector matched no element (tried 1 form(s) of "input#434")
+13:13:54 Validation fix for "input#430" failed: selector matched no element (tried 1 form(s) of "input#430")
+13:13:55 Validation fix for "input#431" failed: ...   (same for #432, #433, #436)
+13:13:55 Attempt 3 applied 9/15 validation fix(es) to: #gdpr_demographic_data_consent_given_1,
+         input#candidate-location, input#country, input#question_67942415 ... question_67942420
+13:13:57 Auto-Submit failed for Reddit: failed to submit application after 3 validation error attempts
+```
+
+**Root cause:** `#430` is not a valid CSS selector. A CSS identifier may not begin with a digit — `document.querySelector("#430")` throws a `SyntaxError`. Greenhouse nevertheless numbers its custom-question controls exactly that way (`id="430"`). The `[id="430"]` attribute form has no such restriction and matches perfectly.
+
+`resolveFieldLocator` built its attribute-form fallbacks only under `if !looksLikeCSSSelector(selector)`. `input#430` contains `#`, so it "looks like CSS", so the fallbacks were skipped and the invalid selector was used verbatim — note `tried 1 form(s)` in the log, versus the 5 forms a bare identifier gets.
+
+**The tell that makes this unambiguous:** the model sent bare `430` on attempt 2 and `input#430` on attempt 3, for the same field on the same form. Attempt 2 resolved it (via #66's bare-identifier fallbacks); attempt 3 could not. The same control alternated between fillable and unfillable purely on how the model happened to phrase the selector — which also explains why #72's `15/15 applied` on attempt 2 dropped to `9/15` on attempt 3 with no change to the page.
+
+**Fix:** added `splitTagID`, which decomposes a simple `tag#id` / `#id` selector and refuses anything more complex (descendant combinators, attribute filters, class chains, selector lists) where a naive rewrite would change meaning. When the verbatim selector is CSS-shaped, `resolveFieldLocator` now also queues `tag[id="..."]`, `[id="..."]` and `[name="..."]`. The verbatim selector is still tried first, so nothing that worked before changes behaviour.
+
+**Tests:** `TestResolveFieldLocator_FallsBackToAttributeFormForNumericIDs`, `TestSplitTagID` (table-driven, pins the refusal cases too).
+
+**Note on what this does *not* explain:** `input#candidate-location` and `input#country` resolved fine on attempt 3 and the form still bounced. #72's autocomplete/combobox hypothesis remains live and unconfirmed for those two.
 
 ### 72. The retry loop counts empty-valued and non-landing fixes as applied, reporting progress it is not making (Resolved 2026-07-25, accounting fixed; underlying non-convergence still under live investigation)
 

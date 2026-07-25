@@ -29,13 +29,13 @@ func TestAttemptSubmit_NewContextFails(t *testing.T) {
 			return nil, fmt.Errorf("context creation failed")
 		},
 	}
-	
+
 	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
-	
+
 	if err == nil {
 		t.Errorf("Expected error when NewContext fails, got nil")
 	}
-	
+
 	expectedErr := "could not create context: context creation failed"
 	if err != nil && err.Error() != expectedErr {
 		t.Errorf("Expected error message %q, got %q", expectedErr, err.Error())
@@ -69,19 +69,19 @@ func TestAttemptSubmit_NewPageFails(t *testing.T) {
 		},
 		closeFunc: func(options ...playwright.BrowserContextCloseOptions) error { return nil },
 	}
-	
+
 	mockBrowser := &MockBrowser{
 		newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
 			return mockCtx, nil
 		},
 	}
-	
+
 	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
-	
+
 	if err == nil {
 		t.Errorf("Expected error when NewPage fails, got nil")
 	}
-	
+
 	expectedErr := "could not create page: page creation failed"
 	if err != nil && err.Error() != expectedErr {
 		t.Errorf("Expected error message %q, got %q", expectedErr, err.Error())
@@ -1809,5 +1809,62 @@ func TestVerifyFixLanded_TreatsAnUncheckedBoxAsNotLanded(t *testing.T) {
 	}
 	if landed {
 		t.Error("expected landed=false for a checkbox still reporting checked=false")
+	}
+}
+
+// bugs.md #73: "#430" is a CSS syntax error -- an id selector cannot start
+// with a digit -- but Greenhouse numbers its custom-question controls exactly
+// that way. Confirmed live on Reddit: the model sent bare "430" on one attempt
+// (resolved) and "input#430" on the next (matched nothing), so the same field
+// alternated between fillable and unfillable across attempts.
+func TestResolveFieldLocator_FallsBackToAttributeFormForNumericIDs(t *testing.T) {
+	var tried []string
+	loc := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	hit := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+
+	page := &MockPage{locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+		tried = append(tried, sel)
+		if sel == `input[id="430"]` || sel == `[id="430"]` {
+			return hit
+		}
+		return loc
+	}}
+
+	if _, err := resolveFieldLocator(pageTarget{page: page}, "input#430"); err != nil {
+		t.Fatalf("resolveFieldLocator: %v", err)
+	}
+	if len(tried) < 2 || tried[0] != "input#430" {
+		t.Fatalf("expected the verbatim selector to be tried first, got %v", tried)
+	}
+	var sawAttrForm bool
+	for _, s := range tried {
+		if s == `input[id="430"]` || s == `[id="430"]` {
+			sawAttrForm = true
+		}
+	}
+	if !sawAttrForm {
+		t.Errorf("expected an [id=\"430\"] attribute-form retry, got %v", tried)
+	}
+}
+
+func TestSplitTagID(t *testing.T) {
+	cases := []struct {
+		in      string
+		tag, id string
+		ok      bool
+	}{
+		{"input#430", "input", "430", true},
+		{"#430", "", "430", true},
+		{"#question_67942415", "", "question_67942415", true},
+		{"div.wrap #x", "", "", false},     // descendant combinator
+		{"input#a#b", "", "", false},       // two hashes
+		{"input[name='x']", "", "", false}, // no hash at all
+		{"#", "", "", false},               // empty id
+	}
+	for _, c := range cases {
+		tag, id, ok := splitTagID(c.in)
+		if ok != c.ok || tag != c.tag || id != c.id {
+			t.Errorf("splitTagID(%q) = (%q, %q, %v), want (%q, %q, %v)", c.in, tag, id, ok, c.tag, c.id, c.ok)
+		}
 	}
 }

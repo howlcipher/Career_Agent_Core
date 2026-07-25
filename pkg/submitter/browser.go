@@ -1230,6 +1230,30 @@ func safeFill(target fillTarget, selector, text string) error {
 	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 }
 
+// splitTagID decomposes a simple "tag#id" or "#id" selector into its parts,
+// reporting false for anything more complex (descendants, attribute filters,
+// class chains, selector lists) where a naive rewrite would change meaning.
+//
+// bugs.md #73: this exists so an id that is not a valid CSS identifier can be
+// retried in attribute form. It is the leading-digit case that bites in
+// practice -- Greenhouse's custom-question ids are bare integers.
+func splitTagID(selector string) (tag, id string, ok bool) {
+	hash := strings.IndexByte(selector, '#')
+	if hash < 0 || strings.Count(selector, "#") != 1 {
+		return "", "", false
+	}
+	tag, id = selector[:hash], selector[hash+1:]
+	if id == "" || strings.ContainsAny(id, "#.[]>:,= \t") {
+		return "", "", false
+	}
+	for _, r := range tag {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
+			return "", "", false
+		}
+	}
+	return tag, id, true
+}
+
 // looksLikeCSSSelector reports whether s already carries CSS syntax. A bare
 // word does not: Playwright reads it as a *tag name*, so "country" searches
 // for a <country> element and matches nothing.
@@ -1256,6 +1280,21 @@ func resolveFieldLocator(target fillTarget, selector string) (playwright.Locator
 			fmt.Sprintf("[name=%q]", selector),
 			fmt.Sprintf("[id=%q]", selector),
 			fmt.Sprintf("[data-qa=%q]", selector),
+		)
+	} else if tag, id, ok := splitTagID(selector); ok {
+		// bugs.md #73: a CSS id selector cannot start with a digit, so "#430"
+		// is a syntax error and matches nothing -- but Greenhouse numbers its
+		// custom-question controls exactly that way (id="430"). The attribute
+		// form has no such restriction. Confirmed live on Reddit: the model
+		// sent bare "430" on one attempt (resolved via the fallbacks below)
+		// and "input#430" on the next (used verbatim, matched nothing), so the
+		// same field alternated between fillable and unfillable.
+		if tag != "" {
+			candidates = append(candidates, fmt.Sprintf("%s[id=%q]", tag, id))
+		}
+		candidates = append(candidates,
+			fmt.Sprintf("[id=%q]", id),
+			fmt.Sprintf("[name=%q]", id),
 		)
 	}
 	for _, c := range candidates {
