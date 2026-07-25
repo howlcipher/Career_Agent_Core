@@ -884,7 +884,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			target := resolveFillTarget(page)
 			domHTML, _ := target.HTML()
 			prunedHTML, err := parser.PruneDOMToForm(domHTML)
-			if err != nil { prunedHTML = domHTML }
+			if err != nil {
+				prunedHTML = domHTML
+			}
 			if stripped, err := parser.StripPresentationalAttrs(prunedHTML); err == nil {
 				prunedHTML = stripped
 			}
@@ -954,7 +956,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if landed, vErr := verifyFixLanded(target, selector); vErr == nil && !landed {
 					// bugs.md #74: the value may not have stuck because this is
 					// an autocomplete that needs its selection committed.
-					if committed, cErr := commitComboboxSelection(target, selector); cErr == nil && committed {
+					if committed, cErr := commitComboboxSelection(target, selector, value); cErr == nil && committed {
 						comboCommitted = append(comboCommitted, selector)
 					} else {
 						notLanded = append(notLanded, selector)
@@ -1006,7 +1008,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 		if autoSubmitClick {
 			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-				State: playwright.LoadStateNetworkidle,
+				State:   playwright.LoadStateNetworkidle,
 				Timeout: playwright.Float(10000),
 			})
 
@@ -1028,7 +1030,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected LinkedIn Job. Implementing Easy Apply automation...")
-	
+
 	// Click Easy Apply button
 	easyApplyBtn := page.Locator("button.jobs-apply-button")
 	if count, _ := easyApplyBtn.Count(); count > 0 {
@@ -1040,10 +1042,10 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 		return fmt.Errorf("could not find Easy Apply button")
 	}
 
-	// This is a complex multi-step modal in LinkedIn. 
+	// This is a complex multi-step modal in LinkedIn.
 	// We'd upload the resume:
 	// page.SetInputFiles("input[type='file']", []playwright.InputFile{{Name: "resume.md", Path: resumePath}})
-	
+
 	// A full implementation would step through the Next buttons.
 	return fmt.Errorf("linkedin easy apply modal interaction not fully implemented")
 }
@@ -1087,10 +1089,13 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 		//
 		// Best-effort throughout: a miss here costs nothing beyond the retry
 		// cycle that used to happen unconditionally.
-		fillGreenhouseCombobox(target, "input#candidate-location", "Location", pii.LocationSearchCandidates())
-		if c := strings.TrimSpace(pii.Country); c != "" {
-			fillGreenhouseCombobox(target, "input#country", "Country", []string{c})
-		}
+		// mustContain guards against the geocoder's first hit being the wrong
+		// place entirely -- "Macomb" surfaces Macomb, Illinois ahead of the
+		// configured Michigan address (bugs.md #79).
+		fillGreenhouseCombobox(target, "input#candidate-location", "Location",
+			pii.LocationSearchCandidates(), pii.LocationMustContain())
+		fillGreenhouseCombobox(target, "input#country", "Country",
+			pii.CountrySearchCandidates(), nil)
 	}
 
 	// Upload resume
@@ -1427,8 +1432,15 @@ const readInputValueJS = `el => (el.type === 'checkbox' || el.type === 'radio') 
 // entirely -- every combobox looked satisfied, nothing was ever committed, and
 // the form kept bouncing on the same required fields. Only the widget's own
 // rendering of the selection counts.
+// bugs.md #78: the shell lookup must not be able to match the input itself.
+// react-select sets role="combobox" *on the input*, and Element.closest()
+// tests the element before its ancestors -- so `closest('[role="combobox"]')`
+// returned the input, which has no children, so the committed value was never
+// found. Proven against Reddit's live form: with this corrected the same DOM
+// reads back "Macomb, Illinois, United States" where it previously read "".
 const readComboboxValueJS = `el => {
-  const shell = el.closest('.select__control, .select-shell, [role="combobox"]');
+  const shell = el.closest('.select__control, .select-shell') ||
+                (el.parentElement && el.parentElement.closest('[role="combobox"]'));
   if (!shell) return '';
   const sv = shell.querySelector('.select__single-value, .select__multi-value__label');
   if (sv && sv.textContent.trim()) return sv.textContent.trim();
@@ -1484,65 +1496,196 @@ func isComboboxLocator(el playwright.Locator) (bool, error) {
 
 // commitComboboxOnLocator is commitComboboxSelection against an
 // already-resolved control (bugs.md #75).
-func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
+func commitComboboxOnLocator(target fillTarget, el playwright.Locator, value string, mustContain []string) (bool, error) {
 	combo, err := isComboboxLocator(el)
 	if err != nil {
 		return false, err
 	}
-	if !combo {
+	if !combo || strings.TrimSpace(value) == "" {
 		return false, nil
 	}
-	// bugs.md #77: wait for an option to exist before committing. react-select
-	// populates its menu asynchronously (Greenhouse's Location field queries a
-	// geocoder), so an Enter sent immediately after Fill lands while the menu
-	// is still empty, highlights nothing, and commits nothing -- which is
-	// exactly what #76's newly-working read-back caught it doing.
-	waitForComboboxOptions(el)
-	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
-		return false, err
-	}
-	return locatorHasValue(el)
+	return setComboboxValue(target, el, value, mustContain)
 }
 
-// comboboxOptionCountJS counts the options currently rendered for a combobox.
-// react-select renders its menu in a portal as often as inline, so this looks
-// document-wide rather than only inside the widget's own subtree.
-const comboboxOptionCountJS = `el => document.querySelectorAll('[role="option"], .select__option').length`
+// activeDescendantJS reports which option the widget currently has focused.
+//
+// bugs.md #78: this replaces a document-wide count of [role="option"], which
+// was worthless -- measured live, an unrelated select's open menu kept 244
+// options in the document at all times, so the count was non-zero before the
+// target widget had opened at all and the wait returned instantly. Every
+// commit then fired into an empty menu. aria-activedescendant is set on the
+// input itself, so it cannot be confused with another widget, and a non-empty
+// value is the precise condition under which Enter selects something.
+const activeDescendantJS = `el => el.getAttribute('aria-activedescendant') || ''`
 
-// waitForComboboxOptions blocks until the widget has at least one selectable
-// option, or the budget runs out. Best-effort by design: on timeout the caller
-// still tries Enter, and the read-back afterwards is what actually decides
-// whether anything committed.
-func waitForComboboxOptions(el playwright.Locator) {
+// waitForComboboxReady blocks until the widget has focused an option, or the
+// budget runs out. Best-effort: on timeout the caller still tries Enter, and
+// the read-back afterwards is what actually decides whether anything
+// committed.
+func waitForComboboxReady(el playwright.Locator) {
 	const (
 		budget = 5 * time.Second
-		tick   = 250 * time.Millisecond
+		tick   = 200 * time.Millisecond
 	)
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		got, err := el.Evaluate(comboboxOptionCountJS, nil)
+		got, err := el.Evaluate(activeDescendantJS, nil)
 		if err != nil {
 			return
 		}
-		if n, ok := toInt(got); ok && n > 0 {
+		if s, _ := got.(string); strings.TrimSpace(s) != "" {
 			return
 		}
 		time.Sleep(tick)
 	}
 }
 
-// toInt normalises the number Playwright hands back from Evaluate, which
-// arrives as int or float64 depending on the value.
-func toInt(v interface{}) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
+// setComboboxValue drives an autocomplete the way a person does: click it,
+// type, wait for it to focus a match, then commit.
+//
+// bugs.md #78: Fill() alone can never work here. Measured live against
+// Reddit's form, Fill() sets input.value without react-select ever opening its
+// menu -- the widget's own option count stayed 0 and aria-activedescendant
+// stayed empty for a full 3 seconds, so the Enter that followed had nothing to
+// select. Real keystrokes open and filter the menu within ~600ms.
+func setComboboxValue(target fillTarget, el playwright.Locator, want string, mustContain []string) (bool, error) {
+	for _, prefix := range searchPrefixes(want) {
+		if err := el.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+			return false, err
+		}
+		// Clear whatever a previous Fill() or attempt left behind, or typing
+		// would append to it.
+		_ = el.Fill("", playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+		if err := el.Type(prefix, playwright.LocatorTypeOptions{
+			Timeout: playwright.Float(fillActionTimeoutMs),
+			Delay:   playwright.Float(40),
+		}); err != nil {
+			continue
+		}
+		waitForComboboxReady(el)
+		optID, ok := pickComboboxOption(readComboboxOptions(el), want, mustContain)
+		if !ok {
+			continue
+		}
+		if err := target.Loc("#" + optID).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+			continue
+		}
+		if landed, err := locatorHasValue(el); err == nil && landed {
+			return true, nil
+		}
 	}
-	return 0, false
+	return false, nil
+}
+
+// comboboxOptionsJS returns the options belonging to THIS widget, resolved via
+// the input's aria-controls (falling back to the listbox implied by
+// aria-activedescendant).
+//
+// bugs.md #79: scoping matters enormously. Greenhouse pages carry an
+// always-present intl-tel-input phone-country widget holding ~244 options at
+// all times, so any document-wide option query is permanently non-empty and
+// says nothing about the widget being driven.
+const comboboxOptionsJS = `el => {
+  const id = el.getAttribute('aria-controls') || '';
+  let box = id ? document.getElementById(id) : null;
+  if (!box) {
+    const ad = el.getAttribute('aria-activedescendant') || '';
+    const m = ad.match(/^(.*)-option-\d+$/);
+    if (m) box = document.getElementById(m[1] + '-listbox');
+  }
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('[role="option"], .select__option'))
+    .map(o => o.id + '|' + o.textContent.trim());
+}`
+
+// normalizeOptionText lowercases and strips punctuation and dial-code noise,
+// so "United States +1" compares as "united states".
+func normalizeOptionText(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || r == ' ' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// searchPrefixes yields progressively shorter leading word-groups of a value.
+//
+// bugs.md #79: measured live, these widgets filter by substring against their
+// own labels, so the configured value often cannot be typed in full --
+// "United States of America" matches nothing against a list whose entry is
+// "United States", and "Macomb Township, MI" matches nothing against a
+// geocoder that wants "Macomb".
+func searchPrefixes(value string) []string {
+	words := strings.Fields(strings.ReplaceAll(value, ",", " "))
+	var out []string
+	seen := map[string]bool{}
+	for n := len(words); n >= 1; n-- {
+		p := strings.Join(words[:n], " ")
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// pickComboboxOption chooses the option that genuinely corresponds to want.
+//
+// bugs.md #79: taking the *first* option is wrong and actively dangerous.
+// Typing "Macomb" into Greenhouse's location field puts "Macomb, Illinois,
+// United States" at option-0 while the configured address is in Michigan --
+// committing that files real applications with the wrong location. Every token
+// in mustContain has to appear; failing that, option and wanted value must
+// contain one another. Otherwise nothing is selected at all, and the field is
+// left to the validation-retry loop rather than filled with something wrong.
+func pickComboboxOption(options []string, want string, mustContain []string) (id string, ok bool) {
+	wantN := normalizeOptionText(want)
+	for _, entry := range options {
+		parts := strings.SplitN(entry, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		optID, text := parts[0], normalizeOptionText(parts[1])
+		if optID == "" {
+			continue
+		}
+		matched := true
+		for _, tok := range mustContain {
+			if t := normalizeOptionText(tok); t != "" && !strings.Contains(text, t) {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if len(mustContain) > 0 || strings.Contains(text, wantN) || strings.Contains(wantN, text) {
+			return optID, true
+		}
+	}
+	return "", false
+}
+
+func readComboboxOptions(el playwright.Locator) []string {
+	got, err := el.Evaluate(comboboxOptionsJS, nil)
+	if err != nil {
+		return nil
+	}
+	raw, ok := got.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // fillGreenhouseCombobox types each candidate into a geocoded autocomplete
@@ -1553,7 +1696,7 @@ func toInt(v interface{}) (int, bool) {
 // checkable only because bugs.md #74/#76 made "did the selection commit"
 // observable. Entirely best-effort: every failure path leaves the field for
 // the validation-retry loop, which is exactly where it used to go anyway.
-func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates []string) {
+func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates []string, mustContain []string) {
 	if len(candidates) == 0 {
 		return
 	}
@@ -1562,10 +1705,7 @@ func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates
 		return
 	}
 	for _, want := range candidates {
-		if err := el.Fill(want, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
-			continue
-		}
-		if committed, err := commitComboboxOnLocator(el); err == nil && committed {
+		if committed, err := setComboboxValue(target, el, want, mustContain); err == nil && committed {
 			log.Printf("[Auto-Submit] %s set to %q on the initial fill (saved a validation-retry cycle)", what, want)
 			return
 		}
@@ -1582,11 +1722,11 @@ func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates
 // bounce on the first pass and force a full validation-retry cycle -- roughly
 // 12 minutes of inference on this machine -- to fix something the first pass
 // could have committed with a keypress.
-func commitFilledCombobox(el playwright.Locator, what string) {
+func commitFilledCombobox(target fillTarget, el playwright.Locator, what, value string) {
 	if landed, err := locatorHasValue(el); err != nil || landed {
 		return
 	}
-	if committed, err := commitComboboxOnLocator(el); err == nil && committed {
+	if committed, err := commitComboboxOnLocator(target, el, value, nil); err == nil && committed {
 		log.Printf("[Auto-Submit] Committed autocomplete selection for %s on the initial fill", what)
 	}
 }
@@ -1598,12 +1738,12 @@ func commitFilledCombobox(el playwright.Locator, what string) {
 // bugs.md #74. Returns whether the control ended up holding a value. It is a
 // no-op on anything that is not a combobox, so an ordinary text input is never
 // sent a stray Enter that could submit the form early.
-func commitComboboxSelection(target fillTarget, selector string) (bool, error) {
+func commitComboboxSelection(target fillTarget, selector, value string) (bool, error) {
 	el, err := resolveFieldLocator(target, selector)
 	if err != nil {
 		return false, err
 	}
-	return commitComboboxOnLocator(el)
+	return commitComboboxOnLocator(target, el, value, nil)
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one
@@ -1632,7 +1772,7 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 	if labelText != "" {
 		labelLoc := target.GetByLabelLoc(labelText)
 		if err := labelLoc.Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
-			commitFilledCombobox(labelLoc, labelText)
+			commitFilledCombobox(target, labelLoc, labelText, text)
 			return nil
 		} else {
 			lastErr = fmt.Errorf("label fill for %q failed: %w", labelText, err)
@@ -1641,7 +1781,7 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 		phLoc := target.GetByPlaceholderLoc(labelText)
 		if err := phLoc.Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
 			log.Printf("[Auto-Submit] Label fill for %q failed; placeholder fallback succeeded", labelText)
-			commitFilledCombobox(phLoc, labelText)
+			commitFilledCombobox(target, phLoc, labelText, text)
 			return nil
 		} else {
 			lastErr = fmt.Errorf("%v; placeholder fill for %q also failed: %w", lastErr, labelText, err)
@@ -1668,7 +1808,7 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 		return err
 	}
 	if el, rErr := resolveFieldLocator(target, selector); rErr == nil {
-		commitFilledCombobox(el, selector)
+		commitFilledCombobox(target, el, selector, text)
 	}
 	if lastErr != nil {
 		log.Printf("[Auto-Submit] Label and placeholder fill both failed; CSS selector fallback succeeded")
@@ -1861,5 +2001,3 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 
 	return nil
 }
-
-

@@ -21,12 +21,13 @@ type PII struct {
 	// autocomplete, and a wrong guess there is worse than leaving it blank for
 	// the validation-retry loop to handle. All optional -- blank fields are
 	// skipped exactly like the EEO ones.
-	Street    string `yaml:"street"`
-	City      string `yaml:"city"`
-	State     string `yaml:"state"`
-	FullState string `yaml:"full_state"`
-	Zip       string `yaml:"zip"`
-	Country   string `yaml:"country"`
+	Street      string `yaml:"street"`
+	City        string `yaml:"city"`
+	State       string `yaml:"state"`
+	FullState   string `yaml:"full_state"`
+	Zip         string `yaml:"zip"`
+	Country     string `yaml:"country"`
+	FullCountry string `yaml:"full_country"`
 
 	EEO EEO `yaml:"eeo"`
 }
@@ -63,6 +64,50 @@ func lowerMappingKeys(n *yaml.Node) {
 	for _, c := range n.Content {
 		lowerMappingKeys(c)
 	}
+}
+
+// CountrySearchCandidates returns the phrasings worth trying against a country
+// picker, shortest first.
+//
+// improvements.md #28: same reasoning as LocationSearchCandidates -- which
+// string a given country list matches is not knowable in advance ("USA" vs
+// "United States of America" vs "United States"), so the caller tries each
+// until one commits. Only values the user actually configured are used; no
+// variant is invented.
+func (p PII) CountrySearchCandidates() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range []string{p.Country, p.FullCountry} {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
+}
+
+// LocationMustContain returns the tokens an accepted location option has to
+// contain.
+//
+// bugs.md #79: Greenhouse's geocoder returns "Macomb, Illinois, United States"
+// as the first hit for "Macomb" even though the configured address is in
+// Michigan. Requiring the state token means a near-miss is rejected outright
+// rather than filed on a real application.
+func (p PII) LocationMustContain() []string {
+	var out []string
+	if city := strings.Fields(strings.TrimSpace(p.City)); len(city) > 0 {
+		out = append(out, city[0])
+	}
+	// Prefer the spelled-out state: option labels read "Macomb, Illinois,
+	// United States", not "MI".
+	if fs := strings.TrimSpace(p.FullState); fs != "" {
+		out = append(out, fs)
+	} else if st := strings.TrimSpace(p.State); st != "" {
+		out = append(out, st)
+	}
+	return out
 }
 
 // LocationSearchCandidates returns the strings worth trying against a geocoded
@@ -102,10 +147,10 @@ func (p PII) LocationSearchCandidates() []string {
 // answers. All fields are optional: leave any blank to have the agent
 // answer "Decline to answer" for that question instead of guessing.
 type EEO struct {
-	Gender          string `yaml:"gender"`
-	RaceEthnicity   string `yaml:"race_ethnicity"`
-	VeteranStatus   string `yaml:"veteran_status"`
-	DisabilityStatus string `yaml:"disability_status"`
+	Gender            string `yaml:"gender"`
+	RaceEthnicity     string `yaml:"race_ethnicity"`
+	VeteranStatus     string `yaml:"veteran_status"`
+	DisabilityStatus  string `yaml:"disability_status"`
 	SexualOrientation string `yaml:"sexual_orientation"`
 }
 

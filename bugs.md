@@ -45,6 +45,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 79 | [The option wait watched an unrelated widget, and committing option-0 filed the wrong location](#79-the-option-wait-watched-an-unrelated-widget-and-committing-option-0-filed-the-wrong-location) | Blocker | Resolved (2026-07-25, root-caused, fixed, and verified against the live form) | — | Opus 5 | Gemini 3 Pro | Found with a standalone Playwright probe against Reddit's real form, after the 12-min-per-guess loop became untenable. Two defects: **(a)** the options wait counted `[role="option"]` **document-wide**, and every Greenhouse page carries an always-open intl-tel-input phone-country widget holding ~244 options — so the count was permanently non-zero, the wait returned instantly, and every commit fired into an empty menu. **(b)** far worse, committing the *focused* option is unsafe: typing `Macomb` puts **"Macomb, Illinois, United States"** at option-0 while the configured address is Michigan, so a successful commit would file real applications with the wrong location |
+| 78 | [Fill() never opens a react-select menu, and the read-back matched the input itself](#78-fill-never-opens-a-react-select-menu-and-the-read-back-matched-the-input-itself) | Blocker | Resolved (2026-07-25, root-caused, fixed, and verified against the live form) | — | Opus 5 | Gemini 3 Pro | Probed directly: `Fill()` sets `input.value` while react-select's menu **never opens** — the widget's own option count stayed 0 and `aria-activedescendant` stayed empty for 3 full seconds, so the Enter that followed had nothing to select. Real keystrokes open and filter it in ~600ms. Separately, react-select sets `role="combobox"` **on the input**, and `Element.closest()` tests the element itself first — so the value read resolved its "shell" to the input, which has no children, and never found the committed value. Same DOM, corrected: `""` → `"Macomb, Illinois, United States"` |
 | 77 | [Enter was pressed before react-select had loaded any option, so the commit selected nothing](#77-enter-was-pressed-before-react-select-had-loaded-any-option-so-the-commit-selected-nothing) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | Caught the moment #76 made the read-back work: `Attempt 2: 11 fix(es) reported success but left the control empty ... 430, 431, 432, 433, 434, 436, candidate-location, country, question_67942418/19/20` — with **no** commit line, so `commitComboboxOnLocator` pressed Enter and still committed nothing. react-select populates its menu asynchronously (Greenhouse's Location field queries a geocoder), so an Enter fired immediately after `Fill()` arrives while the menu is empty, highlights nothing and selects nothing. Real progress in the same run though: the narrowed payload **shrank for the first time**, 8249 → 5988 chars |
 | 76 | [#74's own read-back checked el.value first, silently disabling the combobox commit it had just added](#76-74s-own-read-back-checked-elvalue-first-silently-disabling-the-combobox-commit-it-had-just-added) | Blocker | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | **A defect in #74's fix, caught live by the absence of an expected log line.** Reddit logged `Attempt 2 applied 15/15 validation fix(es)` with **no** `committed N autocomplete selection(s)` line and **no** `left the control empty` line — so `verifyFixLanded` reported every field as landed and the commit step never ran once. Cause: the value read checked `el.value` before the combobox branch, and a react-select search input genuinely holds the typed text after `Fill()`. #74 was therefore inert on exactly the fields it was written for, and #75 inherited the same inertness |
 | 75 | [#74's combobox commit was wired into the retry path but not the initial fill, guaranteeing a wasted retry cycle](#75-74s-combobox-commit-was-wired-into-the-retry-path-but-not-the-initial-fill-guaranteeing-a-wasted-retry-cycle) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | The identical structural gap **#67** found, one layer up: `safeFillWithLabelFallback`'s three tiers all use plain `Fill()`, so a react-select field is typed into but never committed on the first pass. Since `Location (City)` and `Country` are required on every Greenhouse form, the first submit was **guaranteed** to bounce and force a full validation-retry cycle — ~12 minutes of inference on this machine — to commit something a single keypress could have done immediately. Confirmed live at 13:36: the run carrying #74 still bounced on attempt 1 with the narrowed payload at exactly 8249 chars, unchanged from the run before it |
@@ -112,6 +114,63 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 79. The option wait watched an unrelated widget, and committing option-0 filed the wrong location (Resolved 2026-07-25, verified against the live form)
+
+**Found by abandoning the guess-and-wait loop.** Each hypothesis was costing ~12 minutes of inference to test through the agent, so I built a standalone Playwright probe against Reddit's real form. Feedback dropped to ~30 seconds and both defects fell out immediately.
+
+**(a) The options wait was watching the wrong widget.** #77 polled `document.querySelectorAll('[role="option"], .select__option')`. Probe output:
+
+```
+#candidate-location typed="Macomb Township, MI"
+  activedescendant=""   options=[Afghanistan+93, Åland Islands+358, Albania+355, ...]
+```
+
+Those are **dial codes**. Every Greenhouse page carries an always-present intl-tel-input phone-country widget whose menu holds ~244 options at all times, so a document-wide count is *permanently* non-zero. The wait returned instantly, every time, and each commit fired into a menu that had not opened. Now resolved through the input's own `aria-controls` (falling back to the listbox implied by `aria-activedescendant`), so it can only ever see the widget being driven.
+
+**(b) Committing the focused option is unsafe.** This is the serious one. Typing `Macomb` returns:
+
+```
+option-0  Macomb, Illinois, United States      <-- wrong state
+option-2  Township of Macomb, Michigan, ...    <-- the configured address
+```
+
+The configured address is in **Michigan**. An earlier probe run pressed Enter and committed *Macomb, Illinois* — meaning that had the commit "worked" at any point today, it would have filed real job applications with the wrong location. A silent wrong answer is worse than the visible failure it replaced.
+
+`pickComboboxOption` now requires every token in `mustContain` (for location: the city's first word and the spelled-out state) and otherwise requires option and configured value to contain one another. **If nothing matches, nothing is selected** — the field is left to the validation-retry loop rather than filled with something wrong.
+
+Also fixed here: the configured value frequently cannot be typed in full, because these widgets filter by substring against their own labels. `"United States of America"` matches nothing against a list whose entry is `"United States"`; `"Macomb Township, MI"` matches nothing at all. `searchPrefixes` shortens the query word by word until the list responds.
+
+**Verified against the live form**, not merely unit-tested:
+
+```
+LOCATION: "Macomb" -> 7 options -> picked option-2
+  => COMMITTED "Township of Macomb, Michigan, United States"
+COUNTRY:  "United States" -> picked option-0
+  => COMMITTED "+1"
+```
+
+**Tests:** `TestPickComboboxOption_RejectsTheWrongStateEvenWhenItIsFirst` (pins the safety property), `TestPickComboboxOption_SelectsNothingWhenNoOptionMatches`, `TestPickComboboxOption_MatchesAShorterListLabelAgainstALongerConfiguredValue`, `TestSearchPrefixes_ShortensUntilSomethingCanMatch`, `TestNormalizeOptionText_StripsDialCodeAndPunctuation`.
+
+### 78. Fill() never opens a react-select menu, and the read-back matched the input itself (Resolved 2026-07-25, verified against the live form)
+
+**Two independent reasons the combobox commit could never have worked**, both established by direct observation of the live DOM rather than inference.
+
+**(a) `Fill()` does not open the menu.** Probed on Reddit's form: after `Fill()` succeeded, the widget's own option count stayed **0** and `aria-activedescendant` stayed **empty for a full 3 seconds**. react-select opens and filters its menu in response to real key events, not to a programmatic value set. The Enter that followed therefore had nothing to select. Clicking the control and typing produces options and a focused option within ~600ms. `setComboboxValue` now clicks, clears, and types.
+
+**(b) The value read matched the input itself.** react-select sets `role="combobox"` **on the input element**, and `Element.closest()` tests the element before its ancestors. So `el.closest('.select__control, .select-shell, [role="combobox"]')` returned **the input** — which has no children — and the `.select__single-value` lookup inside it found nothing. The read-back reported `""` even when the DOM plainly contained `option Macomb, Illinois, United States, selected.` and a populated `.select__single-value`.
+
+Proven by toggling only that one expression against identical DOM:
+
+```
+role attr on the input itself = "combobox"   <-- closest() matches self
+before: COMMITTED VALUE = ""
+after:  COMMITTED VALUE = "Macomb, Illinois, United States"
+```
+
+The shell lookup now prefers the container classes and only considers a `role="combobox"` ancestor **via `el.parentElement`**, so it can never resolve to the input.
+
+**Why this mattered so much:** (b) made #74, #75 and #77 all report failure even where they had succeeded, which is why three consecutive fixes looked inert. It is the same class of error as #76 — a diagnostic lying about its own subject.
 
 ### 77. Enter was pressed before react-select had loaded any option, so the commit selected nothing (Resolved 2026-07-25, live confirmation pending)
 

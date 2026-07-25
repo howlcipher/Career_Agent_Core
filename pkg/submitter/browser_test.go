@@ -200,6 +200,16 @@ type MockLocator struct {
 	// pressFunc backs the keypress that commits an autocomplete selection
 	// (bugs.md #74).
 	pressFunc func(key string) error
+	// typeFunc backs the real keystrokes an autocomplete needs to open and
+	// filter its menu (bugs.md #78).
+	typeFunc func(text string) error
+}
+
+func (m *MockLocator) Type(text string, options ...playwright.LocatorTypeOptions) error {
+	if m.typeFunc != nil {
+		return m.typeFunc(text)
+	}
+	return nil
 }
 
 func (m *MockLocator) Press(key string, options ...playwright.LocatorPressOptions) error {
@@ -1879,312 +1889,102 @@ func TestSplitTagID(t *testing.T) {
 	}
 }
 
-// bugs.md #74: Reddit's Greenhouse form is react-select. The
-// <input id="candidate-location"> is a search box; the chosen value lives in
-// widget state and is rendered into a sibling .select__single-value, so
-// reading el.value reports "" whether or not a selection succeeded.
-func TestCommitComboboxSelection_PressesEnterOnAComboboxAndConfirms(t *testing.T) {
-	var pressed []string
-	committed := false
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			// isComboboxInputJS is the "!!(...)" predicate; readControlValueJS
-			// is the block form. Both mention combobox, so match on shape.
-			if strings.HasPrefix(script, "el => !!(") {
-				return true, nil
-			}
-			if committed {
-				return "Detroit, MI", nil
-			}
-			return "", nil
-		},
-		pressFunc: func(key string) error {
-			pressed = append(pressed, key)
-			committed = true
-			return nil
-		},
+// bugs.md #79: the safety property of this whole mechanism. Greenhouse's
+// geocoder returns "Macomb, Illinois, United States" as the FIRST hit for
+// "Macomb", while the configured address is in Michigan. Committing option-0
+// would file real job applications with the wrong location, so a near-miss
+// must be rejected outright rather than accepted.
+func TestPickComboboxOption_RejectsTheWrongStateEvenWhenItIsFirst(t *testing.T) {
+	options := []string{
+		"opt-0|Macomb, Illinois, United States",
+		"opt-1|Macomb Township, Michigan, United States",
 	}
-	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
-
-	ok, err := commitComboboxSelection(pageTarget{page: page}, "#candidate-location")
-	if err != nil {
-		t.Fatalf("commitComboboxSelection: %v", err)
-	}
-	if len(pressed) != 1 || pressed[0] != "Enter" {
-		t.Errorf("expected a single Enter press to commit the selection, got %v", pressed)
-	}
+	id, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"})
 	if !ok {
-		t.Error("expected the selection to read back as committed")
+		t.Fatal("expected the Michigan option to be selected")
+	}
+	if id != "opt-1" {
+		t.Errorf("selected %q — option-0 is Illinois and must not be chosen", id)
 	}
 }
 
-// An ordinary text input must never be sent a stray Enter -- that can submit
-// the form before the remaining fixes are applied.
-func TestCommitComboboxSelection_LeavesPlainInputsAlone(t *testing.T) {
-	var pressed []string
+// If nothing genuinely matches, select nothing. Leaving the field to the
+// validation-retry loop is strictly better than filling it with a wrong value.
+func TestPickComboboxOption_SelectsNothingWhenNoOptionMatches(t *testing.T) {
+	options := []string{
+		"opt-0|Macomb, Illinois, United States",
+		"opt-1|Macon, Georgia, United States",
+	}
+	if id, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"}); ok {
+		t.Errorf("expected no selection, got %q", id)
+	}
+}
+
+// Country has no mustContain tokens, so containment either way decides it:
+// the list entry "United States" must satisfy a configured
+// "United States of America".
+func TestPickComboboxOption_MatchesAShorterListLabelAgainstALongerConfiguredValue(t *testing.T) {
+	options := []string{"c-0|United Arab Emirates +971", "c-1|United States +1"}
+	id, ok := pickComboboxOption(options, "United States of America", nil)
+	if !ok {
+		t.Fatal("expected a match for the configured country")
+	}
+	if id != "c-1" {
+		t.Errorf("selected %q, want c-1 (United States)", id)
+	}
+}
+
+// bugs.md #79: these widgets filter by substring against their own labels, so
+// the configured value often cannot be typed in full. Measured live:
+// "United States of America" matches nothing against a list whose entry is
+// "United States", and "Macomb Township, MI" matches nothing at all.
+func TestSearchPrefixes_ShortensUntilSomethingCanMatch(t *testing.T) {
+	got := searchPrefixes("United States of America")
+	want := []string{"United States of America", "United States of", "United States", "United"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("prefix %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Commas are separators, not content.
+	if p := searchPrefixes("Macomb Township, MI"); p[0] != "Macomb Township MI" || p[len(p)-1] != "Macomb" {
+		t.Errorf("comma handling wrong: %v", p)
+	}
+}
+
+func TestNormalizeOptionText_StripsDialCodeAndPunctuation(t *testing.T) {
+	if got := normalizeOptionText("United States +1"); got != "united states" {
+		t.Errorf("got %q, want %q", got, "united states")
+	}
+	if got := normalizeOptionText("Macomb, Illinois, United States"); got != "macomb illinois united states" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// An ordinary text input must never be driven as a combobox — a stray Enter or
+// option click can submit the form before the remaining fixes are applied.
+func TestCommitComboboxOnLocator_LeavesPlainInputsAlone(t *testing.T) {
+	touched := false
 	loc := &MockLocator{
 		countFunc:    func() (int, error) { return 1, nil },
 		evaluateFunc: func(string) (interface{}, error) { return false, nil },
-		pressFunc:    func(key string) error { pressed = append(pressed, key); return nil },
+		clickFunc:    func(...playwright.LocatorClickOptions) error { touched = true; return nil },
+		pressFunc:    func(string) error { touched = true; return nil },
+		typeFunc:     func(string) error { touched = true; return nil },
 	}
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
 
-	ok, err := commitComboboxSelection(pageTarget{page: page}, "#phone")
-	if err != nil {
-		t.Fatalf("commitComboboxSelection: %v", err)
-	}
-	if len(pressed) != 0 {
-		t.Errorf("expected no keypress on a non-combobox input, got %v", pressed)
-	}
-	if ok {
-		t.Error("expected ok=false for a control this function does not handle")
-	}
-}
-
-// bugs.md #75: the same gap #67 found -- a capability wired into the
-// validation-retry path but not the initial fill. Without it every Greenhouse
-// form with a react-select field (Location and Country are required on all of
-// them) was guaranteed to bounce on the first pass and burn a full ~12-minute
-// validation-retry cycle to commit something a keypress could have.
-func TestSafeFillWithLabelFallback_CommitsAComboboxOnTheInitialFill(t *testing.T) {
-	var pressed []string
-	committed := false
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		fillFunc:  func(string) error { return nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			if strings.HasPrefix(script, "el => !!(") {
-				return true, nil
-			}
-			if committed {
-				return "Detroit, MI", nil
-			}
-			return "", nil
-		},
-		pressFunc: func(key string) error {
-			pressed = append(pressed, key)
-			committed = true
-			return nil
-		},
-	}
-	page := &MockPage{
-		locatorFunc:          func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc },
-		getByLabelFunc:       func(any) playwright.Locator { return loc },
-		getByPlaceholderFunc: func(any) playwright.Locator { return loc },
-	}
-
-	if err := safeFillWithLabelFallback(pageTarget{page: page}, "#candidate-location", "Location (City)", "Detroit, MI"); err != nil {
-		t.Fatalf("safeFillWithLabelFallback: %v", err)
-	}
-	if len(pressed) != 1 || pressed[0] != "Enter" {
-		t.Errorf("expected the initial fill to commit the autocomplete with Enter, got %v", pressed)
-	}
-}
-
-// A plain input filled on the first pass must not receive a stray Enter.
-func TestSafeFillWithLabelFallback_DoesNotPressEnterOnPlainInputs(t *testing.T) {
-	var pressed []string
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		fillFunc:  func(string) error { return nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			if strings.HasPrefix(script, "el => !!(") {
-				return false, nil
-			}
-			return "", nil
-		},
-		pressFunc: func(key string) error { pressed = append(pressed, key); return nil },
-	}
-	page := &MockPage{
-		locatorFunc:          func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc },
-		getByLabelFunc:       func(any) playwright.Locator { return loc },
-		getByPlaceholderFunc: func(any) playwright.Locator { return loc },
-	}
-
-	if err := safeFillWithLabelFallback(pageTarget{page: page}, "#phone", "Phone", "586-555-0100"); err != nil {
-		t.Fatalf("safeFillWithLabelFallback: %v", err)
-	}
-	if len(pressed) != 0 {
-		t.Errorf("expected no keypress on a plain input, got %v", pressed)
-	}
-}
-
-// bugs.md #76: proven live, and a defect in #74's own fix. Reddit logged
-// "Attempt 2 applied 15/15 validation fix(es)" with no combobox-commit line at
-// all -- because the value read checked el.value first, and a react-select
-// search input really does hold the typed text after Fill(). Every combobox
-// looked satisfied, #74's commit never fired, and the form bounced on the same
-// required fields.
-//
-// The regression is in *which script* a combobox is read with, so that is what
-// this pins.
-func TestLocatorHasValue_ReadsAComboboxWithTheWidgetScriptNotElValue(t *testing.T) {
-	var used []string
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			if strings.HasPrefix(script, "el => !!(") {
-				return true, nil // it is a combobox
-			}
-			used = append(used, script)
-			// The widget script must be the one asked, and it reports no
-			// committed selection even though typed text exists.
-			return "", nil
-		},
-	}
-
-	landed, err := locatorHasValue(loc)
-	if err != nil {
-		t.Fatalf("locatorHasValue: %v", err)
-	}
-	if len(used) != 1 {
-		t.Fatalf("expected exactly one value read, got %d", len(used))
-	}
-	if strings.Contains(used[0], "el.value") {
-		t.Errorf("a combobox must not be read via el.value — that is uncommitted search text. got: %s", used[0])
-	}
-	if landed {
-		t.Error("expected landed=false: typed search text is not a committed selection")
-	}
-}
-
-func TestLocatorHasValue_ReadsAPlainInputWithElValue(t *testing.T) {
-	var used []string
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			if strings.HasPrefix(script, "el => !!(") {
-				return false, nil // not a combobox
-			}
-			used = append(used, script)
-			return "586-555-0100", nil
-		},
-	}
-
-	landed, err := locatorHasValue(loc)
-	if err != nil {
-		t.Fatalf("locatorHasValue: %v", err)
-	}
-	if len(used) != 1 || !strings.Contains(used[0], "el.value") {
-		t.Errorf("a plain input should be read via el.value, got %v", used)
-	}
-	if !landed {
-		t.Error("expected landed=true for a plain input holding a value")
-	}
-}
-
-// improvements.md #28: Location and Country are required on every Greenhouse
-// form and handleGreenhouse skipped both, so the first submit was guaranteed
-// to bounce into a ~12-minute validation-retry cycle. Which phrasing a
-// geocoder accepts is not knowable in advance, so candidates are tried in
-// order until one actually commits.
-func TestFillGreenhouseCombobox_StopsAtTheFirstCandidateThatCommits(t *testing.T) {
-	var filled []string
-	committed := false
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		fillFunc: func(v string) error {
-			filled = append(filled, v)
-			return nil
-		},
-		evaluateFunc: func(script string) (interface{}, error) {
-			if strings.HasPrefix(script, "el => !!(") {
-				return true, nil
-			}
-			if committed {
-				return "Macomb Township, Michigan", nil
-			}
-			return "", nil
-		},
-		pressFunc: func(string) error {
-			// Only the second phrasing is one the geocoder accepts.
-			if len(filled) >= 2 {
-				committed = true
-			}
-			return nil
-		},
-	}
-	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
-
-	fillGreenhouseCombobox(pageTarget{page: page}, "input#candidate-location", "Location",
-		[]string{"Macomb Township, MI", "Macomb Township, Michigan", "Macomb Township"})
-
-	if len(filled) != 2 {
-		t.Fatalf("expected to stop after the candidate that committed, got %v", filled)
-	}
-	if filled[1] != "Macomb Township, Michigan" {
-		t.Errorf("unexpected second candidate: %q", filled[1])
-	}
-}
-
-// No candidates (no city configured) must touch nothing at all.
-func TestFillGreenhouseCombobox_NoCandidatesIsANoOp(t *testing.T) {
-	touched := false
-	loc := &MockLocator{
-		countFunc: func() (int, error) { touched = true; return 1, nil },
-		fillFunc:  func(string) error { touched = true; return nil },
-	}
-	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
-
-	fillGreenhouseCombobox(pageTarget{page: page}, "input#candidate-location", "Location", nil)
-
-	if touched {
-		t.Error("expected no page interaction when there are no candidates")
-	}
-}
-
-// bugs.md #77: react-select populates its menu asynchronously (Greenhouse's
-// Location field queries a geocoder), so an Enter sent immediately after Fill
-// lands while the menu is still empty and commits nothing. Caught live once
-// #76 made the read-back actually work: 11 of 15 fixes "reported success but
-// left the control empty", including candidate-location and country, with no
-// commit line at all.
-func TestCommitComboboxOnLocator_WaitsForOptionsBeforePressingEnter(t *testing.T) {
-	optionsReady := false
-	pressedBeforeOptions := false
-	var pressed int
-
-	loc := &MockLocator{
-		countFunc: func() (int, error) { return 1, nil },
-		evaluateFunc: func(script string) (interface{}, error) {
-			switch {
-			case strings.HasPrefix(script, "el => !!("):
-				return true, nil // is a combobox
-			case strings.Contains(script, "role=\"option\""):
-				// Menu is empty on the first poll, populated afterwards.
-				if !optionsReady {
-					optionsReady = true
-					return float64(0), nil
-				}
-				return float64(3), nil
-			default:
-				if pressed > 0 {
-					return "Macomb Township, MI", nil
-				}
-				return "", nil
-			}
-		},
-		pressFunc: func(string) error {
-			if !optionsReady {
-				pressedBeforeOptions = true
-			}
-			pressed++
-			return nil
-		},
-	}
-
-	committed, err := commitComboboxOnLocator(loc)
+	ok, err := commitComboboxOnLocator(pageTarget{page: page}, loc, "586-555-0100", nil)
 	if err != nil {
 		t.Fatalf("commitComboboxOnLocator: %v", err)
 	}
-	if pressedBeforeOptions {
-		t.Error("Enter was pressed before any option existed — it can only commit nothing")
+	if ok {
+		t.Error("expected ok=false for a control this does not handle")
 	}
-	if pressed != 1 {
-		t.Errorf("expected exactly one Enter, got %d", pressed)
-	}
-	if !committed {
-		t.Error("expected the selection to read back as committed")
+	if touched {
+		t.Error("a plain input must not be clicked, typed into, or sent Enter")
 	}
 }
