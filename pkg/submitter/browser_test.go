@@ -2073,3 +2073,63 @@ func TestLocatorHasValue_ReadsAPlainInputWithElValue(t *testing.T) {
 		t.Error("expected landed=true for a plain input holding a value")
 	}
 }
+
+// improvements.md #28: Location and Country are required on every Greenhouse
+// form and handleGreenhouse skipped both, so the first submit was guaranteed
+// to bounce into a ~12-minute validation-retry cycle. Which phrasing a
+// geocoder accepts is not knowable in advance, so candidates are tried in
+// order until one actually commits.
+func TestFillGreenhouseCombobox_StopsAtTheFirstCandidateThatCommits(t *testing.T) {
+	var filled []string
+	committed := false
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		fillFunc: func(v string) error {
+			filled = append(filled, v)
+			return nil
+		},
+		evaluateFunc: func(script string) (interface{}, error) {
+			if strings.HasPrefix(script, "el => !!(") {
+				return true, nil
+			}
+			if committed {
+				return "Macomb Township, Michigan", nil
+			}
+			return "", nil
+		},
+		pressFunc: func(string) error {
+			// Only the second phrasing is one the geocoder accepts.
+			if len(filled) >= 2 {
+				committed = true
+			}
+			return nil
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	fillGreenhouseCombobox(pageTarget{page: page}, "input#candidate-location", "Location",
+		[]string{"Macomb Township, MI", "Macomb Township, Michigan", "Macomb Township"})
+
+	if len(filled) != 2 {
+		t.Fatalf("expected to stop after the candidate that committed, got %v", filled)
+	}
+	if filled[1] != "Macomb Township, Michigan" {
+		t.Errorf("unexpected second candidate: %q", filled[1])
+	}
+}
+
+// No candidates (no city configured) must touch nothing at all.
+func TestFillGreenhouseCombobox_NoCandidatesIsANoOp(t *testing.T) {
+	touched := false
+	loc := &MockLocator{
+		countFunc: func() (int, error) { touched = true; return 1, nil },
+		fillFunc:  func(string) error { touched = true; return nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	fillGreenhouseCombobox(pageTarget{page: page}, "input#candidate-location", "Location", nil)
+
+	if touched {
+		t.Error("expected no page interaction when there are no candidates")
+	}
+}

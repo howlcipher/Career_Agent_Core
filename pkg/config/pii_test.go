@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadPII(t *testing.T) {
@@ -72,5 +74,58 @@ func TestLoadPII_InvalidYAML(t *testing.T) {
 	_, err = LoadPII(tmpFile.Name())
 	if err == nil {
 		t.Errorf("Expected error for invalid yaml, got nil")
+	}
+}
+
+// improvements.md #28: gopkg.in/yaml.v3 matches keys case-SENSITIVELY --
+// verified empirically that `City:` silently leaves a `yaml:"city"` field
+// empty, with no error at all. pii.yaml is hand-maintained real data, so a
+// casing slip quietly dropping an address field is a bad failure mode: it
+// loads fine and the only symptom is a form field left blank much later.
+func TestPII_LoadsMixedCaseAddressKeys(t *testing.T) {
+	var p PII
+	// Deliberately mixed casing, matching how the keys were actually written.
+	in := "first_name: \"A\"\nCity: \"Macomb Township\"\nState: \"Mi\"\nFull_state: \"Michigan\"\nzip: \"48042\"\nstreet : \"1 Main\"\n"
+	if err := yaml.Unmarshal([]byte(in), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if p.City != "Macomb Township" {
+		t.Errorf("City = %q, want %q", p.City, "Macomb Township")
+	}
+	if p.State != "Mi" {
+		t.Errorf("State = %q", p.State)
+	}
+	if p.FullState != "Michigan" {
+		t.Errorf("FullState = %q", p.FullState)
+	}
+	if p.Zip != "48042" {
+		t.Errorf("Zip = %q", p.Zip)
+	}
+	if p.Street != "1 Main" {
+		t.Errorf("Street = %q (note the space before the colon in the source)", p.Street)
+	}
+	if p.FirstName != "A" {
+		t.Errorf("FirstName = %q — already-lowercase keys must keep working", p.FirstName)
+	}
+}
+
+func TestPII_LocationSearchCandidates(t *testing.T) {
+	p := PII{City: "Macomb Township", State: "Mi", FullState: "Michigan"}
+	got := p.LocationSearchCandidates()
+	want := []string{"Macomb Township, MI", "Macomb Township, Michigan", "Macomb Township"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("candidate %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// No city configured must mean "leave it to the retry loop", never a guess.
+func TestPII_LocationSearchCandidates_EmptyWithoutCity(t *testing.T) {
+	if got := (PII{State: "MI", FullState: "Michigan"}).LocationSearchCandidates(); got != nil {
+		t.Errorf("expected no candidates without a city, got %v", got)
 	}
 }

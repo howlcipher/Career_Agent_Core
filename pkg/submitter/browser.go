@@ -1076,6 +1076,20 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 				return fmt.Errorf("failed to fill phone: %w", err)
 			}
 		}
+
+		// improvements.md #28: Location and Country are required on every
+		// Greenhouse form, and this handler used to skip both -- so the first
+		// submit was guaranteed to bounce and only the validation-retry loop
+		// (~12 min of inference on this host) could ever satisfy them. Both are
+		// react-select autocompletes, so they need the commit step from bugs.md
+		// #74/#76, not a bare Fill().
+		//
+		// Best-effort throughout: a miss here costs nothing beyond the retry
+		// cycle that used to happen unconditionally.
+		fillGreenhouseCombobox(target, "input#candidate-location", "Location", pii.LocationSearchCandidates())
+		if c := strings.TrimSpace(pii.Country); c != "" {
+			fillGreenhouseCombobox(target, "input#country", "Country", []string{c})
+		}
 	}
 
 	// Upload resume
@@ -1481,6 +1495,34 @@ func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
 		return false, err
 	}
 	return locatorHasValue(el)
+}
+
+// fillGreenhouseCombobox types each candidate into a geocoded autocomplete
+// until one actually commits a selection.
+//
+// improvements.md #28: which phrasing a geocoder accepts is not knowable in
+// advance, so this tries them in order and stops at the first that sticks --
+// checkable only because bugs.md #74/#76 made "did the selection commit"
+// observable. Entirely best-effort: every failure path leaves the field for
+// the validation-retry loop, which is exactly where it used to go anyway.
+func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates []string) {
+	if len(candidates) == 0 {
+		return
+	}
+	el, err := resolveFieldLocator(target, selector)
+	if err != nil {
+		return
+	}
+	for _, want := range candidates {
+		if err := el.Fill(want, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+			continue
+		}
+		if committed, err := commitComboboxOnLocator(el); err == nil && committed {
+			log.Printf("[Auto-Submit] %s set to %q on the initial fill (saved a validation-retry cycle)", what, want)
+			return
+		}
+	}
+	log.Printf("[Auto-Submit] Could not commit a %s selection from %d candidate(s); leaving it to the validation retry", what, len(candidates))
 }
 
 // commitFilledCombobox finishes an autocomplete the initial fill only typed
