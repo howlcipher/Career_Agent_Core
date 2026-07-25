@@ -18,12 +18,27 @@ import (
 //
 //	OLLAMA_HOST            base URL, default http://localhost:11434
 //	OLLAMA_MODEL           text model, default llama3.1
+//	OLLAMA_FAST_MODEL      optional smaller/faster text model used only for
+//	                       calls that opt in via genRequest.fast (ScoreJob).
+//	                       Unset means every text call uses OLLAMA_MODEL.
 //	OLLAMA_VISION_MODEL    vision model, default llava
 //	OLLAMA_EMBED_MODEL     embedding model, default nomic-embed-text
 //	OLLAMA_TIMEOUT_MINUTES per-request client timeout, default 45
 type ollamaProvider struct {
 	host        string
 	model       string
+	// fastModel serves calls that set genRequest.fast — currently ScoreJob
+	// only. Empty (the default) means fall back to model, so this feature is
+	// inert until OLLAMA_FAST_MODEL is deliberately set.
+	//
+	// Why scoring specifically (improvements.md #24): once #23 removed the
+	// per-job tailoring call, ScoreJob became the sole bottleneck, measured
+	// live at 9m49s of a ~10m job cycle. It is also the safest text call to
+	// downgrade — it returns a single number, unlike ExtractFormMapping and
+	// SolveValidationErrors, which pick real selectors and answer real
+	// screening questions (including EEO-sensitive ones) and so stay on the
+	// strong model regardless of this setting.
+	fastModel   string
 	visionModel string
 	embedModel  string
 	timeout     time.Duration
@@ -57,6 +72,7 @@ func newOllamaProvider() *ollamaProvider {
 	return &ollamaProvider{
 		host:        envOr("OLLAMA_HOST", "http://localhost:11434"),
 		model:       envOr("OLLAMA_MODEL", "llama3.1"),
+		fastModel:   envOr("OLLAMA_FAST_MODEL", ""),
 		visionModel: envOr("OLLAMA_VISION_MODEL", "llava"),
 		embedModel:  envOr("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
 		timeout:     ollamaTimeoutFromEnv(),
@@ -91,6 +107,9 @@ type ollamaChatResponse struct {
 
 func (p *ollamaProvider) Generate(ctx context.Context, req genRequest) (string, error) {
 	model := p.model
+	if req.fast && p.fastModel != "" {
+		model = p.fastModel
+	}
 	var messages []ollamaChatMessage
 	if req.system != "" {
 		messages = append(messages, ollamaChatMessage{Role: "system", Content: req.system})

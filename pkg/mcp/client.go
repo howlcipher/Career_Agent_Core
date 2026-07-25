@@ -135,8 +135,15 @@ My Background:
 		return 0, err
 	}
 
-	// Lower the temperature so the model is strictly analytical rather than creative when scoring
-	raw, err := c.generate(genRequest{prompt: prompt, temperature: 0.1})
+	// Lower the temperature so the model is strictly analytical rather than creative when scoring.
+	//
+	// fast: routes to OLLAMA_FAST_MODEL when one is configured
+	// (improvements.md #24). Scoring is the pipeline's dominant cost now that
+	// #23 removed per-job tailoring, and it is the safest text call to run on
+	// a smaller model: the entire expected output is one integer, and the
+	// salvage path below already tolerates a weaker model wrapping that
+	// number in prose. No behavior change when OLLAMA_FAST_MODEL is unset.
+	raw, err := c.generate(genRequest{prompt: prompt, temperature: 0.1, fast: true})
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate content: %w", err)
 	}

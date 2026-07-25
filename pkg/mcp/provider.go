@@ -15,6 +15,11 @@ type genRequest struct {
 	json        bool    // request strict JSON output
 	temperature float32 // < 0 means provider default
 	imagePNG    []byte  // non-nil switches to a vision request
+	// fast opts this call into a smaller/faster model when the provider has
+	// one configured, falling back to the standard model otherwise. Set it
+	// only for calls whose output is simple enough to survive a weaker model
+	// (improvements.md #24).
+	fast bool
 }
 
 // provider abstracts an LLM backend (Ollama, Claude, Gemini).
