@@ -111,6 +111,28 @@ This closes out the whole #74 → #75 → #76 → #77 → #78 → #79 chain, and
 
 **Still 0 confirmed `APPLIED`** — the remaining blockers are the three unset `pii.yaml` values in the audit below, not code.
 
+## Option-level audit of the blocking questions (2026-07-25 16:20, probe)
+
+Read the actual option lists, rather than assuming what the form would accept:
+
+| Field | Options | Verdict |
+| --- | --- | --- |
+| `430` gender identity | Agender, Genderfluid, Gender non-conforming, Genderqueer, Female, Male, Non-binary, Not listed, **I don't wish to answer** | **not a blocker** — declinable |
+| `433` disability | Yes… / No… / **I don't wish to answer** | **not a blocker** — declinable |
+| `434` veteran | 7 statuses / No military service / **I don't wish to answer** | **not a blocker** — declinable |
+| `question_67942418` **authorized to work in the U.S.** | **Yes \| No — no decline option** | **HARD BLOCKER** |
+| `question_67942419` **requires immigration sponsorship** | **Yes \| No — no decline option** | **HARD BLOCKER** |
+| `question_67942416` how did you hear | no options returned — free text | minor; model can answer |
+
+**Two consequences.**
+
+1. **The blank EEO section is fine.** Every demographic question offers "I don't wish to answer", so the model declines correctly and none of them blocks submission. That validates the existing EEO design.
+2. **Work authorization and sponsorship are genuinely unanswerable by the agent.** They are required, binary, and offer no decline. There is no honest value the model can select without the user's input — and a guess would place a **false legal attestation** on a real job application under the user's name. This is the strongest possible vindication of leaving those blank in #29 rather than inferring them from a US address.
+
+Filling `work.authorized_to_work_us` and `work.requires_sponsorship` is now the single highest-value action available, and it is the user's to take.
+
+**Probe footnote:** `page.Locator("#430")` returned NO ELEMENT — `#430` is invalid CSS, exactly the defect bugs.md #73 fixed in the agent. The agent resolves it via `[id="430"]`; the probe needed the same treatment. An independent re-confirmation of #73 from a completely different direction.
+
 ## Required-field audit of Reddit's form (2026-07-25 15:54, probe, no submit)
 
 Enumerated every control Greenhouse marks required, by reading `aria-required`/`requiredInput` rather than clicking submit — clicking it on a real posting could file an incomplete application under the user's name. **20 required fields.** Mapped against what the agent can now supply:
