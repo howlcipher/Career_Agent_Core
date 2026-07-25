@@ -106,6 +106,34 @@ Text to evaluate:
 	return false, nil
 }
 
+// Scoring prompt budget (improvements.md #25). Inference cost on this
+// CPU-only host is dominated by prompt processing, measured live at ~6.8
+// tok/s on the 30B and ~17 tok/s on the 4B — so what ScoreJob spends is set
+// almost entirely by how many characters it sends, not by which model runs.
+//
+// The split is deliberate rather than a plain head truncation: a posting's
+// requirements and remote/onsite wording sit at the top, but the salary
+// range, "must reside in X" restrictions, and EEO boilerplate sit at the
+// very bottom — and rubric rules 2, 3 and 7 all turn on exactly those
+// trailing details. Cutting only the tail would quietly blind the two
+// largest deductions in the rubric.
+const (
+	maxScoringDescChars = 9000
+	scoringDescHeadChars = 6000
+	scoringDescTailChars = 3000
+	scoringElision       = "\n\n[... middle of posting omitted for scoring ...]\n\n"
+)
+
+// trimForScoring shortens an over-long job description while keeping both
+// ends, which is where every rubric-relevant signal lives. Returns the input
+// unchanged when it already fits.
+func trimForScoring(desc string) string {
+	if len(desc) <= maxScoringDescChars {
+		return desc
+	}
+	return desc[:scoringDescHeadChars] + scoringElision + desc[len(desc)-scoringDescTailChars:]
+}
+
 func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (int, error) {
 	prompt := fmt.Sprintf(`Analyze the following job description against my background and constraints.
 Return ONLY a single integer from 0 to 100 representing how good of a fit I am. Do not include any other text.
@@ -129,7 +157,7 @@ Job Description: %s
 
 My Background:
 %s`,
-		profileConstraints["remote_only"], profileConstraints["salary_floor"], profileConstraints["location"], scrapedData["title"], scrapedData["desc"], parsedDocument)
+		profileConstraints["remote_only"], profileConstraints["salary_floor"], profileConstraints["location"], scrapedData["title"], trimForScoring(scrapedData["desc"]), parsedDocument)
 
 	if err := incrementAndLogAPICall("ScoreJob", len(prompt)); err != nil {
 		return 0, err
