@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 85 | [Four early-exit paths left rows stranded in PROCESSING, invisible to every future queue](#85-four-early-exit-paths-left-rows-stranded-in-processing-invisible-to-every-future-queue) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Spotted from the cohort monitor: `PROCESSING=4` on a **single-worker** run. The stranded rows clustered in pairs at exactly the moments a job was skipped — each was `Duplicate check: Already applied ... Skipping.` The worker sets `PROCESSING` at the top of the loop, and four `continue` paths exit without ever clearing it. `GetDiscoveredJobs` selects only `DISCOVERED`, so a stranded row never returns to any queue; #55's startup reaper masked it by resetting them, whereupon they were re-picked, skipped, and stranded again — a silent loop that corrupts cohort accounting and the dashboard's in-flight metrics |
 | 84 | [#82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT](#84-82s-manual-routing-branch-was-never-applied-so-refused-jobs-were-written-off-as-failed_submit) | Major | Resolved (2026-07-25, confirmed live 18:10 — clean A/B on the same job) | — | Opus 5 | Gemini 3 Pro | **My own error, caught live.** #82's guard worked perfectly — ClickHouse was refused in **0 seconds** with `work authorization, visa sponsorship` — but the job landed in `FAILED_SUBMIT`, not `MANUAL_REQUIRED`, and the routing log line never appeared. The `cmd/agent` edit adding that branch **silently failed to apply**; `go build` still passed because the submitter half compiled fine, and I verified the build instead of verifying the edit. Consequence: a job that is perfectly applicable-by-hand was written off as a failure, its tailored documents never moved to the manual-apply folder and no manual-queue entry logged |
 | 83 | [The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout](#83-the-payload-breaker-guarded-the-context-window-but-not-the-time-budget-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Watched live end to end: a Greenhouse theme (`surtai`) that sets **no `aria-invalid` attributes** defeated #64's narrowing, so the retry fell back to the whole form — **50,501 chars**. That fits the 80,000-char context ceiling, passed `likelyExceedsModelContext`, and then ran **16:58:03 → 17:43:03 — exactly the 45-minute Ollama timeout** before dying. Three-quarters of an hour of the single serialised LLM resource, spent on a request that was mathematically incapable of finishing. Context capacity and inference time are different limits, and on this hardware the time one binds far earlier |
 | 82 | [Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted](#82-once-the-commit-worked-an-unanswerable-legal-attestation-would-have-been-guessed-and-really-submitted) | Blocker | Resolved (2026-07-25, confirmed live 17:52 — refused in 0 seconds) | — | Opus 5 | Gemini 3 Pro | **A risk created by fixing #81.** While the combobox commit was broken, nothing the model proposed was ever really set. Probed on the live form immediately after #81: `#question_67942418 -> COMMITTED "Yes"`. Reddit's "Are you currently authorized to work in the U.S.?" and its sponsorship question are **required and offer only Yes/No — no decline option**, so a model with no configured answer does not abstain, it picks one. That answer is a **legal declaration submitted under the applicant's name**. The form is now refused *before* the model is asked, and the job routed to `MANUAL_REQUIRED` |
@@ -119,6 +120,41 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 85. Four early-exit paths left rows stranded in PROCESSING, invisible to every future queue (Resolved 2026-07-25)
+
+**Found by noticing an impossible number.** The cohort monitor reported `PROCESSING=4` on a run with `Using 1 worker(s)`. One worker cannot have four jobs in flight.
+
+The timestamps clustered in pairs, at startup and again exactly when the previous job resolved:
+
+```
+Reddit                            22:01:28
+Akuity                            22:01:28
+Staff Site Reliability Engineer   22:10:45
+Stack AV                          22:10:45
+```
+
+Cross-referencing the log gave the cause immediately:
+
+```
+18:01:28 Fetching job description for Reddit...
+18:01:28 Duplicate check: Already applied to Reddit. Skipping.
+```
+
+**Root cause:** the worker sets `UpdateFunnelStatus(job.URL, "PROCESSING")` at the top of the loop, and **four** `continue` paths exit without ever clearing it:
+
+| Path | Was | Now |
+| --- | --- | --- |
+| Invalid/unsafe URL blocked | stranded | `INVALID_URL` (the status already existed for exactly this) |
+| Failed to create HTTP request | stranded | `DISCOVERED` (transient) |
+| Failed to read response body | stranded | `DISCOVERED` (transient) |
+| Duplicate check skip | stranded | `DISCOVERED` |
+
+`GetDiscoveredJobs` selects only `DISCOVERED`, so a stranded row never reappears in any future queue. **#55's startup reaper masked this**: every restart reset the orphans, they were re-picked, skipped, and stranded again — a silent loop that consumed a queue slot each run, corrupted the cohort accounting, and inflated the dashboard's in-flight figures.
+
+**On the duplicate-check case specifically — `DISCOVERED`, deliberately not `APPLIED`.** The `applied_jobs` record is written at *document generation*, not at confirmed submission. That is precisely the falsehood this entire 82-job re-verification exists to audit (see #53: most historical `APPLIED` rows had no confirmation evidence at all). Marking the row `APPLIED` here would manufacture the very claim under investigation. Resetting to `DISCOVERED` restores the pre-`PROCESSING` state, matches exactly what the startup reaper already does, and asserts nothing new about the job.
+
+**The deeper issue is left open and unchanged:** dedup rows are written before submission is confirmed, so `HasApplied` can skip a job that was never actually submitted. That is pre-existing behaviour, not something this fix should silently redefine.
 
 ### 84. #82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT (Resolved 2026-07-25)
 

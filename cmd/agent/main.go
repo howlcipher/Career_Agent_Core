@@ -311,6 +311,9 @@ func main() {
 			u, err := url.Parse(job.URL)
 			if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
 				log.Printf("[Worker-%d] Invalid or unsafe URL blocked: %s", workerID, job.URL)
+				// bugs.md #85: give the row a terminal status. A bare continue
+				// left it PROCESSING forever, invisible to GetDiscoveredJobs.
+				storage.UpdateFunnelStatus(job.URL, "INVALID_URL")
 				continue
 			}
 			
@@ -329,6 +332,9 @@ func main() {
 			req, err := http.NewRequest("GET", job.URL, nil)
 			if err != nil {
 				log.Printf("[Worker-%d] Failed to create request for %s: %v", workerID, job.CompanyName, err)
+				// bugs.md #85: transient — undo the PROCESSING claim so a later
+				// run can pick it up, rather than stranding it.
+				storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
 				continue
 			}
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -338,6 +344,8 @@ func main() {
 				b, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 				if err != nil {
 					log.Printf("[Worker-%d] Failed to read response body for %s: %v", workerID, job.CompanyName, err)
+					// bugs.md #85: transient — undo the PROCESSING claim.
+					storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
 					continue
 				}
 				htmlStr := string(b)
@@ -389,6 +397,15 @@ func main() {
 
 		if storage.HasApplied(job.URL) {
 			log.Printf("[Worker-%d] Duplicate check: Already applied to %s. Skipping.", workerID, job.CompanyName)
+			// bugs.md #85: undo the PROCESSING claim rather than stranding the
+			// row. Deliberately DISCOVERED and not APPLIED: the applied_jobs
+			// record is written at document generation, not at confirmed
+			// submission (the very falsehood this 82-job re-verification
+			// exists to audit -- see #53), so asserting APPLIED here would
+			// manufacture exactly the claim under investigation. This restores
+			// the pre-PROCESSING state, matching what the startup reaper
+			// already does, and makes no new claim about the job.
+			storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
 			continue
 		}
 
