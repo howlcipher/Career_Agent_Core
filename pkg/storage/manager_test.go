@@ -1212,3 +1212,36 @@ func TestUpdateFunnelStatusWithScorePersistsScore(t *testing.T) {
 		t.Errorf("fit_score = %v after a status change, want it preserved at 90", score)
 	}
 }
+
+// bugs.md #68: valid JSON with every selector null parses fine but is
+// worthless, and caching it costs a Learner Module call per visit forever.
+func TestSaveFormMapping_RejectsSemanticallyEmptyMappings(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(wd)
+	InitDB()
+
+	allNull := `{"fields":{"first_name":null,"last_name":null,"email":null,"phone":null,"submit_button":null}}`
+	if err := SaveFormMapping("example.com", allNull); err == nil {
+		t.Error("expected an all-null mapping to be refused")
+	}
+	if got, _ := GetFormMapping("example.com"); got != "" {
+		t.Errorf("nothing should have been cached, got %q", got)
+	}
+
+	empties := `{"fields":{"first_name":"","email":"   "}}`
+	if err := SaveFormMapping("example.com", empties); err == nil {
+		t.Error("expected a blank-string mapping to be refused")
+	}
+
+	good := `{"fields":{"first_name":"#first_name","email":null}}`
+	if err := SaveFormMapping("example.com", good); err != nil {
+		t.Fatalf("a mapping with one real selector must be cached: %v", err)
+	}
+	if got, _ := GetFormMapping("example.com"); got != good {
+		t.Errorf("expected the usable mapping to round-trip, got %q", got)
+	}
+}

@@ -594,6 +594,15 @@ func SaveFormMapping(domain, mappingJson string) error {
 	if !json.Valid([]byte(mappingJson)) {
 		return fmt.Errorf("refusing to cache non-JSON form mapping for %s", domain)
 	}
+	// bugs.md #68: valid JSON is not the same as a usable mapping. A response
+	// with every selector null parses cleanly and was cached happily, so each
+	// later visit to the domain loaded it, failed every fill, invalidated the
+	// cache, and burned a fresh Learner Module call to produce the same
+	// nulls again. Found live: 7 of 60 cached mappings were in this state,
+	// including smartrecruiters.com, pinpointhq.com and applytojob.com.
+	if !hasUsableSelector(mappingJson) {
+		return fmt.Errorf("refusing to cache form mapping for %s: no usable selectors", domain)
+	}
 	_, err := db.Exec("INSERT INTO form_mappings (domain, mapping_json, created_at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET mapping_json=excluded.mapping_json", domain, mappingJson, time.Now())
 	return err
 }
@@ -1036,4 +1045,34 @@ func GetAllCareerChunks() ([]CareerChunk, error) {
 		chunks = append(chunks, c)
 	}
 	return chunks, nil
+}
+
+// hasUsableSelector reports whether a form mapping contains at least one
+// non-empty selector. The LLM mapper sometimes returns the right shape with
+// every value null -- syntactically valid, semantically worthless -- and
+// caching that costs a full Learner Module call on every subsequent visit to
+// the domain for no possible benefit (bugs.md #68).
+// Accepts both shapes seen in practice: the current nested form
+// ({"fields": {...}}) that ExtractFormMapping produces, and a flat top-level
+// map of field->selector. Being tolerant here matters because the guard's job
+// is to reject *worthless* mappings, and mistaking an unfamiliar-but-usable
+// shape for a worthless one would throw away good work.
+func hasUsableSelector(mappingJson string) bool {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(mappingJson), &raw); err != nil {
+		return false
+	}
+	if fields, ok := raw["fields"].(map[string]interface{}); ok {
+		return anyNonEmptyString(fields)
+	}
+	return anyNonEmptyString(raw)
+}
+
+func anyNonEmptyString(m map[string]interface{}) bool {
+	for _, v := range m {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
 }

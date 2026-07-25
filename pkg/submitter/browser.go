@@ -1301,7 +1301,14 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 		}
 		return ErrEmptySelector
 	}
-	if err := safeFill(target, selector, text); err != nil {
+	// bugs.md #67: this tier goes through applyValidationFix rather than
+	// safeFill so the *initial* fill gets the same two capabilities the
+	// validation-retry path already had — dispatch by control type (#65, so a
+	// required <select> is settable at all) and bare-identifier resolution
+	// (#66, so an id/name value returned in place of a CSS selector still
+	// finds its element). Without this, a required dropdown always failed the
+	// first pass and forced an avoidable, expensive validation-retry cycle.
+	if err := applyValidationFix(target, selector, text); err != nil {
 		if lastErr != nil {
 			return fmt.Errorf("%v; CSS selector fill also failed: %w", lastErr, err)
 		}

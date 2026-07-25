@@ -602,7 +602,9 @@ func TestSafeFillWithLabelFallback_FallsBackToPlaceholderWhenLabelFails(t *testi
 }
 
 func TestSafeFillWithLabelFallback_FallsBackToSelectorWhenLabelAndPlaceholderFail(t *testing.T) {
-	selLocator := &MockLocator{fillFunc: func(value string) error { return nil }}
+	// countFunc added with bugs.md #67: the CSS tier now resolves the element
+	// (verifying it exists) before filling, which safeFill never did.
+	selLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }, fillFunc: func(value string) error { return nil }}
 	labelLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("timeout: label not found") }}
 	placeholderLocator := &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("timeout: placeholder not found") }}
 	mockPage := &MockPage{
@@ -1197,11 +1199,13 @@ func TestAttemptSubmit_VisionFallback_EndToEndSuccess(t *testing.T) {
 		case "input[type='password']":
 			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
 		case "input#totally-wrong-first":
-			return &MockLocator{fillFunc: func(value string) error {
+			return &MockLocator{countFunc: func() (int, error) { return 1, nil }, fillFunc: func(value string) error {
 				return fmt.Errorf("no such element (the Learner Module's mapping guess was wrong, as bug #10 assumes it might be)")
 			}}
 		case "input#real-first", "input#real-last", "input#real-email", "input#real-phone":
-			return &MockLocator{fillFunc: func(value string) error { return nil }}
+			// countFunc added with bugs.md #67: fills now resolve the element
+			// first, so a present field must report a non-zero count.
+			return &MockLocator{countFunc: func() (int, error) { return 1, nil }, fillFunc: func(value string) error { return nil }}
 		case "button#real-submit":
 			return &MockLocator{clickFunc: func(options ...playwright.LocatorClickOptions) error {
 				mockPage.urlValue = applyURL + "/success"
