@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 86 | [Lever's location typeahead was invisible to combobox detection, so every Lever application failed](#86-levers-location-typeahead-was-invisible-to-combobox-detection-so-every-lever-application-failed) | Blocker | Resolved (2026-07-25, root-caused, fixed, verified against the live form) | — | Opus 5 | Gemini 3 Pro | Nova (Lever, score 65) failed all 3 attempts applying **7/7 fixes** each time. Probed the real form: only **3 fields are required** — name, email, `location-input` — and the resume upload is *optional*. Lever's location widget has **none of react-select's markers**: no `role`, no `aria-*`, no `select__` classes. It is a plain `<input name="location">` beside a hidden `<input name="selectedLocation">` that holds the committed value. Detection returned `false`, so it was filled with text while `selectedLocation` stayed empty — and that hidden field is what the form validates. **Clicking the option does not work either**: it loses a blur race, leaving both the visible input and the hidden field empty. Keyboard selection is blur-safe |
 | 85 | [Four early-exit paths left rows stranded in PROCESSING, invisible to every future queue](#85-four-early-exit-paths-left-rows-stranded-in-processing-invisible-to-every-future-queue) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Spotted from the cohort monitor: `PROCESSING=4` on a **single-worker** run. The stranded rows clustered in pairs at exactly the moments a job was skipped — each was `Duplicate check: Already applied ... Skipping.` The worker sets `PROCESSING` at the top of the loop, and four `continue` paths exit without ever clearing it. `GetDiscoveredJobs` selects only `DISCOVERED`, so a stranded row never returns to any queue; #55's startup reaper masked it by resetting them, whereupon they were re-picked, skipped, and stranded again — a silent loop that corrupts cohort accounting and the dashboard's in-flight metrics |
 | 84 | [#82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT](#84-82s-manual-routing-branch-was-never-applied-so-refused-jobs-were-written-off-as-failed_submit) | Major | Resolved (2026-07-25, confirmed live 18:10 — clean A/B on the same job) | — | Opus 5 | Gemini 3 Pro | **My own error, caught live.** #82's guard worked perfectly — ClickHouse was refused in **0 seconds** with `work authorization, visa sponsorship` — but the job landed in `FAILED_SUBMIT`, not `MANUAL_REQUIRED`, and the routing log line never appeared. The `cmd/agent` edit adding that branch **silently failed to apply**; `go build` still passed because the submitter half compiled fine, and I verified the build instead of verifying the edit. Consequence: a job that is perfectly applicable-by-hand was written off as a failure, its tailored documents never moved to the manual-apply folder and no manual-queue entry logged |
 | 83 | [The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout](#83-the-payload-breaker-guarded-the-context-window-but-not-the-time-budget-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Watched live end to end: a Greenhouse theme (`surtai`) that sets **no `aria-invalid` attributes** defeated #64's narrowing, so the retry fell back to the whole form — **50,501 chars**. That fits the 80,000-char context ceiling, passed `likelyExceedsModelContext`, and then ran **16:58:03 → 17:43:03 — exactly the 45-minute Ollama timeout** before dying. Three-quarters of an hour of the single serialised LLM resource, spent on a request that was mathematically incapable of finishing. Context capacity and inference time are different limits, and on this hardware the time one binds far earlier |
@@ -120,6 +121,51 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 86. Lever's location typeahead was invisible to combobox detection, so every Lever application failed (Resolved 2026-07-25, verified against the live form)
+
+**Nova (Lever, `ioconnectservices`) failed all three attempts while reporting `7/7 validation fix(es) applied` each time** — the model even varied its selector syntax between attempts (`input[name='email']` then `input[data-qa='email-input']`), which looked like flailing but was irrelevant: both resolved fine.
+
+Probing the real form settled it immediately. Lever asks for far less than Greenhouse — **only three required fields**, and the resume upload is *optional*:
+
+```
+EMPTY  text   name             EMPTY  email  email             EMPTY  text  location-input
+file inputs: [optional resume files=0]
+```
+
+So the failure was entirely down to `location-input`. Its markup:
+
+```html
+<input class="location-input" data-qa="location-input" id="location-input" name="location" required>
+<input id="selected-location" type="hidden" name="selectedLocation">
+<div class="dropdown-container"><div class="dropdown-results">
+```
+
+**Root cause:** none of react-select's markers are present — no `role="combobox"`, no `aria-autocomplete`, no `aria-controls`, no `select__` classes. `isComboboxInputJS` therefore returned **false**, so the field was treated as a plain text input: filled with text, never committed, while the hidden `selectedLocation` — *the value the form actually validates* — stayed empty. Measured directly: `detectedAsCombobox: false`, `selectedLocation=""` after typing.
+
+**A second, independent obstacle:** clicking the chosen option does not commit it. The click blurs the input, the dropdown closes, and the handler never fires — measured, leaving **both** the visible input and `selectedLocation` empty. Keyboard selection is blur-safe and does work.
+
+**Fix:**
+- Detection extended to a sibling `.dropdown-results`/`.dropdown-container` or a hidden `input[name^="selected"]`.
+- `readHiddenCommitValueJS` reads that hidden field as the committed value — never `el.value`, for #81's reason.
+- Option enumeration extended to Lever's `.dropdown-location` results.
+- `setComboboxValue` keeps the click (confirmed working for react-select and left undisturbed) and falls back to **index-driven keyboard selection**: arrow to the option `pickComboboxOption` chose, then Enter. Index-driven, not "first option", because #79's guarantee has to hold here too — **"Detroit, ME" sits directly beneath "Detroit, MI" in the same list**.
+
+**Verified against the live form, all parts in one run:**
+
+```
+detectedAsCombobox (new logic): true
+options seen (4): location-0|Detroit, MI, USA  location-1|Detroit, ME, USA  location-2|Detroit, TX, USA ...
+picked id="location-0" index=0 ok=true
+AFTER keyboard commit: visible=Detroit, MI, USA
+  hidden(selectedLocation)={"name":"Detroit, MI, USA","id":"cf06481e9473fd2cbab9d1db5ddb043a7c4170df"}
+```
+
+**Open caveat, deliberately not worked around:** Lever's geocoder returns **zero results** for `Macomb`, `Macomb Township` and `Macomb, MI`, while Greenhouse's resolves `Township of Macomb, Michigan, United States` happily. So this fix makes Lever's location *committable*, but the configured location may still not be findable there. Substituting a nearby city the geocoder does know would be misrepresenting the applicant's location on a real application, so it is not done. If this proves common, the honest outcome is to route such jobs to `MANUAL_REQUIRED` rather than to invent a location.
+
+**Also worth noting:** Lever's geocoder rate-limits repeated queries — the same term returned 4 options, then 0, then 4 again across probe runs. Any live testing here needs a fresh page and a single query.
+
+**Tests:** `TestComboboxJS_DetectsLeverStyleTypeaheads`, plus `TestPickComboboxOption_RejectsTheWrongStateEvenWhenItIsFirst` extended to assert the returned index, which is what drives keyboard selection.
 
 ### 85. Four early-exit paths left rows stranded in PROCESSING, invisible to every future queue (Resolved 2026-07-25)
 

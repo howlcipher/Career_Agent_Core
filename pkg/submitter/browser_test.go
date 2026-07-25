@@ -1906,12 +1906,15 @@ func TestPickComboboxOption_RejectsTheWrongStateEvenWhenItIsFirst(t *testing.T) 
 		"opt-0|Macomb, Illinois, United States",
 		"opt-1|Macomb Township, Michigan, United States",
 	}
-	id, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"})
+	id, idx, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"})
 	if !ok {
 		t.Fatal("expected the Michigan option to be selected")
 	}
 	if id != "opt-1" {
 		t.Errorf("selected %q — option-0 is Illinois and must not be chosen", id)
+	}
+	if idx != 1 {
+		t.Errorf("index = %d, want 1 — the index drives keyboard selection on widgets where clicking loses a blur race (bugs.md #86)", idx)
 	}
 }
 
@@ -1922,7 +1925,7 @@ func TestPickComboboxOption_SelectsNothingWhenNoOptionMatches(t *testing.T) {
 		"opt-0|Macomb, Illinois, United States",
 		"opt-1|Macon, Georgia, United States",
 	}
-	if id, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"}); ok {
+	if id, _, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"}); ok {
 		t.Errorf("expected no selection, got %q", id)
 	}
 }
@@ -1932,7 +1935,7 @@ func TestPickComboboxOption_SelectsNothingWhenNoOptionMatches(t *testing.T) {
 // "United States of America".
 func TestPickComboboxOption_MatchesAShorterListLabelAgainstALongerConfiguredValue(t *testing.T) {
 	options := []string{"c-0|United Arab Emirates +971", "c-1|United States +1"}
-	id, ok := pickComboboxOption(options, "United States of America", nil)
+	id, _, ok := pickComboboxOption(options, "United States of America", nil)
 	if !ok {
 		t.Fatal("expected a match for the configured country")
 	}
@@ -2066,5 +2069,28 @@ func TestIsManualReviewError_IgnoresOrdinaryFailures(t *testing.T) {
 	}
 	if IsManualReviewError(nil) {
 		t.Error("nil is not a manual-review outcome")
+	}
+}
+
+// bugs.md #86: Lever's location typeahead carries none of react-select's
+// markers — no role, no aria-*, no select__ classes. It is a plain
+// <input name="location"> beside a hidden <input name="selectedLocation">
+// holding the committed value, with results in a sibling .dropdown-results.
+// Detecting only react-select made it read as an ordinary text input, so it
+// was filled with text and never committed — and selectedLocation is what the
+// form actually validates.
+func TestComboboxJS_DetectsLeverStyleTypeaheads(t *testing.T) {
+	if !strings.Contains(isComboboxInputJS, "dropdown-results") ||
+		!strings.Contains(isComboboxInputJS, `input[type="hidden"][name^="selected"]`) {
+		t.Error("combobox detection must recognise a sibling results dropdown or hidden commit field, not only react-select markup")
+	}
+	if !strings.Contains(readHiddenCommitValueJS, `name^="selected"`) {
+		t.Error("the hidden commit field is where a Lever-style typeahead keeps its committed value")
+	}
+	if strings.Contains(readHiddenCommitValueJS, "el.value") {
+		t.Error("must never fall back to el.value — that is uncommitted typed text (bugs.md #81)")
+	}
+	if !strings.Contains(comboboxOptionsJS, "dropdown-location") {
+		t.Error("option enumeration must cover Lever's .dropdown-location results")
 	}
 }

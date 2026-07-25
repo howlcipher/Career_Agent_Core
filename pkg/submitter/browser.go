@@ -1540,12 +1540,33 @@ const readComboboxValueJS = `el => {
   return sv && sv.textContent.trim() ? sv.textContent.trim() : '';
 }`
 
+// readHiddenCommitValueJS reads the hidden field a typeahead writes its
+// committed selection into (bugs.md #86: Lever's selectedLocation). Never
+// reads el.value, for the same reason as #81 -- that is the typed text.
+const readHiddenCommitValueJS = `el => {
+  const p = el.parentElement;
+  if (!p) return '';
+  const h = p.querySelector('input[type="hidden"][name^="selected"]');
+  return h && h.value ? h.value : '';
+}`
+
 // isComboboxInputJS reports whether the control is an autocomplete widget
 // whose selection must be committed with a keypress. Deliberately narrow:
 // pressing Enter in an ordinary text input can submit the form early, so this
 // must not guess.
-const isComboboxInputJS = `el => !!(el.closest('.select__control, .select-shell') ||
-  el.getAttribute('role') === 'combobox' || el.closest('[role="combobox"]'))`
+// bugs.md #86: Lever's location typeahead is a combobox with none of
+// react-select's markers -- no role, no aria-*, no select__ classes. It is an
+// ordinary <input name="location"> beside a hidden <input
+// name="selectedLocation"> that holds the committed value, with results in a
+// sibling .dropdown-results. Detecting only react-select made it read as a
+// plain text input, so it was filled with text and never committed.
+const isComboboxInputJS = `el => {
+  if (el.closest('.select__control, .select-shell') ||
+      el.getAttribute('role') === 'combobox' || el.closest('[role="combobox"]')) return true;
+  const p = el.parentElement;
+  return !!(p && (p.querySelector('.dropdown-results, .dropdown-container') ||
+                  p.querySelector('input[type="hidden"][name^="selected"]')));
+}`
 
 func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 	el, err := resolveFieldLocator(target, selector)
@@ -1563,8 +1584,9 @@ func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 // order wrong is not a hypothetical: it shipped, and it silently disabled
 // #74's combobox commit on every field.
 func locatorHasValue(el playwright.Locator) (bool, error) {
+	combo, cErr := isComboboxLocator(el)
 	script := readInputValueJS
-	if combo, err := isComboboxLocator(el); err == nil && combo {
+	if cErr == nil && combo {
 		script = readComboboxValueJS
 	}
 	got, err := el.Evaluate(script, nil)
@@ -1572,8 +1594,19 @@ func locatorHasValue(el playwright.Locator) (bool, error) {
 		return false, err
 	}
 	s, _ := got.(string)
-	s = strings.TrimSpace(s)
-	return s != "" && s != "false", nil
+	if v := strings.TrimSpace(s); v != "" && v != "false" {
+		return true, nil
+	}
+	// bugs.md #86: a typeahead may keep its committed value in a hidden
+	// sibling instead of rendering it (Lever's selectedLocation).
+	if cErr == nil && combo {
+		if hv, hErr := el.Evaluate(readHiddenCommitValueJS, nil); hErr == nil {
+			if h, _ := hv.(string); strings.TrimSpace(h) != "" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func isComboboxLocator(el playwright.Locator) (bool, error) {
@@ -1654,11 +1687,35 @@ func setComboboxValue(target fillTarget, el playwright.Locator, want string, mus
 			continue
 		}
 		waitForComboboxReady(el)
-		optID, ok := pickComboboxOption(readComboboxOptions(el), want, mustContain)
+		optID, optIndex, ok := pickComboboxOption(readComboboxOptions(el), want, mustContain)
 		if !ok {
 			continue
 		}
-		if err := target.Loc("#" + optID).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+		if err := target.Loc("#" + optID).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+			if landed, lErr := locatorHasValue(el); lErr == nil && landed {
+				return true, nil
+			}
+		}
+		// bugs.md #86: clicking the option loses a blur race on Lever -- the
+		// input blurs, the dropdown closes, and nothing is committed (measured:
+		// both the visible input and selectedLocation ended up empty).
+		// Keyboard selection is blur-safe. Arrow to the option that was chosen
+		// rather than taking whichever is focused, so #79's guarantee -- never
+		// commit the wrong entry -- still holds: "Detroit, ME" sits directly
+		// beneath "Detroit, MI" in the same list.
+		steps := optIndex
+		if ad, adErr := el.Evaluate(activeDescendantJS, nil); adErr == nil {
+			if s, _ := ad.(string); strings.TrimSpace(s) == "" {
+				// Nothing focused yet, so the first ArrowDown lands on index 0.
+				steps = optIndex + 1
+			}
+		}
+		for k := 0; k < steps; k++ {
+			if err := el.Press("ArrowDown", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+				break
+			}
+		}
+		if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
 			continue
 		}
 		if landed, err := locatorHasValue(el); err == nil && landed {
@@ -1684,7 +1741,15 @@ const comboboxOptionsJS = `el => {
     const m = ad.match(/^(.*)-option-\d+$/);
     if (m) box = document.getElementById(m[1] + '-listbox');
   }
-  if (!box) return [];
+  if (!box) {
+    // bugs.md #86: Lever renders results in a sibling .dropdown-results with
+    // no aria wiring at all.
+    const p = el.parentElement;
+    const alt = p && p.querySelector('.dropdown-results');
+    if (!alt) return [];
+    return Array.from(alt.querySelectorAll('.dropdown-location, [role="option"]'))
+      .map(o => o.id + '|' + o.textContent.trim());
+  }
   return Array.from(box.querySelectorAll('[role="option"], .select__option'))
     .map(o => o.id + '|' + o.textContent.trim());
 }`
@@ -1733,9 +1798,9 @@ func searchPrefixes(value string) []string {
 // in mustContain has to appear; failing that, option and wanted value must
 // contain one another. Otherwise nothing is selected at all, and the field is
 // left to the validation-retry loop rather than filled with something wrong.
-func pickComboboxOption(options []string, want string, mustContain []string) (id string, ok bool) {
+func pickComboboxOption(options []string, want string, mustContain []string) (id string, index int, ok bool) {
 	wantN := normalizeOptionText(want)
-	for _, entry := range options {
+	for i, entry := range options {
 		parts := strings.SplitN(entry, "|", 2)
 		if len(parts) != 2 {
 			continue
@@ -1755,10 +1820,10 @@ func pickComboboxOption(options []string, want string, mustContain []string) (id
 			continue
 		}
 		if len(mustContain) > 0 || strings.Contains(text, wantN) || strings.Contains(wantN, text) {
-			return optID, true
+			return optID, i, true
 		}
 	}
-	return "", false
+	return "", 0, false
 }
 
 func readComboboxOptions(el playwright.Locator) []string {
