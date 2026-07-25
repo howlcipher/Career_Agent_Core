@@ -899,7 +899,16 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// no invalid control can be identified, since an unreadable theme
 			// is a reason to send more, never less.
 			if narrowed, ok, nErr := parser.PruneDOMToInvalidFields(prunedHTML); nErr == nil && ok {
-				log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
+				// bugs.md #80: name the fields, not just the byte count. The
+				// size alone cannot distinguish "the same fields are still
+				// failing" from "different fields now are".
+				if ids := parser.InvalidFieldIdentifiers(narrowed); len(ids) > 0 {
+					sort.Strings(ids)
+					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars); still invalid: %s",
+						len(prunedHTML), len(narrowed), strings.Join(ids, ", "))
+				} else {
+					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
+				}
 				prunedHTML = narrowed
 			}
 

@@ -295,3 +295,36 @@ func TestPruneDOMToInvalidFields_KeepsAriaErrorMessageText(t *testing.T) {
 		t.Errorf("aria-errormessage text must be kept, got: %s", out)
 	}
 }
+
+// bugs.md #80: the retry loop logged the size of the narrowed payload but
+// never which fields were in it, so "13/13 applied, still rejected, payload
+// 7212 -> 7281" could not be diagnosed — the numbers say something is wrong
+// without saying what.
+func TestInvalidFieldIdentifiers_NamesTheRejectedControls(t *testing.T) {
+	form := `<form>
+		<input id="fn" name="first_name" value="Will">
+		<input id="ph" name="phone" aria-invalid="true">
+		<select id="country" name="country" data-invalid="true"></select>
+		<textarea name="why" data-has-error="true"></textarea>
+	</form>`
+
+	got := InvalidFieldIdentifiers(form)
+	want := map[string]bool{"ph": true, "country": true, "why": true}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want the 3 invalid controls", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected identifier %q (fn passed validation and must not appear)", id)
+		}
+	}
+}
+
+// A control with no id must still be nameable, or it reads as a silent gap.
+func TestInvalidFieldIdentifiers_FallsBackToNameThenTag(t *testing.T) {
+	form := `<form><input name="only_name" aria-invalid="true"><select aria-invalid="true"></select></form>`
+	got := InvalidFieldIdentifiers(form)
+	if len(got) != 2 || got[0] != "only_name" || got[1] != "select" {
+		t.Errorf("got %v, want [only_name select]", got)
+	}
+}

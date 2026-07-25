@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 80 | [The retry loop logged the payload size but never which fields were still invalid](#80-the-retry-loop-logged-the-payload-size-but-never-which-fields-were-still-invalid) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Hit the wall directly: `Attempt 2 applied 13/13 validation fix(es)` with **no** not-landed line at all, and the form still bounced — `7212 -> 7281 chars`. Every field reported as filled, nothing reported as failed, and the submission was still rejected. The byte count cannot distinguish "the same fields are still failing" from "different ones now are", so the next step would have been another blind ~25-minute cycle. `InvalidFieldIdentifiers` now names them |
 | 79 | [The option wait watched an unrelated widget, and committing option-0 filed the wrong location](#79-the-option-wait-watched-an-unrelated-widget-and-committing-option-0-filed-the-wrong-location) | Blocker | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Found with a standalone Playwright probe against Reddit's real form, after the 12-min-per-guess loop became untenable. Two defects: **(a)** the options wait counted `[role="option"]` **document-wide**, and every Greenhouse page carries an always-open intl-tel-input phone-country widget holding ~244 options — so the count was permanently non-zero, the wait returned instantly, and every commit fired into an empty menu. **(b)** far worse, committing the *focused* option is unsafe: typing `Macomb` puts **"Macomb, Illinois, United States"** at option-0 while the configured address is Michigan, so a successful commit would file real applications with the wrong location |
 | 78 | [Fill() never opens a react-select menu, and the read-back matched the input itself](#78-fill-never-opens-a-react-select-menu-and-the-read-back-matched-the-input-itself) | Blocker | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Probed directly: `Fill()` sets `input.value` while react-select's menu **never opens** — the widget's own option count stayed 0 and `aria-activedescendant` stayed empty for 3 full seconds, so the Enter that followed had nothing to select. Real keystrokes open and filter it in ~600ms. Separately, react-select sets `role="combobox"` **on the input**, and `Element.closest()` tests the element itself first — so the value read resolved its "shell" to the input, which has no children, and never found the committed value. Same DOM, corrected: `""` → `"Macomb, Illinois, United States"` |
 | 77 | [Enter was pressed before react-select had loaded any option, so the commit selected nothing](#77-enter-was-pressed-before-react-select-had-loaded-any-option-so-the-commit-selected-nothing) | Major | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Caught the moment #76 made the read-back work: `Attempt 2: 11 fix(es) reported success but left the control empty ... 430, 431, 432, 433, 434, 436, candidate-location, country, question_67942418/19/20` — with **no** commit line, so `commitComboboxOnLocator` pressed Enter and still committed nothing. react-select populates its menu asynchronously (Greenhouse's Location field queries a geocoder), so an Enter fired immediately after `Fill()` arrives while the menu is empty, highlights nothing and selects nothing. Real progress in the same run though: the narrowed payload **shrank for the first time**, 8249 → 5988 chars |
@@ -114,6 +115,30 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 80. The retry loop logged the payload size but never which fields were still invalid (Resolved 2026-07-25)
+
+**Filed the moment the existing diagnostics ran out.** With every earlier fix in place:
+
+```
+16:15:33 Attempt 2 applied 13/13 validation fix(es) to: #430 ... #question_67942420
+16:15:34 Submission failed validation. Retrying...
+16:15:34 Narrowed validation retry to the rejected fields only (54606 -> 7281 chars)
+```
+
+Read that carefully: **13 of 13 applied, no "left the control empty" line, no "Validation fix failed" line — and the form still rejected the submission.** Every signal the system had said success, and the outcome was failure. The only remaining number, the payload size, went 7212 → 7281, which is uninterpretable: it cannot distinguish "the same fields are still failing" from "a different set is now failing".
+
+The next step from here would have been another blind ~25-minute cycle. That is the same trap #70, #76 and #77 each sprang in turn, and the same fix applies: **stop inferring, start naming.**
+
+`parser.InvalidFieldIdentifiers` walks the narrowed payload and lists the controls the page flagged, by `id`, falling back to `name` and then the tag so a control can never be silently omitted. The retry loop logs them alongside the size:
+
+```
+Narrowed validation retry to the rejected fields only (54606 -> 7281 chars); still invalid: 430, 431, question_67942418, ...
+```
+
+**Not a code defect in itself** — it is the missing measurement that was preventing the *next* defect from being found. Filed as a bug rather than an improvement because the absence was actively blocking diagnosis of a Blocker-severity failure.
+
+**Tests:** `TestInvalidFieldIdentifiers_NamesTheRejectedControls`, `TestInvalidFieldIdentifiers_FallsBackToNameThenTag`.
 
 ### 79. The option wait watched an unrelated widget, and committing option-0 filed the wrong location (Resolved 2026-07-25, verified against the live form)
 

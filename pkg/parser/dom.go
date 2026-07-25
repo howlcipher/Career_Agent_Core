@@ -212,6 +212,44 @@ var invalidFieldMarkers = [][2]string{
 // When it is false the caller must fall back to the full form: a theme this
 // function cannot read is a reason to send more, never less, since sending
 // nothing would guarantee the retry fixes nothing.
+// InvalidFieldIdentifiers lists the controls a page has flagged invalid,
+// by id (falling back to name, then to the tag).
+//
+// bugs.md #80: the retry loop logged the size of the narrowed payload but
+// never *which* fields were in it, so "13/13 applied, still rejected, payload
+// 7212 -> 7281" was undiagnosable — the numbers say something is still wrong
+// without saying what. Naming the fields is the difference between another
+// blind 12-minute cycle and a direct answer.
+func InvalidFieldIdentifiers(formHTML string) []string {
+	doc, err := html.Parse(strings.NewReader(formHTML))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && isInvalidControl(n) {
+			id := attrValue(n, "id")
+			if id == "" {
+				id = attrValue(n, "name")
+			}
+			if id == "" {
+				id = n.Data
+			}
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return out
+}
+
 func PruneDOMToInvalidFields(formHTML string) (out string, narrowed bool, err error) {
 	doc, err := html.Parse(strings.NewReader(formHTML))
 	if err != nil {
