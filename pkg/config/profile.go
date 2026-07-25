@@ -51,6 +51,13 @@ type Profile struct {
 	// routed to MANUAL_REQUIRED do get master documents instead of tailored
 	// ones as a result, which is the real tradeoff of turning this on.
 	UseMasterCoverLetter bool `yaml:"use_master_cover_letter"`
+	// MasterCoverLetterPath points at the static letter UseMasterCoverLetter
+	// sends. Both a PDF (uploaded as-is to file inputs, text extracted for
+	// paste-style fields) and a plain-text file are supported. Optional:
+	// defaults to master_cover_letter.txt when unset, so the letter can be
+	// swapped for a differently-named file by editing profile.yaml alone,
+	// with no rebuild.
+	MasterCoverLetterPath string `yaml:"master_cover_letter_path"`
 }
 
 // SelectToneVariant picks a random entry from tones for A/B testing

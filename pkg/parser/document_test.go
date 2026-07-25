@@ -22,3 +22,24 @@ func TestReadMarkdown(t *testing.T) {
 		t.Errorf("expected %q, got %q", content, got)
 	}
 }
+
+func TestExtractDocumentText_PlainText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "letter.txt")
+	const want = "Dear Hiring Manager,\n\nI build automation.\n"
+	if err := os.WriteFile(path, []byte(want), 0644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+	got, err := ExtractDocumentText(path)
+	if err != nil {
+		t.Fatalf("ExtractDocumentText failed: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractDocumentText_MissingFile(t *testing.T) {
+	if _, err := ExtractDocumentText("/nonexistent/letter.txt"); err == nil {
+		t.Error("expected an error for a missing file, got nil")
+	}
+}

@@ -34,10 +34,12 @@ const (
 	// pipeline's per-job "tailored" resume is a saved reference document, not
 	// the upload payload — this static PDF is what employers receive.
 	masterResumePath = "master_resume.pdf"
-	// masterCoverLetterPath is the single job-agnostic cover letter reused for
-	// every application when profile.yaml sets use_master_cover_letter.
-	// Gitignored alongside master_resume.pdf: it carries real contact details.
-	masterCoverLetterPath = "master_cover_letter.txt"
+	// defaultMasterCoverLetterPath is the fallback for the single job-agnostic
+	// cover letter reused for every application when profile.yaml sets
+	// use_master_cover_letter, applied only when master_cover_letter_path is
+	// left unset. Gitignored alongside master_resume.pdf, as any real letter
+	// carries contact details.
+	defaultMasterCoverLetterPath = "master_cover_letter.txt"
 )
 
 // parseTargetJobURLs splits TARGET_JOB_URL's comma-separated value into a
@@ -498,18 +500,24 @@ func main() {
 				// dedups against, and the folder it creates is what
 				// MoveToManualApply archives for MANUAL_REQUIRED jobs.
 				if prof.UseMasterCoverLetter {
-					letter, readErr := os.ReadFile(masterCoverLetterPath)
+					coverPath := prof.MasterCoverLetterPath
+					if coverPath == "" {
+						coverPath = defaultMasterCoverLetterPath
+					}
+					// Extracted text, not raw bytes: the letter may be a PDF,
+					// and the saved record is meant to be readable.
+					letterText, readErr := parser.ExtractDocumentText(coverPath)
 					if readErr != nil {
-						log.Printf("[Worker-%d] Failed to read %s: %v", workerID, masterCoverLetterPath, readErr)
+						log.Printf("[Worker-%d] Failed to read master cover letter %s: %v", workerID, coverPath, readErr)
 						return "", "", fmt.Errorf("failed to read master cover letter: %w", readErr)
 					}
 					const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
-					if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, string(letter), untailoredNote); err != nil {
+					if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, letterText, untailoredNote); err != nil {
 						log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
 						return "", "", err
 					}
-					log.Printf("[Worker-%d] Using master resume and master cover letter for %s (no per-job tailoring)", workerID, job.CompanyName)
-					return masterResumePath, masterCoverLetterPath, nil
+					log.Printf("[Worker-%d] Using master resume and master cover letter (%s) for %s (no per-job tailoring)", workerID, coverPath, job.CompanyName)
+					return masterResumePath, coverPath, nil
 				}
 
 				var resume, coverLetter, interviewPrep string

@@ -1345,3 +1345,67 @@ func writeTempCoverLetter(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// A PDF master cover letter must upload byte-for-byte under a .pdf name, not
+// be renamed .txt — the employer should receive the formatted document.
+func TestFillCoverLetter_UploadsPDFUnderPDFName(t *testing.T) {
+	pdfBytes := []byte("%PDF-1.4\nfake pdf body\n%%EOF")
+	path := filepath.Join(t.TempDir(), "Omni_CoverLetter.pdf")
+	if err := os.WriteFile(path, pdfBytes, 0644); err != nil {
+		t.Fatalf("failed to write temp pdf: %v", err)
+	}
+
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) { return true, nil },
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return loc
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "input[type='file']", "Cover Letter")
+
+	if len(loc.uploadedFiles) != 1 {
+		t.Fatalf("expected one uploaded file, got %d", len(loc.uploadedFiles))
+	}
+	if loc.uploadedFiles[0].Name != "cover_letter.pdf" {
+		t.Errorf("uploaded name = %q, want cover_letter.pdf", loc.uploadedFiles[0].Name)
+	}
+	if string(loc.uploadedFiles[0].Buffer) != string(pdfBytes) {
+		t.Error("the PDF was not uploaded byte-for-byte")
+	}
+}
+
+// The inverse risk: a PDF must never have its raw bytes pasted into a
+// textarea. Extraction failing means skip, not send the employer binary.
+func TestFillCoverLetter_NeverPastesRawPDFBytes(t *testing.T) {
+	pdfBytes := []byte("%PDF-1.4\nfake pdf body that is not extractable text\n%%EOF")
+	path := filepath.Join(t.TempDir(), "cover.pdf")
+	if err := os.WriteFile(path, pdfBytes, 0644); err != nil {
+		t.Fatalf("failed to write temp pdf: %v", err)
+	}
+
+	var filledWith string
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{
+				countFunc:    func() (int, error) { return 1, nil },
+				evaluateFunc: func(expression string) (interface{}, error) { return false, nil },
+			}
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				filledWith = value
+				return nil
+			}}
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "#cover", "Cover Letter")
+
+	if strings.Contains(filledWith, "%PDF") {
+		t.Errorf("raw PDF bytes were pasted into the form: %q", filledWith)
+	}
+}

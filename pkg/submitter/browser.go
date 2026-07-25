@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/danielthedm/promptsec"
@@ -1215,6 +1216,14 @@ func fillCoverLetterIfPresent(target fillTarget, coverPath, selector, labelText 
 		return
 	}
 
+	// An upload keeps the file exactly as-is (a PDF stays a formatted PDF),
+	// but a paste-into-textarea needs real text — writing a PDF's raw bytes
+	// into a form field would send the employer binary garbage.
+	uploadName := "cover_letter" + filepath.Ext(coverPath)
+	if uploadName == "cover_letter" {
+		uploadName = "cover_letter.txt"
+	}
+
 	// A file input cannot be Fill()ed — Playwright rejects it — so resolve
 	// the control's shape first and branch, rather than trying text entry and
 	// interpreting the failure.
@@ -1226,20 +1235,25 @@ func fillCoverLetterIfPresent(target fillTarget, coverPath, selector, labelText 
 			if evalErr == nil {
 				if isFileInput, ok := isFile.(bool); ok && isFileInput {
 					if err := candidate.SetInputFiles([]playwright.InputFile{{
-						Name:   "cover_letter.txt",
+						Name:   uploadName,
 						Buffer: content,
 					}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
 						log.Printf("[Auto-Submit] Failed to upload cover letter: %v", err)
 						return
 					}
-					log.Printf("[Auto-Submit] Cover letter uploaded")
+					log.Printf("[Auto-Submit] Cover letter uploaded as %s", uploadName)
 					return
 				}
 			}
 		}
 	}
 
-	if err := safeFillWithLabelFallback(target, selector, labelText, string(content)); err != nil {
+	text, err := parser.ExtractDocumentText(coverPath)
+	if err != nil || strings.TrimSpace(text) == "" {
+		log.Printf("[Auto-Submit] Cover letter at %s has no extractable text to paste, skipping: %v", coverPath, err)
+		return
+	}
+	if err := safeFillWithLabelFallback(target, selector, labelText, text); err != nil {
 		log.Printf("[Auto-Submit] Failed to fill cover letter (optional, continuing): %v", err)
 		return
 	}
