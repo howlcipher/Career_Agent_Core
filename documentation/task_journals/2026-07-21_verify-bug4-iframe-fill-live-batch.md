@@ -47,7 +47,7 @@
 
 Superseded PIDs, all permanently dead, do not try to resume any of them: `3137654` (verify82d), `3435469` (verify82e, killed 2026-07-25 ~00:20 for this restart).
 
-**Outcome-breakdown query** (82-URL list at `applied_urls_verify82.txt`, repo root, untracked — don't delete, needed for this query):
+**Outcome-breakdown query** (82-URL list at `applied_urls_verify82.txt`, repo root — **now tracked in git** as of 2026-07-25, deliberately: it is not regenerable. Every one of the 82 rows was reset off `APPLIED` at the start of this effort, so the database no longer knows which jobs form this cohort, and this file is the only surviving record. It is 82 public posting URLs, no credentials. Delete it only when this task closes):
 ```bash
 urls_file="/var/home/howlcipher/dev/Career_Agent_Core/applied_urls_verify82.txt"
 in_clause=$(awk '{printf "%s%s%s", (NR>1?",":""), "\x27", $0"\x27"}' "$urls_file")
