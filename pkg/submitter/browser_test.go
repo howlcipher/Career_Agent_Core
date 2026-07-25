@@ -1494,3 +1494,32 @@ func TestFillCoverLetter_FallsBackToPasteWhenNoFileInputExists(t *testing.T) {
 		t.Errorf("expected the letter to be pasted when no upload control exists, got %q", pasted)
 	}
 }
+
+// An empty coverPath is how "cover letters are off" reaches the submitter
+// (profile.yaml's send_cover_letter: false). It must touch no control at all
+// -- not the mapped selector, not the upload search, not the paste fallback.
+func TestFillCoverLetter_EmptyPathTouchesNothing(t *testing.T) {
+	locatorCalls := 0
+	pasted := false
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			locatorCalls++
+			return &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				pasted = true
+				return nil
+			}}
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, "", "#cover", "Cover Letter")
+
+	if locatorCalls != 0 {
+		t.Errorf("expected no control lookups when cover letters are off, got %d", locatorCalls)
+	}
+	if pasted {
+		t.Error("expected no paste when cover letters are off")
+	}
+}

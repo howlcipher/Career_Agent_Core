@@ -89,6 +89,12 @@ Tests added: `TestFillCoverLetter_UploadsPDFUnderPDFName` (asserts both the `.pd
 
 Tests added: `TestFillCoverLetter_PrefersUploadOverPasteWhenMappingPointsAtTextarea`, `TestCoverLetterFileInputSelectorsNeverMatchBareResumeInput`, `TestFillCoverLetter_FallsBackToPasteWhenNoFileInputExists` (9 cover-letter tests total).
 
+**Amended again 2026-07-24 (cover letters switched off entirely, feature retained):** user decided cover letters aren't worth the complexity for now and asked to toggle them off without removing the feature. New `send_cover_letter` in `profile.yaml` (`config.Profile.SendCoverLetter`, read via `ShouldSendCoverLetter()`); set to `false` in the live profile. When off, `generateDocsFunc` returns an empty cover path, which `fillCoverLetterIfPresent` already treats as "do nothing" — no control lookup, no upload search, no paste. Everything else stays exactly in place (the PDF, `master_cover_letter_path`, the upload-preference logic, all 10 tests), so flipping it back to `true` restores full behavior with no code change.
+
+**Typed as `*bool`, deliberately:** a plain `bool` would make Go's zero value mean "off", silently disabling cover letters for any profile written before this field existed. `nil` means send. `TestLoadProfile_SendCoverLetter` and `TestShouldSendCoverLetter_ZeroValueProfileSends` both pin that.
+
+**Current live configuration** (`use_master_cover_letter: true` + `send_cover_letter: false`) is the fastest available: `ProcessJobApplication` is skipped entirely, and no cover letter is attached. Applications go out with `master_resume.pdf` alone.
+
 **Two known caveats, neither blocking:** (1) the PDF has a fixed date ("July 20, 2026") baked into it, which will read as stale over time — regenerate the PDF periodically. (2) `ledongthuc/pdf`'s text extraction drops some line breaks ("July 20, 2026Hiring Manager"), so *pasted* letters read slightly run-together; uploads are unaffected since the file goes as-is, and upload is the more common shape on real ATS forms (Greenhouse and Lever's own cover letter controls among them).
 
 ### 22. Rank the discovery queue by resume-fit similarity, not just source-priority

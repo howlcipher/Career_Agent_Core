@@ -87,3 +87,4 @@ headless_browser: true
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."
 use_master_cover_letter: true
 master_cover_letter_path: "Omni_CoverLetter.pdf"
+send_cover_letter: false

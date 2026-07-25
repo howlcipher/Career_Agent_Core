@@ -249,3 +249,48 @@ func TestLoadProfile_UseMasterCoverLetter(t *testing.T) {
 		})
 	}
 }
+
+// send_cover_letter must default to sending when the key is absent: a plain
+// bool would have made the Go zero value mean "off", silently disabling cover
+// letters for every profile written before the field existed.
+func TestLoadProfile_SendCoverLetter(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"absent key still sends", "cover_letter_tone: \"professional\"\n", true},
+		{"explicitly disabled", "send_cover_letter: false\n", false},
+		{"explicitly enabled", "send_cover_letter: true\n", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpFile, err := os.CreateTemp("", "profile_*.yaml")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpFile.Name())
+			if _, err := tmpFile.Write([]byte(tt.yaml)); err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			tmpFile.Close()
+
+			profile, err := LoadProfile(tmpFile.Name())
+			if err != nil {
+				t.Fatalf("LoadProfile failed: %v", err)
+			}
+			if got := profile.ShouldSendCoverLetter(); got != tt.want {
+				t.Errorf("ShouldSendCoverLetter() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A zero-value Profile (no YAML at all) must also default to sending.
+func TestShouldSendCoverLetter_ZeroValueProfileSends(t *testing.T) {
+	var p Profile
+	if !p.ShouldSendCoverLetter() {
+		t.Error("a zero-value Profile must default to sending a cover letter")
+	}
+}

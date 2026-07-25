@@ -58,6 +58,23 @@ type Profile struct {
 	// swapped for a differently-named file by editing profile.yaml alone,
 	// with no rebuild.
 	MasterCoverLetterPath string `yaml:"master_cover_letter_path"`
+	// SendCoverLetter controls whether a cover letter is attached to
+	// applications at all. Set it to false to stop sending one without
+	// removing any of the machinery: the letter file, the master-letter
+	// toggle, and the upload/paste logic all stay in place and resume working
+	// the moment it is set back to true.
+	//
+	// A pointer so an absent key can be told apart from an explicit false:
+	// nil means "send", preserving the behavior of every profile written
+	// before this field existed. Read it through ShouldSendCoverLetter rather
+	// than dereferencing it directly.
+	SendCoverLetter *bool `yaml:"send_cover_letter"`
+}
+
+// ShouldSendCoverLetter reports whether applications should include a cover
+// letter, defaulting to true when send_cover_letter is not set.
+func (p *Profile) ShouldSendCoverLetter() bool {
+	return p.SendCoverLetter == nil || *p.SendCoverLetter
 }
 
 // SelectToneVariant picks a random entry from tones for A/B testing

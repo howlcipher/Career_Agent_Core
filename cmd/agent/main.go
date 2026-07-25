@@ -500,23 +500,36 @@ func main() {
 				// dedups against, and the folder it creates is what
 				// MoveToManualApply archives for MANUAL_REQUIRED jobs.
 				if prof.UseMasterCoverLetter {
-					coverPath := prof.MasterCoverLetterPath
-					if coverPath == "" {
-						coverPath = defaultMasterCoverLetterPath
-					}
-					// Extracted text, not raw bytes: the letter may be a PDF,
-					// and the saved record is meant to be readable.
-					letterText, readErr := parser.ExtractDocumentText(coverPath)
-					if readErr != nil {
-						log.Printf("[Worker-%d] Failed to read master cover letter %s: %v", workerID, coverPath, readErr)
-						return "", "", fmt.Errorf("failed to read master cover letter: %w", readErr)
+					// An empty coverPath is the documented "no cover letter"
+					// signal: fillCoverLetterIfPresent returns immediately on
+					// it, so send_cover_letter: false disables the attachment
+					// without disturbing any of the machinery around it.
+					coverPath := ""
+					letterText := "Cover letters are disabled (send_cover_letter: false); none was sent with this application."
+					if prof.ShouldSendCoverLetter() {
+						coverPath = prof.MasterCoverLetterPath
+						if coverPath == "" {
+							coverPath = defaultMasterCoverLetterPath
+						}
+						// Extracted text, not raw bytes: the letter may be a
+						// PDF, and the saved record is meant to be readable.
+						text, readErr := parser.ExtractDocumentText(coverPath)
+						if readErr != nil {
+							log.Printf("[Worker-%d] Failed to read master cover letter %s: %v", workerID, coverPath, readErr)
+							return "", "", fmt.Errorf("failed to read master cover letter: %w", readErr)
+						}
+						letterText = text
 					}
 					const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
 					if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, letterText, untailoredNote); err != nil {
 						log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
 						return "", "", err
 					}
-					log.Printf("[Worker-%d] Using master resume and master cover letter (%s) for %s (no per-job tailoring)", workerID, coverPath, job.CompanyName)
+					if coverPath == "" {
+						log.Printf("[Worker-%d] Using master resume for %s (no per-job tailoring, cover letter disabled)", workerID, job.CompanyName)
+					} else {
+						log.Printf("[Worker-%d] Using master resume and master cover letter (%s) for %s (no per-job tailoring)", workerID, coverPath, job.CompanyName)
+					}
 					return masterResumePath, coverPath, nil
 				}
 
@@ -556,6 +569,13 @@ func main() {
 
 				log.Printf("[Worker-%d] Successfully generated and saved application for %s", workerID, job.CompanyName)
 
+				// The tailored letter is still generated above (it comes out of
+				// the same combined call as the resume and interview prep) and
+				// still saved to the application folder, but an empty path
+				// keeps it from being attached when cover letters are off.
+				if !prof.ShouldSendCoverLetter() {
+					return masterResumePath, "", nil
+				}
 				// bugs.md #62: this used to concatenate the raw company name,
 				// while SaveApplication writes under the sanitized one — so
 				// for any company whose name isn't already sanitize-stable
