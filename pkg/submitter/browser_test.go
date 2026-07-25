@@ -2149,3 +2149,23 @@ func TestFindSubmitControl_SkipsAGroupWithNoVisibleMatch(t *testing.T) {
 		t.Errorf("expected the lookup to move past the invisible group, selectors tried: %v", asked)
 	}
 }
+
+// bugs.md #88: an uncommittable required widget is not an automation failure.
+// Measured on Lever, whose geocoder returns zero results for "Macomb",
+// "Macomb Township" and "Macomb, MI" while Greenhouse resolves the same
+// address. With no option to select, the required hidden selectedLocation can
+// never be populated. The job is perfectly applicable by hand, so it must be
+// preserved rather than written off as FAILED_SUBMIT.
+func TestErrUncommittableField_IsAManualReviewOutcome(t *testing.T) {
+	if !IsManualReviewError(ErrUncommittableField) {
+		t.Error("an uncommittable required field must route to manual review, not FAILED_SUBMIT")
+	}
+	wrapped := fmt.Errorf("%w: %s", ErrUncommittableField, "input[data-qa='location-input']")
+	if !IsManualReviewError(wrapped) {
+		t.Error("must still be recognised when wrapped with the offending selectors")
+	}
+	// The selectors must survive into the message so the log names the field.
+	if !strings.Contains(wrapped.Error(), "location-input") {
+		t.Errorf("expected the offending field named in the error, got %q", wrapped.Error())
+	}
+}

@@ -398,6 +398,20 @@ var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's
 // manual review is the only honest outcome.
 var ErrNeedsUnprovidedAttestation = errors.New("form requires a legal attestation the applicant has not provided")
 
+// ErrUncommittableField marks a form with a required widget whose value cannot
+// be committed at all -- not because the automation is broken, but because the
+// widget will not accept the configured value.
+//
+// bugs.md #88: measured on Lever, whose geocoder returns **zero** results for
+// "Macomb", "Macomb Township" and "Macomb, MI" while Greenhouse's resolves the
+// same address happily. With no option to select, the required hidden
+// selectedLocation can never be populated and the form can never validate.
+// Substituting a nearby city the geocoder does know would misrepresent the
+// applicant's location on a real application, so the honest outcome is to hand
+// the job to a human with its documents intact rather than burn three attempts
+// reaching the same wall.
+var ErrUncommittableField = errors.New("a required field could not be committed with the configured value")
+
 // manualReviewErrors are the outcomes that are not automation failures: the
 // job is sound, something outside the agent's authority is simply required to
 // finish it. Every one of them must be preserved for manual completion rather
@@ -412,6 +426,7 @@ var manualReviewErrors = []error{
 	ErrAuthWall,
 	ErrFormTooLargeForModel,
 	ErrNeedsUnprovidedAttestation,
+	ErrUncommittableField,
 }
 
 // IsManualReviewError reports whether err means "queue this for a human"
@@ -825,6 +840,10 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// right baseline instead of the original applyURL -- see confirmOrError.
 	urlBeforeSubmitClick := applyURL
 
+	// bugs.md #88: remembers the fields the final attempt could not commit, so
+	// an uncommittable required widget can be reported as needing a human
+	// rather than as a generic automation failure.
+	var lastNotLanded []string
 	for attempt := 1; attempt <= 3; attempt++ {
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
@@ -1050,6 +1069,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				sort.Strings(comboCommitted)
 				log.Printf("[Auto-Submit] Attempt %d committed %d autocomplete selection(s) that Fill() alone had left empty: %s", attempt, len(comboCommitted), strings.Join(comboCommitted, ", "))
 			}
+			lastNotLanded = notLanded
 			if len(notLanded) > 0 {
 				sort.Strings(notLanded)
 				log.Printf("[Auto-Submit] Attempt %d: %d fix(es) reported success but left the control empty (autocomplete/combobox suspected): %s", attempt, len(notLanded), strings.Join(notLanded, ", "))
@@ -1108,6 +1128,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		}
 	}
 
+	// bugs.md #88: if the last attempt left a required widget uncommitted, this
+	// is not an automation failure -- the value simply is not selectable there.
+	// Preserve the job for manual completion instead of writing it off.
+	if len(lastNotLanded) > 0 {
+		sort.Strings(lastNotLanded)
+		return fmt.Errorf("%w: %s", ErrUncommittableField, strings.Join(lastNotLanded, ", "))
+	}
 	return fmt.Errorf("failed to submit application after 3 validation error attempts")
 }
 
