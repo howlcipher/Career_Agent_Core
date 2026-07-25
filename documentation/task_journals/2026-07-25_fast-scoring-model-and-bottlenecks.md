@@ -122,9 +122,21 @@ The restarted run (PID `3520054`) ran **8h37m** and processed 19 jobs. Two thing
 
 **Run restarted 2026-07-25 10:34 as PID `3716166`** (`/tmp/career_agent_bin_verify82h`, HEAD `3c2ac38`). Requeued **17 rows** that failed purely on the now-fixed validation path (identified from the log; `applied_jobs` dedup rows cleared first or `HasApplied` would skip them) plus the orphaned `PROCESSING` row. The **6 remaining `FAILED_SUBMIT` were deliberately left alone** — 5 are the confirmed dead/expired postings, 1 is a non-validation Playwright timeout. Monitor `b6jugkzde` armed.
 
+## 2026-07-25 ~11:45 — #65's logging immediately exposed #66, the actual blocker
+
+User asked to set the fast model and restart. **Surfaced the decisive counter-evidence first** (the 4B measured *no faster* — 30B `421/358/420s` vs 4B `367s` — so it was accuracy loss for nothing, not a speed/accuracy trade) and the user chose to keep the 30B. `OLLAMA_FAST_MODEL` remains unset. Also established the run was **already** on the current binary and the 30B, so no restart was needed for that reason.
+
+**What the restart request actually uncovered:** within an hour of #65 shipping, its new per-selector logging produced `none of the 12 proposed validation fixes could be applied`, followed by twelve `selector matched no element` lines for `question_9558065008`, `country`, `candidate-location`.
+
+**Filed and fixed as bugs.md #66 (`6ee07a7`).** Every "selector" was a **bare identifier** — the literal `id`/`name` attribute value — not CSS. Playwright reads a bare word as a *tag name*, so it searched for `<country>` elements. The model was picking the right fields and returning them in an unusable form. `resolveFieldLocator` now tries the string as-given first (valid selectors unchanged, never mangled into `##foo`), then `#id` / `[name=…]` / `[id=…]` / `[data-qa=…]`.
+
+**The stack worth remembering: #64 (timeout) hid #65 (wrong fill method), which hid #66 (unusable selectors).** Three separate blockers on one code path, each observable only after the one in front was cleared — and each found by the logging the previous fix added.
+
+**Run restarted 11:45 as PID `3744186`** (`/tmp/career_agent_bin_verify82i`, HEAD `6ee07a7`), 70 jobs queued, all validation-path failures requeued with dedup rows cleared. The 6 remaining `FAILED_SUBMIT` are the 5 confirmed-dead postings plus one unrelated Playwright timeout. Monitor `bp7qakdh7` armed.
+
 ## Next Step
 
-**Watch for the first genuine `APPLIED` under #65's fix.** That is the question the entire 82-job effort exists to answer, and nothing before now could have answered it: every large-form job was previously lost either to a timeout (#64) or to an unsatisfiable required dropdown (#65), one hidden behind the other.
+**Watch for the first genuine `APPLIED` under #66's fix.** This is the first run where none of #64/#65/#66 is in the way. That is the question the entire 82-job effort exists to answer, and nothing before now could have answered it: every large-form job was previously lost either to a timeout (#64) or to an unsatisfiable required dropdown (#65), one hidden behind the other.
 
 If failures continue, read the **specific** new reason out of the log before concluding anything — this run has already produced two distinct dominant causes in sequence, each masked by the previous.
 
