@@ -41,6 +41,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 72 | [The retry loop counts empty-valued and non-landing fixes as applied, reporting progress it is not making](#72-the-retry-loop-counts-empty-valued-and-non-landing-fixes-as-applied-reporting-progress-it-is-not-making) | Major | Resolved (2026-07-25, accounting fixed; root cause of the underlying non-convergence still under live investigation) | — | Opus 5 | Gemini 3 Pro | Found immediately after #70 shipped, from the diagnostic #70 added: Reddit logged `Attempt 2 applied 15/15 validation fix(es)` and **still bounced**, with the narrowed payload essentially unchanged (8249 → 8334 chars) — i.e. the same fields were still invalid. Two accounting defects make that tally untrustworthy: `applyValidationFix` returns `nil` for an empty value (correct for the *initial* fill path, a lie in the retry path), and a `nil` return only means Playwright accepted the call, not that the control ended up set |
 | 71 | [firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click](#71-firstvisiblelocators-first-fallback-reintroduces-the-very-hang-it-was-written-to-prevent-at-the-submit-click) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found auditing the cohort's `FAILED_SUBMIT` rows during #70's restart: Zimperium (Lever, scored **85**) died on `playwright: timeout: Timeout 30000ms exceeded` waiting for `locator(...).first()`. The `.first()` in Playwright's own call log is the proof — `firstVisibleLocator` found *no* visible match, fell back to `loc.First()`, and the caller clicked a match already known to be invisible (#59's hidden `hcaptchaSubmitBtn`). Guaranteed to burn the full action timeout and then misreport "no visible submit button here" as a generic timeout, which is why it read as CPU/network flakiness |
 | 70 | [The validation-retry loop strips the page's own error text, so the model never learns why a field bounced](#70-the-validation-retry-loop-strips-the-pages-own-error-text-so-the-model-never-learns-why-a-field-bounced) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on the highest-fit job in the 82-cohort (Reddit, scored **90**), which burned **17.5 minutes** and 3 LLM calls to fail with `failed to submit application after 3 validation error attempts`. `aria-describedby` was stripped as "presentational" *before* `PruneDOMToInvalidFields` ran, so the link from a rejected control to its error message was severed, and the message element was then dropped as neither control nor label. The model was told a field was invalid but never what would make it valid, so it re-guessed the same value each attempt. Compounded by an empty fix map falling through to a re-submit of a byte-identical form. This is the terminal step of the whole pipeline — it fails *after* discovery, scoring and fill have all succeeded |
 | 69 | [Discovery stored the searched role as job_title and discarded the real headline](#69-discovery-stored-the-searched-role-as-job_title-and-discarded-the-real-headline) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found while auditing throughput: **55 distinct titles across 3,131 waiting rows**. The SerpAPI path called `AddToFunnel(company, role, ...)` — storing the *search term* — while `result.Title` (the real headline) was logged one line earlier and thrown away. Beyond misleading logs and dashboard, this degraded improvements.md #22, which ranks the queue by embedding title+company: every job found under the same role got a near-identical embedding |
@@ -102,6 +103,33 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 72. The retry loop counts empty-valued and non-landing fixes as applied, reporting progress it is not making (Resolved 2026-07-25, accounting fixed; underlying non-convergence still under live investigation)
+
+**Found by the diagnostic #70 added, within an hour of it shipping** — which is the point of that diagnostic. Reddit, re-run against #70's fix:
+
+```
+12:52:05 Narrowed validation retry to the rejected fields only (54877 -> 8249 chars)
+13:04:18 Attempt 2 applied 15/15 validation fix(es) to: 430, 431, 432, 433, 434, 436,
+         candidate-location, country, gdpr_demographic_data_consent_given_1,
+         question_67942415, question_67942416, question_67942417, question_67942418,
+         question_67942419, question_67942420
+13:04:19 Submission failed validation. Retrying...
+13:04:19 Narrowed validation retry to the rejected fields only (54748 -> 8334 chars)
+```
+
+**#70's fix did work** — the narrowed payload grew 5,363 → 8,249 chars on the identical form, which is the error text now reaching the model. But 15/15 fixes "applied" and the form still bounced, with the invalid-field payload essentially unchanged (8249 → 8334). The same fields are still invalid, so the tally is not measuring what it claims.
+
+**Two accounting defects, both proven from code:**
+
+1. **An empty value counts as applied.** `applyValidationFix` returns `nil` when `value == ""`. That is *correct* for the initial-fill path, where it means "the profile has no data for this field, skip it" — `safeFillWithLabelFallback` depends on it. In the retry path the same return is a lie: the field was just rejected, and proposing `""` cannot satisfy it. The contract could not simply be changed, since both paths share the function; fixed at the retry call site instead.
+2. **A `nil` return does not mean the control ended up set.** It means Playwright accepted the call. The known gap is ATS autocomplete widgets — `candidate-location` and `country` in the list above are exactly Greenhouse's — where the visible text box is backed by a separate hidden field, so setting it without choosing a suggestion leaves the value the form actually validates completely unset.
+
+**Fix:** the retry loop now skips empty values (logging them separately as `model proposed an empty value for N rejected field(s)`), and `verifyFixLanded` reads each control back after the fix, logging any that report success but left the control empty as `N fix(es) reported success but left the control empty (autocomplete/combobox suspected)`. The read-back test is deliberately "is it non-empty now" rather than strict equality — forms legitimately reformat phone numbers and dates, and a `<select>` set by visible label reports its underlying value, so equality would cry wolf on fixes that did land.
+
+**Deliberately still open:** this fixes the *measurement*, not necessarily the underlying non-convergence. The autocomplete theory is a hypothesis consistent with the selector list, not yet a confirmed root cause. The next Reddit attempt will name the offending selectors outright, and that becomes the next bug — which is exactly the position #70 was in an hour ago, and it was right then.
+
+**Tests:** `TestVerifyFixLanded_DetectsAControlLeftEmpty`, `TestVerifyFixLanded_AcceptsAReformattedValue`, `TestVerifyFixLanded_TreatsAnUncheckedBoxAsNotLanded`.
 
 ### 71. firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click (Resolved 2026-07-25)
 

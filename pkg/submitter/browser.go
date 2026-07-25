@@ -927,15 +927,39 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// profile and this log is not a place for them. The selector list
 			// is what makes a non-converging retry loop diagnosable -- the same
 			// selectors recurring across attempts means the fix is not landing.
+			// bugs.md #72: an empty value must not be counted as an applied
+			// fix. applyValidationFix returns nil for one by design -- the
+			// *initial* fill path relies on that to mean "the profile has no
+			// data for this field, skip it". In the retry path the same return
+			// is a lie: the field was just rejected, proposing "" for it
+			// changes nothing, and counting it inflated the applied tally into
+			// reporting progress the loop was not making.
 			appliedAny := false
 			applied := make([]string, 0, len(fixesMap))
+			empty := make([]string, 0)
+			notLanded := make([]string, 0)
 			for selector, value := range fixesMap {
+				if strings.TrimSpace(value) == "" {
+					empty = append(empty, selector)
+					continue
+				}
 				if err := applyValidationFix(target, selector, value); err != nil {
 					log.Printf("[Auto-Submit] Validation fix for %q failed: %v", selector, err)
 					continue
 				}
 				applied = append(applied, selector)
 				appliedAny = true
+				if landed, vErr := verifyFixLanded(target, selector); vErr == nil && !landed {
+					notLanded = append(notLanded, selector)
+				}
+			}
+			if len(notLanded) > 0 {
+				sort.Strings(notLanded)
+				log.Printf("[Auto-Submit] Attempt %d: %d fix(es) reported success but left the control empty (autocomplete/combobox suspected): %s", attempt, len(notLanded), strings.Join(notLanded, ", "))
+			}
+			if len(empty) > 0 {
+				sort.Strings(empty)
+				log.Printf("[Auto-Submit] Attempt %d: model proposed an empty value for %d rejected field(s), which cannot satisfy them: %s", attempt, len(empty), strings.Join(empty, ", "))
 			}
 			if !appliedAny {
 				return fmt.Errorf("none of the %d proposed validation fixes could be applied", len(fixesMap))
@@ -1302,6 +1326,36 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 	default:
 		return el.Fill(value, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 	}
+}
+
+// verifyFixLanded reports whether a control actually holds a value after a fix
+// was applied to it.
+//
+// bugs.md #72: applyValidationFix returning nil only means Playwright accepted
+// the call, not that the control ended up set. The gap is real on ATS
+// autocomplete widgets (Greenhouse's candidate-location and country are the
+// known cases), where the visible text box is backed by a separate hidden
+// field: typing into it without choosing a suggestion leaves the value the
+// form actually validates completely unset. That failure is invisible -- the
+// fix reports success, the field stays invalid, and the retry loop burns
+// another ~12-minute inference cycle re-proposing the same value.
+//
+// The test is deliberately "is it non-empty now" rather than "does it equal
+// exactly what we sent": forms legitimately reformat input (phone numbers,
+// dates) and a <select> set by visible label reports its underlying value, so
+// strict equality would cry wolf on fixes that did land.
+func verifyFixLanded(target fillTarget, selector string) (bool, error) {
+	el, err := resolveFieldLocator(target, selector)
+	if err != nil {
+		return false, err
+	}
+	got, err := el.Evaluate("el => (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : String(el.value || '')", nil)
+	if err != nil {
+		return false, err
+	}
+	s, _ := got.(string)
+	s = strings.TrimSpace(s)
+	return s != "" && s != "false", nil
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one

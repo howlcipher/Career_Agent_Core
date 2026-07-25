@@ -1756,3 +1756,58 @@ func TestFirstVisibleSubmit_ReportsTheVisibleMatch(t *testing.T) {
 		t.Error("expected the visible index-1 match, not the hidden index-0 one")
 	}
 }
+
+// bugs.md #72: a fix that Playwright accepted is not necessarily a fix that
+// landed. On Greenhouse's candidate-location / country autocompletes the
+// visible box is backed by a hidden field, so setting it without choosing a
+// suggestion leaves the validated value empty -- reported as success, and
+// invisible until someone reads the DOM back.
+func TestVerifyFixLanded_DetectsAControlLeftEmpty(t *testing.T) {
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "", nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#candidate-location")
+	if err != nil {
+		t.Fatalf("verifyFixLanded: %v", err)
+	}
+	if landed {
+		t.Error("expected landed=false for a control whose value is still empty")
+	}
+}
+
+func TestVerifyFixLanded_AcceptsAReformattedValue(t *testing.T) {
+	// The form rewrote "586-555-0100" to "(586) 555-0100". That is a fix that
+	// landed; strict equality would wrongly flag it.
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "(586) 555-0100", nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#phone")
+	if err != nil {
+		t.Fatalf("verifyFixLanded: %v", err)
+	}
+	if !landed {
+		t.Error("expected landed=true — the form reformatting a value does not mean the fix failed")
+	}
+}
+
+func TestVerifyFixLanded_TreatsAnUncheckedBoxAsNotLanded(t *testing.T) {
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "false", nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#consent")
+	if err != nil {
+		t.Fatalf("verifyFixLanded: %v", err)
+	}
+	if landed {
+		t.Error("expected landed=false for a checkbox still reporting checked=false")
+	}
+}
