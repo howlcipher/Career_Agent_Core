@@ -1941,3 +1941,71 @@ func TestCommitComboboxSelection_LeavesPlainInputsAlone(t *testing.T) {
 		t.Error("expected ok=false for a control this function does not handle")
 	}
 }
+
+// bugs.md #75: the same gap #67 found -- a capability wired into the
+// validation-retry path but not the initial fill. Without it every Greenhouse
+// form with a react-select field (Location and Country are required on all of
+// them) was guaranteed to bounce on the first pass and burn a full ~12-minute
+// validation-retry cycle to commit something a keypress could have.
+func TestSafeFillWithLabelFallback_CommitsAComboboxOnTheInitialFill(t *testing.T) {
+	var pressed []string
+	committed := false
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		fillFunc:  func(string) error { return nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			if strings.HasPrefix(script, "el => !!(") {
+				return true, nil
+			}
+			if committed {
+				return "Detroit, MI", nil
+			}
+			return "", nil
+		},
+		pressFunc: func(key string) error {
+			pressed = append(pressed, key)
+			committed = true
+			return nil
+		},
+	}
+	page := &MockPage{
+		locatorFunc:          func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc },
+		getByLabelFunc:       func(any) playwright.Locator { return loc },
+		getByPlaceholderFunc: func(any) playwright.Locator { return loc },
+	}
+
+	if err := safeFillWithLabelFallback(pageTarget{page: page}, "#candidate-location", "Location (City)", "Detroit, MI"); err != nil {
+		t.Fatalf("safeFillWithLabelFallback: %v", err)
+	}
+	if len(pressed) != 1 || pressed[0] != "Enter" {
+		t.Errorf("expected the initial fill to commit the autocomplete with Enter, got %v", pressed)
+	}
+}
+
+// A plain input filled on the first pass must not receive a stray Enter.
+func TestSafeFillWithLabelFallback_DoesNotPressEnterOnPlainInputs(t *testing.T) {
+	var pressed []string
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		fillFunc:  func(string) error { return nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			if strings.HasPrefix(script, "el => !!(") {
+				return false, nil
+			}
+			return "", nil
+		},
+		pressFunc: func(key string) error { pressed = append(pressed, key); return nil },
+	}
+	page := &MockPage{
+		locatorFunc:          func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc },
+		getByLabelFunc:       func(any) playwright.Locator { return loc },
+		getByPlaceholderFunc: func(any) playwright.Locator { return loc },
+	}
+
+	if err := safeFillWithLabelFallback(pageTarget{page: page}, "#phone", "Phone", "586-555-0100"); err != nil {
+		t.Fatalf("safeFillWithLabelFallback: %v", err)
+	}
+	if len(pressed) != 0 {
+		t.Errorf("expected no keypress on a plain input, got %v", pressed)
+	}
+}

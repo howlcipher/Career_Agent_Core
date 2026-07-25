@@ -1425,6 +1425,13 @@ func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return locatorHasValue(el)
+}
+
+// locatorHasValue is verifyFixLanded against an already-resolved control, so
+// the label/placeholder fill tiers -- which never have a selector string to
+// re-resolve -- can use the same check (bugs.md #75).
+func locatorHasValue(el playwright.Locator) (bool, error) {
 	got, err := el.Evaluate(readControlValueJS, nil)
 	if err != nil {
 		return false, err
@@ -1432,6 +1439,40 @@ func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 	s, _ := got.(string)
 	s = strings.TrimSpace(s)
 	return s != "" && s != "false", nil
+}
+
+// commitComboboxOnLocator is commitComboboxSelection against an
+// already-resolved control (bugs.md #75).
+func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
+	isCombo, err := el.Evaluate(isComboboxInputJS, nil)
+	if err != nil {
+		return false, err
+	}
+	if ok, _ := isCombo.(bool); !ok {
+		return false, nil
+	}
+	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+		return false, err
+	}
+	return locatorHasValue(el)
+}
+
+// commitFilledCombobox finishes an autocomplete the initial fill only typed
+// into. Best-effort: a failure here must never fail an otherwise-good fill,
+// since the validation-retry path is still there as a backstop.
+//
+// bugs.md #75: without this, every Greenhouse form carrying a react-select
+// field (Location and Country are required on all of them) was guaranteed to
+// bounce on the first pass and force a full validation-retry cycle -- roughly
+// 12 minutes of inference on this machine -- to fix something the first pass
+// could have committed with a keypress.
+func commitFilledCombobox(el playwright.Locator, what string) {
+	if landed, err := locatorHasValue(el); err != nil || landed {
+		return
+	}
+	if committed, err := commitComboboxOnLocator(el); err == nil && committed {
+		log.Printf("[Auto-Submit] Committed autocomplete selection for %s on the initial fill", what)
+	}
 }
 
 // commitComboboxSelection finishes an autocomplete interaction that Fill()
@@ -1446,17 +1487,7 @@ func commitComboboxSelection(target fillTarget, selector string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	isCombo, err := el.Evaluate(isComboboxInputJS, nil)
-	if err != nil {
-		return false, err
-	}
-	if ok, _ := isCombo.(bool); !ok {
-		return false, nil
-	}
-	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
-		return false, err
-	}
-	return verifyFixLanded(target, selector)
+	return commitComboboxOnLocator(el)
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one
@@ -1483,14 +1514,18 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 
 	var lastErr error
 	if labelText != "" {
-		if err := target.GetByLabelLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+		labelLoc := target.GetByLabelLoc(labelText)
+		if err := labelLoc.Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+			commitFilledCombobox(labelLoc, labelText)
 			return nil
 		} else {
 			lastErr = fmt.Errorf("label fill for %q failed: %w", labelText, err)
 		}
 
-		if err := target.GetByPlaceholderLoc(labelText).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+		phLoc := target.GetByPlaceholderLoc(labelText)
+		if err := phLoc.Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
 			log.Printf("[Auto-Submit] Label fill for %q failed; placeholder fallback succeeded", labelText)
+			commitFilledCombobox(phLoc, labelText)
 			return nil
 		} else {
 			lastErr = fmt.Errorf("%v; placeholder fill for %q also failed: %w", lastErr, labelText, err)
@@ -1515,6 +1550,9 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 			return fmt.Errorf("%v; CSS selector fill also failed: %w", lastErr, err)
 		}
 		return err
+	}
+	if el, rErr := resolveFieldLocator(target, selector); rErr == nil {
+		commitFilledCombobox(el, selector)
 	}
 	if lastErr != nil {
 		log.Printf("[Auto-Submit] Label and placeholder fill both failed; CSS selector fallback succeeded")
