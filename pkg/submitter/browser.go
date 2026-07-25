@@ -1202,9 +1202,9 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 		// mustContain guards against the geocoder's first hit being the wrong
 		// place entirely -- "Macomb" surfaces Macomb, Illinois ahead of the
 		// configured Michigan address (bugs.md #79).
-		fillGreenhouseCombobox(target, "input#candidate-location", "Location",
+		fillComboboxFromCandidates(target, "input#candidate-location", "Location",
 			pii.LocationSearchCandidates(), pii.LocationMustContain())
-		fillGreenhouseCombobox(target, "input#country", "Country",
+		fillComboboxFromCandidates(target, "input#country", "Country",
 			pii.CountrySearchCandidates(), nil)
 	}
 
@@ -1272,6 +1272,16 @@ func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PI
 				return fmt.Errorf("failed to fill phone: %w", err)
 			}
 		}
+
+		// improvements.md #31: Lever marks location required and this handler
+		// used to skip it, so the first submit always bounced and only the
+		// validation-retry loop -- a SolveValidationErrors call, ~12 min of
+		// inference here -- could ever satisfy it. Same gap #28 closed for
+		// Greenhouse. Best-effort: a miss costs nothing beyond the retry that
+		// used to happen unconditionally, and bugs.md #88 now routes a
+		// genuinely uncommittable location to manual review.
+		fillComboboxFromCandidates(target, "input[data-qa='location-input']", "Location",
+			pii.LocationSearchCandidates(), pii.LocationMustContain())
 	}
 
 	fileInput := target.Loc("input[type='file'][id='resume-upload-input']")
@@ -1923,15 +1933,16 @@ func readComboboxOptions(el playwright.Locator) []string {
 	return out
 }
 
-// fillGreenhouseCombobox types each candidate into a geocoded autocomplete
-// until one actually commits a selection.
+// fillComboboxFromCandidates types each candidate into an autocomplete until
+// one actually commits a selection. Not ATS-specific: used for Greenhouse's
+// react-select widgets and Lever's own typeahead alike (improvements #31).
 //
 // improvements.md #28: which phrasing a geocoder accepts is not knowable in
 // advance, so this tries them in order and stops at the first that sticks --
 // checkable only because bugs.md #74/#76 made "did the selection commit"
 // observable. Entirely best-effort: every failure path leaves the field for
 // the validation-retry loop, which is exactly where it used to go anyway.
-func fillGreenhouseCombobox(target fillTarget, selector, what string, candidates []string, mustContain []string) {
+func fillComboboxFromCandidates(target fillTarget, selector, what string, candidates []string, mustContain []string) {
 	if len(candidates) == 0 {
 		return
 	}
