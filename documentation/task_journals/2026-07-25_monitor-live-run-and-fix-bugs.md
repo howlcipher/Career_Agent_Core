@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** User asked me to sit and monitor the live 82-job re-verification run, fix any bugs that arise, log them in `bugs.md`, groom the backlog when doing so, and keep this journal against a session limit/outage. Explicit standing authority: *"If a choice arises, do what you recommend, don't feel you need to ask, do not do anything that adds a monetary cost."*
-- **Status:** In progress
+- **Status:** In progress — user set a `/goal` at ~14:00 making the monitor-and-fix loop a standing directive until the condition holds
 - **Started:** 2026-07-25 ~12:24
 - **Agent and model:** Claude Code / Opus 5
 
@@ -43,6 +43,7 @@
   - **Deliberately did NOT restart for #75.** PID `3797112` already carries #74 and was mid-attempt-2 inference — the decisive test of whether the combobox commit yields the first `APPLIED`. #75 only saves time; restarting would have discarded ~12 min about to answer the real question. Restart for #75 once Reddit resolves.
 - **bugs.md #76 (Blocker) — `b352566`.** **A defect in #74's own fix, caught by a log line that did not appear.** Reddit logged `Attempt 2 applied 15/15 validation fix(es)` with *no* `committed N autocomplete selection(s)` line and *no* `left the control empty` line — a combination only possible if `verifyFixLanded` returned true for all 15, i.e. the commit step never ran once. Cause: the read script tested `el.value` before the combobox branch, and after `Fill()` a react-select search input **does** hold the typed text. So the check meant to detect "typed but not committed" was reading the artifact of typing. #74 was inert on exactly the fields it was written for; #75 inherited it. Split into `readInputValueJS`/`readComboboxValueJS` and moved the choice into Go (`locatorHasValue`) so the ordering is unit-testable — branching inside one JS blob is what let this ship. 2 new tests.
   - **Method note worth keeping:** the signal was an *absent* log line. Both #74 and #75 looked correct in isolation and had passing tests. After any fix whose purpose is to fire on a specific condition, deliberately check that it actually announces itself at runtime.
+- **improvements.md #28 filed (score 2.33)** — `handleGreenhouse` fills only first/last/email/phone and **never attempts `Location (City)` or `Country`**, both required on every Greenhouse form. So the first submit always bounces and the *only* path that can satisfy them is a `SolveValidationErrors` call, ~12 min of inference, on **every** Greenhouse posting. Blocked on a `pii.yaml` schema change (`config.PII` has `Address` but no discrete city/country) that only the user can populate with real data — parsing the free-text address was considered and rejected, since a wrong value there is worse than none. **Not autonomous work.**
 - **Backlog groomed:** dated groom-pass note added to `bugs.md`. No re-ranking was warranted — all bug rows Resolved, both remaining `improvements.md` Pending rows below the ROI floor.
 - **Cleaned up 5 stale leftover monitor shells** (PIDs 2166044/2295635/2368407/2476472/2543238) from long-disconnected sessions, all targeting confirmed-dead PIDs 2165142-2542429. The 07-21 journal predicted they would self-terminate; they had not, and each held a `tail -F` on the log. Verified every target PID dead before killing.
 
