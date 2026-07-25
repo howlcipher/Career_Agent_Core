@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** User goal 2026-07-25, three parts: (1) recommend and actually deploy a model for `improvements.md` #24, (2) find anything that improves real-world results, (3) log the emerging bottleneck, file bugs/improvements from it, and work those too.
-- **Status:** Complete — all four goal items done; journal retained only until the 82-job run is observed healthy, then deletable
+- **Status:** Ongoing — goal items complete; #64 unmasked bug #65, now fixed and under live observation
 - **Started:** 2026-07-25
 - **Agent and model:** Claude Code / Opus 5
 
@@ -110,9 +110,32 @@ Full write-up lives in `improvements.md` #24. The `fast` routing stays in the co
   - *"could not launch browser" (60 occurrences)* — all 60 fall inside a single two-hour window on 2026-07-16 (28 in hour 11, 32 in hour 12). That is the already-documented environment incident, not an ongoing defect.
   - *"Zero APPLIED ever"* — corrected above; it is the deliberate reset of the 82 cohort.
 
+## 2026-07-25 ~10:30 — #64's fix worked, and immediately unmasked the real blocker (bugs.md #65)
+
+The restarted run (PID `3520054`) ran **8h37m** and processed 19 jobs. Two things came out of it.
+
+**#64 is confirmed working live:** `Narrowed validation retry to the rejected fields only (53366 -> 5363 chars)` — a 90% cut, and elsewhere `43033 -> 1200`. No job hit the 30-minute timeout again.
+
+**But `FAILED_SUBMIT` jumped 5 → 23, and 18 of those shared one new cause:** "failed to submit application after 3 validation error attempts". Removing the timeout did not create this — it revealed what had always been happening *after* the fixes were applied, which no one could see while the call was dying first.
+
+**Root cause, filed and fixed as bugs.md #65 (`3c2ac38`).** #64's own logging made it provable rather than speculative: payload sizes were **byte-identical between attempts 2 and 3** (Ethos `43033 -> 1200` twice, Point Wild `3057` twice), so the same fields were still invalid after each "fix". Two compounding defects — the loop **discarded `safeFill`'s error** (every failure silent), and `safeFill` is **`Fill()`-only**, which Playwright refuses on a `<select>`. Greenhouse forms make dropdowns required (work authorization, EEO, sponsorship), so those fields were unsatisfiable by construction. New `applyValidationFix` dispatches on the control's real shape (select → `SelectOption` by visible label then value; checkbox/radio → `Check`, with an explicit "No" mapping to `Uncheck` so a decline never becomes consent; else `Fill`), logs every failure, and fails fast when nothing could be applied.
+
+**Run restarted 2026-07-25 10:34 as PID `3716166`** (`/tmp/career_agent_bin_verify82h`, HEAD `3c2ac38`). Requeued **17 rows** that failed purely on the now-fixed validation path (identified from the log; `applied_jobs` dedup rows cleared first or `HasApplied` would skip them) plus the orphaned `PROCESSING` row. The **6 remaining `FAILED_SUBMIT` were deliberately left alone** — 5 are the confirmed dead/expired postings, 1 is a non-validation Playwright timeout. Monitor `b6jugkzde` armed.
+
 ## Next Step
 
-**All goal items are complete and pushed.** Nothing is outstanding on the code side.
+**Watch for the first genuine `APPLIED` under #65's fix.** That is the question the entire 82-job effort exists to answer, and nothing before now could have answered it: every large-form job was previously lost either to a timeout (#64) or to an unsatisfiable required dropdown (#65), one hidden behind the other.
+
+If failures continue, read the **specific** new reason out of the log before concluding anything — this run has already produced two distinct dominant causes in sequence, each masked by the previous.
+
+**Standing warnings:**
+- **Monitor liveness:** check `ps aux | grep applied_urls_verify82`, not the task list. Three monitors were killed out from under this session today.
+- **Benchmarking:** Ollama serves **warm prompt caches**. Use unseen jobs or restart the server, or you measure the cache — that produced 1s/2s readings here and a wrong "2.5x faster" conclusion.
+- **`OLLAMA_FAST_MODEL` is intentionally unset** — see improvements.md #24 for the evidence the swap was rejected.
+
+### Earlier close-out (goal items), superseded by the section above
+
+**All four goal items are complete and pushed.**
 
 - #24 validated and **rejected on evidence** — `OLLAMA_FAST_MODEL` intentionally unset; routing kept, inert and tested.
 - bugs.md **#64** filed and fixed; improvements.md **#25** filed and shipped.
