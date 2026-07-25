@@ -52,7 +52,9 @@ prompt_eval    : 17
 ```
 Three generated tokens, no `thinking` content, clean output. The `-instruct` variants are non-reasoning, and Ollama is not defaulting thinking on. **No tokens are being wasted on chain-of-thought, and setting `"think": false` would change nothing.** (The probe's 255s `total_duration` was queue wait behind the benchmark process being killed, not inference — do not read it as a latency measurement.)
 
-**What the cost actually is: prompt processing, and it is CPU-bound.** Working from the two measurements now in hand — the 30B did ~3,900 prompt tokens in 9m38s (**~6.8 tok/s**), and the 4B averaged ~3.8 min on comparable prompts (**roughly 17 tok/s**). So the 4B is about **2.5x faster**, which is a real but far more modest win than the model-size ratio suggests. Both are limited by how fast this CPU can ingest the prompt, not by how fast they emit an answer.
+**What the cost actually is: prompt processing, and it is CPU-bound.** The 30B did ~3,900 prompt tokens in 9m38s (**~6.8 tok/s**).
+
+> **Superseded — this paragraph originally estimated the 4B at "~17 tok/s, about 2.5x faster". That was wrong**, computed from warm-cache timings before the trap below was understood. Clean cold measurements later showed the 4B at **367s** against the 30B's **358-421s** — no speed advantage whatsoever. See the RESULT block above for why (the incumbent is an MoE with ~3B active parameters, so a 4B dense model is not smaller in compute terms).
 
 **The corollary worth acting on:** since cost scales with prompt length, the cheapest remaining lever is sending `ScoreJob` a shorter prompt. It currently receives the full job description (5.5k-14k chars in the sampled set) plus the full résumé text. Trimming the description for scoring purposes is likely a larger, cheaper win than any further model change — but it must be measured against score agreement first, since salary and location details sometimes appear late in a posting.
 
