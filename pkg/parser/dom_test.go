@@ -118,7 +118,12 @@ func TestStripPresentationalAttrs_RemovesStylingAndStateAttrs(t *testing.T) {
 		t.Fatalf("StripPresentationalAttrs error: %v", err)
 	}
 
-	for _, attr := range []string{"class=", "style=", "role=", "tabindex=", "autocomplete=", "spellcheck=", "inputmode=", "aria-describedby=", "aria-hidden=", "aria-invalid=", "aria-required="} {
+	// aria-invalid was deliberately removed from this list in bugs.md #64: it
+	// is the only attribute identifying which field a form rejected, and
+	// stripping it forced SolveValidationErrors to re-send the entire form on
+	// every retry. Its retention is pinned by
+	// TestStripPresentationalAttrs_KeepsAriaInvalid.
+	for _, attr := range []string{"class=", "style=", "role=", "tabindex=", "autocomplete=", "spellcheck=", "inputmode=", "aria-describedby=", "aria-hidden=", "aria-required="} {
 		if strings.Contains(output, attr) {
 			t.Errorf("expected %s to be stripped, got: %s", attr, output)
 		}
@@ -171,5 +176,71 @@ func TestStripPresentationalAttrs_MeaningfullyReducesSize(t *testing.T) {
 	}
 	if reduction := 1 - float64(len(output))/float64(len(input)); reduction < 0.3 {
 		t.Errorf("expected at least a 30%% reduction, got %.0f%% (%d -> %d bytes)", reduction*100, len(input), len(output))
+	}
+}
+
+// bugs.md #64: the validation-retry payload must narrow to the rejected
+// fields. A large ATS form is ~55k chars, which exceeded the practical
+// inference budget on this hardware and made big forms fail on time.
+func TestPruneDOMToInvalidFields(t *testing.T) {
+	form := `<form>
+		<label for="fn">First Name</label><input id="fn" name="first_name" value="Will">
+		<label for="ln">Last Name</label><input id="ln" name="last_name" value="Elias">
+		<label for="ph">Phone</label><input id="ph" name="phone" aria-invalid="true">
+		<textarea id="why" name="why" data-invalid="true"></textarea>
+		<select id="src" name="source"><option>LinkedIn</option></select>
+	</form>`
+
+	out, narrowed, err := PruneDOMToInvalidFields(form)
+	if err != nil {
+		t.Fatalf("PruneDOMToInvalidFields: %v", err)
+	}
+	if !narrowed {
+		t.Fatal("expected the payload to be narrowed, got narrowed=false")
+	}
+	if !strings.Contains(out, `name="phone"`) || !strings.Contains(out, `name="why"`) {
+		t.Errorf("both rejected fields must be kept, got: %s", out)
+	}
+	if !strings.Contains(out, "Phone") {
+		t.Errorf("the rejected field's label must be kept so the model knows what it wants, got: %s", out)
+	}
+	// The whole point: passing fields must not be re-sent.
+	if strings.Contains(out, `name="first_name"`) || strings.Contains(out, `name="source"`) {
+		t.Errorf("fields that passed validation must be dropped, got: %s", out)
+	}
+	if len(out) >= len(form) {
+		t.Errorf("narrowed payload (%d) should be smaller than the form (%d)", len(out), len(form))
+	}
+}
+
+// An unreadable theme must fall back to sending the whole form. Sending
+// nothing would guarantee the retry fixes nothing.
+func TestPruneDOMToInvalidFields_NoMarkersFallsBackToFullForm(t *testing.T) {
+	form := `<form><input id="fn" name="first_name"><input id="ph" name="phone"></form>`
+	out, narrowed, err := PruneDOMToInvalidFields(form)
+	if err != nil {
+		t.Fatalf("PruneDOMToInvalidFields: %v", err)
+	}
+	if narrowed {
+		t.Error("expected narrowed=false when no invalid marker is present")
+	}
+	if out != form {
+		t.Errorf("expected the untouched form back, got: %s", out)
+	}
+}
+
+// aria-invalid must survive attribute stripping, or #64's narrowing has no
+// signal left to work with.
+func TestStripPresentationalAttrs_KeepsAriaInvalid(t *testing.T) {
+	in := `<form><input id="ph" name="phone" class="err ring" aria-invalid="true" aria-hidden="false"></form>`
+	out, err := StripPresentationalAttrs(in)
+	if err != nil {
+		t.Fatalf("StripPresentationalAttrs: %v", err)
+	}
+	if !strings.Contains(out, `aria-invalid="true"`) {
+		t.Errorf("aria-invalid must be preserved — it is the only signal of which field failed. got: %s", out)
+	}
+	if strings.Contains(out, "class=") {
+		t.Errorf("presentational attrs should still be stripped, got: %s", out)
 	}
 }

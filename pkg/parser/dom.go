@@ -95,7 +95,11 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 var presentationalAttrs = map[string]bool{
 	"class": true, "style": true, "role": true, "tabindex": true,
 	"autocomplete": true, "spellcheck": true, "inputmode": true,
-	"aria-describedby": true, "aria-hidden": true, "aria-invalid": true,
+	"aria-describedby": true, "aria-hidden": true,
+	// aria-invalid is deliberately NOT stripped (bugs.md #64). It is the one
+	// attribute that says which field a form actually rejected, so removing
+	// it left SolveValidationErrors no way to tell a failing field from a
+	// passing one — forcing it to re-send the entire form on every retry.
 	"aria-required": true, "aria-expanded": true, "aria-controls": true,
 	"aria-activedescendant": true, "aria-live": true, "aria-atomic": true,
 }
@@ -173,4 +177,107 @@ func PruneDOMToText(rawHTML string) (string, error) {
 	// Clean up excess whitespace
 	result := strings.Join(strings.Fields(buf.String()), " ")
 	return result, nil
+}
+
+// invalidFieldMarkers are attribute name/value pairs that mean "this control
+// was rejected". aria-invalid is the WCAG-standard signal and is what
+// Greenhouse, Lever, Workable and every other accessible ATS theme sets when
+// a submission bounces; the data-* variants cover themes that roll their own.
+var invalidFieldMarkers = [][2]string{
+	{"aria-invalid", "true"},
+	{"data-invalid", "true"},
+	{"data-has-error", "true"},
+}
+
+// PruneDOMToInvalidFields narrows an already-form-scoped document to only the
+// controls the page has flagged as invalid, plus any <label> bound to them.
+//
+// Why this exists (bugs.md #64): SolveValidationErrors previously re-sent the
+// whole form on every retry, even though a validation bounce typically
+// involves a handful of fields. Measured live, a large ATS form is ~55k chars
+// even after PruneDOMToForm and StripPresentationalAttrs, which at the ~7
+// tok/s prompt-processing rate observed on this machine's 30B model is over
+// half an hour of inference against a 45-minute timeout -- so large forms
+// failed on time rather than on logic.
+//
+// narrowed reports whether any invalid control was actually identified.
+// When it is false the caller must fall back to the full form: a theme this
+// function cannot read is a reason to send more, never less, since sending
+// nothing would guarantee the retry fixes nothing.
+func PruneDOMToInvalidFields(formHTML string) (out string, narrowed bool, err error) {
+	doc, err := html.Parse(strings.NewReader(formHTML))
+	if err != nil {
+		return "", false, err
+	}
+
+	var invalid []*html.Node
+	ids := map[string]bool{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && isInvalidControl(n) {
+			invalid = append(invalid, n)
+			if id := attrValue(n, "id"); id != "" {
+				ids[id] = true
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+
+	if len(invalid) == 0 {
+		return formHTML, false, nil
+	}
+
+	// Labels are collected separately: a <label for=...> is usually a sibling
+	// or ancestor of its control, not a descendant, so it would be lost by
+	// rendering the control alone -- and the label text is exactly what lets
+	// the model work out what value the field wants.
+	var labels []*html.Node
+	var walkLabels func(*html.Node)
+	walkLabels = func(n *html.Node) {
+		if n.Type == html.ElementNode && strings.ToLower(n.Data) == "label" {
+			if f := attrValue(n, "for"); f != "" && ids[f] {
+				labels = append(labels, n)
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walkLabels(c)
+		}
+	}
+	walkLabels(doc)
+
+	var buf bytes.Buffer
+	buf.WriteString("<form>")
+	for _, n := range append(labels, invalid...) {
+		if err := html.Render(&buf, n); err != nil {
+			return formHTML, false, nil
+		}
+	}
+	buf.WriteString("</form>")
+	return buf.String(), true, nil
+}
+
+func isInvalidControl(n *html.Node) bool {
+	switch strings.ToLower(n.Data) {
+	case "input", "select", "textarea":
+	default:
+		return false
+	}
+	for _, marker := range invalidFieldMarkers {
+		if strings.EqualFold(attrValue(n, marker[0]), marker[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func attrValue(n *html.Node, name string) string {
+	for _, a := range n.Attr {
+		if strings.EqualFold(a.Key, name) {
+			return a.Val
+		}
+	}
+	return ""
 }

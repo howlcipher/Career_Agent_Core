@@ -887,6 +887,18 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				prunedHTML = stripped
 			}
 
+			// bugs.md #64: send only the fields the page actually rejected.
+			// The whole form is typically ~55k chars, which at this machine's
+			// measured prompt-processing rate is over half an hour of
+			// inference against a 45-minute timeout — large forms were failing
+			// on time rather than on logic. Falls back to the full form when
+			// no invalid control can be identified, since an unreadable theme
+			// is a reason to send more, never less.
+			if narrowed, ok, nErr := parser.PruneDOMToInvalidFields(prunedHTML); nErr == nil && ok {
+				log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
+				prunedHTML = narrowed
+			}
+
 			fullProfileContext := pii.EEO.Summary() + "\n\n" + profileContext
 			if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 				return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, ExtractDomain(applyURL))
