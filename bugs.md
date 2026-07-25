@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 83 | [The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout](#83-the-payload-breaker-guarded-the-context-window-but-not-the-time-budget-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Watched live end to end: a Greenhouse theme (`surtai`) that sets **no `aria-invalid` attributes** defeated #64's narrowing, so the retry fell back to the whole form — **50,501 chars**. That fits the 80,000-char context ceiling, passed `likelyExceedsModelContext`, and then ran **16:58:03 → 17:43:03 — exactly the 45-minute Ollama timeout** before dying. Three-quarters of an hour of the single serialised LLM resource, spent on a request that was mathematically incapable of finishing. Context capacity and inference time are different limits, and on this hardware the time one binds far earlier |
 | 82 | [Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted](#82-once-the-commit-worked-an-unanswerable-legal-attestation-would-have-been-guessed-and-really-submitted) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A risk created by fixing #81.** While the combobox commit was broken, nothing the model proposed was ever really set. Probed on the live form immediately after #81: `#question_67942418 -> COMMITTED "Yes"`. Reddit's "Are you currently authorized to work in the U.S.?" and its sponsorship question are **required and offer only Yes/No — no decline option**, so a model with no configured answer does not abstain, it picks one. That answer is a **legal declaration submitted under the applicant's name**. The form is now refused *before* the model is asked, and the job routed to `MANUAL_REQUIRED` |
 | 81 | [data-value mirrors the typed search text, so every react-select falsely reported "landed"](#81-data-value-mirrors-the-typed-search-text-so-every-react-select-falsely-reported-landed) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught by #80's new diagnostic: `Attempt 2 applied 13/13 validation fix(es)` and the still-invalid list came back **byte-identical** — none of the 13 landed, including the declinable EEO fields that have nothing to do with the missing attestations. Probed directly: after a bare `Fill()` with **nothing selected**, the value read returned `"I don't wish to answer"`. react-select puts `data-value` on `.select__input-container` to mirror the *typed search text* for input sizing, so the `[data-value]` fallback was reading the artifact of typing — the same mistake as #76, one layer deeper. The false "landed" suppressed the commit step for every custom question on every Greenhouse form |
 | 80 | [The retry loop logged the payload size but never which fields were still invalid](#80-the-retry-loop-logged-the-payload-size-but-never-which-fields-were-still-invalid) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Hit the wall directly: `Attempt 2 applied 13/13 validation fix(es)` with **no** not-landed line at all, and the form still bounced — `7212 -> 7281 chars`. Every field reported as filled, nothing reported as failed, and the submission was still rejected. The byte count cannot distinguish "the same fields are still failing" from "different ones now are", so the next step would have been another blind ~25-minute cycle. `InvalidFieldIdentifiers` now names them |
@@ -117,6 +118,30 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 83. The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout (Resolved 2026-07-25)
+
+**Predicted, then watched happen.** A Greenhouse posting on a different tenant (`surtai`) produced no `still invalid:` line at all — its theme sets no `aria-invalid` attributes, so `PruneDOMToInvalidFields` found nothing to narrow to and correctly fell back to the whole form, per #64's deliberate design ("an unreadable theme is a reason to send more, never less").
+
+That fallback payload was **50,501 characters**:
+
+```
+16:58:03 Attempt 2: Solving validation errors...
+16:58:03 SolveValidationErrors API Call #4 executed. Payload length: 50501 characters.
+17:43:03 Auto-Submit failed: ... context deadline exceeded
+```
+
+**Exactly 45 minutes.** The full `defaultOllamaTimeoutMinutes`, on the one resource that serialises across the entire pipeline, spent on a request that could never have completed.
+
+**Root cause: two different ceilings, only one of them enforced.** `likelyExceedsModelContext` tested against `maxPromptCharsForModelContext` (80,000) — a limit derived from the llama-server context window. 50,501 fits it comfortably, so the check passed. But fitting the context says nothing about finishing in time.
+
+The arithmetic was already recorded in this file and simply never applied here: prompt processing measured at **~7 tok/s** on this host's 30B model (#64, improvements #25), at ~2.5 chars/token ≈ **17.5 chars/s**. Against a 45-minute timeout that is **~47,000 characters** before a request is doomed. The observed 50,501 sits just past it — the prediction and the measurement agree to within a few percent.
+
+**Fix:** added `maxPromptCharsForTimeBudget` (40,000, leaving headroom for token generation and for CPU contention with the browser) and made `likelyExceedsModelContext` trip on either ceiling. Oversized forms now hit the existing `ErrFormTooLargeForModel` path and route to `MANUAL_REQUIRED` **immediately**, with documents saved, instead of costing 45 minutes first.
+
+**A prior test had to be corrected, deliberately.** `TestLikelyExceedsModelContext` carried a case from #60 asserting that 54,917 chars *should pass*. #60 was right about context capacity and silent about time; today's live evidence settles it. The case now expects `true`, with the derivation written into the test so the change reads as a correction rather than a regression.
+
+**Tests:** `TestLikelyExceedsModelContext_RejectsATimeDoomedPayloadThatFitsTheContext` (uses the exact 50,501 size observed), `TestLikelyExceedsModelContext_StillAllowsNormalPayloads`, plus the corrected `#60` case.
 
 ### 82. Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted (Resolved 2026-07-25)
 

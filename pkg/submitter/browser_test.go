@@ -1082,7 +1082,14 @@ func TestLikelyExceedsModelContext(t *testing.T) {
 	}{
 		{name: "small form, small profile", dom: strings.Repeat("x", 5000), profile: strings.Repeat("y", 1000), want: false},
 		{name: "combined length just over the threshold", dom: strings.Repeat("x", 79000), profile: strings.Repeat("y", 1001), want: true},
-		{name: "Reddit's real repro size (54,917 chars) now fits under the raised context window (bugs.md #60)", dom: strings.Repeat("x", 54917), profile: "", want: false},
+		// bugs.md #83 corrects this case. #60 raised the *context* ceiling and
+		// this size does fit it — but fitting the context is not the same as
+		// finishing in time. Measured live 2026-07-25: a 50,501-char payload
+		// passed this check and then burned the full 45-minute Ollama timeout.
+		// At ~17.5 chars/s of prompt processing, anything past ~47k characters
+		// is mathematically doomed, so 54,917 must now trip the breaker — on
+		// the time budget, not the context one.
+		{name: "Reddit's real repro size (54,917 chars) fits the context window but cannot finish in time (bugs.md #60 -> #83)", dom: strings.Repeat("x", 54917), profile: "", want: true},
 		{name: "a form genuinely larger than even the raised budget still trips the breaker", dom: strings.Repeat("x", 90000), profile: "", want: true},
 	}
 	for _, tt := range tests {
@@ -2004,5 +2011,28 @@ func TestReadComboboxValue_IgnoresDataValueWhichMirrorsTypedText(t *testing.T) {
 	}
 	if !strings.Contains(readComboboxValueJS, "select__single-value") {
 		t.Error("readComboboxValueJS must read the rendered selection")
+	}
+}
+
+// bugs.md #83: the context ceiling and the time ceiling are different limits,
+// and on this hardware the time one binds first. Measured live: a 50,501-char
+// payload fit the 80,000-char context window, passed the old check, and then
+// burned the full 45-minute Ollama timeout — the single serialised LLM
+// resource, spent on a request that could never have finished.
+func TestLikelyExceedsModelContext_RejectsATimeDoomedPayloadThatFitsTheContext(t *testing.T) {
+	// The exact size observed live.
+	dom := strings.Repeat("x", 50501)
+	if !likelyExceedsModelContext(dom, "") {
+		t.Error("a 50,501-char payload fits the context window but cannot finish inside the 45-minute timeout — it must be rejected")
+	}
+	if len(dom) > maxPromptCharsForModelContext {
+		t.Fatal("test premise broken: this payload should fit the context ceiling")
+	}
+}
+
+func TestLikelyExceedsModelContext_StillAllowsNormalPayloads(t *testing.T) {
+	// A narrowed retry payload is a few thousand chars; those must pass.
+	if likelyExceedsModelContext(strings.Repeat("x", 8000), strings.Repeat("y", 4000)) {
+		t.Error("an ordinary narrowed payload must not be rejected")
 	}
 }

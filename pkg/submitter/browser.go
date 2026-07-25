@@ -429,8 +429,28 @@ var ErrNeedsUnprovidedAttestation = errors.New("form requires a legal attestatio
 // profile context).
 const maxPromptCharsForModelContext = 80000
 
+// maxPromptCharsForTimeBudget is the *time* ceiling, which on this hardware
+// binds long before the context ceiling above does.
+//
+// bugs.md #83: measured live 2026-07-25. A Greenhouse theme that sets no
+// aria-invalid attributes defeats #64's narrowing, so the retry falls back to
+// the whole form — 50,501 characters. That fits the 80,000-char context
+// window comfortably and passed the existing check, then ran from 16:58:03 to
+// 17:43:03 and died on the 45-minute Ollama timeout. Exactly 45 minutes of
+// the single serialised LLM resource, spent on a request that could never
+// have finished.
+//
+// Derivation: prompt processing measured at ~7 tok/s on this host's 30B model
+// (bugs.md #64, improvements #25) at ~2.5 chars/token is ~17.5 chars/s.
+// Against defaultOllamaTimeoutMinutes (45) that is ~47,000 characters before
+// the request is mathematically doomed — which matches the 50,501-char
+// observation precisely. Set to 40,000 to leave headroom for token generation
+// and for CPU contention with the browser.
+const maxPromptCharsForTimeBudget = 40000
+
 func likelyExceedsModelContext(domContent, profileContext string) bool {
-	return len(domContent)+len(profileContext) > maxPromptCharsForModelContext
+	total := len(domContent) + len(profileContext)
+	return total > maxPromptCharsForModelContext || total > maxPromptCharsForTimeBudget
 }
 
 // authGatedATSHosts lists ATS platforms whose application flow always requires
