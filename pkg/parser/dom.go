@@ -366,3 +366,54 @@ func attrValue(n *html.Node, name string) string {
 	}
 	return ""
 }
+
+// attestationPatterns maps a category of legally-loaded question to the
+// phrasings ATS forms actually use for it.
+//
+// bugs.md #82: these are questions whose answer is a declaration the applicant
+// makes, not a fact an agent can derive. Greenhouse's work-authorization and
+// sponsorship questions are required and offer only "Yes" and "No" -- no
+// decline option -- so a model with no configured value does not abstain, it
+// picks one. Detecting them is what makes it possible to refuse.
+var attestationPatterns = map[string][]string{
+	"work authorization": {
+		"authorized to work", "legally authorized", "work authorization",
+		"authorization to work", "right to work", "eligible to work",
+	},
+	"visa sponsorship": {
+		"require sponsorship", "requires sponsorship", "need sponsorship",
+		"immigration sponsorship", "visa sponsorship", "sponsorship now or in the future",
+	},
+	"security clearance": {
+		"security clearance", "active clearance", "hold a clearance",
+	},
+	"criminal history": {
+		"convicted of a felony", "criminal conviction", "criminal history",
+		"ever been convicted",
+	},
+}
+
+// DetectAttestationQuestions reports which categories of legally-loaded
+// question appear in a form, by scanning its visible text.
+//
+// bugs.md #82. Returns categories, not field ids, because the caller's
+// question is "does answering this form require a declaration the user has not
+// made?" rather than "which control is it".
+func DetectAttestationQuestions(formHTML string) []string {
+	text, err := PruneDOMToText(formHTML)
+	if err != nil {
+		text = formHTML
+	}
+	text = strings.ToLower(text)
+
+	var found []string
+	for _, category := range []string{"work authorization", "visa sponsorship", "security clearance", "criminal history"} {
+		for _, pattern := range attestationPatterns[category] {
+			if strings.Contains(text, pattern) {
+				found = append(found, category)
+				break
+			}
+		}
+	}
+	return found
+}

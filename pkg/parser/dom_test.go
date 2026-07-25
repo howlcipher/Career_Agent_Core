@@ -7,12 +7,12 @@ import (
 
 func TestPruneDOM(t *testing.T) {
 	input := `<html><head><script>alert(1);</script><style>body{}</style></head><body><div>Hello</div></body></html>`
-	
+
 	output, err := PruneDOM(input)
 	if err != nil {
 		t.Fatalf("PruneDOM error: %v", err)
 	}
-	
+
 	if !strings.Contains(output, "<div>Hello</div>") {
 		t.Errorf("expected output to contain div, got: %s", output)
 	}
@@ -33,12 +33,12 @@ func TestPruneDOMToText(t *testing.T) {
 			<footer>Skip this too</footer>
 		</body>
 	</html>`
-	
+
 	output, err := PruneDOMToText(input)
 	if err != nil {
 		t.Fatalf("PruneDOMToText error: %v", err)
 	}
-	
+
 	if output != "Hello World!" {
 		t.Errorf("expected 'Hello World!', got %q", output)
 	}
@@ -46,12 +46,12 @@ func TestPruneDOMToText(t *testing.T) {
 
 func TestPruneDOMResilience(t *testing.T) {
 	input := `<html><body><div>Hello</div><svg><path d="M0 0"/></svg><iframe src="evil.com"></iframe><script>alert(1);</body></html>`
-	
+
 	output, err := PruneDOM(input)
 	if err != nil {
 		t.Fatalf("PruneDOM error: %v", err)
 	}
-	
+
 	if !strings.Contains(output, "<div>Hello</div>") {
 		t.Errorf("expected output to contain div, got: %s", output)
 	}
@@ -326,5 +326,51 @@ func TestInvalidFieldIdentifiers_FallsBackToNameThenTag(t *testing.T) {
 	got := InvalidFieldIdentifiers(form)
 	if len(got) != 2 || got[0] != "only_name" || got[1] != "select" {
 		t.Errorf("got %v, want [only_name select]", got)
+	}
+}
+
+// bugs.md #82: verified against Reddit's live form — "Are you currently
+// authorized to work in the U.S.?" and the sponsorship question are required
+// and offer ONLY "Yes" and "No". There is no decline option, so a model with
+// no configured answer does not abstain; it picks one, and that becomes a
+// legal declaration submitted under the applicant's name.
+func TestDetectAttestationQuestions_FindsTheRealGreenhousePhrasings(t *testing.T) {
+	form := `<form>
+		<label for="a">Are you currently authorized to work in the U.S.?</label><select id="a"></select>
+		<label for="b">Do you now, or will you in the future, require immigration sponsorship?</label><select id="b"></select>
+	</form>`
+	got := DetectAttestationQuestions(form)
+	want := map[string]bool{"work authorization": true, "visa sponsorship": true}
+	if len(got) != 2 {
+		t.Fatalf("got %v, want work authorization + visa sponsorship", got)
+	}
+	for _, c := range got {
+		if !want[c] {
+			t.Errorf("unexpected category %q", c)
+		}
+	}
+}
+
+// An ordinary form must not be held back — this guard routes jobs to manual
+// review, so a false positive costs a real application.
+func TestDetectAttestationQuestions_IgnoresOrdinaryForms(t *testing.T) {
+	form := `<form>
+		<label for="n">First Name</label><input id="n">
+		<label for="w">Why do you want to work here?</label><textarea id="w"></textarea>
+		<label for="s">What is your desired salary?</label><input id="s">
+	</form>`
+	if got := DetectAttestationQuestions(form); len(got) != 0 {
+		t.Errorf("expected no attestation categories, got %v", got)
+	}
+}
+
+func TestDetectAttestationQuestions_FindsClearanceAndCriminalHistory(t *testing.T) {
+	form := `<form>
+		<label for="c">Do you hold an active security clearance?</label><select id="c"></select>
+		<label for="d">Have you ever been convicted of a felony?</label><select id="d"></select>
+	</form>`
+	got := DetectAttestationQuestions(form)
+	if len(got) != 2 {
+		t.Fatalf("got %v, want security clearance + criminal history", got)
 	}
 }

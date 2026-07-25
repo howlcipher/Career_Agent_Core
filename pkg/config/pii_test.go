@@ -181,3 +181,25 @@ func TestApplicationFacts_HandlesAOneSidedDateRange(t *testing.T) {
 		t.Errorf("dangling separator:\n%s", got)
 	}
 }
+
+// bugs.md #82: a configured answer unblocks the form; a blank one must hold it
+// back rather than let the model guess a legal declaration.
+func TestMissingAttestations(t *testing.T) {
+	all := []string{"work authorization", "visa sponsorship"}
+
+	blank := PII{}
+	if got := blank.MissingAttestations(all); len(got) != 2 {
+		t.Errorf("expected both categories missing, got %v", got)
+	}
+
+	set := PII{Work: WorkFacts{AuthorizedToWorkUS: "Yes", RequiresSponsorship: "No"}}
+	if got := set.MissingAttestations(all); len(got) != 0 {
+		t.Errorf("expected none missing once configured, got %v", got)
+	}
+
+	// visa_status is an acceptable stand-in for the sponsorship question.
+	partial := PII{Work: WorkFacts{AuthorizedToWorkUS: "Yes", VisaStatus: "U.S. Citizen"}}
+	if got := partial.MissingAttestations(all); len(got) != 0 {
+		t.Errorf("visa_status should satisfy the sponsorship question, got %v", got)
+	}
+}

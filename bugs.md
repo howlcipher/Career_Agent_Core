@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 82 | [Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted](#82-once-the-commit-worked-an-unanswerable-legal-attestation-would-have-been-guessed-and-really-submitted) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A risk created by fixing #81.** While the combobox commit was broken, nothing the model proposed was ever really set. Probed on the live form immediately after #81: `#question_67942418 -> COMMITTED "Yes"`. Reddit's "Are you currently authorized to work in the U.S.?" and its sponsorship question are **required and offer only Yes/No — no decline option**, so a model with no configured answer does not abstain, it picks one. That answer is a **legal declaration submitted under the applicant's name**. The form is now refused *before* the model is asked, and the job routed to `MANUAL_REQUIRED` |
 | 81 | [data-value mirrors the typed search text, so every react-select falsely reported "landed"](#81-data-value-mirrors-the-typed-search-text-so-every-react-select-falsely-reported-landed) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught by #80's new diagnostic: `Attempt 2 applied 13/13 validation fix(es)` and the still-invalid list came back **byte-identical** — none of the 13 landed, including the declinable EEO fields that have nothing to do with the missing attestations. Probed directly: after a bare `Fill()` with **nothing selected**, the value read returned `"I don't wish to answer"`. react-select puts `data-value` on `.select__input-container` to mirror the *typed search text* for input sizing, so the `[data-value]` fallback was reading the artifact of typing — the same mistake as #76, one layer deeper. The false "landed" suppressed the commit step for every custom question on every Greenhouse form |
 | 80 | [The retry loop logged the payload size but never which fields were still invalid](#80-the-retry-loop-logged-the-payload-size-but-never-which-fields-were-still-invalid) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Hit the wall directly: `Attempt 2 applied 13/13 validation fix(es)` with **no** not-landed line at all, and the form still bounced — `7212 -> 7281 chars`. Every field reported as filled, nothing reported as failed, and the submission was still rejected. The byte count cannot distinguish "the same fields are still failing" from "different ones now are", so the next step would have been another blind ~25-minute cycle. `InvalidFieldIdentifiers` now names them |
 | 79 | [The option wait watched an unrelated widget, and committing option-0 filed the wrong location](#79-the-option-wait-watched-an-unrelated-widget-and-committing-option-0-filed-the-wrong-location) | Blocker | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Found with a standalone Playwright probe against Reddit's real form, after the 12-min-per-guess loop became untenable. Two defects: **(a)** the options wait counted `[role="option"]` **document-wide**, and every Greenhouse page carries an always-open intl-tel-input phone-country widget holding ~244 options — so the count was permanently non-zero, the wait returned instantly, and every commit fired into an empty menu. **(b)** far worse, committing the *focused* option is unsafe: typing `Macomb` puts **"Macomb, Illinois, United States"** at option-0 while the configured address is Michigan, so a successful commit would file real applications with the wrong location |
@@ -116,6 +117,37 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 82. Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted (Resolved 2026-07-25)
+
+**This is a risk that #81 created rather than one it revealed**, and it is worth being precise about that. For the whole of 2026-07-25 the combobox commit was broken, so whatever the model proposed for a screening question was never actually set. #81 fixed that. Probing the live form immediately afterwards:
+
+```
+#question_67942418   want="Yes"
+  after Fill(): isCombobox=true readCombobox=""  -> not landed -> commit runs
+  commit: prefix="Yes" opts=1 -> COMMITTED "Yes"
+```
+
+It commits. Which means from #81 onward, whatever the model answers to *"Are you currently authorized to work in the U.S.?"* is really submitted.
+
+**The earlier safety assumption does not hold for these fields.** `ApplicationFacts` tells the model that anything not listed "was not provided" and to "choose the form's decline option" — and for the EEO questions that works, because every one of them offers *"I don't wish to answer"* (verified: `430`, `433`, `434`). But the option-level audit found:
+
+```
+question_67942418 (authorized to work in US):  Yes | No
+question_67942419 (requires sponsorship):      Yes | No
+```
+
+**Required, binary, no decline option.** There is nothing for the model to decline *to*. Instructed not to fabricate, and given no abstention, it will still pick one — and that answer is a legal declaration made under the user's name to a real employer.
+
+**Fix — refuse before asking, not after.** `parser.DetectAttestationQuestions` scans the form's visible text for the phrasings ATS forms actually use across four categories (work authorization, visa sponsorship, security clearance, criminal history). `PII.MissingAttestations` filters those to the ones with no configured answer. If any remain, the retry loop returns `ErrNeedsUnprovidedAttestation` **before** `SolveValidationErrors` is called, and `cmd/agent` routes the job to `MANUAL_REQUIRED` with its tailored documents saved — the same path already used for auth walls and oversized forms.
+
+Refusing *before* the model call matters twice over: it cannot produce a guess to submit, and it saves the ~12-minute inference that would have produced one.
+
+**False positives cost a real application**, so detection is deliberately phrase-based rather than keyword-based — `TestDetectAttestationQuestions_IgnoresOrdinaryForms` pins that "desired salary" and "why do you want to work here" do not trip it. `visa_status` is accepted as a stand-in for the sponsorship question, since "U.S. Citizen" answers it unambiguously.
+
+**Unblocking is one line of config per category** (`work.authorized_to_work_us`, `work.requires_sponsorship`, `work.security_clearance`, `work.criminal_history`). The log names exactly which category is missing.
+
+**Tests:** `TestDetectAttestationQuestions_FindsTheRealGreenhousePhrasings`, `TestDetectAttestationQuestions_IgnoresOrdinaryForms`, `TestDetectAttestationQuestions_FindsClearanceAndCriminalHistory`, `TestMissingAttestations`.
 
 ### 81. data-value mirrors the typed search text, so every react-select falsely reported "landed" (Resolved 2026-07-25)
 

@@ -101,6 +101,47 @@ type Job struct {
 	EndDate   string `yaml:"end_date"`
 }
 
+// AttestationValue returns the configured answer for a category of
+// legally-loaded question, and whether one was configured at all.
+//
+// bugs.md #82: these are declarations the applicant makes, not facts an agent
+// can derive. Greenhouse's work-authorization and sponsorship questions are
+// required and offer only Yes/No -- no decline option -- so a model with no
+// configured value does not abstain, it picks one. The caller uses this to
+// refuse the form rather than let that happen.
+func (p PII) AttestationValue(category string) (string, bool) {
+	var v string
+	switch category {
+	case "work authorization":
+		v = p.Work.AuthorizedToWorkUS
+	case "visa sponsorship":
+		v = p.Work.RequiresSponsorship
+		if strings.TrimSpace(v) == "" {
+			v = p.Work.VisaStatus
+		}
+	case "security clearance":
+		v = p.Work.SecurityClearance
+	case "criminal history":
+		v = p.Work.CriminalHistory
+	default:
+		return "", false
+	}
+	v = strings.TrimSpace(v)
+	return v, v != ""
+}
+
+// MissingAttestations filters categories down to those with no configured
+// answer.
+func (p PII) MissingAttestations(categories []string) []string {
+	var out []string
+	for _, c := range categories {
+		if _, ok := p.AttestationValue(c); !ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // ApplicationFacts renders every configured fact as prompt context.
 //
 // The point is to convert questions the model would otherwise reason about

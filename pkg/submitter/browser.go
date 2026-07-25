@@ -387,6 +387,17 @@ var ErrAuthWall = errors.New("application form is gated behind account sign-in")
 // that already happened before it) only to fail with an ugly HTTP 400.
 var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's context window")
 
+// ErrNeedsUnprovidedAttestation marks a form that cannot be completed without
+// the applicant declaring something they have not configured.
+//
+// bugs.md #82: Greenhouse's "Are you authorized to work in the U.S.?" and
+// "Do you require sponsorship?" are required and offer **only Yes and No** --
+// verified against the live form. There is no decline option, so a model with
+// no configured answer does not abstain; it picks one, and that answer is a
+// legal declaration submitted under the applicant's name. Routing the job to
+// manual review is the only honest outcome.
+var ErrNeedsUnprovidedAttestation = errors.New("form requires a legal attestation the applicant has not provided")
+
 // maxPromptCharsForModelContext is a conservative character budget for any
 // single prompt sent to the local model, derived from two real failures:
 // Reddit's 54,917-char prompt needed 18,572 tokens (~2.96 chars/token) and
@@ -910,6 +921,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
 				}
 				prunedHTML = narrowed
+			}
+
+			// bugs.md #82: refuse before asking the model, not after. Once the
+			// combobox commit works (#81), whatever the model picks here is
+			// really submitted -- so an unanswerable attestation has to stop
+			// the job, not produce a guess.
+			if missing := pii.MissingAttestations(parser.DetectAttestationQuestions(prunedHTML)); len(missing) > 0 {
+				return fmt.Errorf("%w: %s", ErrNeedsUnprovidedAttestation, strings.Join(missing, ", "))
 			}
 
 			fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
