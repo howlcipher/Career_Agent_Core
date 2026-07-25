@@ -91,6 +91,23 @@ Signals that this is a real defect, not just a hard form:
 1. The page DOM barely changed between attempts (53366 → 53228 chars) and the narrowed slice *grew* (5363 → 5439) — consistent with the same fields being rejected each time, i.e. the LLM's fix is not landing.
 2. **Nothing logs *which* fields were rejected or what the model tried to set them to.** That is itself a gap — it makes this class of failure undiagnosable from logs alone, and this is the single most expensive failure mode in the pipeline (~6 min per wasted attempt).
 
+## LIVE CONFIRMATION — the combobox chain works (2026-07-25 16:02)
+
+First successful combobox commit in the live agent, on PID `3855561`:
+
+```
+16:01:58 Location set to "Macomb Township, MI" on the initial fill (saved a validation-retry cycle)
+16:02:18 Country set to "United States of America" on the initial fill (saved a validation-retry cycle)
+16:02:18 Submission failed validation. Retrying...
+16:02:18 Narrowed validation retry to the rejected fields only (54537 -> 7212 chars)
+```
+
+This closes out the whole #74 → #75 → #76 → #77 → #78 → #79 chain, and improvements #28's initial-fill path with it. Both fields were previously **impossible** to satisfy — required, react-select, and uncommittable — so every Greenhouse application was structurally doomed regardless of how many retries ran. The narrowed payload also fell 8249 → 7212 chars, consistent with two fewer invalid fields.
+
+**#74, #77, #78, #79 can now be moved off "live confirmation pending".** #28 is confirmed end to end.
+
+**Still 0 confirmed `APPLIED`** — the remaining blockers are the three unset `pii.yaml` values in the audit below, not code.
+
 ## Required-field audit of Reddit's form (2026-07-25 15:54, probe, no submit)
 
 Enumerated every control Greenhouse marks required, by reading `aria-required`/`requiredInput` rather than clicking submit — clicking it on a real posting could file an incomplete application under the user's name. **20 required fields.** Mapped against what the agent can now supply:
