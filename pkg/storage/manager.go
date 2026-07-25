@@ -295,6 +295,17 @@ func safeCompanyDirName(companyName string) string {
 	}, companyName)
 }
 
+// CoverLetterPath returns where SaveApplication writes companyName's cover
+// letter. Exported because callers outside this package need to hand that
+// exact path to the submitter, and building it by hand is a live bug source:
+// cmd/agent previously concatenated the raw company name while
+// SaveApplication writes under safeCompanyDirName's sanitized one, so the two
+// silently disagreed for any company whose name contains a space or
+// punctuation (bugs.md #62).
+func CoverLetterPath(companyName string) string {
+	return filepath.Join("applications", safeCompanyDirName(companyName), "coverletter.txt")
+}
+
 func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
 	companyDir := filepath.Join("applications", safeCompanyDirName(companyName))
 	if err := os.MkdirAll(companyDir, 0755); err != nil {

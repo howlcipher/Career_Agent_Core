@@ -2,6 +2,8 @@ package submitter
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -185,6 +187,13 @@ type MockLocator struct {
 	fillCalls     int
 	nthFunc       func(index int) playwright.Locator
 	isVisibleFunc func() (bool, error)
+	// evaluateFunc backs the tagName/type probe fillCoverLetterIfPresent uses
+	// to tell an upload control apart from a paste textarea (bugs.md #61).
+	evaluateFunc func(expression string) (interface{}, error)
+	// setInputFilesFunc records an upload; uploadedFiles captures what was
+	// actually sent so a test can assert on the letter's real content.
+	setInputFilesFunc func(files any) error
+	uploadedFiles     []playwright.InputFile
 }
 
 func (m *MockLocator) First() playwright.Locator { return m }
@@ -226,6 +235,25 @@ func (m *MockLocator) Click(options ...playwright.LocatorClickOptions) error {
 	m.clickCalls++
 	if m.clickFunc != nil {
 		return m.clickFunc(options...)
+	}
+	return nil
+}
+
+func (m *MockLocator) Evaluate(expression string, arg interface{}, options ...playwright.LocatorEvaluateOptions) (interface{}, error) {
+	if m.evaluateFunc != nil {
+		return m.evaluateFunc(expression)
+	}
+	// Default to "not a file input" so the text-fill path is what an
+	// unconfigured mock exercises.
+	return false, nil
+}
+
+func (m *MockLocator) SetInputFiles(files any, options ...playwright.LocatorSetInputFilesOptions) error {
+	if typed, ok := files.([]playwright.InputFile); ok {
+		m.uploadedFiles = append(m.uploadedFiles, typed...)
+	}
+	if m.setInputFilesFunc != nil {
+		return m.setInputFilesFunc(files)
 	}
 	return nil
 }
@@ -789,7 +817,7 @@ func TestHandleGreenhouse_SubmitFallsBackWhenLegacySelectorMissing(t *testing.T)
 	}
 	target := pageTarget{mockPage}
 
-	if err := handleGreenhouse(target, "", nil, true); err != nil {
+	if err := handleGreenhouse(target, "", "", nil, true); err != nil {
 		t.Fatalf("expected no error when the fallback submit selector matches, got: %v", err)
 	}
 	if fallbackLocator.clickCalls != 1 {
@@ -820,7 +848,7 @@ func TestHandleGreenhouse_SubmitUsesLegacySelectorWhenPresent(t *testing.T) {
 	}
 	target := pageTarget{mockPage}
 
-	if err := handleGreenhouse(target, "", nil, true); err != nil {
+	if err := handleGreenhouse(target, "", "", nil, true); err != nil {
 		t.Fatalf("expected no error when the legacy submit selector matches, got: %v", err)
 	}
 	if legacyLocator.clickCalls != 1 {
@@ -952,7 +980,7 @@ func TestHandleDynamic_FillsCustomQuestionAnswers(t *testing.T) {
 		"answers": {"custom_q_1": "I've followed the team's infrastructure work for years and want to contribute directly."}
 	}`
 
-	if err := handleDynamic(pageTarget{page: mockPage}, "", nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false); err != nil {
 		t.Fatalf("handleDynamic returned an unexpected error: %v", err)
 	}
 	if filledWith != "I've followed the team's infrastructure work for years and want to contribute directly." {
@@ -980,7 +1008,7 @@ func TestHandleDynamic_CustomQuestionFillFailureDoesNotAbort(t *testing.T) {
 		"answers": {"custom_q_1": "Some generated answer."}
 	}`
 
-	if err := handleDynamic(pageTarget{page: mockPage}, "", nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false); err != nil {
 		t.Errorf("expected a failed custom-question fill to not abort the submission, got error: %v", err)
 	}
 }
@@ -1207,4 +1235,113 @@ func TestAttemptSubmit_VisionFallback_EndToEndSuccess(t *testing.T) {
 	if !visionCalled {
 		t.Error("expected ExtractFormMappingVision to be called after the Learner Module fill genuinely failed (bug #10)")
 	}
+}
+
+// --- bugs.md #61: the cover letter must actually reach the form ---
+//
+// Before this fix, handleDynamic/handleGreenhouse/handleLever filled name,
+// email, phone, resume and custom questions but had no cover_letter step at
+// all, so every application went out resume-only while the pipeline still
+// paid full LLM cost to write a letter that was then discarded.
+
+func TestFillCoverLetter_PastesIntoTextarea(t *testing.T) {
+	letter := "Dear Hiring Manager,\n\nI build automation in Go and Python.\n"
+	path := writeTempCoverLetter(t, letter)
+
+	var filledWith string
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return false, nil // a textarea, not a file input
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator { return loc },
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				filledWith = value
+				return nil
+			}}
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "#cover", "Cover Letter")
+
+	if filledWith != letter {
+		t.Errorf("expected the cover letter text to be filled into the form, got %q", filledWith)
+	}
+}
+
+func TestFillCoverLetter_UploadsToFileInput(t *testing.T) {
+	letter := "Dear Hiring Manager,\n\nI build automation in Go and Python.\n"
+	path := writeTempCoverLetter(t, letter)
+
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return true, nil // input[type=file]
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator { return loc },
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "input[type='file'][name='cover_letter']", "Cover Letter")
+
+	if len(loc.uploadedFiles) != 1 {
+		t.Fatalf("expected exactly one uploaded cover letter, got %d", len(loc.uploadedFiles))
+	}
+	if got := string(loc.uploadedFiles[0].Buffer); got != letter {
+		t.Errorf("uploaded the wrong content: got %q, want %q", got, letter)
+	}
+}
+
+// A cover letter is optional on most real postings, so a failure to place one
+// must never abort an otherwise complete, submittable application -- same
+// best-effort contract as the custom-screening-question pass.
+func TestFillCoverLetter_FailureDoesNotAbortSubmission(t *testing.T) {
+	path := writeTempCoverLetter(t, "Dear Hiring Manager,\n")
+
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{
+				countFunc: func() (int, error) { return 0, nil },
+				fillFunc:  func(value string) error { return fmt.Errorf("no such element") },
+			}
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("no such element") }}
+		},
+		getByPlaceholderFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error { return fmt.Errorf("no such element") }}
+		},
+	}
+
+	mappingJSON := `{"fields": {"cover_letter": "#cover"}, "labels": {"cover_letter": "Cover Letter"}}`
+	if err := handleDynamic(pageTarget{page: mockPage}, "", path, nil, mappingJSON, false); err != nil {
+		t.Errorf("a failed cover-letter fill must not abort the submission, got: %v", err)
+	}
+}
+
+// A missing master_cover_letter.txt must degrade to "apply without a letter"
+// rather than taking down the submission.
+func TestFillCoverLetter_MissingFileIsTolerated(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+		},
+	}
+	mappingJSON := `{"fields": {"cover_letter": "#cover"}, "labels": {"cover_letter": "Cover Letter"}}`
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "/nonexistent/master_cover_letter.txt", nil, mappingJSON, false); err != nil {
+		t.Errorf("a missing cover letter file must not abort the submission, got: %v", err)
+	}
+}
+
+func writeTempCoverLetter(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "master_cover_letter.txt")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write temp cover letter: %v", err)
+	}
+	return path
 }

@@ -29,6 +29,17 @@ import (
 	"sync"
 )
 
+const (
+	// masterResumePath is the file actually uploaded to every ATS. The
+	// pipeline's per-job "tailored" resume is a saved reference document, not
+	// the upload payload — this static PDF is what employers receive.
+	masterResumePath = "master_resume.pdf"
+	// masterCoverLetterPath is the single job-agnostic cover letter reused for
+	// every application when profile.yaml sets use_master_cover_letter.
+	// Gitignored alongside master_resume.pdf: it carries real contact details.
+	masterCoverLetterPath = "master_cover_letter.txt"
+)
+
 // parseTargetJobURLs splits TARGET_JOB_URL's comma-separated value into a
 // membership set. Returns nil (not an empty map) for an empty/unset input,
 // so callers can distinguish "no filter" from "filter matches nothing" with
@@ -474,6 +485,33 @@ func main() {
 			}
 
 			generateDocsFunc := func() (string, string, error) {
+				// One static, job-agnostic cover letter for every application
+				// (profile.yaml's use_master_cover_letter). Skips the
+				// ProcessJobApplication LLM call entirely rather than
+				// generating documents and discarding them: that call is the
+				// most expensive step in the pipeline by a wide margin, and
+				// its per-job resume never reaches the employer anyway since
+				// the uploaded file is always masterResumePath below.
+				//
+				// SaveApplication still runs, because it is not just a file
+				// write: RecordApplicationInDB behind it is what HasApplied
+				// dedups against, and the folder it creates is what
+				// MoveToManualApply archives for MANUAL_REQUIRED jobs.
+				if prof.UseMasterCoverLetter {
+					letter, readErr := os.ReadFile(masterCoverLetterPath)
+					if readErr != nil {
+						log.Printf("[Worker-%d] Failed to read %s: %v", workerID, masterCoverLetterPath, readErr)
+						return "", "", fmt.Errorf("failed to read master cover letter: %w", readErr)
+					}
+					const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
+					if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, string(letter), untailoredNote); err != nil {
+						log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
+						return "", "", err
+					}
+					log.Printf("[Worker-%d] Using master resume and master cover letter for %s (no per-job tailoring)", workerID, job.CompanyName)
+					return masterResumePath, masterCoverLetterPath, nil
+				}
+
 				var resume, coverLetter, interviewPrep string
 				var processErr error
 				for attempt := 1; attempt <= 3; attempt++ {
@@ -510,9 +548,12 @@ func main() {
 
 				log.Printf("[Worker-%d] Successfully generated and saved application for %s", workerID, job.CompanyName)
 
-				masterResumePath := "master_resume.pdf"
-				coverLetterPath := "applications/" + job.CompanyName + "/coverletter.txt"
-				return masterResumePath, coverLetterPath, nil
+				// bugs.md #62: this used to concatenate the raw company name,
+				// while SaveApplication writes under the sanitized one — so
+				// for any company whose name isn't already sanitize-stable
+				// ("Backend Software Engineer" -> "Backend_Software_Engineer")
+				// the path pointed at a file that did not exist.
+				return masterResumePath, storage.CoverLetterPath(job.CompanyName), nil
 			}
 
 			if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, submitter.ErrAuthWall) {

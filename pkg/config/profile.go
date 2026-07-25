@@ -32,6 +32,25 @@ type Profile struct {
 	// CoverLetterTone (singular) is used for every application, unchanged
 	// from before this field existed.
 	CoverLetterTones []string `yaml:"cover_letter_tones"`
+	// UseMasterCoverLetter switches the pipeline from generating a tailored
+	// cover letter per application to reusing one static, job-agnostic letter
+	// (master_cover_letter.txt, mirroring master_resume.pdf) for every job.
+	//
+	// Opt in on purpose: the zero value is false, so an existing profile.yaml
+	// that has never heard of this field keeps the per-job tailoring behavior
+	// it had before the field existed.
+	//
+	// When true, cmd/agent skips the ProcessJobApplication LLM call outright
+	// rather than generating and discarding a letter. That call is the single
+	// most expensive step in the pipeline (measured live at 15-20+ minutes per
+	// job against this machine's CPU-only Ollama), and it is one combined call
+	// producing resume + cover letter + interview prep, so skipping it also
+	// stops per-job resume.md and interview_prep.md. Neither is a loss for
+	// auto-submitted jobs: the file uploaded to every ATS is master_resume.pdf
+	// (hardcoded), and interview prep was only ever a saved reference. Jobs
+	// routed to MANUAL_REQUIRED do get master documents instead of tailored
+	// ones as a result, which is the real tradeoff of turning this on.
+	UseMasterCoverLetter bool `yaml:"use_master_cover_letter"`
 }
 
 // SelectToneVariant picks a random entry from tones for A/B testing

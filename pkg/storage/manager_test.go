@@ -1113,3 +1113,52 @@ func TestClearApplicationRecordsByURLPattern(t *testing.T) {
 		t.Error("a non-matching URL's dedup record must not be cleared")
 	}
 }
+
+// TestCoverLetterPath covers bugs.md #62: cmd/agent used to build this path by
+// concatenating the raw company name while SaveApplication writes under the
+// sanitized one, so the two silently disagreed for any company whose name
+// isn't already sanitize-stable -- the submitter was then handed a path to a
+// file that did not exist.
+func TestCoverLetterPath(t *testing.T) {
+	tests := []struct {
+		company string
+		want    string
+	}{
+		{"Reddit", filepath.Join("applications", "Reddit", "coverletter.txt")},
+		{"Backend Software Engineer", filepath.Join("applications", "Backend_Software_Engineer", "coverletter.txt")},
+		{"Acme, Inc.", filepath.Join("applications", "Acme__Inc_", "coverletter.txt")},
+	}
+	for _, tt := range tests {
+		if got := CoverLetterPath(tt.company); got != tt.want {
+			t.Errorf("CoverLetterPath(%q) = %q, want %q", tt.company, got, tt.want)
+		}
+	}
+}
+
+// The path helper must agree with where SaveApplication actually writes, or
+// bug #62 simply comes back in a new form.
+func TestCoverLetterPathMatchesSaveApplication(t *testing.T) {
+	dir := t.TempDir()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working dir: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	defer os.Chdir(origWD)
+
+	InitDB()
+	const company = "Backend Software Engineer"
+	if err := SaveApplication(company, "SRE", "Remote", "https://example.com/j/1", "resume", "the letter", "prep"); err != nil {
+		t.Fatalf("SaveApplication failed: %v", err)
+	}
+
+	got, err := os.ReadFile(CoverLetterPath(company))
+	if err != nil {
+		t.Fatalf("CoverLetterPath does not point at the file SaveApplication wrote: %v", err)
+	}
+	if string(got) != "the letter" {
+		t.Errorf("cover letter content = %q, want %q", string(got), "the letter")
+	}
+}

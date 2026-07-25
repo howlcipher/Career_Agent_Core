@@ -212,3 +212,40 @@ func TestLoadProfile_MalformedYaml(t *testing.T) {
 		t.Errorf("Expected error for invalid yaml, got nil")
 	}
 }
+
+func TestLoadProfile_UseMasterCoverLetter(t *testing.T) {
+	// Opt-in semantics matter here: a profile that predates this field must
+	// keep per-job tailoring, so an absent key has to load as false rather
+	// than silently switching a live pipeline onto the static letter.
+	tests := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"absent key defaults to tailoring", "cover_letter_tone: \"professional\"\n", false},
+		{"explicitly enabled", "use_master_cover_letter: true\n", true},
+		{"explicitly disabled", "use_master_cover_letter: false\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpFile, err := os.CreateTemp("", "profile_*.yaml")
+			if err != nil {
+				t.Fatalf("Failed to create temp file: %v", err)
+			}
+			defer os.Remove(tmpFile.Name())
+			if _, err := tmpFile.Write([]byte(tt.yaml)); err != nil {
+				t.Fatalf("Failed to write temp file: %v", err)
+			}
+			tmpFile.Close()
+
+			profile, err := LoadProfile(tmpFile.Name())
+			if err != nil {
+				t.Fatalf("LoadProfile failed: %v", err)
+			}
+			if profile.UseMasterCoverLetter != tt.want {
+				t.Errorf("UseMasterCoverLetter = %v, want %v", profile.UseMasterCoverLetter, tt.want)
+			}
+		})
+	}
+}

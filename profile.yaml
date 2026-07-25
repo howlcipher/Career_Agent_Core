@@ -85,3 +85,4 @@ auto_submit: true
 auto_submit_click: true
 headless_browser: true
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."
+use_master_cover_letter: true

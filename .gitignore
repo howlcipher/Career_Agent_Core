@@ -8,6 +8,7 @@ main
 .env
 /agent
 master_resume.pdf
+master_cover_letter.txt
 career_agent.log
 career_agent-*.log
 career_agent_live.log

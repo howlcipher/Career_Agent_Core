@@ -711,12 +711,21 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	if err != nil {
 		return fmt.Errorf("failed to generate application documents: %w", err)
 	}
-	if !strings.Contains(resumePath, "master_resume") {
-		defer os.Remove(resumePath)
-	}
-	if !strings.Contains(coverPath, "master_cover") {
-		defer os.Remove(coverPath)
-	}
+	// bugs.md #62: these files are not scratch temporaries. SaveApplication
+	// writes them into applications/<company>/ deliberately as the saved
+	// record of what was sent, and MoveToManualApply archives that whole
+	// folder for jobs routed to MANUAL_REQUIRED — a queue whose entire value
+	// is handing the user ready-made documents. Deleting them here fired on
+	// every exit path, including the ErrAuthWall early return below, so the
+	// manual queue was being stripped of its cover letter before it was ever
+	// archived. Confirmed live 2026-07-24 across applications/
+	// needs_manual_apply/: five sampled folders held resume.md and
+	// interview_prep.md but no coverletter.txt.
+	//
+	// Nothing here needs cleanup: resumePath is the persistent
+	// master_resume.pdf, and coverPath is either the persistent
+	// master_cover_letter.txt or an application folder file that is meant to
+	// outlive this call.
 
 	domain := ExtractDomain(applyURL)
 
@@ -735,13 +744,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
 		cachedTarget := resolveFillTarget(page)
 		urlBeforeClick := page.URL()
-		dynErr := handleDynamic(cachedTarget, resumePath, pii, mappingJSON, autoSubmitClick)
+		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, autoSubmitClick)
 		if dynErr != nil {
 			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
 			storage.DeleteFormMapping(domain)
 			if mapper != nil {
 				log.Printf("[Auto-Submit] Falling back to Vision module after cached-mapping fill failure...")
-				return AttemptVisionSubmit(page, cachedTarget, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+				return AttemptVisionSubmit(page, cachedTarget, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
 			}
 			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
 		}
@@ -774,7 +783,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
 				urlBeforeSubmitClick = page.URL()
-				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
+				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, coverPath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
 				// Bug #47, same reasoning as the Greenhouse branch above.
 				clickApplyIfPresent(page)
@@ -782,7 +791,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
 				urlBeforeSubmitClick = page.URL()
-				execErr = handleLever(resolveFillTarget(page), resumePath, pii, autoSubmitClick)
+				execErr = handleLever(resolveFillTarget(page), resumePath, coverPath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
@@ -848,7 +857,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
 					urlBeforeSubmitClick = page.URL()
-					execErr = handleDynamic(target, resumePath, pii, newMappingJSON, autoSubmitClick)
+					execErr = handleDynamic(target, resumePath, coverPath, pii, newMappingJSON, autoSubmitClick)
 					if execErr != nil {
 						log.Printf("[Auto-Submit] Dynamic fill failed for %s after Learner Module mapping. Invalidating cache. Falling back to Vision module. Error: %v", domain, execErr)
 						storage.DeleteFormMapping(domain)
@@ -856,12 +865,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						// internally (bug #52 follow-up) -- return its result
 						// directly rather than letting it re-enter this loop's
 						// own confirmation check against a now-stale baseline.
-						return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+						return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
 					}
 				} else {
 					log.Printf("[Learner Module] Failed to map form: %v", err)
 					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
-					return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, pii, mapper, autoSubmitClick)
+					return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
 				}
 			} else {
 				execErr = fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
@@ -947,7 +956,7 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 	return fmt.Errorf("linkedin easy apply modal interaction not fully implemented")
 }
 
-func handleGreenhouse(target fillTarget, resumePath string, pii *config.PII, autoSubmitClick bool) error {
+func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
 	if _, err := target.WaitForSel("input#first_name", 30000); err != nil {
@@ -994,6 +1003,11 @@ func handleGreenhouse(target fillTarget, resumePath string, pii *config.PII, aut
 		}
 	}
 
+	// bugs.md #61. Greenhouse exposes the cover letter as a file input under
+	// the same naming convention as the resume one above; the label fallback
+	// inside the helper covers boards that render a paste textarea instead.
+	fillCoverLetterIfPresent(target, coverPath, "input[type='file'][name='cover_letter']", "Cover Letter")
+
 	if autoSubmitClick {
 		// Bug #49: input#submit_app only exists on Greenhouse's legacy embed
 		// theme. Confirmed live 2026-07-23 (job-boards.greenhouse.io/
@@ -1014,7 +1028,7 @@ func handleGreenhouse(target fillTarget, resumePath string, pii *config.PII, aut
 	return nil
 }
 
-func handleLever(target fillTarget, resumePath string, pii *config.PII, autoSubmitClick bool) error {
+func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
 
 	if _, err := target.WaitForSel("input[name='name']", 30000); err != nil {
@@ -1053,6 +1067,11 @@ func handleLever(target fillTarget, resumePath string, pii *config.PII, autoSubm
 			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
 		}
 	}
+
+	// bugs.md #61. Lever renders the cover letter as a plain textarea rather
+	// than an upload control on most templates, which the helper's text path
+	// handles; the label fallback covers templates that differ.
+	fillCoverLetterIfPresent(target, coverPath, "textarea[name='comments']", "Cover Letter")
 
 	if autoSubmitClick {
 		if err := target.Loc("button.postings-btn.template-btn-submit").Click(); err != nil {
@@ -1171,7 +1190,63 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 	return nil
 }
 
-func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
+// fillCoverLetterIfPresent supplies the cover letter to whichever control the
+// form exposes for it, tolerating both shapes ATS platforms use: a file input
+// (upload) or a textarea/text input (paste). Best effort by design, matching
+// the custom-screening-question pass below it — a cover letter is optional on
+// the large majority of real postings, so failing to place one must never
+// abort an otherwise complete, submittable application.
+//
+// bugs.md #61: nothing in this package ever did this. ExtractFormMapping has
+// always been prompted to map a "cover_letter" selector and FormMapping has
+// always carried it, but no handler read it, so every application this project
+// sent went out resume only while still paying full LLM cost to write a letter
+// that was then discarded.
+func fillCoverLetterIfPresent(target fillTarget, coverPath, selector, labelText string) {
+	if coverPath == "" {
+		return
+	}
+	content, err := os.ReadFile(coverPath)
+	if err != nil {
+		log.Printf("[Auto-Submit] Cover letter unreadable at %s, skipping: %v", coverPath, err)
+		return
+	}
+	if len(content) == 0 {
+		return
+	}
+
+	// A file input cannot be Fill()ed — Playwright rejects it — so resolve
+	// the control's shape first and branch, rather than trying text entry and
+	// interpreting the failure.
+	if selector != "" {
+		loc := target.Loc(selector)
+		if count, cErr := loc.Count(); cErr == nil && count > 0 {
+			candidate := firstVisibleLocator(loc, count)
+			isFile, evalErr := candidate.Evaluate("el => el.tagName === 'INPUT' && el.type === 'file'", nil)
+			if evalErr == nil {
+				if isFileInput, ok := isFile.(bool); ok && isFileInput {
+					if err := candidate.SetInputFiles([]playwright.InputFile{{
+						Name:   "cover_letter.txt",
+						Buffer: content,
+					}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+						log.Printf("[Auto-Submit] Failed to upload cover letter: %v", err)
+						return
+					}
+					log.Printf("[Auto-Submit] Cover letter uploaded")
+					return
+				}
+			}
+		}
+	}
+
+	if err := safeFillWithLabelFallback(target, selector, labelText, string(content)); err != nil {
+		log.Printf("[Auto-Submit] Failed to fill cover letter (optional, continuing): %v", err)
+		return
+	}
+	log.Printf("[Auto-Submit] Cover letter filled")
+}
+
+func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
 	var mapping FormMapping
 	if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
@@ -1214,6 +1289,8 @@ func handleDynamic(target fillTarget, resumePath string, pii *config.PII, mappin
 			return fmt.Errorf("resume input selector not found")
 		}
 	}
+
+	fillCoverLetterIfPresent(target, coverPath, mapping.Fields["cover_letter"], mapping.Labels["cover_letter"])
 
 	// Custom screening questions (improvements.md #16, 2026-07-24): best-
 	// effort, unlike the required fields above -- if one fails to fill, the
