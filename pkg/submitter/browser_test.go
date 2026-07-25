@@ -1711,3 +1711,48 @@ func TestLooksLikeCSSSelector(t *testing.T) {
 		}
 	}
 }
+
+// bugs.md #71: the submit click must be able to tell "no visible submit
+// control" apart from "here is one, click it". Zimperium (Lever, fit score 85)
+// failed with a bare `Timeout 30000ms exceeded` waiting on `.first()` --
+// firstVisibleLocator's fallback had handed back a known-hidden match
+// (Lever's hidden hcaptchaSubmitBtn) and the click hung out the full timeout.
+func TestFirstVisibleSubmit_ReportsWhenNoMatchIsVisible(t *testing.T) {
+	hiddenA := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+	hiddenB := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+
+	root := &MockLocator{
+		nthFunc: func(index int) playwright.Locator {
+			if index == 0 {
+				return hiddenA
+			}
+			return hiddenB
+		},
+	}
+
+	if _, ok := firstVisibleSubmit(root, 2); ok {
+		t.Error("expected ok=false when no match reports visible, so the caller can fail fast instead of clicking a hidden element")
+	}
+}
+
+func TestFirstVisibleSubmit_ReportsTheVisibleMatch(t *testing.T) {
+	hidden := &MockLocator{isVisibleFunc: func() (bool, error) { return false, nil }}
+	visible := &MockLocator{isVisibleFunc: func() (bool, error) { return true, nil }}
+
+	root := &MockLocator{
+		nthFunc: func(index int) playwright.Locator {
+			if index == 0 {
+				return hidden
+			}
+			return visible
+		},
+	}
+
+	got, ok := firstVisibleSubmit(root, 2)
+	if !ok {
+		t.Fatal("expected ok=true when a visible match exists")
+	}
+	if got != playwright.Locator(visible) {
+		t.Error("expected the visible index-1 match, not the hidden index-0 one")
+	}
+}

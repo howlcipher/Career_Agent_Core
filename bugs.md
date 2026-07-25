@@ -39,6 +39,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 71 | [firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click](#71-firstvisiblelocators-first-fallback-reintroduces-the-very-hang-it-was-written-to-prevent-at-the-submit-click) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found auditing the cohort's `FAILED_SUBMIT` rows during #70's restart: Zimperium (Lever, scored **85**) died on `playwright: timeout: Timeout 30000ms exceeded` waiting for `locator(...).first()`. The `.first()` in Playwright's own call log is the proof — `firstVisibleLocator` found *no* visible match, fell back to `loc.First()`, and the caller clicked a match already known to be invisible (#59's hidden `hcaptchaSubmitBtn`). Guaranteed to burn the full action timeout and then misreport "no visible submit button here" as a generic timeout, which is why it read as CPU/network flakiness |
 | 70 | [The validation-retry loop strips the page's own error text, so the model never learns why a field bounced](#70-the-validation-retry-loop-strips-the-pages-own-error-text-so-the-model-never-learns-why-a-field-bounced) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on the highest-fit job in the 82-cohort (Reddit, scored **90**), which burned **17.5 minutes** and 3 LLM calls to fail with `failed to submit application after 3 validation error attempts`. `aria-describedby` was stripped as "presentational" *before* `PruneDOMToInvalidFields` ran, so the link from a rejected control to its error message was severed, and the message element was then dropped as neither control nor label. The model was told a field was invalid but never what would make it valid, so it re-guessed the same value each attempt. Compounded by an empty fix map falling through to a re-submit of a byte-identical form. This is the terminal step of the whole pipeline — it fails *after* discovery, scoring and fill have all succeeded |
 | 69 | [Discovery stored the searched role as job_title and discarded the real headline](#69-discovery-stored-the-searched-role-as-job_title-and-discarded-the-real-headline) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found while auditing throughput: **55 distinct titles across 3,131 waiting rows**. The SerpAPI path called `AddToFunnel(company, role, ...)` — storing the *search term* — while `result.Title` (the real headline) was logged one line earlier and thrown away. Beyond misleading logs and dashboard, this degraded improvements.md #22, which ranks the queue by embedding title+company: every job found under the same role got a near-identical embedding |
 | 68 | [SaveFormMapping cached semantically-empty mappings, burning a Learner Module call per visit](#68-saveformmapping-cached-semantically-empty-mappings-burning-a-learner-module-call-per-visit) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Bug #21 guards against non-JSON, but an all-null mapping is *valid* JSON. Found live: **7 of 60** cached mappings had every selector null, including `smartrecruiters.com`, `pinpointhq.com` and `applytojob.com`. Each visit to those domains loaded the useless mapping, failed every fill, invalidated the cache and burned a fresh Learner Module call to regenerate the same nulls |
@@ -99,6 +100,31 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 71. firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click (Resolved 2026-07-25)
+
+**Found while auditing the 82-cohort's `FAILED_SUBMIT` rows** before restarting the run for #70 — the count had grown 6 → 7 and the newcomer was not one of the five known-dead postings. Zimperium (`jobs.lever.co/zimperium/18699ad3...`), fit score **85**:
+
+```
+09:05:51 Detected Lever ATS. Filling out fields...
+09:06:02 Submission failed validation. Retrying...
+09:06:02 Attempt 2: Solving validation errors...
+09:33:28 Auto-Submit failed for Zimperium: playwright: timeout: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator('input[type=\'submit\'], button[type=\'submit\'], button:has-text(\'Submit\'), button:has-text(\'Apply\')').first()
+```
+
+**Root cause:** the `.first()` in Playwright's own call log is the tell. `firstVisibleLocator` walks the matches looking for a visible one and, finding none, falls back to `return loc.First()`. The caller then clicks that match — which is *known to be invisible*, because the loop just checked every single one. Playwright waits for it to become actionable, it never does, and the click burns the full `fillActionTimeoutMs`.
+
+This is precisely the hang the function's own doc comment says it exists to prevent (bug #59: Lever's `<button type="submit" class="hidden" id="hcaptchaSubmitBtn">" being clicked ahead of the real button). #59 fixed the "picks the wrong match" half and left the "picks a known-bad match anyway" half in the fallback.
+
+Two costs: 30 wasted seconds per occurrence, and — worse — the failure surfaces as a bare `Timeout 30000ms exceeded`, which reads as CPU contention or a slow page. It is nothing of the sort. It means *there is no visible submit control on this form*, which is a completely different and actionable diagnosis.
+
+**Fix:** added `firstVisibleSubmit`, which is `firstVisibleLocator` without the fallback — it returns `(locator, ok)`. The submit-click site now fails immediately with `found N submit control(s) but none visible` instead of clicking a hidden element. `firstVisibleLocator` is reimplemented on top of it and keeps its fallback for the two *fill* call sites, where attempting a hidden element is still worth doing; their existing tests are unchanged and still pass.
+
+**Not yet known, deliberately left open:** *why* Lever presented no visible submit control at that moment. The old error message made that question unaskable. It should now be answerable from the logs the next time it happens — and Zimperium is requeued to find out.
+
+**Tests:** `TestFirstVisibleSubmit_ReportsWhenNoMatchIsVisible`, `TestFirstVisibleSubmit_ReportsTheVisibleMatch`.
 
 ### 70. The validation-retry loop strips the page's own error text, so the model never learns why a field bounced (Resolved 2026-07-25)
 

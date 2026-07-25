@@ -945,8 +945,20 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
 			if count, _ := submitLocator.Count(); count > 0 {
-				urlBeforeSubmitClick = page.URL()
-				execErr = firstVisibleLocator(submitLocator, count).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+				// bugs.md #71: when none of the matches is visible, do not fall
+				// back to .First(). That match is known-hidden (typically
+				// Lever's <button type="submit" class="hidden"
+				// id="hcaptchaSubmitBtn">), so clicking it can only burn the
+				// full action timeout before failing -- which is the exact hang
+				// firstVisibleLocator was written to prevent, reintroduced by
+				// its own fallback. Report it accurately and immediately.
+				visible, ok := firstVisibleSubmit(submitLocator, count)
+				if !ok {
+					execErr = fmt.Errorf("found %d submit control(s) but none visible", count)
+				} else {
+					urlBeforeSubmitClick = page.URL()
+					execErr = visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+				}
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
 			}
@@ -1157,13 +1169,29 @@ type FormMapping struct {
 // full click timeout on an element Playwright will never consider
 // clickable, misreporting a real, fixable failure as a generic timeout.
 func firstVisibleLocator(loc playwright.Locator, count int) playwright.Locator {
+	if candidate, ok := firstVisibleSubmit(loc, count); ok {
+		return candidate
+	}
+	return loc.First()
+}
+
+// firstVisibleSubmit is firstVisibleLocator without the .First() fallback: it
+// reports whether a visible match was found at all.
+//
+// bugs.md #71: the fallback is right for the fill paths, where a hidden
+// element is still worth attempting, but wrong for the submit click. Clicking
+// a match already known to be invisible cannot succeed -- it can only hang for
+// the full action timeout and then surface as a bare "Timeout 30000ms
+// exceeded", which is what made this failure look like a network/CPU problem
+// rather than a "there is no visible submit button here" problem.
+func firstVisibleSubmit(loc playwright.Locator, count int) (playwright.Locator, bool) {
 	for i := 0; i < count; i++ {
 		candidate := loc.Nth(i)
 		if visible, err := candidate.IsVisible(); err == nil && visible {
-			return candidate
+			return candidate, true
 		}
 	}
-	return loc.First()
+	return loc.First(), false
 }
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
