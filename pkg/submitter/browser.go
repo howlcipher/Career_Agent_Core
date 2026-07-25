@@ -1191,9 +1191,59 @@ func safeFillWithLabelFallback(target fillTarget, selector, labelText, text stri
 	return nil
 }
 
+// coverLetterFileInputSelectors are searched, in order, for a cover letter
+// upload control when the mapped selector isn't one. Every entry is scoped to
+// an attribute naming the field a cover letter, deliberately: a bare
+// input[type='file'] would match the *resume* input on most forms, and
+// SetInputFiles replaces a file input's contents outright, so a loose selector
+// here would silently overwrite the resume with the cover letter and send the
+// employer no resume at all.
+var coverLetterFileInputSelectors = []string{
+	// Greenhouse's own naming, and the most common convention generally.
+	"input[type='file'][name='cover_letter']",
+	// Case-insensitive substring matches cover the rest: coverLetterFile,
+	// cover-letter-upload, candidate.coverLetter, id="cover_letter_upload"...
+	"input[type='file'][name*='cover' i]",
+	"input[type='file'][id*='cover' i]",
+	"input[type='file'][name*='letter' i]",
+	"input[type='file'][id*='letter' i]",
+	"input[type='file'][aria-label*='cover letter' i]",
+	"input[type='file'][data-qa*='cover' i]",
+}
+
+// uploadCoverLetter attaches the letter to selector when it resolves to a file
+// input, reporting whether it actually did. A non-file match (or no match) is
+// not an error here — it just means this candidate wasn't the upload control,
+// and the caller should keep looking.
+func uploadCoverLetter(target fillTarget, selector, uploadName string, content []byte) bool {
+	loc := target.Loc(selector)
+	count, cErr := loc.Count()
+	if cErr != nil || count == 0 {
+		return false
+	}
+	candidate := firstVisibleLocator(loc, count)
+	isFile, evalErr := candidate.Evaluate("el => el.tagName === 'INPUT' && el.type === 'file'", nil)
+	if evalErr != nil {
+		return false
+	}
+	isFileInput, ok := isFile.(bool)
+	if !ok || !isFileInput {
+		return false
+	}
+	if err := candidate.SetInputFiles([]playwright.InputFile{{
+		Name:   uploadName,
+		Buffer: content,
+	}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+		log.Printf("[Auto-Submit] Failed to upload cover letter via %q: %v", selector, err)
+		return false
+	}
+	log.Printf("[Auto-Submit] Cover letter uploaded as %s via %q", uploadName, selector)
+	return true
+}
+
 // fillCoverLetterIfPresent supplies the cover letter to whichever control the
 // form exposes for it, tolerating both shapes ATS platforms use: a file input
-// (upload) or a textarea/text input (paste). Best effort by design, matching
+// (upload, preferred) or a textarea/text input (paste). Best effort by design, matching
 // the custom-screening-question pass below it — a cover letter is optional on
 // the large majority of real postings, so failing to place one must never
 // abort an otherwise complete, submittable application.
@@ -1224,27 +1274,24 @@ func fillCoverLetterIfPresent(target fillTarget, coverPath, selector, labelText 
 		uploadName = "cover_letter.txt"
 	}
 
-	// A file input cannot be Fill()ed — Playwright rejects it — so resolve
-	// the control's shape first and branch, rather than trying text entry and
-	// interpreting the failure.
-	if selector != "" {
-		loc := target.Loc(selector)
-		if count, cErr := loc.Count(); cErr == nil && count > 0 {
-			candidate := firstVisibleLocator(loc, count)
-			isFile, evalErr := candidate.Evaluate("el => el.tagName === 'INPUT' && el.type === 'file'", nil)
-			if evalErr == nil {
-				if isFileInput, ok := isFile.(bool); ok && isFileInput {
-					if err := candidate.SetInputFiles([]playwright.InputFile{{
-						Name:   uploadName,
-						Buffer: content,
-					}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
-						log.Printf("[Auto-Submit] Failed to upload cover letter: %v", err)
-						return
-					}
-					log.Printf("[Auto-Submit] Cover letter uploaded as %s", uploadName)
-					return
-				}
-			}
+	// Uploading is strictly preferred over pasting whenever the form offers
+	// it: the employer then receives the real, formatted document (the same
+	// treatment the resume already gets) instead of flattened plain text that
+	// loses every bit of layout. A file input also cannot be Fill()ed at all —
+	// Playwright rejects it — so the control's shape has to be resolved up
+	// front either way.
+	//
+	// The mapped selector is tried first since it is form-specific, then a
+	// direct search, because the mapper frequently points cover_letter at a
+	// paste textarea on forms that also expose an upload control. Without the
+	// search, that mapping alone would silently downgrade every such
+	// application to plain text.
+	if selector != "" && uploadCoverLetter(target, selector, uploadName, content) {
+		return
+	}
+	for _, fallbackSel := range coverLetterFileInputSelectors {
+		if uploadCoverLetter(target, fallbackSel, uploadName, content) {
+			return
 		}
 	}
 

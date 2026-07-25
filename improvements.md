@@ -83,6 +83,12 @@ Tests: `TestLoadProfile_UseMasterCoverLetter` (3 cases, including that an absent
 
 Tests added: `TestFillCoverLetter_UploadsPDFUnderPDFName` (asserts both the `.pdf` name and byte-for-byte content), `TestFillCoverLetter_NeverPastesRawPDFBytes`, `TestExtractDocumentText_PlainText`, `TestExtractDocumentText_MissingFile`. **Verified live against the real file:** `Omni_CoverLetter.pdf` extracts to 2151 chars of clean text with no `%PDF` markers, and `profile.yaml` loads `master_cover_letter_path = "Omni_CoverLetter.pdf"`.
 
+**Amended again 2026-07-24 (upload now actively preferred):** user asked whether the letter could be *uploaded* wherever the form offers it, the way the resume already is, instead of being typed into a text section. It could not, reliably — the first pass only uploaded when the mapper's `cover_letter` selector happened to land on a file input, and the mapper frequently points that key at a paste textarea on forms that also expose an upload control, silently downgrading those applications to flattened plain text. Now: the mapped selector is tried first (form-specific), then `coverLetterFileInputSelectors` is searched directly for an upload control, and only with no file input anywhere does it fall back to pasting.
+
+**Safety constraint worth preserving if this list is ever edited:** every entry in `coverLetterFileInputSelectors` is scoped to an attribute naming the field a cover letter. A bare `input[type='file']` would match the **resume** input on most forms, and `SetInputFiles` replaces a file input's contents outright — a loose selector would overwrite the resume with the cover letter and send the employer no resume at all. `TestCoverLetterFileInputSelectorsNeverMatchBareResumeInput` enforces this.
+
+Tests added: `TestFillCoverLetter_PrefersUploadOverPasteWhenMappingPointsAtTextarea`, `TestCoverLetterFileInputSelectorsNeverMatchBareResumeInput`, `TestFillCoverLetter_FallsBackToPasteWhenNoFileInputExists` (9 cover-letter tests total).
+
 **Two known caveats, neither blocking:** (1) the PDF has a fixed date ("July 20, 2026") baked into it, which will read as stale over time — regenerate the PDF periodically. (2) `ledongthuc/pdf`'s text extraction drops some line breaks ("July 20, 2026Hiring Manager"), so *pasted* letters read slightly run-together; uploads are unaffected since the file goes as-is, and upload is the more common shape on real ATS forms (Greenhouse and Lever's own cover letter controls among them).
 
 ### 22. Rank the discovery queue by resume-fit similarity, not just source-priority

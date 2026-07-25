@@ -1409,3 +1409,88 @@ func TestFillCoverLetter_NeverPastesRawPDFBytes(t *testing.T) {
 		t.Errorf("raw PDF bytes were pasted into the form: %q", filledWith)
 	}
 }
+
+// Upload must win over paste even when the mapper pointed cover_letter at a
+// textarea — the employer should get the real formatted document whenever the
+// form offers an upload control, the same treatment the resume gets.
+func TestFillCoverLetter_PrefersUploadOverPasteWhenMappingPointsAtTextarea(t *testing.T) {
+	pdfBytes := []byte("%PDF-1.4\nfake pdf\n%%EOF")
+	path := filepath.Join(t.TempDir(), "Omni_CoverLetter.pdf")
+	if err := os.WriteFile(path, pdfBytes, 0644); err != nil {
+		t.Fatalf("failed to write temp pdf: %v", err)
+	}
+
+	fileInput := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) { return true, nil },
+	}
+	textarea := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) { return false, nil },
+	}
+
+	var pasted string
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "type='file'") {
+				return fileInput
+			}
+			return textarea // what the mapper guessed
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				pasted = value
+				return nil
+			}}
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "#coverLetterTextarea", "Cover Letter")
+
+	if len(fileInput.uploadedFiles) != 1 {
+		t.Fatalf("expected the cover letter to be uploaded, got %d uploads", len(fileInput.uploadedFiles))
+	}
+	if pasted != "" {
+		t.Errorf("expected no paste fallback once upload succeeded, but pasted %q", pasted)
+	}
+}
+
+// The upload-search selectors must never match a bare resume file input:
+// SetInputFiles replaces a file input's contents outright, so a loose selector
+// would overwrite the resume and send the employer no resume at all.
+func TestCoverLetterFileInputSelectorsNeverMatchBareResumeInput(t *testing.T) {
+	for _, sel := range coverLetterFileInputSelectors {
+		if sel == "input[type='file']" {
+			t.Fatalf("bare file-input selector %q would overwrite the resume", sel)
+		}
+		if !strings.Contains(strings.ToLower(sel), "cover") && !strings.Contains(strings.ToLower(sel), "letter") {
+			t.Errorf("selector %q is not scoped to a cover-letter attribute; it risks matching the resume input", sel)
+		}
+	}
+}
+
+// With no upload control anywhere, pasting is still the correct fallback.
+func TestFillCoverLetter_FallsBackToPasteWhenNoFileInputExists(t *testing.T) {
+	const letter = "Dear Hiring Manager,\n\nI build automation.\n"
+	path := writeTempCoverLetter(t, letter)
+
+	var pasted string
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			// No file inputs on this form at all.
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+		getByLabelFunc: func(text any) playwright.Locator {
+			return &MockLocator{fillFunc: func(value string) error {
+				pasted = value
+				return nil
+			}}
+		},
+	}
+
+	fillCoverLetterIfPresent(pageTarget{page: mockPage}, path, "#cover", "Cover Letter")
+
+	if pasted != letter {
+		t.Errorf("expected the letter to be pasted when no upload control exists, got %q", pasted)
+	}
+}
