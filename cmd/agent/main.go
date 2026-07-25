@@ -608,6 +608,25 @@ func main() {
 				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
 					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
 				}
+			} else if errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) {
+				// bugs.md #82/#84: this form asks the applicant to declare
+				// something not set in pii.yaml -- work authorization,
+				// sponsorship, clearance or criminal history -- and those
+				// questions offer no decline option. Guessing would submit a
+				// false legal statement under the user's name, so the job goes
+				// to manual review with its tailored documents saved. Fill the
+				// matching key in pii.yaml to unblock it; the error names the
+				// missing category.
+				log.Printf("[Worker-%d] %s needs a legal attestation not set in pii.yaml — queued for manual submission: %v", workerID, job.CompanyName, err)
+				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
+				storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
+				docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+				if mvErr != nil {
+					log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
+				}
+				if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
+					log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
+				}
 			} else if errors.Is(err, submitter.ErrFormTooLargeForModel) {
 				// Bug #52's later recurrences: this form's content would
 				// exceed the local model's context window regardless of how
@@ -630,6 +649,23 @@ func main() {
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "BLOCKED_CAPTCHA")
 				storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
 			} else if err != nil {
+				if submitter.IsManualReviewError(err) {
+					// bugs.md #84: a manual-review sentinel that no branch above
+					// claimed. Never let one fall through to FAILED_SUBMIT --
+					// the job is fine, it just needs a human, and its tailored
+					// documents must be preserved.
+					log.Printf("[Worker-%d] %s needs manual completion — queued for manual submission: %v", workerID, job.CompanyName, err)
+					pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
+					storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
+					docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+					if mvErr != nil {
+						log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
+					}
+					if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
+						log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
+					}
+					continue
+				}
 				log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 				pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
 				storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")

@@ -2036,3 +2036,35 @@ func TestLikelyExceedsModelContext_StillAllowsNormalPayloads(t *testing.T) {
 		t.Error("an ordinary narrowed payload must not be rejected")
 	}
 }
+
+// bugs.md #84: #82 added ErrNeedsUnprovidedAttestation and the cmd/agent
+// branch meant to route it was never actually applied — the edit silently did
+// not match, the build still passed, and ClickHouse was written off as
+// FAILED_SUBMIT with its tailored documents stranded instead of being queued
+// for manual completion.
+//
+// This list is what cmd/agent's catch-all consults, so a sentinel added
+// without a routing branch still reaches manual review rather than the generic
+// failure path.
+func TestIsManualReviewError_CoversEveryManualReviewSentinel(t *testing.T) {
+	for _, sentinel := range []error{ErrAuthWall, ErrFormTooLargeForModel, ErrNeedsUnprovidedAttestation} {
+		if !IsManualReviewError(sentinel) {
+			t.Errorf("%v must be treated as needing manual review", sentinel)
+		}
+		// Wrapped, as the call sites actually return them.
+		if !IsManualReviewError(fmt.Errorf("context: %w", sentinel)) {
+			t.Errorf("%v must still be recognised when wrapped", sentinel)
+		}
+	}
+}
+
+// An ordinary automation failure must NOT be diverted to manual review —
+// that would hide real bugs behind a queue.
+func TestIsManualReviewError_IgnoresOrdinaryFailures(t *testing.T) {
+	if IsManualReviewError(fmt.Errorf("failed to submit application after 3 validation error attempts")) {
+		t.Error("a genuine automation failure must not be routed to manual review")
+	}
+	if IsManualReviewError(nil) {
+		t.Error("nil is not a manual-review outcome")
+	}
+}

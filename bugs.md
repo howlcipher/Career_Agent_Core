@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 84 | [#82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT](#84-82s-manual-routing-branch-was-never-applied-so-refused-jobs-were-written-off-as-failed_submit) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **My own error, caught live.** #82's guard worked perfectly — ClickHouse was refused in **0 seconds** with `work authorization, visa sponsorship` — but the job landed in `FAILED_SUBMIT`, not `MANUAL_REQUIRED`, and the routing log line never appeared. The `cmd/agent` edit adding that branch **silently failed to apply**; `go build` still passed because the submitter half compiled fine, and I verified the build instead of verifying the edit. Consequence: a job that is perfectly applicable-by-hand was written off as a failure, its tailored documents never moved to the manual-apply folder and no manual-queue entry logged |
 | 83 | [The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout](#83-the-payload-breaker-guarded-the-context-window-but-not-the-time-budget-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Watched live end to end: a Greenhouse theme (`surtai`) that sets **no `aria-invalid` attributes** defeated #64's narrowing, so the retry fell back to the whole form — **50,501 chars**. That fits the 80,000-char context ceiling, passed `likelyExceedsModelContext`, and then ran **16:58:03 → 17:43:03 — exactly the 45-minute Ollama timeout** before dying. Three-quarters of an hour of the single serialised LLM resource, spent on a request that was mathematically incapable of finishing. Context capacity and inference time are different limits, and on this hardware the time one binds far earlier |
 | 82 | [Once the commit worked, an unanswerable legal attestation would have been guessed and really submitted](#82-once-the-commit-worked-an-unanswerable-legal-attestation-would-have-been-guessed-and-really-submitted) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A risk created by fixing #81.** While the combobox commit was broken, nothing the model proposed was ever really set. Probed on the live form immediately after #81: `#question_67942418 -> COMMITTED "Yes"`. Reddit's "Are you currently authorized to work in the U.S.?" and its sponsorship question are **required and offer only Yes/No — no decline option**, so a model with no configured answer does not abstain, it picks one. That answer is a **legal declaration submitted under the applicant's name**. The form is now refused *before* the model is asked, and the job routed to `MANUAL_REQUIRED` |
 | 81 | [data-value mirrors the typed search text, so every react-select falsely reported "landed"](#81-data-value-mirrors-the-typed-search-text-so-every-react-select-falsely-reported-landed) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught by #80's new diagnostic: `Attempt 2 applied 13/13 validation fix(es)` and the still-invalid list came back **byte-identical** — none of the 13 landed, including the declinable EEO fields that have nothing to do with the missing attestations. Probed directly: after a bare `Fill()` with **nothing selected**, the value read returned `"I don't wish to answer"`. react-select puts `data-value` on `.select__input-container` to mirror the *typed search text* for input sizing, so the `[data-value]` fallback was reading the artifact of typing — the same mistake as #76, one layer deeper. The false "landed" suppressed the commit step for every custom question on every Greenhouse form |
@@ -118,6 +119,36 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 84. #82's manual-routing branch was never applied, so refused jobs were written off as FAILED_SUBMIT (Resolved 2026-07-25)
+
+**My own error, and worth recording as such.** #82's guard behaved exactly as designed — watched live on ClickHouse:
+
+```
+17:52:52 Narrowed validation retry ... (53969 -> 1877 chars); still invalid: question_15561491004, ...
+17:52:52 Auto-Submit failed for ClickHouse: form requires a legal attestation the applicant has not provided: work authorization, visa sponsorship
+```
+
+Same timestamp — refused in **zero seconds**, before the ~12-minute model call, exactly as intended. But then:
+
+```
+sqlite> SELECT status FROM job_funnel WHERE company_name='ClickHouse';
+FAILED_SUBMIT
+$ grep -c 'needs a legal attestation not set in pii.yaml' career_agent.log
+0
+```
+
+`FAILED_SUBMIT`, not `MANUAL_REQUIRED`, and the routing log line never fired. The `cmd/agent` branch that was supposed to catch `ErrNeedsUnprovidedAttestation` **did not exist in the source at all** — the scripted edit silently failed to match, `go build ./...` passed anyway because the `pkg/submitter` half compiled fine, and I confirmed the build rather than confirming the edit.
+
+**Consequence:** a job that is entirely applicable by hand — high fit score, form reachable, only a personal declaration missing — was recorded as a failure. Its tailored documents were never moved to the manual-apply folder and no manual-queue entry was written, so it would simply have been lost.
+
+**The irony is the point.** This is the same failure mode as #76, #77 and #81: *trusting an absence*. There I reasoned from a log line that never appeared; here I reasoned from a compiler that never complained. A green build proves the code that exists compiles, not that the code you intended exists.
+
+**Fix, in two parts:**
+1. The branch, applied properly and verified present with `grep` rather than inferred from a passing build.
+2. **A structural guarantee instead of a promise.** `submitter.manualReviewErrors` now lists every sentinel meaning "queue this for a human", with `IsManualReviewError` over it, and `cmd/agent` consults it as a **catch-all immediately before the generic failure log**. A sentinel added in future without its own branch still reaches manual review rather than silently becoming `FAILED_SUBMIT`.
+
+**Tests:** `TestIsManualReviewError_CoversEveryManualReviewSentinel` (including wrapped, as call sites actually return them), `TestIsManualReviewError_IgnoresOrdinaryFailures` — a real automation failure must *not* be diverted to manual review, since that would hide genuine bugs behind a queue.
 
 ### 83. The payload breaker guarded the context window but not the time budget, burning the full 45-minute timeout (Resolved 2026-07-25)
 

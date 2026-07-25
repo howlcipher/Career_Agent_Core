@@ -398,6 +398,33 @@ var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's
 // manual review is the only honest outcome.
 var ErrNeedsUnprovidedAttestation = errors.New("form requires a legal attestation the applicant has not provided")
 
+// manualReviewErrors are the outcomes that are not automation failures: the
+// job is sound, something outside the agent's authority is simply required to
+// finish it. Every one of them must be preserved for manual completion rather
+// than written off as FAILED_SUBMIT.
+//
+// bugs.md #84: this list exists so a newly-added sentinel cannot silently fall
+// through to the generic failure path. #82 added
+// ErrNeedsUnprovidedAttestation and the cmd/agent branch meant to route it was
+// never actually applied -- the build still passed, and ClickHouse was written
+// off as FAILED_SUBMIT with its tailored documents stranded.
+var manualReviewErrors = []error{
+	ErrAuthWall,
+	ErrFormTooLargeForModel,
+	ErrNeedsUnprovidedAttestation,
+}
+
+// IsManualReviewError reports whether err means "queue this for a human"
+// rather than "this attempt failed".
+func IsManualReviewError(err error) bool {
+	for _, sentinel := range manualReviewErrors {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
 // maxPromptCharsForModelContext is a conservative character budget for any
 // single prompt sent to the local model, derived from two real failures:
 // Reddit's 54,917-char prompt needed 18,572 tokens (~2.96 chars/token) and
