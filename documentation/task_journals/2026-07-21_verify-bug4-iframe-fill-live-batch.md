@@ -43,7 +43,7 @@
 
 **Core unanswered question for the 82-job run (why it's still open):** user asked to requeue all 82 previously-`APPLIED` jobs (39 Lever, 32 Greenhouse, 7 Workday, 2 SmartRecruiters, 2 Pinpoint) and re-verify them for real. **As of this writing, 0 of the 82 have reached a confirmed `APPLIED` or a genuine duplicate-block result.** 5 have reached a genuine permanent terminal state (dead/expired postings, unrecoverable by any fix) and 5 are legitimate fit-score `SKIPPED` results; the remaining 72 are back in `DISCOVERED`/`PROCESSING`, now getting a real shot under bugs #58/#59/#60's fixes. Don't declare this task done just because bugs stop surfacing — it's done when the 82 (or as many as reach a genuine terminal state) show real evidence one way or the other. See bugs.md's #52/#53/#60 Details sections for the full diagnostic history.
 
-**Live process running right now:** PID `3486446` (`/tmp/career_agent_bin_verify82f`, built from HEAD `375fcdb` — has every fix through bugs #61/#62 and improvements #23), started 2026-07-25 ~00:20. Confirm alive: `distrobox enter career-agent -- ps -p 3486446`. Monitor `b4s03blqp` armed as of ~00:25 (same `ps aux | grep applied_urls_verify82` liveness-check caveat as always — don't trust `TaskList` alone; also don't trust a journal's recorded monitor ID without checking the grep yourself — one recorded as armed, `bt0tnxw4r`, was found dead by a later session).
+**Live process running right now:** PID `3520054` (`/tmp/career_agent_bin_verify82g`, built from HEAD `e1013d5` — first run carrying bugs #63/#64 and improvements #25), started 2026-07-25 01:53. Confirm alive: `distrobox enter career-agent -- ps -p 3520054`. Monitor `btylz9pe4` armed. Superseded: PID `3486446` (`/tmp/career_agent_bin_verify82f`, built from HEAD `375fcdb` — has every fix through bugs #61/#62 and improvements #23), started 2026-07-25 ~00:20. Confirm alive: `distrobox enter career-agent -- ps -p 3486446`. Monitor `b4s03blqp` armed as of ~00:25 (same `ps aux | grep applied_urls_verify82` liveness-check caveat as always — don't trust `TaskList` alone; also don't trust a journal's recorded monitor ID without checking the grep yourself — one recorded as armed, `bt0tnxw4r`, was found dead by a later session).
 
 Superseded PIDs, all permanently dead, do not try to resume any of them: `3137654` (verify82d), `3435469` (verify82e, killed 2026-07-25 ~00:20 for this restart).
 
@@ -62,7 +62,7 @@ Last read (2026-07-25 ~00:20, immediately before the restart): `DISCOVERED=70 FA
 ```bash
 urls_file="/var/home/howlcipher/dev/Career_Agent_Core/applied_urls_verify82.txt"
 in_clause=$(awk '{printf "%s%s%s", (NR>1?",":""), "\x27", $0"\x27"}' "$urls_file")
-pid=3486446
+pid=3520054
 prev=""
 while true; do
   if ! distrobox enter career-agent -- kill -0 "$pid" 2>/dev/null; then
@@ -75,7 +75,7 @@ while true; do
   sleep 90
 done
 ```
-Don't kill/restart PID 3486446 just to attach a fresh monitor — that only loses progress.
+Don't kill/restart PID 3520054 just to attach a fresh monitor — that only loses progress.
 
 **IMPORTANT — this is NOT the normal full-backlog batch.** It's a dedicated, isolated `TARGET_JOB_URL` run restricted to exactly the 82 URLs. It is self-terminating: once all 82 resolve, the process exits on its own and does **not** pick up fresh discovery or the rest of the ~3000-job backlog. **After this run finishes (or if you decide to abandon it), the normal batch must be manually restarted** — build `cmd/agent` fresh, launch WITHOUT `TARGET_JOB_URL` set, confirm sole instance, re-arm a normal `APPLIED`-count monitor. See the Operational Trap notes at the top of `bugs.md` for the full restart procedure.
 

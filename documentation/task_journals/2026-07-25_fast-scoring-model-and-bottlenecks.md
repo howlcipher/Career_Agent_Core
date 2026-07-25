@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** User goal 2026-07-25, three parts: (1) recommend and actually deploy a model for `improvements.md` #24, (2) find anything that improves real-world results, (3) log the emerging bottleneck, file bugs/improvements from it, and work those too.
-- **Status:** In progress
+- **Status:** Complete — all four goal items done; journal retained only until the 82-job run is observed healthy, then deletable
 - **Started:** 2026-07-25
 - **Agent and model:** Claude Code / Opus 5
 
@@ -112,7 +112,11 @@ Full write-up lives in `improvements.md` #24. The `fast` routing stays in the co
 
 ## Next Step
 
-1. When `r30b.json` lands, compare against the 4B's `95, 85, 95` — **agreement across the `<50` threshold is the pass/fail criterion**, not exact parity.
-2. If agreement holds, set `OLLAMA_FAST_MODEL="qwen3:4b-instruct"` in `.env` (the routing already shipped in `55ee4a7`; the variable is all that is left). If it does not hold, leave it unset and record why — the routing is inert either way, so nothing breaks by declining.
-3. Rebuild `cmd/agent` from HEAD and **restart the 82-job run**, which has been stopped since ~00:52. It gains #63 (fit scores now persist), #64 (validation retries no longer time out on large forms), and #25 (shorter scoring prompts). Follow the restart procedure in `2026-07-21_verify-bug4-iframe-fill-live-batch.md` — audit non-terminal rows, clear dedup rows for anything requeued, `kill -9`, rebuild to a fresh binary path, relaunch with the full `TARGET_JOB_URL` list, re-arm a monitor.
-4. Optional follow-up flagged in #25: no sampled job exceeded the 9,000-char cap, so the trim path is untested against live scores. Worth one comparison on a genuinely long posting.
+**All goal items are complete and pushed.** Nothing is outstanding on the code side.
+
+- #24 validated and **rejected on evidence** — `OLLAMA_FAST_MODEL` intentionally unset; routing kept, inert and tested.
+- bugs.md **#64** filed and fixed; improvements.md **#25** filed and shipped.
+- 82-job run **restarted 2026-07-25 01:53 as PID `3520054`** (`/tmp/career_agent_bin_verify82g`, built from HEAD `e1013d5`) — the first run carrying #63 (fit scores persist), #64 (validation retries narrowed) and #25 (shorter scoring prompts). Confirmed healthy: "loaded 72 matching job(s)", RAG found 9 chunks. Monitor `btylz9pe4` armed. Reddit was requeued once more (orphaned `PROCESSING` from the benchmark kill; its `applied_jobs` dedup row was cleared first or `HasApplied` would have skipped it).
+- Ongoing tracking of the 82-job effort itself continues in `2026-07-21_verify-bug4-iframe-fill-live-batch.md`, which is the journal to consult for that task. **This journal can be deleted once the restarted run is confirmed progressing.**
+
+**Standing warning for the next benchmark:** Ollama serves warm prompt caches. Use unseen jobs or restart the server between runs, or you will measure the cache — it produced 1s/2s readings here and led to a wrong "2.5x faster" conclusion that cold measurements later overturned.
