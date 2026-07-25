@@ -353,3 +353,37 @@ func TestCompanyFromURL(t *testing.T) {
 		}
 	}
 }
+
+// bugs.md #69: the SerpAPI discovery path stored the *searched role* as
+// job_title and threw away the real headline, leaving 55 distinct titles
+// across 3,131 rows. That also degraded improvements.md #22, which ranks the
+// queue by embedding title+company.
+func TestExtractJobTitleFromResult(t *testing.T) {
+	cases := []struct{ headline, role, want string }{
+		{"Senior Backend Engineer at Stripe - Lever", "Backend Developer", "Senior Backend Engineer"},
+		{"Staff SRE at Reddit - Greenhouse", "Site Reliability Engineer", "Staff SRE"},
+		{"Platform Engineer - Acme - Greenhouse", "DevOps Engineer", "Platform Engineer"},
+		// Unparseable headlines must fall back to the searched role rather
+		// than storing a misleading fragment.
+		{"", "Go Developer", "Go Developer"},
+		{"   ", "Go Developer", "Go Developer"},
+		{"SomeHeadlineWithNoSeparators", "Go Developer", "Go Developer"},
+	}
+	for _, c := range cases {
+		if got := extractJobTitleFromResult(c.headline, c.role); got != c.want {
+			t.Errorf("extractJobTitleFromResult(%q, %q) = %q, want %q", c.headline, c.role, got, c.want)
+		}
+	}
+}
+
+// The title and company extractors read the same headline from opposite
+// sides; a change to one must not silently break the other.
+func TestTitleAndCompanyExtractorsAgree(t *testing.T) {
+	headline := "Senior Backend Engineer at Stripe - Lever"
+	if title := extractJobTitleFromResult(headline, "fallback"); title != "Senior Backend Engineer" {
+		t.Errorf("title = %q", title)
+	}
+	if company := extractCompanyFromTitle(headline); company != "Stripe" {
+		t.Errorf("company = %q", company)
+	}
+}

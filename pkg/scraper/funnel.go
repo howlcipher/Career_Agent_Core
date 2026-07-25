@@ -109,7 +109,8 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				company := extractCompanyFromTitle(result.Title)
 				log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
 				
-				isNew, err := storage.AddToFunnel(company, role, result.Link, "DISCOVERED")
+				jobTitle := extractJobTitleFromResult(result.Title, role)
+				isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED")
 				if err != nil {
 					log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
 				} else if isNew && jobChan != nil {
@@ -143,6 +144,33 @@ func extractCompanyFromTitle(title string) string {
 		return strings.TrimSpace(parts[0])
 	}
 	return "Unknown Company"
+}
+
+// extractJobTitleFromResult pulls the posting's real title out of a search
+// result headline, which is the mirror of what extractCompanyFromTitle does
+// with the same string: "Senior Backend Engineer at Stripe - Lever" carries
+// the title before " at " and the company after it.
+//
+// bugs.md #69: the SerpAPI path used to store the *search role* as job_title
+// and discard result.Title after logging it. Falls back to the role when the
+// headline cannot be parsed, so a row always has something meaningful.
+func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
+	t := strings.TrimSpace(resultTitle)
+	if t == "" {
+		return fallbackRole
+	}
+	if parts := strings.Split(t, " at "); len(parts) > 1 {
+		if title := strings.TrimSpace(parts[0]); title != "" {
+			return title
+		}
+	}
+	// Headlines without " at " commonly read "Title - Company - ATS".
+	if parts := strings.Split(t, " - "); len(parts) > 1 {
+		if title := strings.TrimSpace(parts[0]); title != "" {
+			return title
+		}
+	}
+	return fallbackRole
 }
 
 func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- Job) {
@@ -194,6 +222,10 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 				company = "Unknown Company"
 			}
 			
+			// Unlike the SerpAPI path above, this fallback parses raw anchor
+			// hrefs and has no result headline to read a real title from, so
+			// the searched role is genuinely the only label available here
+			// (bugs.md #69).
 			log.Printf("[FunnelEngine] Yahoo Fallback Discovered Live Job at %s", decoded)
 			isNew, err := storage.AddToFunnel(company, role, decoded, "DISCOVERED")
 			if err == nil && isNew && jobChan != nil {
