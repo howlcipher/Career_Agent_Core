@@ -1162,3 +1162,53 @@ func TestCoverLetterPathMatchesSaveApplication(t *testing.T) {
 		t.Errorf("cover letter content = %q, want %q", string(got), "the letter")
 	}
 }
+
+// bugs.md #63: UpdateFunnelStatusWithScore is the only writer of fit_score and
+// had zero callers, so the pipeline's most expensive computation (~10 min/job)
+// was discarded after a single in-memory threshold check. This pins that the
+// score both persists and survives a later status change.
+func TestUpdateFunnelStatusWithScorePersistsScore(t *testing.T) {
+	dir := t.TempDir()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origWD)
+
+	InitDB()
+	const url = "https://job-boards.greenhouse.io/acme/jobs/1"
+	if _, err := AddToFunnel("Acme", "SRE", url, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+
+	if err := UpdateFunnelStatusWithScore(url, "PROCESSING", 90); err != nil {
+		t.Fatalf("UpdateFunnelStatusWithScore: %v", err)
+	}
+
+	var status string
+	var score sql.NullInt64
+	if err := db.QueryRow("SELECT status, fit_score FROM job_funnel WHERE url = ?", url).Scan(&status, &score); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if status != "PROCESSING" {
+		t.Errorf("status = %q, want PROCESSING", status)
+	}
+	if !score.Valid || score.Int64 != 90 {
+		t.Fatalf("fit_score = %v, want 90 — the score was not persisted", score)
+	}
+
+	// A later plain status update must not wipe the recorded score, or the
+	// data still never accumulates.
+	if err := UpdateFunnelStatus(url, "APPLIED"); err != nil {
+		t.Fatalf("UpdateFunnelStatus: %v", err)
+	}
+	if err := db.QueryRow("SELECT fit_score FROM job_funnel WHERE url = ?", url).Scan(&score); err != nil {
+		t.Fatalf("re-query: %v", err)
+	}
+	if !score.Valid || score.Int64 != 90 {
+		t.Errorf("fit_score = %v after a status change, want it preserved at 90", score)
+	}
+}

@@ -473,13 +473,23 @@ func main() {
 			continue
 		}
 
+		// bugs.md #63: persist the score. ScoreJob is the most expensive step
+		// in the pipeline (~9m49s/job measured live after #23 removed
+		// tailoring), and its result used to be read once for the threshold
+		// check below and then thrown away — UpdateFunnelStatusWithScore, the
+		// only writer of fit_score, had zero callers.
 		if score < 50 {
 			log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", workerID, job.CompanyName, score)
-			storage.UpdateFunnelStatus(job.URL, "SKIPPED")
+			if err := storage.UpdateFunnelStatusWithScore(job.URL, "SKIPPED", score); err != nil {
+				log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
+			}
 			time.Sleep(1 * time.Second)
 			continue
 		}
 		log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d! Proceeding with application.", workerID, job.CompanyName, score)
+		if err := storage.UpdateFunnelStatusWithScore(job.URL, "PROCESSING", score); err != nil {
+			log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
+		}
 
 		if prof.AutoSubmit {
 			if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
