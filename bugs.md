@@ -41,6 +41,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 74 | [react-select comboboxes were filled but never committed, so their validated value stayed empty](#74-react-select-comboboxes-were-filled-but-never-committed-so-their-validated-value-stayed-empty) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | #72's autocomplete hypothesis, confirmed structurally by fetching Reddit's real Greenhouse markup: `Location (City)` and `Country` are **react-select** widgets (`select__control`, `select__input-container[data-value]`, `react-select-candidate-location-live-region`). The `<input id="candidate-location">` is a *search* box — the chosen value lives in widget state and renders into a sibling `.select__single-value`. `Fill()` types the search text and commits nothing, so the value the form validates stays empty, and reading `el.value` back reports `""` whether or not a selection succeeded. These are required fields, so the form could never pass |
 | 73 | [A CSS id selector cannot start with a digit, so Greenhouse's numeric custom-question ids were unfillable half the time](#73-a-css-id-selector-cannot-start-with-a-digit-so-greenhouses-numeric-custom-question-ids-were-unfillable-half-the-time) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on Reddit's third and final attempt: 6 of 15 fixes failed with `selector matched no element` for `input#430`, `input#431`, `input#432`, `input#433`, `input#434`, `input#436`. `#430` is a **CSS syntax error** — an id selector cannot begin with a digit — yet Greenhouse numbers its custom-question controls exactly that way. `resolveFieldLocator` only tried its attribute-form fallbacks when the selector did *not* look like CSS, and `input#430` contains `#`, so it was used verbatim and matched nothing. The model sent bare `430` on attempt 2 (resolved fine) and `input#430` on attempt 3 (dead), so the same field alternated between fillable and unfillable across attempts of the same job |
 | 72 | [The retry loop counts empty-valued and non-landing fixes as applied, reporting progress it is not making](#72-the-retry-loop-counts-empty-valued-and-non-landing-fixes-as-applied-reporting-progress-it-is-not-making) | Major | Resolved (2026-07-25, accounting fixed; root cause of the underlying non-convergence still under live investigation) | — | Opus 5 | Gemini 3 Pro | Found immediately after #70 shipped, from the diagnostic #70 added: Reddit logged `Attempt 2 applied 15/15 validation fix(es)` and **still bounced**, with the narrowed payload essentially unchanged (8249 → 8334 chars) — i.e. the same fields were still invalid. Two accounting defects make that tally untrustworthy: `applyValidationFix` returns `nil` for an empty value (correct for the *initial* fill path, a lie in the retry path), and a `nil` return only means Playwright accepted the call, not that the control ended up set |
 | 71 | [firstVisibleLocator's .First() fallback reintroduces the very hang it was written to prevent, at the submit click](#71-firstvisiblelocators-first-fallback-reintroduces-the-very-hang-it-was-written-to-prevent-at-the-submit-click) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Found auditing the cohort's `FAILED_SUBMIT` rows during #70's restart: Zimperium (Lever, scored **85**) died on `playwright: timeout: Timeout 30000ms exceeded` waiting for `locator(...).first()`. The `.first()` in Playwright's own call log is the proof — `firstVisibleLocator` found *no* visible match, fell back to `loc.First()`, and the caller clicked a match already known to be invisible (#59's hidden `hcaptchaSubmitBtn`). Guaranteed to burn the full action timeout and then misreport "no visible submit button here" as a generic timeout, which is why it read as CPU/network flakiness |
@@ -104,6 +105,35 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 74. react-select comboboxes were filled but never committed, so their validated value stayed empty (Resolved 2026-07-25, live confirmation pending)
+
+**This is #72's autocomplete hypothesis, promoted to a root cause by evidence rather than inference.** Fetched Reddit's actual Greenhouse page and read the markup for the two fields that resolved fine on attempt 3 and still bounced:
+
+```html
+<label id="candidate-location-label" for="candidate-location">Location (City)<span aria-hidden="true">*</span></label>
+<div class="select-shell remix-css-b62m3t-container">
+  <span id="react-select-candidate-location-live-region" ...></span>
+  <div class="select__control remix-css-13cymwt-control">
+    <div class="select__value-container">
+      <div class="select__placeholder" id="react-select-candidate-location-placeholder"></div>
+      <div class="select__input-container" data-value="">
+        <input class="select__input" ...>
+```
+
+It is **react-select**. `<input id="candidate-location">` is the widget's *search* box, not its value. The committed selection lives in React state and is rendered into a sibling `.select__single-value`; `.select__input-container[data-value]` mirrors it.
+
+**Two consequences, both fatal:**
+1. `Fill()` types search text and commits nothing. The value the form validates stays empty. `Location (City)` and `Country` are both **required** (note the `*`), so the form could never pass, no matter how many retries.
+2. `verifyFixLanded` (added in #72) reads `el.value` — which is `""` *whether or not a selection succeeded*. So #72's own read-back would have reported a false negative on a working combobox. Fixed here as part of the same change.
+
+**Fix:** `readControlValueJS` now looks past the input to the widget — `.select__single-value`, `.select__multi-value__label`, then `[data-value]` — before concluding a control is empty. `commitComboboxSelection` presses `Enter` to commit the focused option and re-reads. It is **deliberately narrow**: it fires only when the control is inside `.select__control` / `.select-shell` or carries `role="combobox"`, because a stray `Enter` in an ordinary text input can submit the form before the remaining fixes are applied. Pinned by `TestCommitComboboxSelection_LeavesPlainInputsAlone`.
+
+The retry loop now logs `committed N autocomplete selection(s) that Fill() alone had left empty`.
+
+**Status is "live confirmation pending" deliberately.** The markup evidence is direct and the mechanism is not in doubt, but no live run has yet produced a confirmed `APPLIED` through this path. Do not mark it verified until one does.
+
+**Tests:** `TestCommitComboboxSelection_PressesEnterOnAComboboxAndConfirms`, `TestCommitComboboxSelection_LeavesPlainInputsAlone`.
 
 ### 73. A CSS id selector cannot start with a digit, so Greenhouse's numeric custom-question ids were unfillable half the time (Resolved 2026-07-25)
 

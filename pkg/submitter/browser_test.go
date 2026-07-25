@@ -197,6 +197,16 @@ type MockLocator struct {
 	selectOptionFunc  func(values playwright.SelectOptionValues) ([]string, error)
 	checkCalls        int
 	uncheckCalls      int
+	// pressFunc backs the keypress that commits an autocomplete selection
+	// (bugs.md #74).
+	pressFunc func(key string) error
+}
+
+func (m *MockLocator) Press(key string, options ...playwright.LocatorPressOptions) error {
+	if m.pressFunc != nil {
+		return m.pressFunc(key)
+	}
+	return nil
 }
 
 func (m *MockLocator) First() playwright.Locator { return m }
@@ -1866,5 +1876,68 @@ func TestSplitTagID(t *testing.T) {
 		if ok != c.ok || tag != c.tag || id != c.id {
 			t.Errorf("splitTagID(%q) = (%q, %q, %v), want (%q, %q, %v)", c.in, tag, id, ok, c.tag, c.id, c.ok)
 		}
+	}
+}
+
+// bugs.md #74: Reddit's Greenhouse form is react-select. The
+// <input id="candidate-location"> is a search box; the chosen value lives in
+// widget state and is rendered into a sibling .select__single-value, so
+// reading el.value reports "" whether or not a selection succeeded.
+func TestCommitComboboxSelection_PressesEnterOnAComboboxAndConfirms(t *testing.T) {
+	var pressed []string
+	committed := false
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			// isComboboxInputJS is the "!!(...)" predicate; readControlValueJS
+			// is the block form. Both mention combobox, so match on shape.
+			if strings.HasPrefix(script, "el => !!(") {
+				return true, nil
+			}
+			if committed {
+				return "Detroit, MI", nil
+			}
+			return "", nil
+		},
+		pressFunc: func(key string) error {
+			pressed = append(pressed, key)
+			committed = true
+			return nil
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	ok, err := commitComboboxSelection(pageTarget{page: page}, "#candidate-location")
+	if err != nil {
+		t.Fatalf("commitComboboxSelection: %v", err)
+	}
+	if len(pressed) != 1 || pressed[0] != "Enter" {
+		t.Errorf("expected a single Enter press to commit the selection, got %v", pressed)
+	}
+	if !ok {
+		t.Error("expected the selection to read back as committed")
+	}
+}
+
+// An ordinary text input must never be sent a stray Enter -- that can submit
+// the form before the remaining fixes are applied.
+func TestCommitComboboxSelection_LeavesPlainInputsAlone(t *testing.T) {
+	var pressed []string
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return false, nil },
+		pressFunc:    func(key string) error { pressed = append(pressed, key); return nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	ok, err := commitComboboxSelection(pageTarget{page: page}, "#phone")
+	if err != nil {
+		t.Fatalf("commitComboboxSelection: %v", err)
+	}
+	if len(pressed) != 0 {
+		t.Errorf("expected no keypress on a non-combobox input, got %v", pressed)
+	}
+	if ok {
+		t.Error("expected ok=false for a control this function does not handle")
 	}
 }

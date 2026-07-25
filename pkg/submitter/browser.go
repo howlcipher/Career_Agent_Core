@@ -938,6 +938,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			applied := make([]string, 0, len(fixesMap))
 			empty := make([]string, 0)
 			notLanded := make([]string, 0)
+			comboCommitted := make([]string, 0)
 			for selector, value := range fixesMap {
 				if strings.TrimSpace(value) == "" {
 					empty = append(empty, selector)
@@ -950,8 +951,18 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				applied = append(applied, selector)
 				appliedAny = true
 				if landed, vErr := verifyFixLanded(target, selector); vErr == nil && !landed {
-					notLanded = append(notLanded, selector)
+					// bugs.md #74: the value may not have stuck because this is
+					// an autocomplete that needs its selection committed.
+					if committed, cErr := commitComboboxSelection(target, selector); cErr == nil && committed {
+						comboCommitted = append(comboCommitted, selector)
+					} else {
+						notLanded = append(notLanded, selector)
+					}
 				}
+			}
+			if len(comboCommitted) > 0 {
+				sort.Strings(comboCommitted)
+				log.Printf("[Auto-Submit] Attempt %d committed %d autocomplete selection(s) that Fill() alone had left empty: %s", attempt, len(comboCommitted), strings.Join(comboCommitted, ", "))
 			}
 			if len(notLanded) > 0 {
 				sort.Strings(notLanded)
@@ -1383,18 +1394,69 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 // exactly what we sent": forms legitimately reformat input (phone numbers,
 // dates) and a <select> set by visible label reports its underlying value, so
 // strict equality would cry wolf on fixes that did land.
+// bugs.md #74: a combobox's committed value does not live on the input.
+// Confirmed against Reddit's real Greenhouse markup, which is react-select:
+// the <input id="candidate-location"> is a *search* box, and the chosen value
+// is held in widget state and rendered into a sibling .select__single-value.
+// So reading el.value reports "" both when nothing was selected and when a
+// selection succeeded -- this script has to look at the widget, not the input.
+const readControlValueJS = `el => {
+  if (el.type === 'checkbox' || el.type === 'radio') return String(el.checked);
+  if (el.value) return String(el.value);
+  const shell = el.closest('.select__control, .select-shell, [role="combobox"]');
+  if (shell) {
+    const sv = shell.querySelector('.select__single-value, .select__multi-value__label');
+    if (sv && sv.textContent.trim()) return sv.textContent.trim();
+    const dv = shell.querySelector('[data-value]');
+    if (dv && dv.getAttribute('data-value')) return dv.getAttribute('data-value');
+  }
+  return '';
+}`
+
+// isComboboxInputJS reports whether the control is an autocomplete widget
+// whose selection must be committed with a keypress. Deliberately narrow:
+// pressing Enter in an ordinary text input can submit the form early, so this
+// must not guess.
+const isComboboxInputJS = `el => !!(el.closest('.select__control, .select-shell') ||
+  el.getAttribute('role') === 'combobox' || el.closest('[role="combobox"]'))`
+
 func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 	el, err := resolveFieldLocator(target, selector)
 	if err != nil {
 		return false, err
 	}
-	got, err := el.Evaluate("el => (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : String(el.value || '')", nil)
+	got, err := el.Evaluate(readControlValueJS, nil)
 	if err != nil {
 		return false, err
 	}
 	s, _ := got.(string)
 	s = strings.TrimSpace(s)
 	return s != "" && s != "false", nil
+}
+
+// commitComboboxSelection finishes an autocomplete interaction that Fill()
+// only half-performed: filling types the search text, and react-select focuses
+// the first matching option but commits nothing until Enter is pressed.
+//
+// bugs.md #74. Returns whether the control ended up holding a value. It is a
+// no-op on anything that is not a combobox, so an ordinary text input is never
+// sent a stray Enter that could submit the form early.
+func commitComboboxSelection(target fillTarget, selector string) (bool, error) {
+	el, err := resolveFieldLocator(target, selector)
+	if err != nil {
+		return false, err
+	}
+	isCombo, err := el.Evaluate(isComboboxInputJS, nil)
+	if err != nil {
+		return false, err
+	}
+	if ok, _ := isCombo.(bool); !ok {
+		return false, nil
+	}
+	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+		return false, err
+	}
+	return verifyFixLanded(target, selector)
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one
