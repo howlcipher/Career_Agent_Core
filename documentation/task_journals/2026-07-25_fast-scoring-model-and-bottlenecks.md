@@ -84,6 +84,8 @@ print('eval_count:',d.get('eval_count'))"
 
 **The timings from that run are contaminated — do not cite them.** The same run reported 1s, 367s, 2s. A 1-second result for a ~1,400-token prompt is impossible on this CPU; those two jobs had been scored by the earlier (killed) 6-job run, so Ollama served them from a warm prompt cache. Only the 367s figure reflects real cold work. **Any future benchmark here must either use jobs never scored before or restart the Ollama server between runs**, or it will measure the cache instead of the model.
 
+**Benchmark fidelity caveat:** `scorebench` passes the **full résumé text** as `parsedDocument`, whereas production passes `tailoredContext` (RAG top-5 chunks). So benchmark prompts run somewhat larger than live ones — the smallest job (5,594-char description) still produced a **13,388-char payload**, meaning roughly 7.8k chars of that is rubric + résumé + constraints, i.e. **fixed overhead independent of the posting**. Both models receive identical input, so the *score comparison* is unaffected; only absolute timings skew slightly pessimistic. Worth noting that this fixed overhead limits how much improvements.md #25's description trimming can save on short postings.
+
 30B baseline on the identical cached inputs is running now (`r30b.json`). What matters in the comparison is **agreement across the `<50` skip threshold**, not exact score parity — the threshold is the only thing that changes behavior.
 
 ## Work completed under this goal
