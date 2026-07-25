@@ -37,7 +37,8 @@ So for a **Greenhouse or Lever job that fills cleanly — the bulk of the queue 
 
 ## Findings on result quality (goal item 2)
 
-- **Zero `APPLIED` rows exist in the entire database** (all-time: 3133 `DISCOVERED`, 301 `INVALID_URL`, 264 `FAILED_SUBMIT`, 115 `SKIPPED`, 36 `BLOCKED_CAPTCHA`, 22 `FAILED_SCORE`, 12 `MANUAL_REQUIRED`). Not one confirmed application has ever completed.
+- Current status spread: 3133 `DISCOVERED`, 301 `INVALID_URL`, 264 `FAILED_SUBMIT`, 115 `SKIPPED`, 36 `BLOCKED_CAPTCHA`, 22 `FAILED_SCORE`, 12 `MANUAL_REQUIRED`, **0 `APPLIED`**.
+  - **Correction, made before this claim went any further:** the 0 is *expected and self-inflicted*, not evidence that nothing ever worked. All 82 historically-`APPLIED` rows were deliberately reset to `DISCOVERED` at the start of this re-verification effort — that is the entire cohort in `applied_urls_verify82.txt`. A genuine, confirmed `APPLIED` was also produced 2026-07-23 (a real Lever posting at `jobs.lever.co/smarsh/...`, which is what flipped the Usability Gate's live-batch box). The honest statement is: **82 applications were recorded historically but on evidence bug #53 later showed was unreliable, one application is confirmed genuine, and the re-verification of the 82 is still unanswered.** Do not repeat "nothing has ever applied" — it is wrong.
 - Historical failure reasons (rotated log, 622 scored jobs) are dominated by **119× "form failed to render in time"** and **60× "could not launch browser: target closed"**. Both predate most of this week's fixes, so the counts are not current evidence — but "could not launch browser" is a resource/stability class that no bug so far has addressed and is worth watching for recurrence.
 
 ## Next Step
