@@ -962,7 +962,15 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				}
 				applied = append(applied, selector)
 				appliedAny = true
-				if landed, vErr := verifyFixLanded(target, selector); vErr == nil && !landed {
+				// bugs.md #81: a verification *error* previously fell through
+				// this condition entirely -- the field was recorded as neither
+				// landed nor failed, so it vanished from the logs and no commit
+				// was attempted. Treat an unverifiable field as not landed.
+				landed, vErr := verifyFixLanded(target, selector)
+				if vErr != nil {
+					log.Printf("[Auto-Submit] Could not verify whether %q was set (%v); treating as not set", selector, vErr)
+				}
+				if !landed {
 					// bugs.md #74: the value may not have stuck because this is
 					// an autocomplete that needs its selection committed.
 					if committed, cErr := commitComboboxSelection(target, selector, value); cErr == nil && committed {
@@ -1447,15 +1455,23 @@ const readInputValueJS = `el => (el.type === 'checkbox' || el.type === 'radio') 
 // returned the input, which has no children, so the committed value was never
 // found. Proven against Reddit's live form: with this corrected the same DOM
 // reads back "Macomb, Illinois, United States" where it previously read "".
+// bugs.md #81: only the widget's rendered selection counts. The earlier
+// [data-value] fallback was actively wrong -- react-select puts data-value on
+// .select__input-container to mirror the *typed search text* for input sizing,
+// so it is non-empty the instant anything is typed, committed or not. Probed
+// directly: after a bare Fill() with nothing selected, this returned
+// "I don't wish to answer". That false "landed" suppressed the commit step for
+// every custom question on every Greenhouse form, which is why 13/13 fixes
+// "applied" and the invalid-field list came back byte-identical.
+//
+// This is the same mistake as #76 one layer deeper: reading the artifact of
+// typing and calling it a committed value.
 const readComboboxValueJS = `el => {
   const shell = el.closest('.select__control, .select-shell') ||
                 (el.parentElement && el.parentElement.closest('[role="combobox"]'));
   if (!shell) return '';
   const sv = shell.querySelector('.select__single-value, .select__multi-value__label');
-  if (sv && sv.textContent.trim()) return sv.textContent.trim();
-  const dv = shell.querySelector('[data-value]');
-  const v = dv && dv.getAttribute('data-value');
-  return v ? v : '';
+  return sv && sv.textContent.trim() ? sv.textContent.trim() : '';
 }`
 
 // isComboboxInputJS reports whether the control is an autocomplete widget

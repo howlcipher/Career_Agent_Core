@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 81 | [data-value mirrors the typed search text, so every react-select falsely reported "landed"](#81-data-value-mirrors-the-typed-search-text-so-every-react-select-falsely-reported-landed) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught by #80's new diagnostic: `Attempt 2 applied 13/13 validation fix(es)` and the still-invalid list came back **byte-identical** — none of the 13 landed, including the declinable EEO fields that have nothing to do with the missing attestations. Probed directly: after a bare `Fill()` with **nothing selected**, the value read returned `"I don't wish to answer"`. react-select puts `data-value` on `.select__input-container` to mirror the *typed search text* for input sizing, so the `[data-value]` fallback was reading the artifact of typing — the same mistake as #76, one layer deeper. The false "landed" suppressed the commit step for every custom question on every Greenhouse form |
 | 80 | [The retry loop logged the payload size but never which fields were still invalid](#80-the-retry-loop-logged-the-payload-size-but-never-which-fields-were-still-invalid) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Hit the wall directly: `Attempt 2 applied 13/13 validation fix(es)` with **no** not-landed line at all, and the form still bounced — `7212 -> 7281 chars`. Every field reported as filled, nothing reported as failed, and the submission was still rejected. The byte count cannot distinguish "the same fields are still failing" from "different ones now are", so the next step would have been another blind ~25-minute cycle. `InvalidFieldIdentifiers` now names them |
 | 79 | [The option wait watched an unrelated widget, and committing option-0 filed the wrong location](#79-the-option-wait-watched-an-unrelated-widget-and-committing-option-0-filed-the-wrong-location) | Blocker | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Found with a standalone Playwright probe against Reddit's real form, after the 12-min-per-guess loop became untenable. Two defects: **(a)** the options wait counted `[role="option"]` **document-wide**, and every Greenhouse page carries an always-open intl-tel-input phone-country widget holding ~244 options — so the count was permanently non-zero, the wait returned instantly, and every commit fired into an empty menu. **(b)** far worse, committing the *focused* option is unsafe: typing `Macomb` puts **"Macomb, Illinois, United States"** at option-0 while the configured address is Michigan, so a successful commit would file real applications with the wrong location |
 | 78 | [Fill() never opens a react-select menu, and the read-back matched the input itself](#78-fill-never-opens-a-react-select-menu-and-the-read-back-matched-the-input-itself) | Blocker | Resolved (2026-07-25, confirmed live in the agent 16:02) | — | Opus 5 | Gemini 3 Pro | Probed directly: `Fill()` sets `input.value` while react-select's menu **never opens** — the widget's own option count stayed 0 and `aria-activedescendant` stayed empty for 3 full seconds, so the Enter that followed had nothing to select. Real keystrokes open and filter it in ~600ms. Separately, react-select sets `role="combobox"` **on the input**, and `Element.closest()` tests the element itself first — so the value read resolved its "shell" to the input, which has no children, and never found the committed value. Same DOM, corrected: `""` → `"Macomb, Illinois, United States"` |
@@ -115,6 +116,38 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 81. data-value mirrors the typed search text, so every react-select falsely reported "landed" (Resolved 2026-07-25)
+
+**Caught immediately by #80's new diagnostic**, which is exactly why #80 was worth filing:
+
+```
+16:27:01 Narrowed ... still invalid: 430, 431, 432, 433, 434, 436, gdpr_..., question_67942415 ... 67942420
+16:40:11 Attempt 2 applied 13/13 validation fix(es) to: #430 ... #question_67942420
+16:40:13 Narrowed ... still invalid: 430, 431, 432, 433, 434, 436, gdpr_..., question_67942415 ... 67942420
+```
+
+The list is **byte-identical before and after applying all 13 fixes**. Not a near miss — nothing landed at all, including the EEO fields, which are freely declinable and have nothing to do with the two missing attestations. Before #80 this was invisible: the only observable was a payload size drifting 7212 → 7281.
+
+**Root cause, established by probe rather than inference.** Replicating what `applyValidationFix` does — resolve, `Fill()`, then run the agent's own checks:
+
+```
+[id="430"]   Fill()=nil, nothing selected
+  isCombobox   = true
+  readCombobox = "I don't wish to answer"    <-- reports LANDED
+```
+
+react-select sets `data-value` on `.select__input-container` to mirror the **typed search text** (it drives the input's auto-sizing). It is therefore non-empty the instant anything is typed, committed or not. The `[data-value]` fallback in `readComboboxValueJS` was reading it and calling it a committed selection.
+
+So: `applyValidationFix` types the text, the read-back sees `data-value` and reports success, the commit step is skipped, and the field is never actually set. Every custom question on every Greenhouse form, every attempt.
+
+**This is the same mistake as #76 one layer deeper** — reading the artifact of typing and treating it as a committed value. #76 fixed `el.value`; the fallback added alongside it had the identical flaw and went unnoticed because it only fires when `el.value` is empty.
+
+**Why Location/Country still worked:** `fillGreenhouseCombobox` calls `setComboboxValue` directly and clicks a real option, so `.select__single-value` genuinely exists and is checked first. Only the *retry* path, which starts from a bare `Fill()`, was fooled.
+
+**Fix:** `readComboboxValueJS` now reads **only** `.select__single-value` / `.select__multi-value__label` — the widget's rendered selection. Pinned by `TestReadComboboxValue_IgnoresDataValueWhichMirrorsTypedText`, which asserts the JS does not mention `data-value` at all, so the fallback cannot be reintroduced.
+
+**Second defect fixed here:** a verification *error* fell through the retry loop's condition entirely (`vErr == nil && !landed`), recording the field as neither landed nor failed — it vanished from the logs and no commit was attempted. An unverifiable field is now treated as not set and logged.
 
 ### 80. The retry loop logged the payload size but never which fields were still invalid (Resolved 2026-07-25)
 

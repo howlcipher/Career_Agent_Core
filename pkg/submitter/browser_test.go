@@ -1988,3 +1988,21 @@ func TestCommitComboboxOnLocator_LeavesPlainInputsAlone(t *testing.T) {
 		t.Error("a plain input must not be clicked, typed into, or sent Enter")
 	}
 }
+
+// bugs.md #81: react-select puts data-value on .select__input-container to
+// mirror the TYPED SEARCH TEXT for input sizing, so it is non-empty the moment
+// anything is typed — committed or not. Probed live: after a bare Fill() with
+// nothing selected, the old read returned "I don't wish to answer". That false
+// "landed" suppressed the commit step for every custom question on every
+// Greenhouse form, which is why 13/13 fixes "applied" and the invalid-field
+// list came back byte-identical.
+//
+// Only the widget's rendered selection counts.
+func TestReadComboboxValue_IgnoresDataValueWhichMirrorsTypedText(t *testing.T) {
+	if strings.Contains(readComboboxValueJS, "data-value") {
+		t.Error("readComboboxValueJS must not consult data-value — it mirrors uncommitted typed text, not a committed selection")
+	}
+	if !strings.Contains(readComboboxValueJS, "select__single-value") {
+		t.Error("readComboboxValueJS must read the rendered selection")
+	}
+}
