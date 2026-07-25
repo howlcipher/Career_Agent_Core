@@ -129,7 +129,7 @@ The restarted run (PID `3520054`) ran **8h37m** and processed 19 jobs. Two thing
 If failures continue, read the **specific** new reason out of the log before concluding anything — this run has already produced two distinct dominant causes in sequence, each masked by the previous.
 
 **Standing warnings:**
-- **Monitor liveness:** check `ps aux | grep applied_urls_verify82`, not the task list. Three monitors were killed out from under this session today.
+- **Monitor liveness — both existing checks can lie, so use the output file.** The task list has reported zero for monitors that were demonstrably alive (documented in the sibling journal), and today `ps aux | grep applied_urls_verify82` *also* returned nothing for monitor `b6jugkzde` while it was actively emitting status changes. **The authoritative check is reading the monitor's own output file** (`/tmp/.../tasks/<id>.output`): if it contains recent `STATUS CHANGE` lines, the monitor is alive regardless of what `ps` or the task list claim. Only re-arm when that file is stale *and* the run has genuinely moved on. Three monitors were also killed out from under this session today, so expect to re-arm after any interruption.
 - **Benchmarking:** Ollama serves **warm prompt caches**. Use unseen jobs or restart the server, or you measure the cache — that produced 1s/2s readings here and a wrong "2.5x faster" conclusion.
 - **`OLLAMA_FAST_MODEL` is intentionally unset** — see improvements.md #24 for the evidence the swap was rejected.
 
