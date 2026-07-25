@@ -2169,3 +2169,29 @@ func TestErrUncommittableField_IsAManualReviewOutcome(t *testing.T) {
 		t.Errorf("expected the offending field named in the error, got %q", wrapped.Error())
 	}
 }
+
+// bugs.md #89: Greenhouse replaces the form in place, so a successful submit
+// leaves the URL unchanged and only a confirmation phrase can prove it. If
+// that page renders after the 10s networkidle wait, the check right after the
+// click sees the old DOM and reports failure — and retrying re-submits an
+// application that already went through, filing a duplicate with a real
+// employer. The re-check before each retry is the only protection against that.
+func TestIsSubmissionConfirmed_ConfirmsOnPhraseWithAnUnchangedURL(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/orkes/jobs/5221481008"
+	confirmed, reason := isSubmissionConfirmed(same, same, "<h1>Thank you for applying</h1>")
+	if !confirmed {
+		t.Fatal("a confirmation phrase must confirm even when the URL never changed — that is the Greenhouse case")
+	}
+	if reason != reasonConfirmationPhrase {
+		t.Errorf("reason = %v, want the phrase reason", reason)
+	}
+}
+
+// Without a phrase and without a URL change there is no evidence, and it must
+// not be treated as success — that was bug #51.
+func TestIsSubmissionConfirmed_StillRefusesWithNoEvidence(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/orkes/jobs/5221481008"
+	if confirmed, _ := isSubmissionConfirmed(same, same, "<form>still here</form>"); confirmed {
+		t.Error("an unchanged URL with no confirmation phrase is not evidence of success")
+	}
+}

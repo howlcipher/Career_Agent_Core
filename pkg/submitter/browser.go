@@ -957,6 +957,21 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			}
 			initialAttemptComplete = true
 		} else {
+			// bugs.md #89: re-check confirmation before retrying anything.
+			// Greenhouse replaces the form in place, so a successful submit
+			// leaves the URL unchanged and only a confirmation *phrase* can
+			// prove it -- and if that page renders after the 10s networkidle
+			// wait, the check right after the click sees the old DOM and
+			// reports failure. Retrying from there re-submits an application
+			// that already went through. Cheap to re-test, and the only
+			// protection against filing duplicates with a real employer.
+			if content, cErr := page.Content(); cErr == nil {
+				if confirmed, reason := isSubmissionConfirmed(urlBeforeSubmitClick, page.URL(), content); confirmed {
+					log.Printf("[Auto-Submit] Submission confirmed for %s on re-check before attempt %d (%s) — the previous click had succeeded", companyName, attempt, reason)
+					return nil
+				}
+			}
+
 			log.Printf("[Auto-Submit] Attempt %d: Solving validation errors...", attempt)
 			target := resolveFillTarget(page)
 			domHTML, _ := target.HTML()
@@ -975,6 +990,15 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// on time rather than on logic. Falls back to the full form when
 			// no invalid control can be identified, since an unreadable theme
 			// is a reason to send more, never less.
+			// bugs.md #89: when nothing is flagged invalid, say whether a form
+			// is even still on the page. "Narrowing found nothing" is
+			// ambiguous between "the form is fine now" and "the form is gone
+			// because it submitted", and that ambiguity is exactly what made
+			// this case unreadable from the logs.
+			if _, ok, _ := parser.PruneDOMToInvalidFields(prunedHTML); !ok {
+				log.Printf("[Auto-Submit] Attempt %d: no field is flagged invalid (form present: %v, payload %d chars) — sending the whole form",
+					attempt, strings.Contains(strings.ToLower(prunedHTML), "<form"), len(prunedHTML))
+			}
 			if narrowed, ok, nErr := parser.PruneDOMToInvalidFields(prunedHTML); nErr == nil && ok {
 				// bugs.md #80: name the fields, not just the byte count. The
 				// size alone cannot distinguish "the same fields are still
