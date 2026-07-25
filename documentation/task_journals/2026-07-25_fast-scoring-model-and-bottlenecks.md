@@ -41,6 +41,28 @@ So for a **Greenhouse or Lever job that fills cleanly — the bulk of the queue 
   - **Correction, made before this claim went any further:** the 0 is *expected and self-inflicted*, not evidence that nothing ever worked. All 82 historically-`APPLIED` rows were deliberately reset to `DISCOVERED` at the start of this re-verification effort — that is the entire cohort in `applied_urls_verify82.txt`. A genuine, confirmed `APPLIED` was also produced 2026-07-23 (a real Lever posting at `jobs.lever.co/smarsh/...`, which is what flipped the Usability Gate's live-batch box). The honest statement is: **82 applications were recorded historically but on evidence bug #53 later showed was unreliable, one application is confirmed genuine, and the re-verification of the 82 is still unanswered.** Do not repeat "nothing has ever applied" — it is wrong.
 - Historical failure reasons (rotated log, 622 scored jobs) are dominated by **119× "form failed to render in time"** and **60× "could not launch browser: target closed"**. Both predate most of this week's fixes, so the counts are not current evidence — but "could not launch browser" is a resource/stability class that no bug so far has addressed and is worth watching for recurrence.
 
+## Open lead: reasoning-mode tokens may be the real cost (unverified — verify before acting)
+
+**Hypothesis, strongly grounded but not yet confirmed.** `pkg/mcp/provider_ollama.go`'s `ollamaChatRequest` has **no `think` field**, and a repo-wide grep confirms `think` is never set on any request. Both configured models advertise the `thinking` capability (`ollama show qwen3:30b-instruct` → `Capabilities: tools, thinking, completion`). If Ollama defaults thinking **on** for these models, then every call in the pipeline generates a chain-of-thought block before its actual answer.
+
+Why that would matter enormously here: generation on this CPU-only host was measured at roughly **1.6-1.8 tokens/sec** (see `defaultOllamaTimeoutMinutes`' comment). A few hundred reasoning tokens is therefore **several minutes of pure waste per call** — for `ScoreJob`, whose entire useful output is one integer.
+
+Two pieces of circumstantial support:
+- `ScoreJob` already carries a salvage path (`firstInt`) with the comment "Smaller local models sometimes wrap the number in prose instead of returning a bare integer" — exactly what leaked reasoning output looks like.
+- The 4B benchmark is taking ~3.8 min/job for 5.5-14k-char prompts, far slower than a 4B dense model should need on 8 cores if it were emitting only a handful of tokens.
+
+**If confirmed, this is likely a bigger win than the model swap, and it helps every call and both models.** Ollama accepts `"think": false` per request. Prime candidate for `ScoreJob` (bare integer), and worth measuring for `ExtractFormMapping`/`SolveValidationErrors` (JSON out) too.
+
+**Verification blocked so far** only because `OLLAMA_MAX_LOADED_MODELS=1` plus a single-slot server (`-np 1`) means the benchmark monopolizes Ollama; a probe request queues behind it and timed out at 300s. Re-run the probe the moment the benchmark exits:
+```bash
+curl -s http://localhost:11434/api/chat -d '{"model":"qwen3:4b-instruct",
+  "messages":[{"role":"user","content":"Reply with only the number 42."}],"stream":false}' \
+| python3 -c "import json,sys; d=json.load(sys.stdin); m=d['message']; \
+print('content:',repr(m.get('content','')[:200])); print('thinking:',repr(str(m.get('thinking',''))[:200])); \
+print('eval_count:',d.get('eval_count'))"
+```
+`eval_count` is the decisive number: a bare "42" should be ~1-5 tokens. Anything in the hundreds means reasoning tokens are being generated and paid for.
+
 ## Next Step
 
 Awaiting the 4B benchmark (`results_4b.json`); then run the identical cached set against `qwen3:30b-instruct` for the baseline, compare agreement — **especially across the `<50` skip threshold, which is what actually changes behavior** — and set `OLLAMA_FAST_MODEL` only if agreement holds. Then rebuild and restart the 82-job run with #63/#64 and whatever model decision follows.
