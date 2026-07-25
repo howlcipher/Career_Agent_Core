@@ -41,6 +41,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 76 | [#74's own read-back checked el.value first, silently disabling the combobox commit it had just added](#76-74s-own-read-back-checked-elvalue-first-silently-disabling-the-combobox-commit-it-had-just-added) | Blocker | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | **A defect in #74's fix, caught live by the absence of an expected log line.** Reddit logged `Attempt 2 applied 15/15 validation fix(es)` with **no** `committed N autocomplete selection(s)` line and **no** `left the control empty` line — so `verifyFixLanded` reported every field as landed and the commit step never ran once. Cause: the value read checked `el.value` before the combobox branch, and a react-select search input genuinely holds the typed text after `Fill()`. #74 was therefore inert on exactly the fields it was written for, and #75 inherited the same inertness |
 | 75 | [#74's combobox commit was wired into the retry path but not the initial fill, guaranteeing a wasted retry cycle](#75-74s-combobox-commit-was-wired-into-the-retry-path-but-not-the-initial-fill-guaranteeing-a-wasted-retry-cycle) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | The identical structural gap **#67** found, one layer up: `safeFillWithLabelFallback`'s three tiers all use plain `Fill()`, so a react-select field is typed into but never committed on the first pass. Since `Location (City)` and `Country` are required on every Greenhouse form, the first submit was **guaranteed** to bounce and force a full validation-retry cycle — ~12 minutes of inference on this machine — to commit something a single keypress could have done immediately. Confirmed live at 13:36: the run carrying #74 still bounced on attempt 1 with the narrowed payload at exactly 8249 chars, unchanged from the run before it |
 | 74 | [react-select comboboxes were filled but never committed, so their validated value stayed empty](#74-react-select-comboboxes-were-filled-but-never-committed-so-their-validated-value-stayed-empty) | Major | Resolved (2026-07-25, root-caused and fixed; live confirmation pending) | — | Opus 5 | Gemini 3 Pro | #72's autocomplete hypothesis, confirmed structurally by fetching Reddit's real Greenhouse markup: `Location (City)` and `Country` are **react-select** widgets (`select__control`, `select__input-container[data-value]`, `react-select-candidate-location-live-region`). The `<input id="candidate-location">` is a *search* box — the chosen value lives in widget state and renders into a sibling `.select__single-value`. `Fill()` types the search text and commits nothing, so the value the form validates stays empty, and reading `el.value` back reports `""` whether or not a selection succeeded. These are required fields, so the form could never pass |
 | 73 | [A CSS id selector cannot start with a digit, so Greenhouse's numeric custom-question ids were unfillable half the time](#73-a-css-id-selector-cannot-start-with-a-digit-so-greenhouses-numeric-custom-question-ids-were-unfillable-half-the-time) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Caught live on Reddit's third and final attempt: 6 of 15 fixes failed with `selector matched no element` for `input#430`, `input#431`, `input#432`, `input#433`, `input#434`, `input#436`. `#430` is a **CSS syntax error** — an id selector cannot begin with a digit — yet Greenhouse numbers its custom-question controls exactly that way. `resolveFieldLocator` only tried its attribute-form fallbacks when the selector did *not* look like CSS, and `input#430` contains `#`, so it was used verbatim and matched nothing. The model sent bare `430` on attempt 2 (resolved fine) and `input#430` on attempt 3 (dead), so the same field alternated between fillable and unfillable across attempts of the same job |
@@ -106,6 +107,34 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 76. #74's own read-back checked el.value first, silently disabling the combobox commit it had just added (Resolved 2026-07-25, live confirmation pending)
+
+**A defect in #74's fix, and it was caught by a log line that did not appear.** The run carrying #74 produced:
+
+```
+13:49:18 Attempt 2 applied 15/15 validation fix(es) to: 430 ... candidate-location, country ...
+13:49:20 Submission failed validation. Retrying...
+```
+
+No `committed N autocomplete selection(s)` line. No `reported success but left the control empty` line. Both are absent, and that combination is only possible one way: `verifyFixLanded` returned **true for all 15 fields**, so the combobox branch was never entered. #74 was inert on precisely the fields it was written for, and #75 — built on the same read-back — inherited the inertness.
+
+**Root cause:** the read script tested `el.value` before the combobox branch:
+
+```js
+if (el.value) return String(el.value);          // <-- wrong for a combobox
+const shell = el.closest('.select__control, ...');
+```
+
+After `Fill()`, a react-select search input **does** hold the typed text. So `el.value` was `"Detroit, MI"`, non-empty, and the control was declared satisfied — while the widget's committed selection was still empty and the form still rejected it. The check that was supposed to detect "typed but not committed" was reading the very artifact of typing.
+
+**Fix:** split into `readInputValueJS` and `readComboboxValueJS` (which never looks at `el.value`), and moved the choice between them into Go, in `locatorHasValue`. Branching inside one JS blob is what made the ordering untestable and let this ship in the first place; the decision is now a plain Go conditional with `isComboboxLocator`, and is unit-tested directly.
+
+**Severity Blocker:** it rendered two other shipped fixes completely inert without any error, on required fields that no retry could otherwise satisfy.
+
+**Lesson worth keeping:** the diagnostic that caught this was an *absent* log line, not a failing one. Both #74 and #75 looked correct in isolation and had passing tests. What exposed the defect was checking whether the fix actually announced itself at runtime — worth doing deliberately after any fix whose whole purpose is to fire on a specific condition.
+
+**Tests:** `TestLocatorHasValue_ReadsAComboboxWithTheWidgetScriptNotElValue`, `TestLocatorHasValue_ReadsAPlainInputWithElValue`.
 
 ### 75. #74's combobox commit was wired into the retry path but not the initial fill, guaranteeing a wasted retry cycle (Resolved 2026-07-25, live confirmation pending)
 

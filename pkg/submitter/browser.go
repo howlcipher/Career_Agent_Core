@@ -1400,17 +1400,26 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 // is held in widget state and rendered into a sibling .select__single-value.
 // So reading el.value reports "" both when nothing was selected and when a
 // selection succeeded -- this script has to look at the widget, not the input.
-const readControlValueJS = `el => {
-  if (el.type === 'checkbox' || el.type === 'radio') return String(el.checked);
-  if (el.value) return String(el.value);
+// readInputValueJS reads an ordinary control's value. Never used on a
+// combobox -- see readComboboxValueJS for why.
+const readInputValueJS = `el => (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : String(el.value || '')`
+
+// readComboboxValueJS deliberately never looks at el.value.
+//
+// bugs.md #76: a react-select search input genuinely holds the typed text
+// after Fill(), so reading el.value on a combobox reports a committed
+// selection where there is none. That silently suppressed #74's commit step
+// entirely -- every combobox looked satisfied, nothing was ever committed, and
+// the form kept bouncing on the same required fields. Only the widget's own
+// rendering of the selection counts.
+const readComboboxValueJS = `el => {
   const shell = el.closest('.select__control, .select-shell, [role="combobox"]');
-  if (shell) {
-    const sv = shell.querySelector('.select__single-value, .select__multi-value__label');
-    if (sv && sv.textContent.trim()) return sv.textContent.trim();
-    const dv = shell.querySelector('[data-value]');
-    if (dv && dv.getAttribute('data-value')) return dv.getAttribute('data-value');
-  }
-  return '';
+  if (!shell) return '';
+  const sv = shell.querySelector('.select__single-value, .select__multi-value__label');
+  if (sv && sv.textContent.trim()) return sv.textContent.trim();
+  const dv = shell.querySelector('[data-value]');
+  const v = dv && dv.getAttribute('data-value');
+  return v ? v : '';
 }`
 
 // isComboboxInputJS reports whether the control is an autocomplete widget
@@ -1431,8 +1440,16 @@ func verifyFixLanded(target fillTarget, selector string) (bool, error) {
 // locatorHasValue is verifyFixLanded against an already-resolved control, so
 // the label/placeholder fill tiers -- which never have a selector string to
 // re-resolve -- can use the same check (bugs.md #75).
+// bugs.md #76: which script is used is decided here, in Go, rather than by
+// branching inside one JS blob -- so the choice is unit-testable. Getting the
+// order wrong is not a hypothetical: it shipped, and it silently disabled
+// #74's combobox commit on every field.
 func locatorHasValue(el playwright.Locator) (bool, error) {
-	got, err := el.Evaluate(readControlValueJS, nil)
+	script := readInputValueJS
+	if combo, err := isComboboxLocator(el); err == nil && combo {
+		script = readComboboxValueJS
+	}
+	got, err := el.Evaluate(script, nil)
 	if err != nil {
 		return false, err
 	}
@@ -1441,14 +1458,23 @@ func locatorHasValue(el playwright.Locator) (bool, error) {
 	return s != "" && s != "false", nil
 }
 
-// commitComboboxOnLocator is commitComboboxSelection against an
-// already-resolved control (bugs.md #75).
-func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
-	isCombo, err := el.Evaluate(isComboboxInputJS, nil)
+func isComboboxLocator(el playwright.Locator) (bool, error) {
+	got, err := el.Evaluate(isComboboxInputJS, nil)
 	if err != nil {
 		return false, err
 	}
-	if ok, _ := isCombo.(bool); !ok {
+	ok, _ := got.(bool)
+	return ok, nil
+}
+
+// commitComboboxOnLocator is commitComboboxSelection against an
+// already-resolved control (bugs.md #75).
+func commitComboboxOnLocator(el playwright.Locator) (bool, error) {
+	combo, err := isComboboxLocator(el)
+	if err != nil {
+		return false, err
+	}
+	if !combo {
 		return false, nil
 	}
 	if err := el.Press("Enter", playwright.LocatorPressOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {

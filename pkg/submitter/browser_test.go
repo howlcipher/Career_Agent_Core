@@ -2009,3 +2009,67 @@ func TestSafeFillWithLabelFallback_DoesNotPressEnterOnPlainInputs(t *testing.T) 
 		t.Errorf("expected no keypress on a plain input, got %v", pressed)
 	}
 }
+
+// bugs.md #76: proven live, and a defect in #74's own fix. Reddit logged
+// "Attempt 2 applied 15/15 validation fix(es)" with no combobox-commit line at
+// all -- because the value read checked el.value first, and a react-select
+// search input really does hold the typed text after Fill(). Every combobox
+// looked satisfied, #74's commit never fired, and the form bounced on the same
+// required fields.
+//
+// The regression is in *which script* a combobox is read with, so that is what
+// this pins.
+func TestLocatorHasValue_ReadsAComboboxWithTheWidgetScriptNotElValue(t *testing.T) {
+	var used []string
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			if strings.HasPrefix(script, "el => !!(") {
+				return true, nil // it is a combobox
+			}
+			used = append(used, script)
+			// The widget script must be the one asked, and it reports no
+			// committed selection even though typed text exists.
+			return "", nil
+		},
+	}
+
+	landed, err := locatorHasValue(loc)
+	if err != nil {
+		t.Fatalf("locatorHasValue: %v", err)
+	}
+	if len(used) != 1 {
+		t.Fatalf("expected exactly one value read, got %d", len(used))
+	}
+	if strings.Contains(used[0], "el.value") {
+		t.Errorf("a combobox must not be read via el.value — that is uncommitted search text. got: %s", used[0])
+	}
+	if landed {
+		t.Error("expected landed=false: typed search text is not a committed selection")
+	}
+}
+
+func TestLocatorHasValue_ReadsAPlainInputWithElValue(t *testing.T) {
+	var used []string
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(script string) (interface{}, error) {
+			if strings.HasPrefix(script, "el => !!(") {
+				return false, nil // not a combobox
+			}
+			used = append(used, script)
+			return "586-555-0100", nil
+		},
+	}
+
+	landed, err := locatorHasValue(loc)
+	if err != nil {
+		t.Fatalf("locatorHasValue: %v", err)
+	}
+	if len(used) != 1 || !strings.Contains(used[0], "el.value") {
+		t.Errorf("a plain input should be read via el.value, got %v", used)
+	}
+	if !landed {
+		t.Error("expected landed=true for a plain input holding a value")
+	}
+}
