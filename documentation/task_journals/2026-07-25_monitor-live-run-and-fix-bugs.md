@@ -30,7 +30,22 @@
 - **12:24** — Resumed. Verified journal claims against the tree: working tree clean, HEAD `c9e270c`, agent process genuinely alive. The most-recently-modified journal (`2026-07-25_throughput-and-discovery-quality.md`) is **Complete**; the genuinely in-flight task is the parent 82-job re-verification.
 - **12:32** — First bug surfaced live: **Reddit (`job-boards.greenhouse.io/reddit/jobs/8044767`), fit score 90 — the best-scoring job in the cohort — failed with `failed to submit application after 3 validation error attempts`.** Burned ~17.5 min of LLM time (12:14:55 → 12:32:28) for nothing. Under investigation; see below.
 
-## Open investigation: the validation-retry loop does not converge
+## Shipped this session
+
+- **bugs.md #70 (Blocker) — `d68ce61`.** The validation-retry loop stripped the page's own error text. `aria-describedby` was in `presentationalAttrs`, so `StripPresentationalAttrs` severed the WCAG link from a rejected control to its error message *before* `PruneDOMToInvalidFields` ran; the pruner then dropped the message element as neither control nor label. The model was told a field was invalid but never what would make it valid. Plus an empty fix map fell through to re-submitting a byte-identical form. Fixed all three; 2 new regression tests, verified failing first.
+- **bugs.md #71 (Major) — `4234fba`.** `firstVisibleLocator` falls back to `loc.First()` when nothing is visible, and the submit-click site then clicked an element it had just proven invisible — hanging the full 30s action timeout and misreporting "no visible submit button" as a generic Playwright timeout. Added `firstVisibleSubmit` returning `(locator, ok)`; fill call sites keep the old fallback. 2 new tests.
+- **Backlog groomed:** dated groom-pass note added to `bugs.md`. No re-ranking was warranted — all bug rows Resolved, both remaining `improvements.md` Pending rows below the ROI floor.
+- **Cleaned up 5 stale leftover monitor shells** (PIDs 2166044/2295635/2368407/2476472/2543238) from long-disconnected sessions, all targeting confirmed-dead PIDs 2165142-2542429. The 07-21 journal predicted they would self-terminate; they had not, and each held a `tail -F` on the log. Verified every target PID dead before killing.
+
+## Run restarted onto the fixes
+
+Killed PID `3755906`, confirmed dead, confirmed zero other agent binaries running. Audited the cohort rather than blanket-resetting: of 7 `FAILED_SUBMIT`, 5 are the known-dead postings (Netcraft, NABIS, Postscript, Sphinx Defense, chownow) — left untouched. Requeued exactly **Reddit** (#70's victim) and **Zimperium** (#71's victim), both with `-clear-dedup`, or `HasApplied` would have silently skipped the retry.
+
+Rebuilt from HEAD to `/tmp/career_agent_bin_verify82k`. **New PID `3778859`**, confirmed healthy at 12:43: reaped the 1 orphaned `PROCESSING` row, `loaded 71 matching job(s)`, RAG found 9 career chunks (bug #58's fix persists), and started on **Reddit** — the exact job #70 killed. Cohort at relaunch: `DISCOVERED=70 FAILED_SUBMIT=5 PROCESSING=1 SKIPPED=6` (82 total).
+
+Monitors re-armed for the new PID: `b8wgiddyn` (cohort status + PID death). The log monitor `bpsfomclo` survived the restart since it tails the file, not the process.
+
+## Open investigation: the validation-retry loop does not converge (RESOLVED — this became #70)
 
 Evidence from `career_agent.log`:
 
@@ -51,4 +66,15 @@ Signals that this is a real defect, not just a hard form:
 
 ## Next Step
 
-Read `pkg/submitter`'s validation-retry path (`SolveValidationErrors` + the 3-attempt loop) and determine whether the fix is (a) not being applied to the DOM, (b) being applied but rejected again, or (c) the rejected-field extraction is wrong. File in `bugs.md` with real evidence, then fix. Do **not** restart PID `3755906` until there is a fix worth picking up.
+**Keep monitoring PID `3778859` and keep fixing what surfaces.** That is the standing instruction for this session; it does not complete until the user says so.
+
+The immediate question is now sharply posed: **Reddit (90) and Zimperium (85) are both back in the queue running against #70's and #71's fixes.** Reddit is being processed first (started 12:43:52). Watch for:
+- `Attempt N applied X/Y validation fix(es) to: <selectors>` — new in #70. If the *same* selectors recur across attempts, the fix still is not landing and the diagnosis was incomplete.
+- `found N submit control(s) but none visible` — new in #71. If Zimperium produces this, the real question ("why does Lever show no visible submit control?") is finally askable, and that becomes the next bug.
+- `Submission confirmed for ...` — the first genuine `APPLIED` of the whole 82-job effort, still 0 as of this writing.
+
+**Do not restart PID `3778859`** unless there is a new fix worth picking up. It carries everything through `4234fba`, including #69 and #26, which the previous run did not.
+
+**Note #26 (ATS feed discovery) still has not run live** — this is an isolated `TARGET_JOB_URL` run, which skips `FunnelEngine.DiscoverJobs` entirely. `discoverWithATSFeeds` only executes on the next *normal* batch start. Watch then for `ATS board feeds contributed N new posting(s)` and check the title gate is not over-filtering.
+
+**Standing warnings carried forward:** monitor liveness is best checked by reading the monitor's own output file, not `TaskList`; Ollama serves warm prompt caches so benchmark only on unseen jobs; `OLLAMA_FAST_MODEL` is intentionally unset (improvements #24).
