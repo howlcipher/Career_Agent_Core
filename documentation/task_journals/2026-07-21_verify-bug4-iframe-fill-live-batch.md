@@ -29,7 +29,9 @@
 
 - 2026-07-24 ~22:35-23:00 (same session, user said "do what you recommend on those 82") — Restarted the isolated run to actually benefit from bugs #59/#60's fixes, per the open decision above. Precisely audited every non-terminal row before touching anything (not a blanket reset): confirmed all 5 remaining `FAILED_SUBMIT` rows were genuine dead/expired postings (Netcraft, NABIS, Postscript, Sphinx Defense, and "Backend Engineer, Senior"@chownow, all "job posting is dead or expired") — left untouched, permanent terminal states no fix can help. Identified 16 jobs that deserved a real retry: all 14 `MANUAL_REQUIRED` rows (100% were bug #60's now-fixed context-window circuit breaker), Nova (bug #59, now-fixed), and Jumio (collateral `FAILED_SUBMIT` from the Ollama restart itself, never got a real attempt). Cleared their `applied_jobs` dedup rows first (14 of the 16 had already reached `SaveApplication` before hitting their respective circuit breaker — confirmed via a JOIN query — so `HasApplied` would otherwise have silently skipped their retry as a duplicate) via a scoped DELETE, then reset all 16 `job_funnel` rows to `DISCOVERED`. Reaped the 1 orphaned `PROCESSING` row separately. Killed PID 3137654 (`kill -9`, confirmed dead), rebuilt `cmd/agent` fresh from current HEAD (`/tmp/career_agent_bin_verify82e`), relaunched with `TARGET_JOB_URL` set to the full 82-URL list again (safe to pass the full list — `GetDiscoveredJobs` only ever matches `DISCOVERED` rows, so the 5 untouched dead postings and 5 `SKIPPED` rows are silently ignored, not reprocessed). New PID `3435469` confirmed healthy: log shows "loaded 72 matching job(s)" (71 reset + 1 reaped), RAG correctly found 9 career chunks (confirms bug #58's fix persisted through the restart), resumed processing cleanly. Stopped the old `bu7k9xvol` monitor (it self-detected PID 3137654's death and exited on its own) and armed a fresh one (`bt0tnxw4r`) pointed at the new PID. **Aside, found and left alone:** 5 unrelated stray monitor shell processes referencing `career_agent_bin_live2` through `live7` and separate PIDs (2165142/2294955/2327412/2475804/2542429) were still running — confirmed all 5 target PIDs are dead, so these are harmless leftovers from disconnected earlier sessions (not trackable via this session's `TaskList`) that will self-terminate on their own next check cycle; not worth chasing further.
 
-## Next Step (accurate as of 2026-07-24 ~23:00)
+- 2026-07-24 ~23:20 (`/resume_task` after a session clear) — Verified all prior claims before acting: `git log` confirms every commit through `1f3c9dd`/`15b7196` is present; working tree clean except the expected untracked `applied_urls_verify82.txt`. PID `3435469` confirmed alive; `3137654` confirmed dead (expected — killed intentionally last session). **No monitor process was actually running** (`ps aux | grep applied_urls_verify82` came back empty, despite the journal recording `bt0tnxw4r` as armed) — re-armed a fresh one (`bmowmvf2x`), this time pointed at the correct live PID `3435469` (the journal's monitor script template still had the stale dead PID `3137654` hardcoded — fixed at launch time, template below updated to match). Outcome breakdown: `DISCOVERED=71 FAILED_SUBMIT=5 PROCESSING=1 SKIPPED=5` (72 in queue as expected: 71+1). Tailed `career_agent.log`: process is genuinely working, not stalled — currently on the "Reddit" job (scored 90, `ProcessJobApplication` in flight since 23:07:48 generating tailored documents). Confirms the known pattern: single-worker CPU-only Ollama inference is just slow (~9 min for one `ScoreJob` call), not stuck. No action needed beyond re-arming the monitor; continuing to watch.
+
+## Next Step (accurate as of 2026-07-24 ~23:20)
 
 **Improvements #22/#12/#13 and bugs #58/#59/#60 are all fully committed and pushed, and the isolated run has been restarted to actually benefit from #59/#60.** Nothing left to do on the code side. **A fresh session should NOT redo any of this** — if `git log` doesn't show these commits (search for "fit-similarity queue ranking", "Hacker News", "cover-letter tone A/B tagging", "hidden anti-spam-widget", "Ollama context window"), treat that as a red flag and re-check before assuming the work was lost.
 
@@ -37,9 +39,9 @@
 
 **Core unanswered question for the 82-job run (why it's still open):** user asked to requeue all 82 previously-`APPLIED` jobs (39 Lever, 32 Greenhouse, 7 Workday, 2 SmartRecruiters, 2 Pinpoint) and re-verify them for real. **As of this writing, 0 of the 82 have reached a confirmed `APPLIED` or a genuine duplicate-block result.** 5 have reached a genuine permanent terminal state (dead/expired postings, unrecoverable by any fix) and 5 are legitimate fit-score `SKIPPED` results; the remaining 72 are back in `DISCOVERED`/`PROCESSING`, now getting a real shot under bugs #58/#59/#60's fixes. Don't declare this task done just because bugs stop surfacing — it's done when the 82 (or as many as reach a genuine terminal state) show real evidence one way or the other. See bugs.md's #52/#53/#60 Details sections for the full diagnostic history.
 
-**Live process running right now:** PID `3435469` (`/tmp/career_agent_bin_verify82e`, supersedes `3137654`/`verify82d` — has every fix through bug #60), started 2026-07-24 ~22:58. Confirm alive: `distrobox enter career-agent -- ps -p 3435469`. Monitor `bt0tnxw4r` armed (same `ps aux | grep applied_urls_verify82` liveness-check caveat as always — don't trust `TaskList` alone).
+**Live process running right now:** PID `3435469` (`/tmp/career_agent_bin_verify82e`, supersedes `3137654`/`verify82d` — has every fix through bug #60), started 2026-07-24 ~22:58. Confirm alive: `distrobox enter career-agent -- ps -p 3435469`. Monitor `bmowmvf2x` armed as of ~23:20 (same `ps aux | grep applied_urls_verify82` liveness-check caveat as always — don't trust `TaskList` alone; also don't trust a journal's recorded monitor ID without checking the grep yourself — one recorded as armed last session, `bt0tnxw4r`, was actually dead when this session checked).
 
-**Live process running right now, independent of any chat session:** PID `3137654` (`/tmp/career_agent_bin_verify82d`, has every fix through bug #58 now via the live `cmd/reingest` fix), started 2026-07-24 ~15:10, running inside the `career-agent` distrobox. Confirm alive: `distrobox enter career-agent -- ps -p 3137654`. Tail: `distrobox enter career-agent -- tail -f career_agent.log`.
+PID `3137654` is now permanently dead (intentionally killed 2026-07-24 ~22:35 when the run was restarted to pick up bugs #59/#60's fixes) — no longer relevant, do not try to resume it.
 
 **Outcome-breakdown query** (82-URL list at `applied_urls_verify82.txt`, repo root, untracked — don't delete, needed for this query):
 ```bash
@@ -48,7 +50,7 @@ in_clause=$(awk '{printf "%s%s%s", (NR>1?",":""), "\x27", $0"\x27"}' "$urls_file
 distrobox enter career-agent -- sqlite3 /var/home/howlcipher/dev/Career_Agent_Core/applications.db \
   "SELECT status, COUNT(*) FROM job_funnel WHERE url IN ($in_clause) GROUP BY status ORDER BY status;"
 ```
-Last read (this session, ~18:05): `DISCOVERED=69 FAILED_SUBMIT=2 MANUAL_REQUIRED=7 PROCESSING=1 SKIPPED=3` (sums to 82). PID `3137654` confirmed alive throughout this session.
+Last read (this session, ~23:20): `DISCOVERED=71 FAILED_SUBMIT=5 PROCESSING=1 SKIPPED=5` (sums to 82; the 5 `FAILED_SUBMIT`/5 `SKIPPED` are the untouched permanent-terminal/fit-skip rows from the ~22:35 restart audit, not touched again). PID `3435469` confirmed alive this session.
 
 **Dashboard binary is `/tmp/career_dashboard_v4`, PID `3274101`** (supersedes `v3`/PID `3199531`). If it needs restarting: `distrobox enter career-agent -- bash -c "cd /var/home/howlcipher/dev/Career_Agent_Core && /usr/local/go/bin/go build -o /tmp/career_dashboard_v4 ./cmd/dashboard && nohup /tmp/career_dashboard_v4 > /tmp/dashboard.log 2>&1 & disown"`. Check first with `ss -tlnp | grep 8080`.
 
@@ -56,7 +58,7 @@ Last read (this session, ~18:05): `DISCOVERED=69 FAILED_SUBMIT=2 MANUAL_REQUIRED
 ```bash
 urls_file="/var/home/howlcipher/dev/Career_Agent_Core/applied_urls_verify82.txt"
 in_clause=$(awk '{printf "%s%s%s", (NR>1?",":""), "\x27", $0"\x27"}' "$urls_file")
-pid=3137654
+pid=3435469
 prev=""
 while true; do
   if ! distrobox enter career-agent -- kill -0 "$pid" 2>/dev/null; then
@@ -69,7 +71,7 @@ while true; do
   sleep 90
 done
 ```
-Don't kill/restart PID 3137654 just to attach a fresh monitor — that only loses progress.
+Don't kill/restart PID 3435469 just to attach a fresh monitor — that only loses progress.
 
 **IMPORTANT — this is NOT the normal full-backlog batch.** It's a dedicated, isolated `TARGET_JOB_URL` run restricted to exactly the 82 URLs. It is self-terminating: once all 82 resolve, the process exits on its own and does **not** pick up fresh discovery or the rest of the ~3000-job backlog. **After this run finishes (or if you decide to abandon it), the normal batch must be manually restarted** — build `cmd/agent` fresh, launch WITHOUT `TARGET_JOB_URL` set, confirm sole instance, re-arm a normal `APPLIED`-count monitor. See the Operational Trap notes at the top of `bugs.md` for the full restart procedure.
 
