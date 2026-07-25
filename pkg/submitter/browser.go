@@ -908,8 +908,20 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				return fmt.Errorf("failed to solve validation errors: %w", fixErr)
 			}
 
+			// bugs.md #65: dispatch on the control's real type, and never
+			// discard the outcome. A silently-failed fix leaves the field
+			// exactly as invalid as it was, so the next attempt re-sends an
+			// identical payload and the loop is guaranteed to exhaust itself.
+			appliedAny := false
 			for selector, value := range fixesMap {
-				safeFill(target, selector, value)
+				if err := applyValidationFix(target, selector, value); err != nil {
+					log.Printf("[Auto-Submit] Validation fix for %q failed: %v", selector, err)
+					continue
+				}
+				appliedAny = true
+			}
+			if !appliedAny && len(fixesMap) > 0 {
+				return fmt.Errorf("none of the %d proposed validation fixes could be applied", len(fixesMap))
 			}
 
 			submitLocator := target.Loc("input[type='submit'], button[type='submit'], button:has-text('Submit'), button:has-text('Apply')")
@@ -1145,6 +1157,70 @@ func safeFill(target fillTarget, selector, text string) error {
 		return nil
 	}
 	return target.Loc(selector).Fill(text, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+}
+
+// applyValidationFix sets a value on whatever kind of control the selector
+// actually resolves to, instead of assuming everything is a text input.
+//
+// bugs.md #65: the validation-retry loop previously called safeFill (which is
+// Fill()-only) and discarded its error. Playwright refuses Fill() on a
+// <select>, and Greenhouse-style forms routinely make dropdowns required
+// (work authorization, EEO self-identification, "how did you hear about
+// us"). So a required dropdown could never be satisfied, every attempt
+// re-sent an identical payload -- confirmed live, the narrowed payload was
+// byte-identical across attempts 2 and 3 -- and the job burned all three
+// retries and failed, with nothing logged to say why.
+func applyValidationFix(target fillTarget, selector, value string) error {
+	if selector == "" {
+		return ErrEmptySelector
+	}
+	if value == "" {
+		return nil
+	}
+	loc := target.Loc(selector)
+	count, err := loc.Count()
+	if err != nil {
+		return fmt.Errorf("could not resolve selector: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("selector matched no element")
+	}
+	el := firstVisibleLocator(loc, count)
+
+	kind, evalErr := el.Evaluate("el => el.tagName.toLowerCase() + '|' + ((el.type || '').toLowerCase())", nil)
+	shape, _ := kind.(string)
+	if evalErr != nil {
+		shape = ""
+	}
+
+	switch {
+	case strings.HasPrefix(shape, "select"):
+		// Try matching the visible option text first, since the model is
+		// answering the question as a human would ("Yes", "Decline to
+		// answer"), then fall back to the underlying value attribute.
+		if _, err := el.SelectOption(playwright.SelectOptionValues{Labels: &[]string{value}},
+			playwright.LocatorSelectOptionOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+			return nil
+		}
+		if _, err := el.SelectOption(playwright.SelectOptionValues{Values: &[]string{value}},
+			playwright.LocatorSelectOptionOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+			return fmt.Errorf("select option %q not available: %w", value, err)
+		}
+		return nil
+
+	case shape == "input|checkbox", shape == "input|radio":
+		// A checkbox's "value" is its checked state; anything affirmative
+		// means tick it, and an explicit negative must not silently tick it.
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "false", "no", "0", "unchecked":
+			return el.Uncheck(playwright.LocatorUncheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+		default:
+			return el.Check(playwright.LocatorCheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+		}
+
+	default:
+		return el.Fill(value, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+	}
 }
 
 // safeFillWithLabelFallback tries the field's accessible label first when one

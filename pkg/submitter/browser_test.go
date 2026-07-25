@@ -194,6 +194,9 @@ type MockLocator struct {
 	// actually sent so a test can assert on the letter's real content.
 	setInputFilesFunc func(files any) error
 	uploadedFiles     []playwright.InputFile
+	selectOptionFunc  func(values playwright.SelectOptionValues) ([]string, error)
+	checkCalls        int
+	uncheckCalls      int
 }
 
 func (m *MockLocator) First() playwright.Locator { return m }
@@ -246,6 +249,23 @@ func (m *MockLocator) Evaluate(expression string, arg interface{}, options ...pl
 	// Default to "not a file input" so the text-fill path is what an
 	// unconfigured mock exercises.
 	return false, nil
+}
+
+func (m *MockLocator) SelectOption(values playwright.SelectOptionValues, options ...playwright.LocatorSelectOptionOptions) ([]string, error) {
+	if m.selectOptionFunc != nil {
+		return m.selectOptionFunc(values)
+	}
+	return nil, nil
+}
+
+func (m *MockLocator) Check(options ...playwright.LocatorCheckOptions) error {
+	m.checkCalls++
+	return nil
+}
+
+func (m *MockLocator) Uncheck(options ...playwright.LocatorUncheckOptions) error {
+	m.uncheckCalls++
+	return nil
 }
 
 func (m *MockLocator) SetInputFiles(files any, options ...playwright.LocatorSetInputFilesOptions) error {
@@ -1521,5 +1541,89 @@ func TestFillCoverLetter_EmptyPathTouchesNothing(t *testing.T) {
 	}
 	if pasted {
 		t.Error("expected no paste when cover letters are off")
+	}
+}
+
+// bugs.md #65: a validation fix must be applied according to the control's
+// real type. Fill() is rejected by Playwright on a <select>, and required
+// dropdowns are routine on Greenhouse-style forms -- so treating everything
+// as a text input made those fields impossible to satisfy.
+func TestApplyValidationFix_UsesSelectOptionForDropdowns(t *testing.T) {
+	var gotLabels []string
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "select|select-one", nil },
+		selectOptionFunc: func(v playwright.SelectOptionValues) ([]string, error) {
+			if v.Labels != nil {
+				gotLabels = *v.Labels
+			}
+			return []string{"ok"}, nil
+		},
+		fillFunc: func(string) error { return fmt.Errorf("Fill() must never be used on a <select>") },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	if err := applyValidationFix(pageTarget{page: page}, "#work_auth", "Yes"); err != nil {
+		t.Fatalf("applyValidationFix: %v", err)
+	}
+	if len(gotLabels) != 1 || gotLabels[0] != "Yes" {
+		t.Errorf("expected the option to be chosen by visible label, got %v", gotLabels)
+	}
+	if loc.fillCalls != 0 {
+		t.Error("Fill() was called on a <select>; Playwright rejects that")
+	}
+}
+
+func TestApplyValidationFix_ChecksCheckboxes(t *testing.T) {
+	mk := func(val string) *MockLocator {
+		return &MockLocator{
+			countFunc:    func() (int, error) { return 1, nil },
+			evaluateFunc: func(string) (interface{}, error) { return "input|checkbox", nil },
+		}
+	}
+	yes := mk("Yes")
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return yes }}
+	if err := applyValidationFix(pageTarget{page: page}, "#agree", "Yes"); err != nil {
+		t.Fatalf("applyValidationFix: %v", err)
+	}
+	if yes.checkCalls != 1 {
+		t.Errorf("expected the box to be ticked, got %d Check calls", yes.checkCalls)
+	}
+
+	// An explicit negative must not silently tick the box.
+	no := mk("No")
+	page2 := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return no }}
+	if err := applyValidationFix(pageTarget{page: page2}, "#agree", "No"); err != nil {
+		t.Fatalf("applyValidationFix: %v", err)
+	}
+	if no.uncheckCalls != 1 || no.checkCalls != 0 {
+		t.Errorf("an explicit \"No\" must uncheck, not check (check=%d uncheck=%d)", no.checkCalls, no.uncheckCalls)
+	}
+}
+
+// A selector that matches nothing must report an error rather than being
+// swallowed — a silent no-op is what made the retry loop unwinnable.
+func TestApplyValidationFix_ReportsUnmatchedSelector(t *testing.T) {
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator {
+		return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	}}
+	if err := applyValidationFix(pageTarget{page: page}, "#nope", "x"); err == nil {
+		t.Error("expected an error when the selector matches nothing, got nil")
+	}
+}
+
+func TestApplyValidationFix_FillsPlainTextInputs(t *testing.T) {
+	var filled string
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "input|text", nil },
+		fillFunc:     func(v string) error { filled = v; return nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	if err := applyValidationFix(pageTarget{page: page}, "#phone", "586-555-0100"); err != nil {
+		t.Fatalf("applyValidationFix: %v", err)
+	}
+	if filled != "586-555-0100" {
+		t.Errorf("expected the text input to be filled, got %q", filled)
 	}
 }
