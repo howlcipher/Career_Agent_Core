@@ -320,6 +320,26 @@ Zimperium — one of the three jobs that ended earlier today with a bare `playwr
 
 Seven boards now confirmed blocked. Combined with the 6-of-7 completed-fill figure above, the projection for the remaining queue is that most of it is unreachable without a paid solver.
 
+### ACCEPTANCE IS INTERMITTENT ON THE SAME BOARD (2026-07-26 06:19)
+
+Akuity's submit history tonight, cross-checked against the mailbox each time:
+
+| submit | code email | accepted? |
+| --- | --- | --- |
+| 23:40:06 | 23:40:07 (`yN8V0cLO`) | **yes** |
+| 05:59:19 | 05:59:19 (`82taTsxA`) | **yes** |
+| **06:18:00** | **none** | **no** |
+
+Same board, same form, same binary path — and the third submit was not accepted. **This is not a per-board property.** reCAPTCHA Enterprise is score-based, and the score degrades with repeated automated attempts from the same browser and address.
+
+**Consequences that matter more than any individual fix.**
+
+1. **"Boards that accept" is not a stable category.** I have been reasoning in those terms all session — ClickHouse and Akuity as "the two that can accept" — and that framing is wrong. Acceptance is probabilistic per attempt.
+2. **Repeated attempts make it worse, not better.** Every requeue-and-retry cycle tonight has been lowering the score it depends on. The 27 restarts were necessary for the fixes, but they also degraded the thing being tested.
+3. **It strengthens the case for the paid solver** (`improvements_paywall.md` #17) rather than weakening it: there is no configuration of free retries that makes a score-based challenge reliable.
+
+**#111 confirmed working in the negative direction, which is the more important one.** It correctly did *not* claim acceptance when no code arrived — a false positive there would enter a stale code and record an application as filed when it was not. The 12-second gap between `Attempt 2: Solving validation errors...` and the narrowing line is the IMAP round-trip, so the check demonstrably ran.
+
 ### Where the ceiling actually is now
 
 The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
