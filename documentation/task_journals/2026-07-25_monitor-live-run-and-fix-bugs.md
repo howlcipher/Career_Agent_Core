@@ -111,37 +111,24 @@ Context was cleared; re-oriented from this journal. Verified against the live tr
   - **Watch out: the stored URL is `https://`, and the log prints `http://`.** A scoped `UPDATE`/`DELETE` written from the log's spelling matched **zero rows** and silently did nothing. Caught it because the verification `SELECT` in the same statement returned no row — worth keeping that pattern, since a requeue that quietly no-ops looks identical to one that worked.
   - Log monitor replaced (`b1h3bcrgz` → `bkmg640jz`) to add `Submit verdict after` and the dedup-record failure line. #77's lesson: a diagnostic missing from the filter is invisible.
 
-### Confirmed structural finding, implementation deliberately held (2026-07-25 22:27)
+### bugs.md #98 — the held finding, confirmed and shipped (2026-07-25 22:47)
 
-**The model cannot see any combobox's permitted values.** Probed Reddit's form for four distinctive strings from `#434`'s option list:
+**#97's diagnostic answered it in exactly one cycle**, the same way #80 paid for itself. Reddit reached a single remaining invalid field and printed:
 
-| string | in page HTML before opening | after opening |
-| --- | --- | --- |
-| `Other Protected Veteran` | **false** | true |
-| `Vietnam Era Veteran` | **false** | true |
-| `No military service` | **false** | true |
-| `I don't wish to answer` | **false** | true |
+```
+22:41:35 Attempt 2 ... left the control empty: 434 (tried "I am not a protected veteran")
+22:42:39 Attempt 3 ... left the control empty: #434 (tried "I am not a protected veteran")
+```
 
-Page HTML grows 144,506 → 146,812 chars purely from opening one widget, and the form contains **zero native `<select>` elements** — Greenhouse is react-select throughout, so no `<option>` text is ever in the served document.
+The **identical** wrong value both times — deterministic, so it would never have converged however many retries ran. And it is one of the exact phrasings the earlier probe had tested, which filters `#434`'s list to **zero**.
 
-The narrowed validation payload is built from page HTML. So the model is asked to supply a value for a control **whose permitted values are nowhere in what it is given**, and can only guess the wording. That is the structural root cause of #97's value mismatch, and it explains the shape of the whole day: Yes/No fields committed fine because they are trivially guessable, while `#434`'s unusual taxonomy did not.
+So the held question resolved to **wrong phrasing**, not a broken mechanism. Candidate fix (a) was the right one, and the probe's prediction held.
 
-**Sized against the log (window since #91/#92 shipped at 20:34, i.e. the current machinery):**
+Shipped as **`a79744d`**: `enumerateComboboxOptions` opens each invalid control that is genuinely a combobox, reads its options with **no query typed** (#91), closes it, and names the exact permitted values in the prompt. **Wired into both the retry path and `ExtractFormMapping`**, per this backlog's standing check about capabilities added to one path only (#65/#66→#67, #74→#75, #28→#31). The `isComboboxLocator` gate is a **correctness** requirement, not an optimisation — the invalid-field list routinely includes checkboxes (Greenhouse's GDPR consent), and clicking one would toggle it. 3 new tests, including one pinning that a non-combobox is never clicked.
 
-| outcome | count |
-| --- | --- |
-| autocomplete selections **committed** | **14** (2 + 4 + 8 across three jobs) |
-| distinct fields that reported success but stayed empty | **2** — `#434` (Reddit, veteran status) and `#question_7849575101` (Sporty Group, GDPR) |
+**Caught a dispatch-order bug in my own test mock while writing it** — the readiness probe case matched before the options case, and `comboboxOptionsJS` mentions `aria-activedescendant` too, so it swallowed the option read entirely. Same class as the ordering defects this session has been fixing all day (#76, #91), which is a fair reminder that the technique does not exempt the person applying it.
 
-So the combobox machinery is now roughly **87% effective**, and the entire residual is the "unusual wording" case — exactly what the options-visibility gap predicts, and nothing else. Earlier day-wide counts are misleading here because they include `country`/`candidate-location` failures from before #78/#79 fixed them.
-
-**Deliberately not implemented yet**, for the reason recorded in #97: Reddit's next attempt will print `#434 (tried "…")`, and that value decides which fix is right.
-- Wrong phrasing → this finding is the blocker, and the fix is to put the real options in front of the model.
-- Correct phrasing (`I don't wish to answer`) → the commit mechanism is broken for this widget after all, this finding is true but *not* the blocker, and the probe replicated the wrong sequence again (#76/#81/#91's recurring trap).
-
-Two candidate fixes, to be chosen on that evidence rather than now:
-- **(a)** enumerate every combobox's options into the narrowed payload up front — thorough, but requires opening each widget before building it;
-- **(b)** on a failed containment match, capture the widget's real options and inject them into the *next* attempt's context — smaller, cheaper, and closes the loop exactly where it breaks.
+**Restarted (22nd) at 22:47.** PID `4019401` (`verify84c`), 66 queued, all **five** of this session's fixes verified present by `strings`. Reddit requeued (status verified `DISCOVERED`, dedup 0) — this run is the decisive test. Monitor `bnr24opx1`.
 
 ### Investigated and dismissed
 
@@ -286,11 +273,11 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 **Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-### Live state (accurate as of 2026-07-25 22:17)
+### Live state (accurate as of 2026-07-25 22:48)
 
-- **Agent PID `4007419`** (`/tmp/career_agent_bin_verify84b`), built from HEAD carrying **#94, #95, #96 and #97** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
+- **Agent PID `4019401`** (`/tmp/career_agent_bin_verify84c`), built from HEAD carrying **#94, #95, #96, #97 and #98** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
 - **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `bjoxh5nwy` — cohort status + PID death, pointed at `4007419`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `bnr24opx1` — cohort status + PID death, pointed at `4019401`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
   - `bkmg640jz` — `tail -F career_agent.log`, filter now including `Submit verdict after` (#96) and the dedup-record failure line.
 - **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV** (#83's size ceiling — a correct route, not a failure). Reddit was requeued out of it.
 - **Still 0 confirmed `APPLIED`**, but the gap is now one field wide on the best job in the cohort. `job_funnel` has never held an `APPLIED` row at all (#94).
