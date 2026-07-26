@@ -257,12 +257,36 @@ func MarkEmailProcessed(messageID string) error {
 	return err
 }
 
+// canonicalURLKey normalises a posting URL for dedup comparisons.
+//
+// bugs.md #112: job_funnel and applied_jobs are both keyed on the raw URL, and
+// the same posting reaches this code under both schemes -- discovery yields
+// https, some earlier records and verification lists hold http. Measured
+// 2026-07-26: 20 scheme-duplicate pairs in job_funnel, 11 of them holding
+// DIFFERENT statuses. For the dedup path that split is outward-facing: a job
+// recorded as applied under one scheme is not deduped under the other, so it
+// can be applied to twice.
+//
+// Only the scheme is normalised. Nothing else about the URL is touched, because
+// query strings and trailing paths genuinely distinguish postings on Lever.
+func canonicalURLKey(rawURL string) string {
+	if strings.HasPrefix(rawURL, "https://") {
+		return strings.TrimPrefix(rawURL, "https://")
+	}
+	return strings.TrimPrefix(rawURL, "http://")
+}
+
 func HasApplied(url string) bool {
 	if db == nil {
 		return false
 	}
+	// bugs.md #112: compare on the scheme-normalised key so an application
+	// recorded under http is still seen when the same posting arrives as https.
 	var id int
-	err := db.QueryRow("SELECT id FROM applied_jobs WHERE url = ?", url).Scan(&id)
+	err := db.QueryRow(`SELECT id FROM applied_jobs
+		WHERE url = ?
+		   OR replace(replace(url, 'https://', ''), 'http://', '') = ?`,
+		url, canonicalURLKey(url)).Scan(&id)
 	return err == nil
 }
 
@@ -885,7 +909,7 @@ func GetConversionStatsBySource() ([]SourceConversionStat, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	rows, err := db.Query(`SELECT
-		`+atsSourceCASE+` AS source,
+		` + atsSourceCASE + ` AS source,
 		COUNT(*),
 		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),

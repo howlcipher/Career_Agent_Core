@@ -266,7 +266,7 @@ func TestSaveApplication(t *testing.T) {
 	if _, err := os.Stat(companyDir); os.IsNotExist(err) {
 		t.Fatalf("Expected directory %s to be created", companyDir)
 	}
-	
+
 	files := []string{"resume.md", "coverletter.txt", "interview_prep.md", "metadata.json"}
 	for _, f := range files {
 		if _, err := os.Stat(filepath.Join(companyDir, f)); os.IsNotExist(err) {
@@ -371,7 +371,7 @@ func TestLogFailedSubmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to read report file: %v", err)
 	}
-	
+
 	content := string(data)
 	if !strings.Contains(content, "FailCorp") || !strings.Contains(content, "http://fail.com") {
 		t.Errorf("Report content mismatch: %s", content)
@@ -1318,5 +1318,59 @@ func TestSaveFormMapping_RejectsSemanticallyEmptyMappings(t *testing.T) {
 	}
 	if got, _ := GetFormMapping("example.com"); got != good {
 		t.Errorf("expected the usable mapping to round-trip, got %q", got)
+	}
+}
+
+// bugs.md #112: the same posting reaches this code under both schemes --
+// discovery yields https, earlier records and the 82-job verification list hold
+// http. Measured 2026-07-26: 20 scheme-duplicate pairs in job_funnel, 11 of them
+// holding DIFFERENT statuses. On the dedup path that split is outward-facing: a
+// job recorded as applied under one scheme was not deduped under the other, so
+// it could be applied to twice.
+func TestHasApplied_MatchesAcrossURLScheme(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const httpsURL = "https://job-boards.greenhouse.io/akuity/jobs/4240492009"
+	const httpURL = "http://job-boards.greenhouse.io/akuity/jobs/4240492009"
+
+	if err := RecordApplicationInDB("Akuity", "SRE", httpsURL); err != nil {
+		t.Fatalf("record failed: %v", err)
+	}
+	if !HasApplied(httpsURL) {
+		t.Error("the exact URL must still match")
+	}
+	if !HasApplied(httpURL) {
+		t.Error("the same posting under http must be recognised as already applied")
+	}
+
+	// And the reverse direction.
+	const otherHTTP = "http://job-boards.greenhouse.io/clickhouse/jobs/5819754004"
+	const otherHTTPS = "https://job-boards.greenhouse.io/clickhouse/jobs/5819754004"
+	if err := RecordApplicationInDB("ClickHouse", "SRE", otherHTTP); err != nil {
+		t.Fatalf("record failed: %v", err)
+	}
+	if !HasApplied(otherHTTPS) {
+		t.Error("a record made under http must be seen when the posting arrives as https")
+	}
+}
+
+// Only the scheme is normalised. Query strings and trailing paths genuinely
+// distinguish postings on Lever, so they must keep separating jobs.
+func TestHasApplied_DoesNotOvermatchDifferentPostings(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if err := RecordApplicationInDB("Lever Co", "SRE", "https://jobs.lever.co/acme/aaa-111"); err != nil {
+		t.Fatalf("record failed: %v", err)
+	}
+	for _, other := range []string{
+		"https://jobs.lever.co/acme/bbb-222",
+		"https://jobs.lever.co/acme/aaa-111/apply",
+		"https://jobs.lever.co/other/aaa-111",
+	} {
+		if HasApplied(other) {
+			t.Errorf("%q is a different posting and must not be deduped", other)
+		}
 	}
 }

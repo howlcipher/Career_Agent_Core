@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 112 | [The same posting exists twice, once per URL scheme, and their statuses have diverged](#112-the-same-posting-exists-twice-once-per-url-scheme-and-their-statuses-have-diverged) | Major | Resolved for the dedup path (2026-07-26); funnel row merge left open | — | Opus 5 | Gemini 3 Pro | Measured: **20 scheme-duplicate pairs** in `job_funnel` (`http://x` and `https://x` for one posting), **11 of them holding different statuses** — `SKIPPED`/`DISCOVERED` ×5, `FAILED_SUBMIT`/`DISCOVERED` ×4, `BLOCKED_CAPTCHA`/`DISCOVERED`, `FAILED_SUBMIT`/`PROCESSING`. `AddToFunnel` keys on the raw URL via `ON CONFLICT(url)`, so the two are separate jobs. **Outward-facing consequence on the dedup path:** a job recorded as applied under one scheme was not deduped under the other, so it could be applied to twice |
 | 111 | [#104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance](#111-104-labelled-an-accepted-application-captcha-blocked-because-the-dom-lags-the-acceptance) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A false positive in my own #104, of exactly the kind #104's guard was written to prevent.** Akuity's submit was **accepted** — Greenhouse emailed code `82taTsxA` at **05:59:19** — and the verdict at 05:59:27 still reported `BLOCKED_CAPTCHA`, because the guard tested `DetectSecurityCodeChallenge(prunedHTML)` and the code input had **not yet rendered** 8s after the click. The DOM cannot distinguish accepted from blocked on this timescale; the mailbox can, and #32's fetcher only returns codes issued after the triggering click |
 | 110 | [A short option label could hijack a longer answer — "Prefer not to say" selected "No"](#110-a-short-option-label-could-hijack-a-longer-answer--prefer-not-to-say-selected-no) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found by a test written for #109, not by the log.** `pickComboboxOption` matched by raw bidirectional `strings.Contains`, and a short label hides inside longer prose: `"no"` sits inside `"prefer **no**t to say"`. Asking for **"Prefer not to say" selected the box labelled "No"** — on an EEO question that converts a declined answer into a substantive one on a real application. The precise failure **#79** exists to prevent, in the function that enforces it. `"male"` vs `"female"` is the same shape |
 | 109 | [A single-choice question rendered as a checkbox group was read as one box to untick](#109-a-single-choice-question-rendered-as-a-checkbox-group-was-read-as-one-box-to-untick) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Probed live: Sporty Group renders a Yes / No / Prefer-not-to-say question as **three checkboxes sharing one `name`**. A model value of `"No"` means *tick the box labelled No*, but `applyValidationFix` read it as *untick this box* — opposite results. #107 then made the wrong reading report as **landed**, so the job degraded from `MANUAL_REQUIRED` (documents preserved, field named) to a bare `FAILED_SUBMIT` |
@@ -180,6 +181,30 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 112. The same posting exists twice, once per URL scheme, and their statuses have diverged (Resolved for the dedup path 2026-07-26; funnel row merge left open)
+
+**Found while checking a correction I had just made and got wrong.** After #111 I told the user the captcha count was overstated because Akuity was in it. Verifying that claim showed Akuity was *not* among the 9 cohort rows — because its `BLOCKED_CAPTCHA` had landed on a **different row for the same job**.
+
+`AddToFunnel` inserts with `ON CONFLICT(url) DO NOTHING`, keyed on the raw URL. Discovery yields `https://`, while some earlier records and the 82-job verification list hold `http://`. Measured 2026-07-26:
+
+| `http://` row | `https://` row | pairs |
+| --- | --- | --- |
+| SKIPPED | DISCOVERED | 5 |
+| FAILED_SUBMIT | DISCOVERED | 4 |
+| BLOCKED_CAPTCHA | DISCOVERED | 1 |
+| FAILED_SUBMIT | PROCESSING | 1 |
+| *(in agreement)* | | 9 |
+
+**20 pairs, 11 diverged.**
+
+**Two distinct consequences, of very different severity.**
+
+1. **Outward-facing, now fixed:** `applied_jobs` is keyed the same way, so a job recorded as applied under one scheme was **not deduped under the other** — it could be applied to twice. `HasApplied` now compares on a scheme-normalised key. Only the scheme is normalised: query strings and trailing `/apply` paths genuinely distinguish postings on Lever, and a test pins that `.../aaa-111`, `.../aaa-111/apply` and `.../bbb-222` stay separate jobs.
+
+2. **Reporting, left open deliberately:** the cohort tally used throughout the 2026-07-25/26 session reads whichever scheme the verification file holds, so for up to 11 of 82 jobs it has been showing a **stale status** while the agent worked the other row. Every conclusion drawn from the *log* is unaffected — including the "6 of 7 completed fills were captcha-blocked" figure, which came from log lines — but the funnel status breakdown quoted during that session should be treated as approximate for those rows.
+
+**Why the row merge is not done here.** Merging requires deciding which status wins when two disagree, and `BLOCKED_CAPTCHA` versus `DISCOVERED` versus `FAILED_SUBMIT` are not obviously orderable — picking wrong either strands a workable job or re-attempts a blocked one. That is a judgment call worth making deliberately, not at the end of a long session with a live run in progress. The narrow dedup fix removes the only consequence that can reach an employer; the rest is bookkeeping.
 
 ### 111. #104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance (Resolved 2026-07-26)
 
