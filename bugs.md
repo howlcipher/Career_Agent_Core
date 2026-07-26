@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 114 | [When the emailed code cannot be entered, nothing records what IS on the page](#114-when-the-emailed-code-cannot-be-entered-nothing-records-what-is-on-the-page) | Major | Resolved (2026-07-26, diagnostic added) | — | Opus 5 | Gemini 3 Pro | #113 proved the field is **absent, not late** — a full 20s wait found nothing (`could not find a visible security-code field to fill within 20s`). But the error can only name the selectors that *failed*, so the real field cannot be identified without reproducing an accepted submit, which means **filing a real application**. Detection fires on substrings like `security-code`, which a CSS class or notice text satisfies with no input present. Same move as #80/#96/#97/#100, each of which paid off within one cycle |
 | 113 | [The emailed code was retrieved and then discarded, because the code field had not rendered yet](#113-the-emailed-code-was-retrieved-and-then-discarded-because-the-code-field-had-not-rendered-yet) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **One step from the first confirmed application.** Akuity's submit was ACCEPTED, the gate was detected, and #32 **successfully retrieved the code** — then `fillSecurityCode` failed instantly with `could not find a visible security-code field to fill` and the job went to manual review. Detection substring-matches the HTML; filling needs a real *visible* locator, and the input renders later than the markers. Everything happened in one second, ~11s after the submit. Same DOM-lag as #95, #102 and #111, one layer further in |
 | 112 | [The same posting exists twice, once per URL scheme, and their statuses have diverged](#112-the-same-posting-exists-twice-once-per-url-scheme-and-their-statuses-have-diverged) | Major | Resolved for the dedup path (2026-07-26); funnel row merge left open | — | Opus 5 | Gemini 3 Pro | Measured: **20 scheme-duplicate pairs** in `job_funnel` (`http://x` and `https://x` for one posting), **11 of them holding different statuses** — `SKIPPED`/`DISCOVERED` ×5, `FAILED_SUBMIT`/`DISCOVERED` ×4, `BLOCKED_CAPTCHA`/`DISCOVERED`, `FAILED_SUBMIT`/`PROCESSING`. `AddToFunnel` keys on the raw URL via `ON CONFLICT(url)`, so the two are separate jobs. **Outward-facing consequence on the dedup path:** a job recorded as applied under one scheme was not deduped under the other, so it could be applied to twice |
 | 111 | [#104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance](#111-104-labelled-an-accepted-application-captcha-blocked-because-the-dom-lags-the-acceptance) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A false positive in my own #104, of exactly the kind #104's guard was written to prevent.** Akuity's submit was **accepted** — Greenhouse emailed code `82taTsxA` at **05:59:19** — and the verdict at 05:59:27 still reported `BLOCKED_CAPTCHA`, because the guard tested `DetectSecurityCodeChallenge(prunedHTML)` and the code input had **not yet rendered** 8s after the click. The DOM cannot distinguish accepted from blocked on this timescale; the mailbox can, and #32's fetcher only returns codes issued after the triggering click |
@@ -182,6 +183,30 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 114. When the emailed code cannot be entered, nothing records what IS on the page (Resolved 2026-07-26)
+
+The full chain fired on Akuity at 07:00, and stopped at the last step:
+
+```
+07:00:41 Retrieved a security code from email (subject: "Security code for your application to Akuity")
+07:00:41 akuity issued a security code after the last submit — that submission was ACCEPTED
+07:00:41 Security-code gate detected for akuity — waiting for the emailed code...
+07:01:02 Retrieved a security code for akuity but could not enter it:
+         could not find a visible security-code field to fill within 20s
+```
+
+**#111 and #32 are confirmed working end to end** — the acceptance was recognised from the mailbox and the real code was retrieved. **#113 established that the field is absent rather than late**: a full 20-second poll found nothing, so the earlier instantaneous failure was not a timing artifact.
+
+**What is still unknown, and why it cannot be guessed.** `DetectSecurityCodeChallenge` fires on a field marker **plus** matching wording, and its markers include bare substrings — `security-code`, `verification-code`. A CSS class such as `security-code-notice`, or the phrase inside an explanatory message, satisfies that with **no input on the page at all**. So the likeliest reading is that detection matched a *message about* the code rather than a field for it. Other possibilities: the input lives outside the resolved fill target's frame, or Greenhouse renders it only after a reload or a click.
+
+Distinguishing those requires seeing the page at that moment — and reproducing it requires an **accepted submit**, which means filing a real application. That is not an acceptable way to gather evidence.
+
+**Fix (diagnostic).** On failure to enter the code, the log now names every fillable input actually present — id, name, type, placeholder, autocomplete, maxlength, label, visibility — and says so explicitly when there are none. `no fillable inputs on the page at all` and `inputs present, none matching` are different diagnoses and the log now separates them. Best-effort: an unevaluable page yields nothing and the original error passes through unchanged.
+
+**This is the fifth time this session the move has been "ship the diagnostic before guessing the cause"** (#80, #96, #97, #100, now #114). The previous four each identified their root cause within one cycle, including #100 catching a defect in #98 within one cycle of #100 shipping. The alternative here — guessing at selectors and re-running — costs a real application per attempt.
+
+**Nothing else changed.** The code is still never logged (improvements #32's rule), and an unenterable code still routes to `ErrNeedsEmailVerification` → manual review with documents preserved, which is correct: the code is in the user's inbox and a human can finish in seconds.
 
 ### 113. The emailed code was retrieved and then discarded, because the code field had not rendered yet (Resolved 2026-07-26)
 

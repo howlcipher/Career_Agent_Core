@@ -3267,3 +3267,52 @@ func TestFillSecurityCode_WaitsForALateRenderingField(t *testing.T) {
 		t.Errorf("filled %q, want the emailed code", filled)
 	}
 }
+
+// bugs.md #114: when the emailed code cannot be entered, the error names the
+// selectors that failed and nothing about what IS on the page. Measured on
+// Akuity: gate detected in the HTML, #32 retrieved the code, and a full 20s
+// wait found no visible field -- so whatever satisfied detection was probably
+// not an input. Identifying the real field otherwise requires reproducing an
+// accepted submit, i.e. filing a real application.
+func TestDescribeCodeFieldCandidates_NamesWhatIsOnThePage(t *testing.T) {
+	page := &MechanicalEvalPage{payload: []interface{}{
+		map[string]interface{}{"id": "code_input", "name": "otp", "type": "text",
+			"placeholder": "Enter code", "visible": true, "maxlength": 8},
+		map[string]interface{}{"id": "first_name", "name": "first_name", "type": "text",
+			"visible": true},
+	}}
+	got := describeCodeFieldCandidates(page)
+	for _, want := range []string{"code_input", "otp", "Enter code", "first_name"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("candidate dump missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+// The distinction that matters: "no inputs at all" is a different diagnosis
+// from "inputs present, none matching", and the log must separate them.
+func TestDescribeCodeFieldCandidates_DistinguishesAnEmptyPage(t *testing.T) {
+	page := &MechanicalEvalPage{payload: []interface{}{}}
+	if got := describeCodeFieldCandidates(page); got != "no fillable inputs on the page at all" {
+		t.Errorf("an empty page must say so explicitly, got %q", got)
+	}
+}
+
+// Best-effort: an unevaluable page must not break the failure path it explains.
+func TestDescribeCodeFieldCandidates_IsBestEffort(t *testing.T) {
+	page := &MechanicalEvalPage{err: fmt.Errorf("execution context destroyed")}
+	if got := describeCodeFieldCandidates(page); got != "" {
+		t.Errorf("an unevaluable page must yield no description, got %q", got)
+	}
+}
+
+// MechanicalEvalPage is a MockPage whose Evaluate returns a fixed payload.
+type MechanicalEvalPage struct {
+	MockPage
+	payload interface{}
+	err     error
+}
+
+func (m *MechanicalEvalPage) Evaluate(string, ...interface{}) (interface{}, error) {
+	return m.payload, m.err
+}

@@ -1355,6 +1355,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				}
 				if fErr := fillSecurityCode(target, code); fErr != nil {
 					log.Printf("[Auto-Submit] Retrieved a security code for %s but could not enter it: %v", companyName, fErr)
+					// bugs.md #114: name what IS on the page, since the error can
+					// only name selectors that did not match. Without this the
+					// real field cannot be identified without reproducing an
+					// accepted submit, which means filing a real application.
+					if cands := describeCodeFieldCandidates(page); cands != "" {
+						log.Printf("[Auto-Submit] Fillable inputs present when the code could not be entered: %s", cands)
+					}
 					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
 				}
 				log.Printf("[Auto-Submit] Entered the emailed security code for %s; resubmitting", companyName)
@@ -2478,6 +2485,55 @@ func pendingSecurityCodeAfter(clickedAt time.Time) string {
 		return ""
 	}
 	return code
+}
+
+// codeFieldCandidatesJS lists every text-ish input on the page with the
+// attributes needed to recognise a one-time-code field, plus whether it is
+// visible. Deliberately unfiltered: the point is to discover what the field
+// actually looks like, not to confirm a guess about it.
+const codeFieldCandidatesJS = `() => {
+  const out = [];
+  document.querySelectorAll('input:not([type=hidden]), textarea').forEach(el => {
+    const t = (el.type || '').toLowerCase();
+    if (['checkbox','radio','file','submit','button'].includes(t)) return;
+    const lab = el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
+    out.push({
+      id: el.id || '', name: el.name || '', type: t,
+      placeholder: el.placeholder || '',
+      autocomplete: el.getAttribute('autocomplete') || '',
+      maxlength: el.maxLength > 0 ? el.maxLength : null,
+      label: lab ? lab.textContent.trim().slice(0, 60) : '',
+      visible: !!(el.offsetParent || el.getClientRects().length),
+      inIframe: window !== window.top,
+    });
+  });
+  return out.slice(0, 40);
+}`
+
+// describeCodeFieldCandidates renders the page's fillable inputs for the log.
+//
+// bugs.md #114: when the emailed code cannot be entered, the failure names the
+// selectors that did not match and nothing about what IS on the page -- so the
+// real field cannot be identified without reproducing an accepted submit, which
+// requires filing a real application. Measured on Akuity: the gate was detected
+// in the HTML, #32 retrieved the code, and a full 20-second wait found no
+// visible field, so the marker that satisfied detection was probably not an
+// input at all. This is the same "log the evidence before guessing the cause"
+// move as #80, #96, #97 and #100, each of which paid off within one cycle.
+func describeCodeFieldCandidates(page playwright.Page) string {
+	got, err := page.Evaluate(codeFieldCandidatesJS, nil)
+	if err != nil {
+		return ""
+	}
+	raw, ok := got.([]interface{})
+	if !ok || len(raw) == 0 {
+		return "no fillable inputs on the page at all"
+	}
+	parts := make([]string, 0, len(raw))
+	for _, v := range raw {
+		parts = append(parts, fmt.Sprintf("%v", v))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // rejectedDespiteLanding pairs each still-rejected field with the value the
