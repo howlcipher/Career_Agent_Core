@@ -1220,7 +1220,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						// attempt's leftovers -- the #102 shape, with a captcha in place
 						// of the code gate. #99 cannot catch it because the verdict
 						// settles on flagged fields and never reaches budget exhaustion.
-						if allFieldsWereSet(ids, lastApplied) {
+						// bugs.md #104 follow-up: acceptance outranks the captcha verdict,
+						// exactly as #102 established. Measured the same night: Akuity
+						// carries a reCAPTCHA frame AND its submit was accepted (code email
+						// at 23:40:07), so "widget present + nothing left to fix" would
+						// otherwise label an accepted application captcha-blocked. This
+						// check sits above #93's gate handling below, so it has to test the
+						// gate itself rather than rely on ordering.
+						if allFieldsWereSet(ids, lastApplied) && !parser.DetectSecurityCodeChallenge(prunedHTML) {
 							if hits := detectBotProtectionOnPage(page); len(hits) > 0 {
 								return fmt.Errorf("%w at %s (every rejected field was already set; %s present)",
 									ErrCaptchaBlocked, ExtractDomain(applyURL), strings.Join(hits, ", "))

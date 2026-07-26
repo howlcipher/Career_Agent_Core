@@ -169,7 +169,21 @@ Every value is sensible and correctly committed. The identical five come back fl
 
 **Fix.** When every still-rejected field was successfully written by the previous attempt, there is nothing left for the model to fix; the form is rejecting values it already holds. Combined with a bot-protection widget on the page, that is a swallowed submission, and it now returns `ErrCaptchaBlocked` at the top of the retry rather than spending a third ~10-minute model call to re-answer questions that were already answered correctly.
 
-**Deliberately requires ALL of them, not merely some.** A single genuinely-bad answer among several is an ordinary validation failure and keeps its remaining retry; a test pins that one unset field prevents the captcha verdict. This matters because every Greenhouse page carries reCAPTCHA, so the bot-protection signal alone is far too weak to act on — it is the *conjunction* with "nothing left to fix" that makes it evidence. Same discipline as #99's iframe-`src` narrowness, for the same reason: #45/#46 were captcha false positives that killed most jobs on this platform.
+**Deliberately requires ALL of them, not merely some.** A single genuinely-bad answer among several is an ordinary validation failure and keeps its remaining retry; a test pins that one unset field prevents the captcha verdict.
+
+**Correction, and it strengthens the constraint rather than weakening it.** This entry originally justified that with "every Greenhouse page carries reCAPTCHA". That was an assumption, and it is **wrong**. Measured across three boards the same night:
+
+| board | reCAPTCHA frame | submit outcome |
+| --- | --- | --- |
+| `greenhouse.io/reddit` | **present** | blocked |
+| `greenhouse.io/clickhouse` | **absent** | accepted |
+| `greenhouse.io/akuity` | **present** | **accepted** (code email 23:40:07) |
+
+reCAPTCHA Enterprise is score-based, so **Akuity carries the widget and submits fine**. The claim was wrong; the caution it was defending is now *empirically* proven right, which is a better footing than the assumption gave it. Presence of a provider frame means nothing on its own — only the conjunction with "nothing left for the model to fix" is evidence.
+
+**Follow-up defect found by that same measurement, before it caused harm.** Akuity is precisely the case that breaks this: an accepted submission whose post-acceptance click times out (`element is not enabled`) on a page that *does* carry reCAPTCHA. Because #104's check sits **above** #93's security-code handling in the retry loop, it would have labelled an accepted application `BLOCKED_CAPTCHA`. That is #102's rule — acceptance outranks any rejection signal — reintroduced by the very fix written after learning it. The condition now tests `DetectSecurityCodeChallenge` itself rather than relying on ordering, with a test pinning both directions.
+
+Same discipline as #99's iframe-`src` narrowness, for the same reason: #45/#46 were captcha false positives that killed most jobs on this platform.
 
 ### 103. #98 showed the model react-select's internal option ids, and it answered with them (Resolved 2026-07-26)
 

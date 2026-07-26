@@ -2,6 +2,7 @@ package submitter
 
 import (
 	"fmt"
+	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2842,5 +2843,43 @@ func TestAllFieldsWereSet_EmptyInputsAreNeverAMatch(t *testing.T) {
 	}
 	if allFieldsWereSet([]string{"question_1"}, map[string]string{}) {
 		t.Error("nothing applied must not report a captcha block")
+	}
+}
+
+// bugs.md #104 follow-up. Measured across three Greenhouse boards the same
+// night:
+//
+//	reddit      recaptcha present  -> submit blocked
+//	clickhouse  recaptcha absent   -> submit accepted
+//	akuity      recaptcha PRESENT  -> submit ACCEPTED (code email 23:40:07)
+//
+// So a bot-protection frame says nothing on its own, and an accepted
+// submission awaiting a code must never be reported as captcha-blocked --
+// #102's rule, which #104 could have reintroduced a violation of because its
+// check sits above #93's gate handling.
+func TestSecurityCodeGateOutranksTheCaptchaVerdict(t *testing.T) {
+	gateHTML := `<form><input id="security_code" name="security_code">` +
+		`Copy and paste this code into the security code field on your application</form>`
+	if !parser.DetectSecurityCodeChallenge(gateHTML) {
+		t.Fatal("precondition: the gate must be detectable in this markup")
+	}
+
+	applied := map[string]string{"#question_1": "Yes", "#question_2": "No"}
+	ids := []string{"question_1", "question_2"}
+
+	// Everything the captcha verdict keys on is true here...
+	if !allFieldsWereSet(ids, applied) {
+		t.Fatal("precondition: every rejected field was already set")
+	}
+	// ...so only the gate check can prevent the mislabel. This mirrors the
+	// guard's exact composition at the call site.
+	if allFieldsWereSet(ids, applied) && !parser.DetectSecurityCodeChallenge(gateHTML) {
+		t.Error("an accepted submission awaiting a security code must not be reported as captcha-blocked")
+	}
+
+	// Without a gate, the captcha verdict must still be reachable.
+	noGate := "<form>nothing here</form>"
+	if !(allFieldsWereSet(ids, applied) && !parser.DetectSecurityCodeChallenge(noGate)) {
+		t.Error("with no gate present the captcha verdict must remain reachable")
 	}
 }
