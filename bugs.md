@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 116 | [The post-security-code resubmit still judged the page in one instantaneous read](#116-the-post-security-code-resubmit-still-judged-the-page-in-one-instantaneous-read) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **#115 worked — `Entered the emailed security code for akuity; resubmitting` — and the verdict still failed, in the same second.** This third submit site kept the original `WaitForLoadState` + single `page.Content()` read that **#95 replaced in the other two**, so the post-code resubmit was judged before the page could answer. Fifth instance of a capability wired into one path and not the others (#65/#66→#67, #74→#75, #28→#31, #98's two prompt paths). It is also the **last step before a confirmed application**, so the most expensive place to get it wrong |
 | 115 | [Greenhouse splits the one-time code across eight single-character inputs](#115-greenhouse-splits-the-one-time-code-across-eight-single-character-inputs) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **#114's diagnostic answered it in one cycle.** The real markup is `security-input-0` … `security-input-7`, **eight inputs, each `maxlength=1`, each with an EMPTY `name`**. Every prior selector looked for a single `security_code`/`security-code` field — none could match, and filling one box with an 8-character code would have failed anyway. This was the last unimplemented link between an accepted submission and a completed application |
 | 114 | [When the emailed code cannot be entered, nothing records what IS on the page](#114-when-the-emailed-code-cannot-be-entered-nothing-records-what-is-on-the-page) | Major | Resolved (2026-07-26, diagnostic added) | — | Opus 5 | Gemini 3 Pro | #113 proved the field is **absent, not late** — a full 20s wait found nothing (`could not find a visible security-code field to fill within 20s`). But the error can only name the selectors that *failed*, so the real field cannot be identified without reproducing an accepted submit, which means **filing a real application**. Detection fires on substrings like `security-code`, which a CSS class or notice text satisfies with no input present. Same move as #80/#96/#97/#100, each of which paid off within one cycle |
 | 113 | [The emailed code was retrieved and then discarded, because the code field had not rendered yet](#113-the-emailed-code-was-retrieved-and-then-discarded-because-the-code-field-had-not-rendered-yet) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **One step from the first confirmed application.** Akuity's submit was ACCEPTED, the gate was detected, and #32 **successfully retrieved the code** — then `fillSecurityCode` failed instantly with `could not find a visible security-code field to fill` and the job went to manual review. Detection substring-matches the HTML; filling needs a real *visible* locator, and the input renders later than the markers. Everything happened in one second, ~11s after the submit. Same DOM-lag as #95, #102 and #111, one layer further in |
@@ -184,6 +185,37 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 116. The post-security-code resubmit still judged the page in one instantaneous read (Resolved 2026-07-26)
+
+**#115 worked. The chain ran end to end for the first time, and then failed on the very last step:**
+
+```
+08:00:31 Retrieved a security code from email (subject: "Security code for your application to Akuity")
+08:00:31 akuity issued a security code after the last submit — that submission was ACCEPTED
+08:00:31 Security-code gate detected for akuity — waiting for the emailed code...
+08:00:31 Entered the emailed security code for akuity; resubmitting
+08:00:31 akuity needs manual completion ... (code entered, no confirmation)
+```
+
+**Every line in the same second**, which is the signature #95 exists to eliminate.
+
+**Root cause.** The post-code resubmit had its own verdict, written before #95 and never updated:
+
+```go
+page.WaitForLoadState(networkidle, 10s)
+if content, err := page.Content(); err == nil {
+    if confirmed, reason := isSubmissionConfirmed(...); confirmed { ... }
+}
+```
+
+That is exactly the code #95 replaced in `confirmOrError` and in the retry loop. There were **three** post-click verdict sites and #95 fixed two. So the resubmit was judged before the page had a chance to respond — and this is the final step between an accepted application and a confirmed one, which makes it the most expensive site of the three to have missed.
+
+**Fifth instance of one structural pattern.** The backlog already records #65/#66→#67, #74→#75, #28→#31, and #98 needing both prompt paths. Knowing the pattern was not enough to prevent it: when I wrote #95 I checked the two sites I knew about and did not enumerate all callers.
+
+**Fix.** The resubmit now uses `awaitSubmissionOutcome`, like the other two, and logs the reason when it does not confirm so a failure here is diagnosable rather than silent.
+
+**Structural guard, because memory has now failed five times.** `TestNoUnpolledPostClickConfirmationChecks` pins that `isSubmissionConfirmed` appears exactly three times in `browser.go` — its declaration, its use inside `decideSubmissionOutcome`, and #89's opportunistic re-check of already-settled state at the top of a retry. A **new** call site is almost certainly a post-click verdict that should be polling, and the test says so in its failure message. This is the same species of guarantee as #84's `manualReviewErrors` list, added for the same reason: the invariant cannot depend on the next person remembering it.
 
 ### 115. Greenhouse splits the one-time code across eight single-character inputs (Resolved 2026-07-26)
 

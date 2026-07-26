@@ -1422,16 +1422,20 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						urlBeforeSubmitClick = page.URL()
 						submitClickedAt = time.Now()
 						if clickErr := visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); clickErr == nil {
-							page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-								State:   playwright.LoadStateNetworkidle,
-								Timeout: playwright.Float(10000),
-							})
-							if content, err := page.Content(); err == nil {
-								if confirmed, reason := isSubmissionConfirmed(urlBeforeSubmitClick, page.URL(), content); confirmed {
-									log.Printf("[Auto-Submit] Submission confirmed for %s (%s) after entering the emailed code", companyName, reason)
-									return nil
-								}
+							// bugs.md #116: wait for evidence, exactly as #95 does
+							// on the other two submit paths. This third site kept
+							// the original single instantaneous read after
+							// WaitForLoadState, so the verdict on the
+							// post-code resubmit was taken before the page could
+							// answer -- and this is the last step before a
+							// confirmed application, so it is the most expensive
+							// place to get it wrong.
+							confirmed, reason, currentURL := awaitSubmissionOutcome(page, urlBeforeSubmitClick)
+							if confirmed {
+								log.Printf("[Auto-Submit] Submission confirmed for %s (%s) after entering the emailed code at %s", companyName, reason, currentURL)
+								return nil
 							}
+							log.Printf("[Auto-Submit] Resubmit after the security code did not confirm for %s (%s)", companyName, reason)
 						}
 					}
 				}

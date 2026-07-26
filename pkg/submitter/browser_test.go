@@ -3381,3 +3381,32 @@ func TestFillSplitSecurityCode_NoWidgetIsNotAnError(t *testing.T) {
 		t.Error("no widget present must simply report false so the single-field path runs")
 	}
 }
+
+// bugs.md #116: the post-security-code resubmit kept the original
+// "WaitForLoadState then read once" verdict long after #95 replaced it in
+// confirmOrError and the retry loop. That is the fifth instance in this
+// codebase of a capability wired into one path and not the others
+// (#65/#66->#67, #74->#75, #28->#31, #98's two prompt paths, now this), so the
+// invariant is encoded here rather than left to memory.
+//
+// isSubmissionConfirmed may only be called from two places: inside
+// decideSubmissionOutcome (which awaitSubmissionOutcome polls), and #89's
+// opportunistic re-check at the top of a retry attempt, which inspects
+// already-settled state rather than judging a fresh click. Any NEW call site is
+// almost certainly a post-click verdict that should be polling instead.
+func TestNoUnpolledPostClickConfirmationChecks(t *testing.T) {
+	src, err := os.ReadFile("browser.go")
+	if err != nil {
+		t.Fatalf("read browser.go: %v", err)
+	}
+	calls := strings.Count(string(src), "isSubmissionConfirmed(")
+	// One declaration + two legitimate call sites.
+	const want = 3
+	if calls != want {
+		t.Errorf("isSubmissionConfirmed appears %d times, want %d.\n"+
+			"A new call site is very likely a post-click verdict that must use "+
+			"awaitSubmissionOutcome instead of reading the page once (bugs.md #95/#116). "+
+			"If the new site is genuinely a re-check of settled state, update this count "+
+			"and say why.", calls, want)
+	}
+}
