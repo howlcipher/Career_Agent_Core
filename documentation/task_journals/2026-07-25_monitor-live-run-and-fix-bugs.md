@@ -213,6 +213,29 @@ Attempt 3 then found nothing invalid, fell back to the whole 54,190-char form, a
   - **The defect that measurement exposed:** Akuity is precisely the breaking case — an accepted submission whose post-acceptance click times out (`element is not enabled`) on a page that *does* carry reCAPTCHA. #104's check sits **above** #93's security-code handling, so it would have labelled an **accepted application** `BLOCKED_CAPTCHA`. That is **#102's own rule — acceptance outranks any rejection signal — reintroduced by the fix written after learning it.** The condition now tests `DetectSecurityCodeChallenge` directly instead of relying on ordering, with a test pinning both directions.
 - **Cohort scope, measured:** only **2 of 82** jobs are Reddit (the captcha-blocked board). The bulk is **Lever 39**, other Greenhouse 30, other 11. Greenhouse acceptance is demonstrably working, so the reCAPTCHA limit is narrow and board-specific rather than platform-wide.
 
+### OPEN RISK TO THE WHOLE EFFORT: bot protection is widespread, on BOTH platforms (2026-07-26 01:45)
+
+**This supersedes my earlier "only 2 of 82 are Reddit" reassurance, which was too narrow.** Four distinct boards were confirmed blocked within 40 minutes, and both #99 and #101 labelled every one correctly:
+
+| board | platform | provider | detected via |
+| --- | --- | --- | --- |
+| `greenhouse.io/reddit` | Greenhouse | reCAPTCHA Enterprise | #101 (click timeout) |
+| `greenhouse.io/orkes` | Greenhouse | reCAPTCHA Enterprise | #99 (budget exhaustion) |
+| `greenhouse.io/alphasense` | Greenhouse | reCAPTCHA Enterprise | #99 (budget exhaustion) |
+| `jobs.lever.co/dexcarehealth` | Lever | **hCaptcha** | #101 (click timeout) |
+
+Orkes and AlphaSense are the cleanest cases yet: **`invalid fields: 0`** — the form fully satisfied — then the full 15s budget with no confirmation and no rejection, on a page carrying reCAPTCHA. Exactly the state #95's budget branch was written to represent honestly and #99 was written to explain.
+
+**Lever probe:** all four additional Lever boards sampled (`Instrumentl`, `LuminDigital`, `agile-defense`, `eneba`) carry hCaptcha on the apply form. Lever is **39 of the 82** cohort jobs.
+
+**What is NOT established, and it matters.** Presence is not blocking — **Akuity carries reCAPTCHA and its submit was accepted** (code email 23:40:07), and ClickHouse carries none. These systems are score-based. So the sampled Lever boards are *suspect*, not proven blocked, and claiming otherwise would repeat the #104 mistake exactly.
+
+**Honest scoreboard for tonight's ~12 attempts:** 4 confirmed captcha-blocked, 2 confirmed accepted-and-awaiting-code (ClickHouse, Akuity), the rest still working through. **The pipeline's real ceiling is bot protection, not form-filling** — the fill machinery now reaches `invalid fields: 0` routinely.
+
+**This is the user's call, not mine.** If bot protection blocks a large share of the cohort, the only remedy is a paid solver (`improvements_paywall.md` #17), which is explicitly out of scope under this session's no-monetary-cost constraint. Worth deciding before investing further in fill-path work, which is no longer the bottleneck.
+
+**Checked and dismissed:** the cohort monitor briefly reported `BLOCKED_CAPTCHA=2` after having reported `4`, which would mean rows leaving that status — nothing in the agent does that. Verified directly: **one** agent process (`4059119`), and the DB consistently holds 4, on exactly the four boards above. A transient read in the polling script, not a status regression, and not the orphan-process trap.
+
 ### The session's dominant pattern, stated plainly
 
 Four of this session's fixes were defects in *earlier fixes from the same session*: **#95 → #102**, **#98 → #103**, **#104 → its own follow-up**, and #96/#97/#100 were each written because the previous diagnostic could not see the next failure. The recurring cause is always the same — **a signal that looks like evidence is really residue of the previous step** (#76's `el.value`, #81's `[data-value]`, #102's `aria-invalid`, #103's `id|label`). The defence that has actually worked is not more care up front; it is shipping the diagnostic *before* the root cause is known, which has now paid off four times in a row within a single cycle each.
