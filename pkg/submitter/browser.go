@@ -1213,6 +1213,19 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					// can only re-guess it.
 					if rej := rejectedDespiteLanding(ids, lastApplied); rej != "" {
 						log.Printf("[Auto-Submit] Rejected despite being set last attempt: %s", rej)
+						// bugs.md #104: every field still flagged was successfully set
+						// last attempt, so there is nothing left for the model to fix.
+						// On a page carrying bot protection that means the submission is
+						// never reaching the server and the flags are the previous
+						// attempt's leftovers -- the #102 shape, with a captcha in place
+						// of the code gate. #99 cannot catch it because the verdict
+						// settles on flagged fields and never reaches budget exhaustion.
+						if allFieldsWereSet(ids, lastApplied) {
+							if hits := detectBotProtectionOnPage(page); len(hits) > 0 {
+								return fmt.Errorf("%w at %s (every rejected field was already set; %s present)",
+									ErrCaptchaBlocked, ExtractDomain(applyURL), strings.Join(hits, ", "))
+							}
+						}
 					}
 				} else {
 					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
@@ -2178,6 +2191,36 @@ func detectBotProtectionOnPage(page playwright.Page) []string {
 		}
 	}
 	return out
+}
+
+// allFieldsWereSet reports whether every still-rejected field was successfully
+// written by the previous attempt.
+//
+// bugs.md #104. When that holds there is nothing left for the model to fix:
+// the form is rejecting values it already has. Combined with a bot-protection
+// widget it means the submission is not reaching the server at all, and the
+// aria-invalid flags are the previous attempt's leftovers rather than a fresh
+// verdict -- the #102 shape with a captcha in place of the code gate.
+//
+// Requires ALL of them, not merely some: a single genuinely-bad answer among
+// several is an ordinary validation failure that deserves its remaining retry.
+func allFieldsWereSet(rejectedIDs []string, applied map[string]string) bool {
+	if len(rejectedIDs) == 0 || len(applied) == 0 {
+		return false
+	}
+	for _, id := range rejectedIDs {
+		found := false
+		for selector := range applied {
+			if selectorTargetsID(selector, id) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // rejectedDespiteLanding pairs each still-rejected field with the value the

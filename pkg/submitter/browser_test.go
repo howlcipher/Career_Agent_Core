@@ -2809,3 +2809,38 @@ func TestEnumerateComboboxOptions_NeverLeaksInternalIDsToTheModel(t *testing.T) 
 		}
 	}
 }
+
+// bugs.md #104: Reddit's job 7956443 filled all five custom questions with
+// sensible values -- "company website", "Stellantis Financial Services",
+// "Yes", "No", "I agree" -- committed all three comboboxes, and the identical
+// five came back flagged with the page byte-for-byte unchanged (140544 chars
+// twice). Nothing was left for the model to fix; the submission was never
+// reaching the server past the page's reCAPTCHA.
+func TestAllFieldsWereSet_RequiresEveryRejectedFieldToHaveBeenWritten(t *testing.T) {
+	applied := map[string]string{
+		"#question_67179374": "company website",
+		"#question_67179375": "Stellantis Financial Services",
+		"#question_67179376": "Yes",
+	}
+	all := []string{"question_67179374", "question_67179375", "question_67179376"}
+	if !allFieldsWereSet(all, applied) {
+		t.Error("every rejected field was written; expected true")
+	}
+
+	// One field the previous attempt never set means there IS something left
+	// to fix -- an ordinary validation failure that keeps its remaining retry.
+	withUnset := append(append([]string{}, all...), "question_67179999")
+	if allFieldsWereSet(withUnset, applied) {
+		t.Error("a rejected field that was never written must prevent the captcha verdict")
+	}
+}
+
+func TestAllFieldsWereSet_EmptyInputsAreNeverAMatch(t *testing.T) {
+	applied := map[string]string{"#question_1": "x"}
+	if allFieldsWereSet(nil, applied) {
+		t.Error("no rejected fields must not report a captcha block")
+	}
+	if allFieldsWereSet([]string{"question_1"}, map[string]string{}) {
+		t.Error("nothing applied must not report a captcha block")
+	}
+}

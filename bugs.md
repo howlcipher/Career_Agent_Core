@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 104 | [A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired](#104-a-captcha-swallowed-submit-hid-behind-stale-invalid-flags-so-99-never-fired) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Predicted from #99+#102, then confirmed by #100's diagnostic on the next run. Reddit job `7956443` set all five custom questions to sensible values (`"company website"`, `"Stellantis Financial Services"`, `"Yes"`, `"No"`, `"I agree"`), committed all three comboboxes, and the **identical five** came back flagged with the page **byte-for-byte unchanged** (140544 chars twice). Nothing was left to fix — the submit was never reaching the server past the page's reCAPTCHA. #99 could not catch it because the verdict settles on flagged fields and never reaches budget exhaustion |
 | 103 | [#98 showed the model react-select's internal option ids, and it answered with them](#103-98-showed-the-model-react-selects-internal-option-ids-and-it-answered-with-them) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #98 fix, caught by #100's diagnostic within one cycle of that diagnostic shipping.** `readComboboxOptions` returns `"id\|label"` so `pickComboboxOption` can click by id; #98 put those raw strings into the prompt, and the model faithfully answered `react-select-question_67179376-option-0\|Yes` — an internal DOM id no widget offers. Live: `Rejected despite being set last attempt: question_67179376 = "react-select-question_67179376-option-0\|Yes"`. So #98 has been feeding garbage to the model since it shipped, on every combobox |
 | 102 | [#95's early exit read stale invalid flags and called four accepted submissions failures](#102-95s-early-exit-read-stale-invalid-flags-and-called-four-accepted-submissions-failures) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #95 fix, and the biggest single misreading of the effort.** Greenhouse *accepts* a submission and issues an emailed security-code challenge within ~1s, then re-renders the challenge later while the previous attempt's `aria-invalid` markers are **still on the page**. #95's flagged-field early exit fired at 2s on those stale markers and called the accepted submission a validation failure. Proven by timestamps: the Akuity code email is stamped **23:40:07, between** its submit click (~23:40:06) and its verdict (23:40:08); ClickHouse's is stamped **00:05:34, the same second** as its submit. **Four applications reached Greenhouse today** (Surt AI, ClickHouse ×2, Akuity) and every one was recorded as a failure |
 | 101 | [A submit click that timed out reported nothing about what blocked it](#101-a-submit-click-that-timed-out-reported-nothing-about-what-blocked-it) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | **Three jobs ended the day this way** — Akuity, Nova and Zimperium — each with a bare `playwright: timeout: Timeout 30000ms exceeded` from the submit click and no indication of why the control was unactionable, all written off as generic `FAILED_SUBMIT`. A timeout says the click never landed; it says nothing about what stopped it. Now reads `elementFromPoint` at the control's centre — the same check that cleared Reddit's button in #99 — and names whatever covers it |
@@ -144,6 +145,31 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 104. A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired (Resolved 2026-07-26)
+
+**Predicted before it was seen, then confirmed by measurement** — which is worth noting because the previous prediction this session (#103's causal claim) was wrong and had to be retracted.
+
+After #102, the reasoning was: a reCAPTCHA-swallowed submit leaves the page untouched, so the previous attempt's `aria-invalid` markers persist, so the verdict settles as `reasonFieldsFlagged` at the 8s floor and **never reaches budget exhaustion** — which is the only state #99's bot-protection branch tests. Same structure as #102, with a captcha in place of the code gate.
+
+The next run produced exactly that, on Reddit job `7956443`:
+
+```
+00:51:48 Attempt 2 committed 3 autocomplete selection(s): #question_67179376, #question_67179377, #question_67179378
+00:51:48 Attempt 2 applied 5/5 validation fix(es)
+00:51:56 Submit verdict after 8s: page re-rendered with fields flagged invalid (url moved: false, invalid fields: 5, page 140544 chars)
+00:51:56 Rejected despite being set last attempt: question_67179374 = "company website";
+         question_67179375 = "Stellantis Financial Services"; question_67179376 = "Yes";
+         question_67179377 = "No"; question_67179378 = "I agree"
+```
+
+Every value is sensible and correctly committed. The identical five come back flagged. And the page is **byte-for-byte unchanged** — 140544 chars on this run and on the previous one, 133352 at both initial submits. A server that had processed and re-rejected the form would not return the same bytes twice.
+
+**This also cleanly confirms #103's fix and its retraction.** The values are now human-readable labels (`"Yes"`, not `react-select-…-option-0|Yes`), so #103 works — and the rejection is *unchanged*, so #103 was correctly retracted as the cause.
+
+**Fix.** When every still-rejected field was successfully written by the previous attempt, there is nothing left for the model to fix; the form is rejecting values it already holds. Combined with a bot-protection widget on the page, that is a swallowed submission, and it now returns `ErrCaptchaBlocked` at the top of the retry rather than spending a third ~10-minute model call to re-answer questions that were already answered correctly.
+
+**Deliberately requires ALL of them, not merely some.** A single genuinely-bad answer among several is an ordinary validation failure and keeps its remaining retry; a test pins that one unset field prevents the captcha verdict. This matters because every Greenhouse page carries reCAPTCHA, so the bot-protection signal alone is far too weak to act on — it is the *conjunction* with "nothing left to fix" that makes it evidence. Same discipline as #99's iframe-`src` narrowness, for the same reason: #45/#46 were captcha false positives that killed most jobs on this platform.
 
 ### 103. #98 showed the model react-select's internal option ids, and it answered with them (Resolved 2026-07-26)
 
