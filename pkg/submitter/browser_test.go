@@ -101,6 +101,15 @@ type MockPage struct {
 	urlValue             string
 	contentValue         string
 	screenshotFunc       func() ([]byte, error)
+	// evaluateFunc backs page-level JS probes (bugs.md #99/#101).
+	evaluateFunc func(expression string) (interface{}, error)
+}
+
+func (m *MockPage) Evaluate(expression string, arg ...interface{}) (interface{}, error) {
+	if m.evaluateFunc != nil {
+		return m.evaluateFunc(expression)
+	}
+	return nil, nil
 }
 
 func (m *MockPage) MainFrame() playwright.Frame { return m.mainFrame }
@@ -2630,5 +2639,71 @@ func TestTruncateForLog_KeepsLongAnswersReadable(t *testing.T) {
 	// Newlines collapse so one answer stays on one log line.
 	if got := truncateForLog("line one\nline two", 100); got != "line one line two" {
 		t.Errorf("newlines must collapse, got %q", got)
+	}
+}
+
+// bugs.md #101: three jobs ended 2026-07-25 with a bare
+// `playwright: timeout: Timeout 30000ms exceeded` from the submit click
+// (Akuity, Nova, Zimperium) and no indication of why the control was
+// unactionable. A timeout says the click never landed; it says nothing about
+// what stopped it.
+func TestDescribeSubmitObstruction_ReportsWhatCoversTheControl(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]interface{}
+		want    []string
+	}{
+		{
+			name:    "no submit control at all",
+			payload: map[string]interface{}{"found": false},
+			want:    []string{"no submit control"},
+		},
+		{
+			name: "clear button, nothing covering it (Reddit's shape in #99)",
+			payload: map[string]interface{}{
+				"found": true, "disabled": false, "inViewport": true, "coveredBy": "",
+			},
+			want: []string{"nothing covering it", "disabled=false"},
+		},
+		{
+			name: "an overlay intercepting the click (#34's shape)",
+			payload: map[string]interface{}{
+				"found": true, "disabled": false, "inViewport": true,
+				"coveredBy": "DIV#onetrust-consent-sdk.banner",
+			},
+			want: []string{"covered by DIV#onetrust-consent-sdk.banner"},
+		},
+		{
+			name: "a captcha frame sitting over the button",
+			payload: map[string]interface{}{
+				"found": true, "disabled": false, "inViewport": true,
+				"coveredBy": "IFRAME.challenge src=https://challenges.cloudflare.com/x",
+			},
+			want: []string{"covered by IFRAME.challenge", "challenges.cloudflare.com"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			page := &MockPage{evaluateFunc: func(string) (interface{}, error) {
+				return tc.payload, nil
+			}}
+			got := describeSubmitObstruction(page)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("describeSubmitObstruction = %q, want it to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// Best-effort: a page that cannot be evaluated must not break the failure path
+// it is only trying to explain.
+func TestDescribeSubmitObstruction_IsBestEffort(t *testing.T) {
+	page := &MockPage{evaluateFunc: func(string) (interface{}, error) {
+		return nil, fmt.Errorf("execution context destroyed")
+	}}
+	if got := describeSubmitObstruction(page); got != "" {
+		t.Errorf("an unevaluable page must yield no description, got %q", got)
 	}
 }

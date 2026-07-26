@@ -1380,6 +1380,21 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		}
 
 		if execErr != nil {
+			// bugs.md #101: a bare `Timeout 30000ms exceeded` from the submit
+			// click says the click never landed and nothing about what stopped
+			// it. Three jobs ended the day exactly that way (Akuity, Nova,
+			// Zimperium), each written off as a generic failure. Read the
+			// control's actionability directly instead of inferring it.
+			if obstruction := describeSubmitObstruction(page); obstruction != "" {
+				log.Printf("[Auto-Submit] Submit click failed for %s (%s); submit control: %s", companyName, execErr, obstruction)
+			}
+			// Only claim a bot-protection block when a provider frame is
+			// actually embedded -- #45/#46 were false positives that killed most
+			// jobs on this platform, so this stays evidence-led.
+			if hits := detectBotProtectionOnPage(page); len(hits) > 0 {
+				return fmt.Errorf("%w at %s (submit click did not land; %s present): %v",
+					ErrCaptchaBlocked, ExtractDomain(applyURL), strings.Join(hits, ", "), execErr)
+			}
 			return execErr
 		}
 
@@ -2180,6 +2195,56 @@ func truncateForLog(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// submitObstructionJS reports what, if anything, sits on top of the submit
+// control -- direct evidence of interception rather than inference from a
+// timeout. Uses elementFromPoint at the control's centre, the same check a
+// read-only probe used to clear Reddit's button in bugs.md #99.
+const submitObstructionJS = `() => {
+  const btn = document.querySelector("button[type='submit'], input[type='submit']");
+  if (!btn) return {found: false};
+  const r = btn.getBoundingClientRect();
+  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+  const top = document.elementFromPoint(cx, cy);
+  let coveredBy = null;
+  if (top && top !== btn && !btn.contains(top)) {
+    coveredBy = top.tagName +
+      (top.id ? '#' + top.id : '') +
+      (top.className && typeof top.className === 'string'
+        ? '.' + top.className.trim().split(/\s+/).slice(0,2).join('.') : '');
+    if (top.tagName === 'IFRAME' && top.src) coveredBy += ' src=' + top.src.split('?')[0];
+  }
+  return {found: true, disabled: !!btn.disabled, w: Math.round(r.width), h: Math.round(r.height),
+          inViewport: r.top < innerHeight && r.bottom > 0, coveredBy};
+}`
+
+// describeSubmitObstruction renders the submit control's actionability for the
+// log. Best-effort: any failure yields "" and the caller reports what it has.
+//
+// bugs.md #101: three jobs (Akuity, Nova, Zimperium) ended the day with a bare
+// `playwright: timeout: Timeout 30000ms exceeded` from the submit click and no
+// indication of why the control was unactionable. A timeout says the click
+// never landed; it does not say what stopped it.
+func describeSubmitObstruction(page playwright.Page) string {
+	got, err := page.Evaluate(submitObstructionJS, nil)
+	if err != nil {
+		return ""
+	}
+	m, ok := got.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if found, _ := m["found"].(bool); !found {
+		return "no submit control present at all"
+	}
+	parts := []string{fmt.Sprintf("disabled=%v inViewport=%v", m["disabled"], m["inViewport"])}
+	if cb, ok := m["coveredBy"].(string); ok && cb != "" {
+		parts = append(parts, "covered by "+cb)
+	} else {
+		parts = append(parts, "nothing covering it")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func isComboboxLocator(el playwright.Locator) (bool, error) {

@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 101 | [A submit click that timed out reported nothing about what blocked it](#101-a-submit-click-that-timed-out-reported-nothing-about-what-blocked-it) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | **Three jobs ended the day this way** — Akuity, Nova and Zimperium — each with a bare `playwright: timeout: Timeout 30000ms exceeded` from the submit click and no indication of why the control was unactionable, all written off as generic `FAILED_SUBMIT`. A timeout says the click never landed; it says nothing about what stopped it. Now reads `elementFromPoint` at the control's centre — the same check that cleared Reddit's button in #99 — and names whatever covers it |
 | 100 | [A field that lands and is rejected anyway had no diagnostic at all](#100-a-field-that-lands-and-is-rejected-anyway-had-no-diagnostic-at-all) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Akuity logged `applied 7/7`, **no** not-landed line — so `verifyFixLanded` reported every control as set — and the **identical 7 fields** came back flagged. #97 names values only for fields that *fail* to land, so this opposite case had no diagnostic whatsoever and the loop could only re-guess. Probe ruled out the obvious causes: all 7 are plain required `INPUT`/`TEXTAREA`, single match, no `pattern`, and React genuinely *does* observe `Fill()` (`reactValue` matches the DOM). Fourth instance of the same lesson as #80/#96/#97 |
 | 99 | [A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce](#99-a-submit-silently-swallowed-by-recaptcha-was-reported-as-an-ordinary-validation-bounce) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Reddit reached **`invalid fields: 0`** — the form fully satisfied for the first time — and the submit still produced no confirmation and no rejection. **No Greenhouse email arrived**, while ClickHouse's accepted submit produced one in the same second, so Reddit's request never reached the server. Read-only probe: the submit control is **clean** (one match, visible, enabled, in-form, unobstructed — ruling out #87's decoy and #34's overlay) and the page embeds **reCAPTCHA Enterprise**. Score-based invisible reCAPTCHA silently discards a headless submission. The cost was ~30 min of model calls per attempt on a form with nothing left to fix, ending in a misleading manual-review reason |
 | 98 | [The model was never shown a dropdown's permitted values, so it guessed the wording](#98-the-model-was-never-shown-a-dropdowns-permitted-values-so-it-guessed-the-wording) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The last-mile blocker, caught by #97's diagnostic in one cycle.** Reddit reached a single remaining invalid field and proposed `"I am not a protected veteran"` on **two consecutive attempts** for a widget offering *No military service* / *I don't wish to answer* — a phrasing that filters the option list to **zero**. Probe: none of `#434`'s option strings exist in the page HTML until the widget is opened, and Greenhouse forms carry **zero native `<select>` elements**, so no option text is ever in the served document the prompt is built from. The model was asked to supply a value for a control whose permitted values it is never shown. Residual measured since #91/#92: **14 commits succeeded, 2 fields failed** — and both failures are exactly this unusual-wording case |
@@ -141,6 +142,32 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 101. A submit click that timed out reported nothing about what blocked it (Resolved 2026-07-25)
+
+Three separate jobs ended 2026-07-25 with the identical, uninformative line:
+
+```
+23:48:08 [Worker-1] Auto-Submit failed for Akuity: playwright: timeout: Timeout 30000ms exceeded.
+```
+
+`grep` confirms the count: **Akuity, Nova and Zimperium**, each after a full set of validation fixes had been applied, each written off as a generic `FAILED_SUBMIT`. Akuity's is the clearest waste — attempt 3 applied 7/7 fixes and then spent the whole 30s action timeout failing to click.
+
+**A timeout says the click never landed. It says nothing about what stopped it** — a disabled control, an off-screen one, a consent banner over the top (#34's shape), or a bot-protection frame (#99's). Those need different responses and were indistinguishable.
+
+The 07-21 journal had already guessed at Nova's: *"most plausibly an hCaptcha overlay after repeated submits."* A guess is what this replaces.
+
+**Fix.** On a failed submit click, read the control's actionability directly via `elementFromPoint` at its centre — the same check a read-only probe used to *clear* Reddit's button in #99 — and log it:
+
+```
+[Auto-Submit] Submit click failed for Akuity (timeout ...); submit control: disabled=false inViewport=true, covered by DIV#onetrust-consent-sdk.banner
+```
+
+Naming the covering element turns three indistinguishable timeouts into three separable causes. When an iframe covers it, its `src` is included, so a challenge frame identifies itself.
+
+**Routing stays evidence-led.** `ErrCaptchaBlocked` is returned only when a provider frame is genuinely embedded, reusing #99's narrow `src` matcher. #45/#46 were CAPTCHA false positives that killed the large majority of Greenhouse/Lever/Ashby/Workable jobs before fit-scoring, so nothing here infers a captcha from a timeout alone — the timeout and the widget must both be present, and the message states both facts rather than asserting one caused the other. The original Playwright error is preserved in the wrapped message either way.
+
+The probe is best-effort: a page that cannot be evaluated yields no description and the original error is returned unchanged, so a diagnostic can never break the failure path it exists to explain. 5 new sub-cases plus a best-effort test.
 
 ### 100. A field that lands and is rejected anyway had no diagnostic at all (Resolved 2026-07-25)
 
