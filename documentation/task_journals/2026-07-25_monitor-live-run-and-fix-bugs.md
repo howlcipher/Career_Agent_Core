@@ -553,51 +553,125 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 ## Next Step
 
-**Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
+**Standing instruction: monitor the live run, fix what surfaces, log it in `bugs.md`, groom the backlog, keep this journal.** The user set this as a `/goal`; it does not complete until they say so. Standing authority: *"If a choice arises, do what you recommend, don't feel you need to ask, do not do anything that adds a monetary cost."*
 
-### Live state (accurate as of 2026-07-26 04:10)
+### Live state (accurate as of 2026-07-26 08:55)
 
-- **Agent PID `4125158`** (`/tmp/career_agent_bin_verify84h`), built from HEAD carrying **#94-#110** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
-- **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `bjejz88wb` — cohort status + PID death, pointed at `4125158`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
-  - `bkmg640jz` — `tail -F career_agent.log`, filter now including `Submit verdict after` (#96) and the dedup-record failure line.
-- **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV** (#83's size ceiling — a correct route, not a failure). Reddit was requeued out of it.
-- **Still 0 confirmed `APPLIED`**, but the gap is now one field wide on the best job in the cohort. `job_funnel` has never held an `APPLIED` row at all (#94).
+- **NOTHING IS RUNNING.** The targeted 2-job run (PID `5294`) finished at 08:50 — `Batch execution complete!`. No agent process is alive.
+- **Working tree clean, `main` in sync with `origin/main`.** HEAD carries **#94-#117** (29 fixes this session).
+- **1 confirmed `APPLIED`: Akuity** — the first in the database's history (was 0 across 3,884 rows at session start). See the *FIRST CONFIRMED APPLICATION* section above for the evidence.
+- **82-cohort:** `DISCOVERED=52 FAILED_SUBMIT=11 BLOCKED_CAPTCHA=9 SKIPPED=6 MANUAL_REQUIRED=4`. Note this tally reads the `http://` rows and is unreliable for ~11 of 82 jobs — see **#112**.
+- **Backlog:** 105 bug rows, **0 open**. `improvements.md` has 3 Pending (all ⚠️ below the 0.5 ROI floor), `improvements_paywall.md` 1.
+- **Monitors: none armed.** They do not survive a session boundary. On resume, `pgrep -af watch_82.sh` and `pgrep -af 'tail -F.*career_agent.log'`, kill any orphans, arm fresh ones.
 
-### The single thing to watch next
+### RECOMMENDED NEXT ACTIONS, in order
 
-**Reddit's `#434`.** It is the only field standing between this effort and its first confirmed application. The next Reddit run will log `#434 (tried "…")`. That value decides the fix:
-- If it is a phrasing the widget does not offer (`Prefer not to say`, `I am not a protected veteran`), the fix is to make the model choose from the offered options — a prompt/containment change, and the sole-option path already handles the rest.
-- If it *is* `I don't wish to answer`, then the mechanism is broken for this widget after all, despite the probe, and the probe replicated the wrong sequence again (#76/#81/#91's recurring trap).
+#### 1. Restart the full 82-job cohort on current HEAD
 
-Do not guess between those before the line appears.
+Every previous cohort run used a much earlier binary; **no full run has ever executed with #94-#117**. This is the highest-value action and needs no user decision.
 
-### Open question for the user (not blocking, do not decide unilaterally)
+```bash
+# Build on the HOST (distrobox Go is 1.18 and rejects go.mod's 1.26.5).
+cd /var/home/howlcipher/dev/Career_Agent_Core
+go build ./... && go vet ./... && go test ./...
 
-**~59 remaining DB-wide `applied_jobs` rows predate the current log**, on jobs sitting in `DISCOVERED`. Under #94 they are almost certainly bogus (documents generated, never submitted), and clearing them would return a large block of the ~3,100-job backlog to circulation. But there is **no positive evidence** either way for those specific rows, and clearing one where an application genuinely landed files a duplicate with a real employer. Deliberately left for the user. Same reasoning as #82 and #88: a wrong outward-facing action is worse than an omission.
+# Launch INSIDE the distrobox (the agent renders blank pages on the bare host).
+cat > /tmp/relaunch_full.sh <<'EOS'
+#!/bin/bash
+set -e
+cd /var/home/howlcipher/dev/Career_Agent_Core
+/usr/local/go/bin/go build -o /tmp/career_agent_bin_full1 ./cmd/agent
+echo "BUILD OK"
+TARGET_JOB_URL="$(paste -sd, applied_urls_verify82.txt)" \
+  nohup /tmp/career_agent_bin_full1 > /tmp/full1_stdout.log 2>&1 &
+disown
+echo "LAUNCHED PID $!"
+EOS
+chmod +x /tmp/relaunch_full.sh
+distrobox enter career-agent -- bash -lc "bash /tmp/relaunch_full.sh"
+```
 
-### What to watch for
+Then **verify the fixes are in the binary** rather than assuming (#84's lesson):
 
-- `Submission confirmed for ...` — the first genuine `APPLIED` of the whole 82-job effort.
-- `Security-code gate detected ... waiting for the emailed code` then `Entered the emailed security code` — improvements #32 firing live. **Not yet observed in the wild**; the capability is tested but unproven end to end.
-- `Location set to "Macomb, MI"` on a **Lever** job — improvements #33's payoff. Greenhouse already commits `Township of Macomb, Michigan`.
-- `committed N autocomplete selection(s)` / `left the control empty` / `still invalid: <fields>` — the diagnostics from #80/#81 that have driven most of today's finds.
+```bash
+for s in "security-input-" "issued a security code after the last submit" \
+         "Resubmit after the security code did not confirm" \
+         "AVAILABLE OPTIONS FOR DROPDOWN FIELDS" "Submit verdict after"; do
+  printf "%-50s %s\n" "${s:0:50}" "$(strings /tmp/career_agent_bin_full1 | grep -cF "$s")"
+done
+```
 
-### Everything is unblocked on the user's side
+Arm both monitors (cohort + log). The cohort watcher, self-contained:
 
-All attestations are set (`MissingAttestations` returns empty), the location resolves on both geocoders, `earliest_start_date` is computed at render time, and code retrieval is live. **There are no open questions for the user.**
+```bash
+cat > /tmp/watch_82.sh <<'EOS'
+#!/bin/bash
+urls_file="/var/home/howlcipher/dev/Career_Agent_Core/applied_urls_verify82.txt"
+db="/var/home/howlcipher/dev/Career_Agent_Core/applications.db"
+in_clause=$(awk '{printf "%s%s%s", (NR>1?",":""), "\x27", $0"\x27"}' "$urls_file")
+pid=<THE_NEW_PID>
+prev=""
+while true; do
+  if ! kill -0 "$pid" 2>/dev/null; then echo "PROCESS $pid EXITED. Final: $prev"; break; fi
+  cur=$(distrobox enter career-agent -- sqlite3 "$db" \
+    "SELECT status || '=' || COUNT(*) FROM job_funnel WHERE url IN ($in_clause) GROUP BY status ORDER BY status;" 2>/dev/null | tr '\n' ' ')
+  if [ -n "$cur" ] && [ "$cur" != "$prev" ]; then echo "STATUS CHANGE (82-cohort): $cur"; prev="$cur"; fi
+  sleep 120
+done
+EOS
+```
 
-### Standing procedure and hard-won warnings
+Log monitor filter (must include the newer diagnostics or their events are invisible — #77):
 
-- **Restart procedure:** kill the PID, requeue affected rows (`cmd/requeue` for `FAILED_SUBMIT`/`BLOCKED_CAPTCHA`/`APPLIED` — it does **not** accept `MANUAL_REQUIRED`, use scoped SQL for that), **clear the `applied_jobs` dedup row** or `HasApplied` silently skips the retry, rebuild via `scratchpad/relaunch.sh` (bump the binary suffix), update `watch_82.sh`'s `pid=`, re-arm the cohort monitor.
-- **Monitors do not survive a session boundary.** They keep running as host processes but their notifications cannot reach a new session. On `/resume_task`: `pgrep -af watch_82.sh` and `pgrep -af 'tail -F.*career_agent.log'`, kill them, arm fresh ones. Five orphans from disconnected sessions were found and cleaned up this morning.
-- **Probe the real page instead of iterating through the agent.** The single most effective technique of this session — ~30s per hypothesis versus ~12 minutes. Build it in the scratchpad with a `replace` back to the repo module, pin `playwright-go` to the repo's version, run inside the `career-agent` distrobox. **Never let a probe click submit on a live posting** — that files a real, incomplete application. Read `aria-required`/`aria-invalid` and option lists instead.
-- **Replicate the code path, not the expected outcome.** Three fixes (#76, #81, #91) shipped inert because the probe reproduced my mental model of the sequence rather than the code's actual order of operations. #91 is the clearest case: I read the option list with no query typed; the agent always types first, which filtered the list to zero.
-- **An absent signal is not evidence of an absent event.** Bit me repeatedly — a log line missing from a monitor's grep (#77), a compiler that never complained about code I never wrote (#84), a `data-value` that was really just typed text (#81).
-- **Verify an edit landed, not just that the build passed.** #84 shipped with the `cmd/agent` branch silently missing; `go build` was green because the other half compiled.
-- **A flaky external service needs a clean re-test before its answer becomes fact.** #88 recorded "Lever cannot find Macomb, MI"; that was rate-limiting, corrected in #33.
+```
+Submission confirmed|Submit verdict after|Auto-Submit failed|Proceeding with application|panic:|CRITICAL:|BLOCKED_CAPTCHA|queued for manual submission|Duplicate check|Batch execution complete|ATS board feeds contributed|validation fix\(es\) to:|Narrowed validation retry|Submission failed validation|committed .*autocomplete|left the control empty|on the initial fill|Security-code gate|Entered the emailed security code|issued a security code|Rejected despite being set|Fillable inputs present|Submit click failed|manual review|failed to record the dedup row
+```
+
+**Expect mostly `BLOCKED_CAPTCHA`.** Measured: **6 of 7** completed fills were blocked. That is accurate reporting, not a regression.
+
+#### 2. Merge #112's duplicate funnel rows — needs a decision first
+
+20 scheme-duplicate pairs (`http://x` and `https://x` for one posting), **11 holding different statuses**. The dedup half is fixed; the funnel half is not, because merging requires deciding which status wins when two disagree (`BLOCKED_CAPTCHA` vs `DISCOVERED` vs `FAILED_SUBMIT` are not obviously orderable). Picking wrong either strands a workable job or re-attempts a blocked one. **Ask the user before merging.** Inspect with:
+
+```sql
+SELECT b.status AS http_status, a.status AS https_status, COUNT(*) FROM job_funnel a JOIN job_funnel b
+  ON replace(a.url,'https://','') = replace(b.url,'http://','')
+ AND a.url LIKE 'https://%' AND b.url LIKE 'http://%' GROUP BY 1,2 ORDER BY 3 DESC;
+```
+
+#### 3. The bot-protection decision — the user's, and now the dominant constraint
+
+**6 of 7 completed fills were blocked**, across both platforms: `reddit`, `orkes`, `alphasense`, `sportygroup`, `pointwild` (reCAPTCHA) and `dexcarehealth`, `zimperium`, `brightedge`, `syw` (hCaptcha on Lever — **4 of 4 Lever jobs attempted were blocked**, and Lever is 39 of 82). The fill path is solved; this is what stops applications. The only remedy is `improvements_paywall.md` **#17** (2captcha/capsolver), which is **paid and explicitly out of scope** under the no-monetary-cost constraint. **Do not act on this without the user.**
+
+**Do NOT "optimise" by pre-skipping jobs whose page carries a captcha widget** — see the ⚠️ note in `bugs.md`'s Operational Trap section. Akuity carries reCAPTCHA *and* was accepted; presence is not blocking, and a presence-based skip recreates #45/#46.
+
+### OPEN ITEMS FOR THE USER (do not decide unilaterally)
+
+1. **ClickHouse has an accepted application awaiting its code** — Greenhouse emailed `p5Kqsn22` at 08:48:11. One code entry from complete. The agent missed it via #117 (now fixed). Completing it by hand, or requeuing it, is the user's call.
+2. **Akuity received a DUPLICATE application** (08:01 and 08:32). Caused by an undetected success (#116) plus my requeue loop. #116 prevents recurrence; the duplicate cannot be undone. See the disclosure section above.
+3. **~59 DB-wide `applied_jobs` rows predate the log**, on `DISCOVERED` jobs. Under #94 they are probably bogus, and clearing them would return a large block of the ~3,100-job backlog to circulation — but there is no positive evidence per row, and clearing one where an application landed files a duplicate.
+4. **Per #110, check the EEO answers** on any pending application completed by hand. The loose option matcher was live for most of the session and could have selected a substantively wrong answer.
+
+### STANDING PROCEDURE AND HARD-WON WARNINGS
+
+- **Build on the HOST, run in the DISTROBOX.** Host Go is 1.26.5; the distrobox's is 1.18 and rejects `go.mod`. `sqlite3` and Playwright only work inside the distrobox.
+- **Restart procedure:** kill the PID (verify dead — plain `kill` often does not stick, use `kill -9`), requeue affected rows, **clear the `applied_jobs` dedup row** or `HasApplied` silently skips the retry, rebuild with a bumped binary suffix, re-arm monitors against the new PID.
+- **Requeue by the scheme-normalised key** (#112), or you will update only one of two rows:
+  `DELETE FROM applied_jobs WHERE replace(replace(url,'https://',''),'http://','') IN (...)`.
+  The DB stores `https://` while the log prints `http://` — a scoped `UPDATE` written from the log's spelling matches **zero rows and silently does nothing**. Always include a verification `SELECT` in the same statement.
+- **Before requeuing a job that reached code entry, CHECK THE INBOX for a completion email.** That is the only place an undetected success is visible, and skipping it is what filed the Akuity duplicate.
+- **Every signal this pipeline depends on arrives late. Never read one once.** Six bugs this session were exactly that: #95 (DOM before the submit landed), #102 (previous attempt's `aria-invalid`), #111 (unrendered gate), #113 (unrendered field), #116 (instant resubmit verdict), #117 (unindexed mailbox).
+- **Ship the diagnostic before the root cause is known.** #80, #96, #97, #100 and #114 each found their cause within *one* cycle — #114 dumped the page's inputs and directly produced #115's unguessable eight-box widget. Guessing here costs a real application per attempt.
+- **The inbox is ground truth; the page is not.** When they disagreed, the mailbox was right every time (#93, #95's proof, #111, #117, the duplicate).
+- **Fixing one path is not fixing the capability.** Five instances (#65/#66→#67, #74→#75, #28→#31, #98's two prompt paths, #95→#116). `TestNoUnpolledPostClickConfirmationChecks` now guards the submit-verdict case structurally, because memory failed five times.
+- **Probe the real page instead of iterating through the agent** — ~30s per hypothesis versus ~12 minutes. Build in the scratchpad with a `replace` back to the repo module, pin `playwright-go` to the repo's version, run inside the distrobox. **Never let a probe click submit on a live posting.**
+- **Replicate the code path, not the expected outcome** (#76, #81, #91 all shipped inert because the probe reproduced my mental model of the sequence, not the code's).
+- **Verify an edit landed, not just that the build passed** (#84), and **verify fixes are in the binary** with `strings` before trusting a run.
+- **An absent signal is not evidence of an absent event** (#77, #84, #81) — and its inverse, **a benign-looking log line is not evidence of a benign event** (#94's `Duplicate check: Already applied`).
+- **A flaky external service needs a clean re-test before its answer becomes fact** (#88's "Lever cannot find Macomb, MI" was rate-limiting, corrected in #33).
+- **Acceptance is per-attempt, not per-board.** reCAPTCHA is score-based and the score degrades with repeated automated attempts. Akuity accepted, then didn't, then did. Do not reason in terms of "boards that accept".
 - Ollama serves warm prompt caches — benchmark only on unseen jobs. `OLLAMA_FAST_MODEL` is intentionally unset (improvements #24).
 
-### Not yet exercised
+### NOT YET EXERCISED
 
-**improvements #26 (ATS feed discovery) still has not run live.** This is an isolated `TARGET_JOB_URL` run, which skips `FunnelEngine.DiscoverJobs` entirely. `discoverWithATSFeeds` only executes on the next *normal* batch start — watch then for `ATS board feeds contributed N new posting(s)` and check the title gate is not over-filtering.
+**improvements #26 (ATS feed discovery) still has not run live.** Every run this session used `TARGET_JOB_URL`, which skips `FunnelEngine.DiscoverJobs` entirely. `discoverWithATSFeeds` only executes on a *normal* batch start — watch then for `ATS board feeds contributed N new posting(s)` and check the title gate is not over-filtering.
