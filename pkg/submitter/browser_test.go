@@ -2353,7 +2353,7 @@ func TestDecideSubmissionOutcome_UnchangedPageBeforeFloorIsNotYetRejection(t *te
 	// The exact live signature: every field committed, the DOM still showing
 	// the form, a few milliseconds after the click. Judging here is what
 	// produced "applied N/N ... Submission failed validation" in one second.
-	v := decideSubmissionOutcome(same, same, "<form>still here</form>", 5*time.Millisecond, 3)
+	v := decideSubmissionOutcome(same, same, "<form>still here</form>", 5*time.Millisecond, 3, false)
 	if v.Done {
 		t.Fatalf("verdict at 5ms must be inconclusive, got %+v", v)
 	}
@@ -2361,7 +2361,7 @@ func TestDecideSubmissionOutcome_UnchangedPageBeforeFloorIsNotYetRejection(t *te
 
 func TestDecideSubmissionOutcome_FlaggedFieldsAfterFloorAreRejection(t *testing.T) {
 	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
-	v := decideSubmissionOutcome(same, same, "<form>still here</form>", submitOutcomeSettleFloor, 3)
+	v := decideSubmissionOutcome(same, same, "<form>still here</form>", submitOutcomeSettleFloor, 3, false)
 	if !v.Done || v.Confirmed {
 		t.Fatalf("flagged fields past the floor must be a settled rejection, got %+v", v)
 	}
@@ -2373,7 +2373,7 @@ func TestDecideSubmissionOutcome_FlaggedFieldsAfterFloorAreRejection(t *testing.
 func TestDecideSubmissionOutcome_ConfirmationWinsImmediatelyEvenBeforeFloor(t *testing.T) {
 	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
 	// A thank-you view that renders fast is no less real than a slow one.
-	v := decideSubmissionOutcome(same, same, "<h1>Thank you for applying</h1>", time.Millisecond, 0)
+	v := decideSubmissionOutcome(same, same, "<h1>Thank you for applying</h1>", time.Millisecond, 0, false)
 	if !v.Done || !v.Confirmed {
 		t.Fatalf("early confirmation must be accepted, got %+v", v)
 	}
@@ -2384,10 +2384,10 @@ func TestDecideSubmissionOutcome_ConfirmationWinsImmediatelyEvenBeforeFloor(t *t
 // model call plus a duplicate submit click (#89).
 func TestDecideSubmissionOutcome_LateConfirmationIsCaught(t *testing.T) {
 	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
-	if v := decideSubmissionOutcome(same, same, "<form>still here</form>", time.Second, 0); v.Done {
+	if v := decideSubmissionOutcome(same, same, "<form>still here</form>", time.Second, 0, false); v.Done {
 		t.Fatalf("must still be waiting at 1s with no evidence either way, got %+v", v)
 	}
-	v := decideSubmissionOutcome(same, same, "<h1>Application submitted</h1>", 6*time.Second, 0)
+	v := decideSubmissionOutcome(same, same, "<h1>Application submitted</h1>", 6*time.Second, 0, false)
 	if !v.Done || !v.Confirmed {
 		t.Fatalf("a confirmation arriving at 6s must be caught, got %+v", v)
 	}
@@ -2395,7 +2395,7 @@ func TestDecideSubmissionOutcome_LateConfirmationIsCaught(t *testing.T) {
 
 func TestDecideSubmissionOutcome_GivesUpAtBudget(t *testing.T) {
 	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
-	v := decideSubmissionOutcome(same, same, "<div>nothing conclusive</div>", submitOutcomeBudget, 0)
+	v := decideSubmissionOutcome(same, same, "<div>nothing conclusive</div>", submitOutcomeBudget, 0, false)
 	if !v.Done || v.Confirmed {
 		t.Fatalf("budget exhaustion must settle as unconfirmed, got %+v", v)
 	}
@@ -2411,10 +2411,10 @@ func TestDecideSubmissionOutcome_ErrorWordingIsRejectionWithoutAriaInvalid(t *te
 	const before = "https://job-boards.greenhouse.io/acme/jobs/1"
 	const after = "https://job-boards.greenhouse.io/acme/jobs/1?err=1"
 	content := "<form>Please correct the errors below</form>"
-	if v := decideSubmissionOutcome(before, after, content, time.Millisecond, 0); v.Done {
+	if v := decideSubmissionOutcome(before, after, content, time.Millisecond, 0, false); v.Done {
 		t.Fatalf("error wording before the floor is still too early, got %+v", v)
 	}
-	v := decideSubmissionOutcome(before, after, content, submitOutcomeSettleFloor, 0)
+	v := decideSubmissionOutcome(before, after, content, submitOutcomeSettleFloor, 0, false)
 	if !v.Done || v.Confirmed {
 		t.Fatalf("error wording past the floor must settle as rejection, got %+v", v)
 	}
@@ -2705,5 +2705,62 @@ func TestDescribeSubmitObstruction_IsBestEffort(t *testing.T) {
 	}}
 	if got := describeSubmitObstruction(page); got != "" {
 		t.Errorf("an unevaluable page must yield no description, got %q", got)
+	}
+}
+
+// bugs.md #102: Greenhouse ACCEPTS a submission and issues an emailed
+// security-code challenge, then re-renders while the previous attempt's
+// aria-invalid markers are still on the page. Both signals are therefore true
+// at once, and #95's flagged-field branch was reading the stale one and
+// calling an accepted submission a validation failure.
+//
+// Measured: the Greenhouse code email for Akuity is timestamped 23:40:07,
+// between its submit click (~23:40:06) and its verdict (23:40:08); ClickHouse's
+// is timestamped 00:05:34, the same second as its submit.
+func TestDecideSubmissionOutcome_SecurityCodeGateBeatsStaleInvalidFlags(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	content := `<form><input id="security_code" name="security_code">` +
+		`Copy and paste this code into the security code field on your application</form>`
+
+	// The exact live shape: fields still flagged AND a code gate present.
+	v := decideSubmissionOutcome(same, same, content, submitOutcomeSettleFloor, 7, true)
+	if !v.Done {
+		t.Fatalf("a security-code gate is a settled outcome, got %+v", v)
+	}
+	if v.Reason != reasonSecurityCodeGate {
+		t.Errorf("reason = %q, want %q -- stale invalid flags must not win", v.Reason, reasonSecurityCodeGate)
+	}
+	if v.Confirmed {
+		t.Error("a code gate is not yet a confirmed application; it still needs the code entered")
+	}
+}
+
+// The gate wins even before the settle floor: acceptance is acceptance.
+func TestDecideSubmissionOutcome_SecurityCodeGateWinsEarly(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	v := decideSubmissionOutcome(same, same, "<form>whatever</form>", time.Millisecond, 3, true)
+	if !v.Done || v.Reason != reasonSecurityCodeGate {
+		t.Fatalf("gate must settle immediately, got %+v", v)
+	}
+}
+
+// Without a gate the old behaviour must be intact, or #99 would start
+// attributing ordinary validation failures to bot protection.
+func TestDecideSubmissionOutcome_NoGateKeepsRejectionSignal(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	v := decideSubmissionOutcome(same, same, "<form>still here</form>", submitOutcomeSettleFloor, 7, false)
+	if !v.Done || v.Confirmed || v.Reason != reasonFieldsFlagged {
+		t.Fatalf("flagged fields with no gate must still settle as rejection, got %+v", v)
+	}
+}
+
+// The floor must be long enough for a challenge that renders after the
+// verdict used to be taken. Akuity's verdict landed at 2.2s and missed it.
+func TestSubmitOutcomeSettleFloor_LeavesRoomForALateChallenge(t *testing.T) {
+	if submitOutcomeSettleFloor < 5*time.Second {
+		t.Errorf("settle floor %v is too short for a late-rendering security-code challenge (bugs.md #102)", submitOutcomeSettleFloor)
+	}
+	if submitOutcomeSettleFloor >= submitOutcomeBudget {
+		t.Errorf("settle floor %v must stay below the budget %v", submitOutcomeSettleFloor, submitOutcomeBudget)
 	}
 }

@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 102 | [#95's early exit read stale invalid flags and called four accepted submissions failures](#102-95s-early-exit-read-stale-invalid-flags-and-called-four-accepted-submissions-failures) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #95 fix, and the biggest single misreading of the effort.** Greenhouse *accepts* a submission and issues an emailed security-code challenge within ~1s, then re-renders the challenge later while the previous attempt's `aria-invalid` markers are **still on the page**. #95's flagged-field early exit fired at 2s on those stale markers and called the accepted submission a validation failure. Proven by timestamps: the Akuity code email is stamped **23:40:07, between** its submit click (~23:40:06) and its verdict (23:40:08); ClickHouse's is stamped **00:05:34, the same second** as its submit. **Four applications reached Greenhouse today** (Surt AI, ClickHouse ×2, Akuity) and every one was recorded as a failure |
 | 101 | [A submit click that timed out reported nothing about what blocked it](#101-a-submit-click-that-timed-out-reported-nothing-about-what-blocked-it) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | **Three jobs ended the day this way** — Akuity, Nova and Zimperium — each with a bare `playwright: timeout: Timeout 30000ms exceeded` from the submit click and no indication of why the control was unactionable, all written off as generic `FAILED_SUBMIT`. A timeout says the click never landed; it says nothing about what stopped it. Now reads `elementFromPoint` at the control's centre — the same check that cleared Reddit's button in #99 — and names whatever covers it |
 | 100 | [A field that lands and is rejected anyway had no diagnostic at all](#100-a-field-that-lands-and-is-rejected-anyway-had-no-diagnostic-at-all) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Akuity logged `applied 7/7`, **no** not-landed line — so `verifyFixLanded` reported every control as set — and the **identical 7 fields** came back flagged. #97 names values only for fields that *fail* to land, so this opposite case had no diagnostic whatsoever and the loop could only re-guess. Probe ruled out the obvious causes: all 7 are plain required `INPUT`/`TEXTAREA`, single match, no `pattern`, and React genuinely *does* observe `Fill()` (`reactValue` matches the DOM). Fourth instance of the same lesson as #80/#96/#97 |
 | 99 | [A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce](#99-a-submit-silently-swallowed-by-recaptcha-was-reported-as-an-ordinary-validation-bounce) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Reddit reached **`invalid fields: 0`** — the form fully satisfied for the first time — and the submit still produced no confirmation and no rejection. **No Greenhouse email arrived**, while ClickHouse's accepted submit produced one in the same second, so Reddit's request never reached the server. Read-only probe: the submit control is **clean** (one match, visible, enabled, in-form, unobstructed — ruling out #87's decoy and #34's overlay) and the page embeds **reCAPTCHA Enterprise**. Score-based invisible reCAPTCHA silently discards a headless submission. The cost was ~30 min of model calls per attempt on a form with nothing left to fix, ending in a misleading manual-review reason |
@@ -142,6 +143,36 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 102. #95's early exit read stale invalid flags and called four accepted submissions failures (Resolved 2026-07-26)
+
+**A defect in my own #95 fix, found the same way #93 and #95 were: by reading the inbox rather than the logs.**
+
+Four Greenhouse security-code emails exist for 2026-07-25/26. Lined up against the log, the timestamps are decisive:
+
+| code email (EDT) | job | log |
+| --- | --- | --- |
+| 16:58:03 | Surt AI | the original #93 case |
+| 21:15:58 | ClickHouse | `21:15:58 applied 3/3` → `Submission failed validation` |
+| **23:40:07** | **Akuity** | `23:40:05 applied 7/7` → **`23:40:08 verdict: invalid fields: 7`** |
+| **00:05:34** | **ClickHouse** | `00:05:34 applied 3/3` → **`00:05:36 verdict: invalid fields: 3`** |
+
+Akuity's email is timestamped **between** its submit click (~23:40:06) and its verdict (23:40:08). ClickHouse's is stamped the **same second** as its submit. In both cases the server had already accepted the application before the agent declared it failed.
+
+**Root cause, and it is mine.** #95 replaced an instantaneous read with a bounded poll, and treated "fields flagged `aria-invalid` past a 2s floor" as *positive evidence of rejection* — reasoning that a re-rendered form with flagged fields proves the server answered and refused. That reasoning is wrong on Greenhouse: it accepts the submission, issues the code challenge, and **leaves the previous attempt's `aria-invalid` markers in place** while the challenge renders. Both signals are true simultaneously, and #95 was reading the stale one.
+
+**This is the same trap, third time.** #76 read `el.value` that was really the artifact of typing; #81 read `[data-value]` that was really the search text; #102 reads `aria-invalid` that is really the previous attempt's leftover. Each time a signal that looked like evidence was a residue of the prior step. That the pattern recurred *in a fix written specifically to stop misreading post-submit state* is the part worth remembering.
+
+**Why #93's detector never rescued it.** `DetectSecurityCodeChallenge` runs at the top of the *next* attempt. ClickHouse's attempt 3 began 2s after the submit and went straight to `SolveValidationErrors`, so the challenge had not rendered even then. The detector was correct; it was asked too early, twice.
+
+**Fix.**
+1. The security-code gate is now tested **inside** the verdict, on every poll, and **before** the flagged-field branch — acceptance beats a stale rejection marker by construction, not by timing luck.
+2. `submitOutcomeSettleFloor` raised **2s → 8s**. Akuity's verdict at 2.2s missed a challenge that had already been issued; the floor now leaves room for one that renders late.
+3. A gate verdict is routed to the existing #93/#32 path (retrieve the emailed code, enter it, resubmit) and explicitly **not** to #99's bot-protection branch, which would otherwise mislabel an accepted submission as captcha-blocked.
+
+The rejection signal is deliberately preserved when no gate is present — a test pins that, because removing it entirely would leave every genuine validation failure exiting on budget exhaustion, which #99 maps to `BLOCKED_CAPTCHA` on any page carrying reCAPTCHA. That interaction would have traded one misreading for another. 4 new tests.
+
+**Consequence.** The pipeline submitted **four** applications today and recorded all four as failures. "0 confirmed `APPLIED`" was never a submission problem; it was this.
 
 ### 101. A submit click that timed out reported nothing about what blocked it (Resolved 2026-07-25)
 

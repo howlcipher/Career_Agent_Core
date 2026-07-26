@@ -304,6 +304,7 @@ const (
 	reasonURLChangedNoError  submissionConfirmationReason = "URL changed, no confirmation or error wording found (weakest signal)"
 	reasonFieldsFlagged      submissionConfirmationReason = "page re-rendered with fields flagged invalid"
 	reasonNoOutcomeInBudget  submissionConfirmationReason = "no confirmation and no rejection evidence within the settle budget"
+	reasonSecurityCodeGate   submissionConfirmationReason = "submission accepted; an emailed security code is required"
 )
 
 // bugs.md #95. A submit click used to be judged from a single page read taken
@@ -321,10 +322,17 @@ const (
 // case legitimately waits the whole budget, which is correct behaviour but not
 // something the suite should sit through.
 var (
-	// Minimum time after the click before an unchanged page is allowed to
-	// count as rejection. Below this, "nothing changed" means "too early to
-	// tell", not "rejected".
-	submitOutcomeSettleFloor = 2 * time.Second
+	// Minimum time after the click before flagged fields are allowed to count
+	// as rejection. Below this, "nothing changed" means "too early to tell".
+	//
+	// bugs.md #102 raised this from 2s. Greenhouse accepts a submission and
+	// issues an emailed security-code challenge within ~1s, but re-renders the
+	// challenge later while the OLD aria-invalid markers are still on the page.
+	// At 2s the verdict was reading those stale flags and calling an accepted
+	// submission a validation failure -- measured on Akuity and ClickHouse,
+	// where the security-code email is timestamped BETWEEN the submit click and
+	// the verdict.
+	submitOutcomeSettleFloor = 8 * time.Second
 	// Upper bound on waiting for any outcome at all.
 	submitOutcomeBudget = 15 * time.Second
 	// Gap between polls inside the budget.
@@ -353,10 +361,18 @@ type submissionOutcomeVerdict struct {
 //     theme that sets no aria-invalid still renders error text (the gap #83
 //     hit), and a form flagged purely via aria-invalid may carry no wording.
 //  3. Otherwise keep waiting until the budget runs out.
-func decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent string, elapsed time.Duration, invalidFieldCount int) submissionOutcomeVerdict {
+func decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent string, elapsed time.Duration, invalidFieldCount int, securityCodeGate bool) submissionOutcomeVerdict {
 	confirmed, reason := isSubmissionConfirmed(urlBeforeClick, currentURL, pageContent)
 	if confirmed {
 		return submissionOutcomeVerdict{Done: true, Confirmed: true, Reason: reason}
+	}
+	// bugs.md #102: a security-code challenge means the server ACCEPTED the
+	// submission. It must be tested before the flagged-field branch, because
+	// Greenhouse leaves the previous attempt's aria-invalid markers in place
+	// while the challenge renders -- so both signals are true at once and the
+	// stale one must not win.
+	if securityCodeGate {
+		return submissionOutcomeVerdict{Done: true, Confirmed: false, Reason: reasonSecurityCodeGate}
 	}
 	if elapsed >= submitOutcomeSettleFloor {
 		if invalidFieldCount > 0 {
@@ -387,7 +403,8 @@ func awaitSubmissionOutcome(page playwright.Page, urlBeforeClick string) (bool, 
 		pageContent, _ := page.Content()
 		invalid := parser.InvalidFieldIdentifiers(pageContent)
 		elapsed := time.Since(start)
-		v := decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent, elapsed, len(invalid))
+		v := decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent, elapsed,
+			len(invalid), parser.DetectSecurityCodeChallenge(pageContent))
 		if v.Done {
 			// bugs.md #96: one line per submit click recording what the verdict
 			// was actually made on. #95 took a full day to find because the only
@@ -1408,6 +1425,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				return nil
 			}
 
+			// bugs.md #102: the server accepted this submission and is asking
+			// for an emailed code. It is not a validation failure and must not
+			// be attributed to bot protection by #99 below. Fall through to the
+			// next attempt, whose #93/#32 block retrieves and enters the code.
+			if reason == reasonSecurityCodeGate {
+				log.Printf("[Auto-Submit] %s accepted the submission and issued a security-code challenge", companyName)
+				continue
+			}
 			// bugs.md #99: a submit that produced neither confirmation nor
 			// rejection, on a page carrying a live bot-protection widget, is a
 			// silently swallowed submission -- not a validation bounce. Reddit
