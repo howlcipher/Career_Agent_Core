@@ -200,9 +200,22 @@ Attempt 3 then found nothing invalid, fell back to the whole 54,190-char form, a
   - **Requires ALL fields, not some, and that constraint is load-bearing.** Every Greenhouse page carries reCAPTCHA, so the widget alone is far too weak a signal; it is the conjunction with "nothing left for the model to fix" that makes it evidence. One genuinely-bad answer among several keeps its remaining retry, pinned by a test. Same discipline as #99's iframe-`src` narrowness, for the same reason (#45/#46).
   - **This run also settled #103 in both directions:** the logged values are now human-readable labels, so the fix works; and the rejection is *unchanged*, so retracting its causal claim was right.
 
+- **#101 confirmed live at 00:56** — the first accurate `BLOCKED_CAPTCHA` from the submit path: `Staff Site Reliability Engineer is behind a bot-protection challenge ... (submit click did not land; https://www.recaptcha.net/recaptcha/enterprise/anchor present): playwright: timeout: Timeout 30000ms exceeded.` That is the exact failure class that produced three bare, causeless timeouts earlier in the day.
+- **#104 follow-up — `cf69812`. I corrected a false statement I had written into #104 as fact, and the correction caught a false positive before it could cause harm.** #104 justified its strictness with *"every Greenhouse page carries reCAPTCHA"*. That was an assumption. Measured across three boards:
+
+| board | reCAPTCHA frame | submit outcome |
+| --- | --- | --- |
+| `greenhouse.io/reddit` | **present** | blocked |
+| `greenhouse.io/clickhouse` | **absent** | accepted |
+| `greenhouse.io/akuity` | **present** | **accepted** (code email 23:40:07) |
+
+  reCAPTCHA Enterprise is score-based, so **Akuity carries the widget and submits fine**. The claim was wrong; the caution it defended is now *empirically* proven rather than assumed — a better footing than it had.
+  - **The defect that measurement exposed:** Akuity is precisely the breaking case — an accepted submission whose post-acceptance click times out (`element is not enabled`) on a page that *does* carry reCAPTCHA. #104's check sits **above** #93's security-code handling, so it would have labelled an **accepted application** `BLOCKED_CAPTCHA`. That is **#102's own rule — acceptance outranks any rejection signal — reintroduced by the fix written after learning it.** The condition now tests `DetectSecurityCodeChallenge` directly instead of relying on ordering, with a test pinning both directions.
+- **Cohort scope, measured:** only **2 of 82** jobs are Reddit (the captcha-blocked board). The bulk is **Lever 39**, other Greenhouse 30, other 11. Greenhouse acceptance is demonstrably working, so the reCAPTCHA limit is narrow and board-specific rather than platform-wide.
+
 ### The session's dominant pattern, stated plainly
 
-Three of this session's fixes were defects in *earlier fixes from the same session*: **#95 → #102**, **#98 → #103**, and #96/#97/#100 were each written because the previous diagnostic could not see the next failure. The recurring cause is always the same — **a signal that looks like evidence is really residue of the previous step** (#76's `el.value`, #81's `[data-value]`, #102's `aria-invalid`, #103's `id|label`). The defence that has actually worked is not more care up front; it is shipping the diagnostic *before* the root cause is known, which has now paid off four times in a row within a single cycle each.
+Four of this session's fixes were defects in *earlier fixes from the same session*: **#95 → #102**, **#98 → #103**, **#104 → its own follow-up**, and #96/#97/#100 were each written because the previous diagnostic could not see the next failure. The recurring cause is always the same — **a signal that looks like evidence is really residue of the previous step** (#76's `el.value`, #81's `[data-value]`, #102's `aria-invalid`, #103's `id|label`). The defence that has actually worked is not more care up front; it is shipping the diagnostic *before* the root cause is known, which has now paid off four times in a row within a single cycle each.
 
 ### Investigated and dismissed
 
