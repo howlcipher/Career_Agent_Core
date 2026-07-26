@@ -69,6 +69,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 110 | [A short option label could hijack a longer answer — "Prefer not to say" selected "No"](#110-a-short-option-label-could-hijack-a-longer-answer--prefer-not-to-say-selected-no) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found by a test written for #109, not by the log.** `pickComboboxOption` matched by raw bidirectional `strings.Contains`, and a short label hides inside longer prose: `"no"` sits inside `"prefer **no**t to say"`. Asking for **"Prefer not to say" selected the box labelled "No"** — on an EEO question that converts a declined answer into a substantive one on a real application. The precise failure **#79** exists to prevent, in the function that enforces it. `"male"` vs `"female"` is the same shape |
+| 109 | [A single-choice question rendered as a checkbox group was read as one box to untick](#109-a-single-choice-question-rendered-as-a-checkbox-group-was-read-as-one-box-to-untick) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Probed live: Sporty Group renders a Yes / No / Prefer-not-to-say question as **three checkboxes sharing one `name`**. A model value of `"No"` means *tick the box labelled No*, but `applyValidationFix` read it as *untick this box* — opposite results. #107 then made the wrong reading report as **landed**, so the job degraded from `MANUAL_REQUIRED` (documents preserved, field named) to a bare `FAILED_SUBMIT` |
 | 108 | [A submit that went nowhere was reported as "form too large for the local model"](#108-a-submit-that-went-nowhere-was-reported-as-form-too-large-for-the-local-model) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Ethos reached **`invalid fields: 0`** — fully satisfied — exhausted the settle budget with **no bot-protection frame** to explain it, and was then written up as `form content exceeds the local model's context window`. The form was never the problem: narrowing found nothing to narrow, fell back to the whole document, and the size check caught it incidentally. Right outcome (manual review, documents preserved), wrong cause — and a wrong cause has real cost, since that is exactly how #83 misdiagnosed the case #93 later reframed |
 | 107 | [A checkbox the model deliberately declined was recorded as uncommittable](#107-a-checkbox-the-model-deliberately-declined-was-recorded-as-uncommittable) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live on Sporty Group, visible only because #97 logs the value: `1 fix(es) reported success but left the control empty ... input[id='question_8242451101[]_54236360101'] **(tried "No")**`. `applyValidationFix` correctly *unchecks* on a negative, then `verifyFixLanded` reads the generic "does it hold a value" and sees `checked=false` → not landed → `ErrUncommittableField` → the whole job to manual review. **A correct answer was recorded as a failure**, on every checkbox the model declines |
 | 106 | [A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73](#106-a-bare-bracketed-checkbox-group-id-got-no-fallbacks-at-all--the-third-shape-of-73) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "question_8242451101[]_54236360101" failed: selector matched no element (**tried 1 form(s)**)`. Greenhouse names checkbox-group controls that way; the brackets alone make `looksLikeCSSSelector` true, but there is no `tag#id` to split, so the selector was used **verbatim with no fallbacks** — and it is not valid CSS for an id either, so it matched nothing. Third shape of one defect: **#73** fixed `input#430`, **#92** fixed `#question_...[]_...`, this is the bare form with no prefix. It was the remaining blocker on Sporty Group, which reached 11 invalid → 4 with three of the four being exactly these ids |
@@ -167,6 +169,46 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 110. A short option label could hijack a longer answer — "Prefer not to say" selected "No" (Resolved 2026-07-26)
+
+**Found by a test written for #109, not by the log** — the live symptom was indistinguishable from an ordinary rejection, and would have stayed that way.
+
+`pickComboboxOption` matched an option against the wanted value with raw bidirectional containment:
+
+```go
+strings.Contains(text, wantN) || strings.Contains(wantN, text)
+```
+
+Normalisation strips punctuation but not word boundaries, so a **short label hides inside longer prose**. Against Sporty Group's real option list:
+
+| want | old rule selected | correct |
+| --- | --- | --- |
+| `Prefer not to say` | **`No`** — because `"no"` sits inside `"prefer **no**t to say"` | `Prefer not to say` |
+
+`"male"` inside `"female"` is the same shape, and so is `"yes"` inside `"yesterday"`.
+
+**This is the exact failure #79 exists to prevent, occurring inside the function that enforces it.** #79's guarantee is *never commit the wrong entry* — written after an earlier probe committed "Macomb, Illinois" for a Michigan address. Here the consequence is worse in kind than in size: on an EEO question, a declined answer silently becomes a **substantive** one, submitted under the user's name.
+
+**Fix.** `optionTextMatches` compares **whole words in sequence**: exact equality, else one side's words appearing as a contiguous run inside the other's. Every match the old rule was written for survives, and there are tests for each — `"United States"` still matches `"United States of America"` (#79), and `"Macomb, MI, USA"` still matches `"Macomb, MI"` (improvements #33). Out-of-order and non-contiguous word sets are rejected, so `"states united"` and `"united america"` no longer match.
+
+All six pre-existing `pickComboboxOption` tests pass unchanged, which is the evidence that the loosening this replaces was never actually needed.
+
+### 109. A single-choice question rendered as a checkbox group was read as one box to untick (Resolved 2026-07-26)
+
+Probed Sporty Group's real form after #106/#107 made its last fields settable and it *still* rejected them:
+
+| id | label | name |
+| --- | --- | --- |
+| `question_8242451101[]_54236359101` | **Yes** | `question_8242451101[]` |
+| `question_8242451101[]_54236360101` | **No** | `question_8242451101[]` |
+| `question_8242451101[]_54236362101` | **Prefer not to say** | `question_8242451101[]` |
+
+It is a **single-choice question rendered as a checkbox group** — three boxes sharing one `name`, each marked required. A model value of `"No"` means *tick the box labelled No*. `applyValidationFix` read it through the standalone-checkbox rule and **unticked** the box instead: the opposite outcome, and the group stayed empty so the form could never validate.
+
+**#107 made the reporting worse while making the check more correct.** Before it, the unticked box read as not-landed and the job reached `MANUAL_REQUIRED` with documents preserved and the field named. After it, the same wrong action reported as **landed**, `lastNotLanded` was empty, and Sporty Group degraded to a bare `FAILED_SUBMIT`. Worth recording plainly: a fix that made one thing more accurate made an adjacent outcome less useful, and only the live re-run showed it.
+
+**Fix.** When a checkbox shares its `name` with siblings, the value names *which option to tick*, resolved through the same `pickComboboxOption` path comboboxes use — so #79's never-commit-the-wrong-entry rule now covers checkbox groups too, and an unmatched value ticks **nothing** rather than guessing. `verifyFixLanded` checks the *matched* option, which is usually a different element than the selector resolved to. Standalone checkboxes keep #107's behaviour exactly, pinned by a test.
 
 ### 108. A submit that went nowhere was reported as "form too large for the local model" (Resolved 2026-07-26)
 

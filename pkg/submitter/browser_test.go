@@ -3062,3 +3062,110 @@ func TestErrSubmitProducedNoOutcome_IsAManualReviewOutcome(t *testing.T) {
 		t.Errorf("the message must state what actually happened, got %q", wrapped.Error())
 	}
 }
+
+// bugs.md #109: Greenhouse renders some single-choice questions as a set of
+// checkboxes sharing one name. Sporty Group asks exactly that way, probed live:
+//
+//	question_8242451101[]_54236359101  label "Yes"
+//	question_8242451101[]_54236360101  label "No"
+//	question_8242451101[]_54236362101  label "Prefer not to say"
+//
+// A model value of "No" means TICK THE BOX LABELLED NO, not "leave this box
+// unticked". The two readings produce opposite results, and #107 made the
+// wrong one report as landed.
+func TestCheckboxGroup_PicksTheOptionNamedByTheValue(t *testing.T) {
+	group := []string{
+		"question_8242451101[]_54236359101|Yes",
+		"question_8242451101[]_54236360101|No",
+		"question_8242451101[]_54236362101|Prefer not to say",
+	}
+
+	optID, _, ok := pickComboboxOption(group, "No", nil)
+	if !ok {
+		t.Fatal(`"No" must select an option in the group`)
+	}
+	if optID != "question_8242451101[]_54236360101" {
+		t.Errorf(`"No" selected %q, want the box labelled "No"`, optID)
+	}
+
+	if id, _, ok := pickComboboxOption(group, "Yes", nil); !ok || id != "question_8242451101[]_54236359101" {
+		t.Errorf(`"Yes" selected %q (ok=%v), want the Yes box`, id, ok)
+	}
+	if id, _, ok := pickComboboxOption(group, "Prefer not to say", nil); !ok || id != "question_8242451101[]_54236362101" {
+		t.Errorf(`"Prefer not to say" selected %q (ok=%v), want that box`, id, ok)
+	}
+}
+
+// #79's rule carries over: with no matching option, tick nothing rather than
+// guess. A wrong tick here is a wrong answer on a real application.
+func TestCheckboxGroup_RefusesWhenNoOptionMatches(t *testing.T) {
+	group := []string{
+		"opt_a|Yes",
+		"opt_b|No",
+	}
+	if id, _, ok := pickComboboxOption(group, "Somewhat", nil); ok {
+		t.Errorf("an unmatched value must select nothing, got %q", id)
+	}
+}
+
+// A standalone checkbox must keep #107's behaviour: no group, so a negative
+// means leave it unticked and that counts as the requested state.
+func TestCheckboxGroupOptions_EmptyForAStandaloneBox(t *testing.T) {
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expr string) (interface{}, error) {
+			if strings.Contains(expr, "querySelectorAll") {
+				return []interface{}{}, nil // fewer than 2 members
+			}
+			return "input|checkbox", nil
+		},
+	}
+	if got := checkboxGroupOptions(loc); len(got) != 0 {
+		t.Errorf("a standalone checkbox must report no group, got %v", got)
+	}
+}
+
+// bugs.md #110: the option matcher used raw bidirectional substring, and a
+// short label hides inside longer prose -- "No" sits inside "prefer NOt to
+// say". Asking for "Prefer not to say" therefore selected the box labelled
+// "No", turning a declined EEO answer into a substantive one on a real
+// application. Exactly the failure #79 exists to prevent.
+func TestOptionTextMatches_ShortLabelCannotHijackLongerAnswer(t *testing.T) {
+	if optionTextMatches("no", "prefer not to say") {
+		t.Error(`"No" must NOT match "Prefer not to say" -- "no" is only inside the word "not"`)
+	}
+	if optionTextMatches("yes", "yesterday") {
+		t.Error(`"Yes" must NOT match "yesterday"`)
+	}
+	if optionTextMatches("male", "female") {
+		t.Error(`"Male" must NOT match "Female" -- this one would misstate a real answer`)
+	}
+}
+
+// Every match the old rule was written for must survive.
+func TestOptionTextMatches_KeepsTheMatchesItWasWrittenFor(t *testing.T) {
+	// bugs.md #79: a shorter list label against a longer configured value.
+	if !optionTextMatches("united states", "united states of america") {
+		t.Error(`option "United States" must match "United States of America"`)
+	}
+	// improvements.md #33: a longer geocoder result against a shorter value.
+	if !optionTextMatches("macomb mi usa", "macomb mi") {
+		t.Error(`option "Macomb, MI, USA" must match "Macomb, MI"`)
+	}
+	if !optionTextMatches("no military service", "no military service") {
+		t.Error("an exact label must match itself")
+	}
+	if !optionTextMatches("i don t wish to answer", "i don t wish to answer") {
+		t.Error("the decline option must match itself")
+	}
+}
+
+// The words must be contiguous and in order, not merely present.
+func TestOptionTextMatches_RequiresAContiguousWordRun(t *testing.T) {
+	if optionTextMatches("states united", "united states of america") {
+		t.Error("out-of-order words must not match")
+	}
+	if optionTextMatches("united america", "united states of america") {
+		t.Error("non-contiguous words must not match")
+	}
+}

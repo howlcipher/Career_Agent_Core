@@ -1990,6 +1990,20 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 	case shape == "input|checkbox", shape == "input|radio":
 		// A checkbox's "value" is its checked state; anything affirmative
 		// means tick it, and an explicit negative must not silently tick it.
+		// bugs.md #109: when this checkbox is one option of a group sharing a
+		// name, the value names WHICH option to tick, not whether to tick this
+		// one. "No" against a Yes/No/Prefer-not-to-say group means the box
+		// labelled "No" -- the opposite of the standalone reading below.
+		if group := checkboxGroupOptions(el); len(group) > 0 {
+			if optID, _, ok := pickComboboxOption(group, value, nil); ok {
+				return target.Loc(fmt.Sprintf("[id=%q]", optID)).
+					Check(playwright.LocatorCheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+			}
+			// No option matches: tick nothing rather than guess, exactly as
+			// #79 requires for comboboxes. A wrong choice here is a wrong
+			// answer on a real application.
+			return fmt.Errorf("no option in the checkbox group matches %q", value)
+		}
 		if isNegativeCheckboxValue(value) {
 			return el.Uncheck(playwright.LocatorUncheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 		}
@@ -2099,6 +2113,20 @@ func verifyFixLanded(target fillTarget, selector, value string) (bool, error) {
 	el, err := resolveFieldLocator(target, selector)
 	if err != nil {
 		return false, err
+	}
+	// bugs.md #109: for a grouped checkbox, "landed" means the option the
+	// value names is ticked -- which is usually a DIFFERENT element than the
+	// one the selector resolved to.
+	if group := checkboxGroupOptions(el); len(group) > 0 {
+		optID, _, ok := pickComboboxOption(group, value, nil)
+		if !ok {
+			return false, nil
+		}
+		checked, cErr := target.Loc(fmt.Sprintf("[id=%q]", optID)).IsChecked()
+		if cErr != nil {
+			return false, cErr
+		}
+		return checked, nil
 	}
 	if isNegativeCheckboxValue(value) && isTickableControl(el) {
 		return true, nil
@@ -2344,6 +2372,52 @@ func isTickableControl(el playwright.Locator) bool {
 	}
 	shape, _ := kind.(string)
 	return shape == "input|checkbox" || shape == "input|radio"
+}
+
+// checkboxGroupJS reports the sibling checkboxes sharing this control's name,
+// with their labels, as "id|label" entries -- the same shape
+// readComboboxOptions uses, so pickComboboxOption can select among them.
+// Returns an empty list for a standalone checkbox.
+const checkboxGroupJS = `el => {
+  const name = el.name || '';
+  if (!name) return [];
+  const members = Array.from(document.querySelectorAll(
+    'input[type="checkbox"][name="' + name.replace(/"/g, '\\"') + '"]'));
+  if (members.length < 2) return [];
+  return members.map(m => {
+    let text = '';
+    if (m.id) {
+      const l = document.querySelector('label[for="' + CSS.escape(m.id) + '"]');
+      if (l) text = l.textContent.trim();
+    }
+    return m.id + '|' + text;
+  });
+}`
+
+// checkboxGroupOptions returns the "id|label" entries of the checkbox group
+// this control belongs to, or nil when it stands alone.
+//
+// bugs.md #109: Greenhouse renders some single-choice questions as a set of
+// checkboxes sharing one name -- Sporty Group asks a Yes / No / Prefer not to
+// say question exactly that way. For those, a model value of "No" means "tick
+// the box labelled No", not "leave this box unticked", and the two readings
+// produce opposite results.
+func checkboxGroupOptions(el playwright.Locator) []string {
+	got, err := el.Evaluate(checkboxGroupJS, nil)
+	if err != nil {
+		return nil
+	}
+	raw, ok := got.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // rejectedDespiteLanding pairs each still-rejected field with the value the
@@ -2627,6 +2701,53 @@ func normalizeOptionText(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+// optionTextMatches reports whether an option's label and the wanted value
+// refer to the same choice, comparing WHOLE WORDS in sequence rather than raw
+// substrings.
+//
+// bugs.md #110. The previous rule was bidirectional strings.Contains, and a
+// short label is a substring of longer prose far too easily: "No" sits inside
+// "prefer NOt to say", so asking for "Prefer not to say" selected the box
+// labelled "No". That is the precise failure #79 exists to prevent -- and on
+// an EEO question it turns a declined answer into a substantive one on a real
+// application.
+//
+// Word-sequence containment keeps every match the old rule was written for:
+// "United States of America" still matches the option "United States +1", and
+// "Macomb, MI" still matches "Macomb, MI, USA", because in both cases one
+// side's words appear contiguously in the other's.
+func optionTextMatches(optionText, want string) bool {
+	if optionText == "" || want == "" {
+		return false
+	}
+	if optionText == want {
+		return true
+	}
+	o, w := strings.Fields(optionText), strings.Fields(want)
+	return containsWordRun(w, o) || containsWordRun(o, w)
+}
+
+// containsWordRun reports whether needle appears as a contiguous run of whole
+// words inside haystack.
+func containsWordRun(haystack, needle []string) bool {
+	if len(needle) == 0 || len(needle) > len(haystack) {
+		return false
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		matched := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
 // searchPrefixes yields progressively shorter leading word-groups of a value.
 //
 // bugs.md #79: measured live, these widgets filter by substring against their
@@ -2689,7 +2810,7 @@ func pickComboboxOption(options []string, want string, mustContain []string) (id
 		if !matched {
 			continue
 		}
-		if len(mustContain) > 0 || strings.Contains(text, wantN) || strings.Contains(wantN, text) {
+		if len(mustContain) > 0 || optionTextMatches(text, wantN) {
 			return optID, i, true
 		}
 	}
