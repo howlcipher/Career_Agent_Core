@@ -31,6 +31,16 @@ Every session — Claude Code, Gemini CLI, or manual — that touches this repo 
 
 **Technique: targeted single-job verification via `TARGET_JOB_URL`.** `cmd/agent` reads this env var at startup; when set, it restricts the run to exactly that one already-`DISCOVERED` job and skips fresh `FunnelEngine` discovery entirely (`TARGET_JOB_URL="https://..." /path/to/binary`). This is how bugs #46-#49 were verified end-to-end in minutes instead of waiting on normal queue order, and without disturbing a separately-running full batch. The job must actually be in `DISCOVERED` status first (use `cmd/requeue` or direct SQL if it's currently in some other status), and if it previously reached document generation, clear its `applied_jobs` dedup row too or `HasApplied` will skip it as a duplicate.
 
+**⚠️ Deliberately NOT built, and it must stay that way: pre-emptively skipping jobs whose page carries a bot-protection widget.**
+
+Each captcha-blocked job costs ~10 minutes of fit-scoring before the block is discovered — measured 2026-07-26 across 8 blocked boards, roughly 7+ hours of compute over a cohort this size. The obvious optimisation is to detect the provider frame at page load and skip before scoring. **Do not do it.**
+
+**Presence is not blocking.** These systems are score-based. Measured the same night: `greenhouse.io/akuity` carries a reCAPTCHA Enterprise frame **and its submit was accepted** (security-code email timestamped 23:40:07), while `greenhouse.io/clickhouse` carries no frame at all and also succeeded. A presence-based pre-skip would have discarded Akuity — a job that genuinely submitted.
+
+That is exactly **#45/#46**, where captcha false positives killed the large majority of Greenhouse/Lever/Ashby/Workable jobs before they ever reached fit-scoring, and produced zero applications until 830 rows were manually reset. Skipping a job that would have submitted is strictly worse than wasting inference, because the goal is applications, not throughput.
+
+The narrow detections that **are** safe — #99, #101, #104 — all fire only **after** a submit has already produced no outcome, so they cannot pre-empt a working job. Any future optimisation here must preserve that property. A per-board history rule might eventually justify skipping, but 3 Lever data points are not a basis for excluding 39 jobs.
+
 ## Ranked Backlog (best ROI first)
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
