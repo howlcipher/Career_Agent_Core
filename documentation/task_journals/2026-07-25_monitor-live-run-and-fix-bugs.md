@@ -30,6 +30,48 @@
 - **12:24** — Resumed. Verified journal claims against the tree: working tree clean, HEAD `c9e270c`, agent process genuinely alive. The most-recently-modified journal (`2026-07-25_throughput-and-discovery-quality.md`) is **Complete**; the genuinely in-flight task is the parent 82-job re-verification.
 - **12:32** — First bug surfaced live: **Reddit (`job-boards.greenhouse.io/reddit/jobs/8044767`), fit score 90 — the best-scoring job in the cohort — failed with `failed to submit application after 3 validation error attempts`.** Burned ~17.5 min of LLM time (12:14:55 → 12:32:28) for nothing. Under investigation; see below.
 
+## ✅ FIRST CONFIRMED APPLICATION — Akuity, 2026-07-26 08:31:02
+
+The question this whole 82-job effort was created to answer is now answered, with a real application to show for it.
+
+```
+08:30:45 Attempt 2 applied 7/7 validation fix(es)
+08:31:01 Retrieved a security code from email (subject: "Security code for your application to Akuity")
+08:31:01 akuity issued a security code after the last submit — that submission was ACCEPTED
+08:31:01 Security-code gate detected for akuity — waiting for the emailed code...
+08:31:01 Entered the emailed security code for akuity; resubmitting
+08:31:02 Submit verdict after 500ms: confirmation phrase found on page (url moved: true, invalid fields: 0, page 14250 chars)
+08:31:02 Submission confirmed for akuity ... at .../jobs/4240492009/confirmation
+```
+
+**Evidence, not inference:** the URL moved to a real `/confirmation` page, the document collapsed **126,557 → 14,250 chars** (the form is gone), a confirmation phrase is present, and `invalid fields: 0`.
+
+**Verified in the database:**
+
+| check | result |
+| --- | --- |
+| `job_funnel.status` | **`APPLIED`** (fit score 85) |
+| `applied_jobs` dedup row | written `08:31:02.600` — matching the confirmation to the millisecond |
+| `APPLIED` rows in the entire DB | **1** (was **0** across 3,884 rows) |
+| `Submission confirmed` lines in the log | **1** (was **0**) |
+
+That millisecond match is **#94** working as designed: before it, the dedup row was written at document generation ~13 minutes earlier, whether or not anything was ever submitted.
+
+**Every link, each confirmed live:**
+
+1. Form filled to `invalid fields: 0` — #98, #106, #107, #109, #110
+2. Submit accepted by Greenhouse
+3. Acceptance recognised **from the mailbox, not the DOM** — #111
+4. Code challenge detected — #93
+5. Real code retrieved over IMAP — improvements #32
+6. Code distributed across **eight single-character boxes** — #115
+7. Resubmit judged with a settle budget — #116
+8. `APPLIED` and the dedup row written **only** on confirmation — #94
+
+**The answer to the audit.** The historical `APPLIED` rows were not genuine, and the reason was never an inability to fill forms. It was two things: the pipeline submitted without being able to tell that it had (#95, #102, #111), and it could not complete Greenhouse's out-of-band code challenge (#113, #115, #116). Both are fixed and demonstrated.
+
+**Note on the funnel rows:** `Akuity` still shows `FAILED_SUBMIT` alongside `akuity` → `APPLIED`. That is **#112**'s scheme-duplicate issue, documented rather than guessed at. The application is real; the stale twin row is bookkeeping.
+
 ## Shipped this session
 
 - **bugs.md #70 (Blocker) — `d68ce61`.** The validation-retry loop stripped the page's own error text. `aria-describedby` was in `presentationalAttrs`, so `StripPresentationalAttrs` severed the WCAG link from a rejected control to its error message *before* `PruneDOMToInvalidFields` ran; the pruner then dropped the message element as neither control nor label. The model was told a field was invalid but never what would make it valid. Plus an empty fix map fell through to re-submitting a byte-identical form. Fixed all three; 2 new regression tests, verified failing first.
