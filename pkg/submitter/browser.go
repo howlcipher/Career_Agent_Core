@@ -424,6 +424,66 @@ var ErrUncommittableField = errors.New("a required field could not be committed 
 // form to the model and burn the full 45-minute timeout on it.
 var ErrNeedsEmailVerification = errors.New("form is waiting on a one-time code sent by email")
 
+// SecurityCodeFetcher, when set, retrieves a one-time code an ATS emailed
+// during an application. cmd/agent wires this to the IMAP credentials the
+// email tracker already uses; left nil, the submitter behaves exactly as
+// bugs.md #93 described and hands the job to manual review.
+//
+// improvements.md #32. Indirected rather than imported so pkg/submitter keeps
+// no dependency on the mail layer, and so tests can supply a stub.
+var SecurityCodeFetcher func(notBefore time.Time) (string, error)
+
+// securityCodeSelectors locate the field the code is typed into.
+var securityCodeSelectors = []string{
+	"input[name='security_code']", "#security_code",
+	"input[name='securityCode']", "#securityCode",
+	"input[name='verification_code']", "#verification_code",
+	"input[id*='security-code']", "input[id*='verification-code']",
+}
+
+// waitForSecurityCode polls for the emailed code. Delivery takes seconds to a
+// minute, so this is deliberately patient but bounded -- and it only ever
+// accepts a message that arrived *after* the submit that triggered it, so a
+// stale code from an earlier application can never be reused.
+func waitForSecurityCode(notBefore time.Time) (string, error) {
+	const (
+		budget = 90 * time.Second
+		tick   = 10 * time.Second
+	)
+	deadline := time.Now().Add(budget)
+	var lastErr error
+	for {
+		code, err := SecurityCodeFetcher(notBefore)
+		if err != nil {
+			lastErr = err
+		} else if code != "" {
+			return code, nil
+		}
+		if time.Now().After(deadline) {
+			return "", lastErr
+		}
+		time.Sleep(tick)
+	}
+}
+
+func fillSecurityCode(target fillTarget, code string) error {
+	for _, sel := range securityCodeSelectors {
+		loc := target.Loc(sel)
+		count, err := loc.Count()
+		if err != nil || count == 0 {
+			continue
+		}
+		el, ok := firstVisibleSubmit(loc, count)
+		if !ok {
+			continue
+		}
+		if err := el.Fill(code, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("could not find a visible security-code field to fill")
+}
+
 // manualReviewErrors are the outcomes that are not automation failures: the
 // job is sound, something outside the agent's authority is simply required to
 // finish it. Every one of them must be preserved for manual completion rather
@@ -852,6 +912,10 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// attempt's own submit click, so confirmation compares against the
 	// right baseline instead of the original applyURL -- see confirmOrError.
 	urlBeforeSubmitClick := applyURL
+	// improvements.md #32: when the submit that triggers a code email happened.
+	// Only messages that arrived after this are eligible, so a code from an
+	// earlier application can never be reused.
+	submitClickedAt := time.Now()
 
 	// bugs.md #88: remembers the fields the final attempt could not commit, so
 	// an uncommittable required widget can be reported as needing a human
@@ -1034,7 +1098,43 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// model call -- a code the agent cannot obtain makes everything
 			// downstream pointless, and this is what silently cost 45 minutes.
 			if parser.DetectSecurityCodeChallenge(prunedHTML) {
-				return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
+				// improvements.md #32: the code is obtainable if a fetcher is
+				// wired up. Without one this is a dead end, exactly as #93
+				// described.
+				if SecurityCodeFetcher == nil {
+					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
+				}
+				log.Printf("[Auto-Submit] Security-code gate detected for %s — waiting for the emailed code...", companyName)
+				code, cErr := waitForSecurityCode(submitClickedAt)
+				if cErr != nil || code == "" {
+					log.Printf("[Auto-Submit] No security code arrived for %s (%v) — queued for manual submission", companyName, cErr)
+					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
+				}
+				if fErr := fillSecurityCode(target, code); fErr != nil {
+					log.Printf("[Auto-Submit] Retrieved a security code for %s but could not enter it: %v", companyName, fErr)
+					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
+				}
+				log.Printf("[Auto-Submit] Entered the emailed security code for %s; resubmitting", companyName)
+				if sLoc, sCount := findSubmitControl(target); sCount > 0 {
+					if visible, ok := firstVisibleSubmit(sLoc, sCount); ok {
+						urlBeforeSubmitClick = page.URL()
+						submitClickedAt = time.Now()
+						if clickErr := visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); clickErr == nil {
+							page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+								State:   playwright.LoadStateNetworkidle,
+								Timeout: playwright.Float(10000),
+							})
+							if content, err := page.Content(); err == nil {
+								if confirmed, reason := isSubmissionConfirmed(urlBeforeSubmitClick, page.URL(), content); confirmed {
+									log.Printf("[Auto-Submit] Submission confirmed for %s (%s) after entering the emailed code", companyName, reason)
+									return nil
+								}
+							}
+						}
+					}
+				}
+				// Entered but not confirmed: hand it over rather than loop.
+				return fmt.Errorf("%w: %s (code entered, no confirmation)", ErrNeedsEmailVerification, ExtractDomain(applyURL))
 			}
 
 			if missing := pii.MissingAttestations(parser.DetectAttestationQuestions(prunedHTML)); len(missing) > 0 {
@@ -1142,6 +1242,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					execErr = fmt.Errorf("found %d submit control(s) but none visible", count)
 				} else {
 					urlBeforeSubmitClick = page.URL()
+					submitClickedAt = time.Now()
 					execErr = visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 				}
 			} else {

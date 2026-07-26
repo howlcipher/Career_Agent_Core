@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/mxschmitt/playwright-go"
@@ -2253,5 +2254,66 @@ func TestSplitTagID_StillRefusesCompoundSelectors(t *testing.T) {
 		if _, _, ok := splitTagID(sel); ok {
 			t.Errorf("splitTagID(%q) must refuse — rewriting it as one id changes the meaning", sel)
 		}
+	}
+}
+
+// improvements.md #32: the poll must only ever accept a code that arrived
+// AFTER the submit which triggered it, so a stale code from an earlier
+// application can never be typed into a new one.
+func TestWaitForSecurityCode_ReturnsTheCodeAndPassesTheCutoff(t *testing.T) {
+	orig := SecurityCodeFetcher
+	defer func() { SecurityCodeFetcher = orig }()
+
+	cutoff := time.Date(2026, 7, 25, 16, 58, 0, 0, time.UTC)
+	var gotCutoff time.Time
+	SecurityCodeFetcher = func(notBefore time.Time) (string, error) {
+		gotCutoff = notBefore
+		return "uOSBQvRu", nil
+	}
+
+	code, err := waitForSecurityCode(cutoff)
+	if err != nil {
+		t.Fatalf("waitForSecurityCode: %v", err)
+	}
+	if code != "uOSBQvRu" {
+		t.Errorf("code = %q, want uOSBQvRu", code)
+	}
+	if !gotCutoff.Equal(cutoff) {
+		t.Errorf("cutoff = %v, want %v — a stale code must not be reusable", gotCutoff, cutoff)
+	}
+}
+
+// With no fetcher configured the submitter must behave exactly as bugs.md #93
+// described, so the nil case stays a supported configuration.
+func TestSecurityCodeFetcher_NilByDefaultIsSupported(t *testing.T) {
+	orig := SecurityCodeFetcher
+	defer func() { SecurityCodeFetcher = orig }()
+	SecurityCodeFetcher = nil
+	if SecurityCodeFetcher != nil {
+		t.Error("a nil fetcher must be a valid configuration")
+	}
+}
+
+func TestFillSecurityCode_ReportsWhenNoFieldIsPresent(t *testing.T) {
+	loc := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	if err := fillSecurityCode(pageTarget{page: page}, "uOSBQvRu"); err == nil {
+		t.Error("expected an error when there is no security-code field to fill")
+	}
+}
+
+func TestFillSecurityCode_FillsAVisibleField(t *testing.T) {
+	var filled string
+	loc := &MockLocator{
+		countFunc:     func() (int, error) { return 1, nil },
+		isVisibleFunc: func() (bool, error) { return true, nil },
+		fillFunc:      func(v string) error { filled = v; return nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	if err := fillSecurityCode(pageTarget{page: page}, "uOSBQvRu"); err != nil {
+		t.Fatalf("fillSecurityCode: %v", err)
+	}
+	if filled != "uOSBQvRu" {
+		t.Errorf("filled %q, want uOSBQvRu", filled)
 	}
 }

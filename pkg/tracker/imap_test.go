@@ -51,3 +51,62 @@ func TestMatchTrackedCompany(t *testing.T) {
 		}
 	}
 }
+
+// improvements.md #32: pulling the code out of a real Greenhouse email body.
+// This is the exact wording observed live for the Surt AI application.
+func TestExtractSecurityCode_RealGreenhouseWording(t *testing.T) {
+	body := `Hi William,
+
+Copy and paste this code into the security code field on your application:
+
+uOSBQvRu
+
+After you enter the code, resubmit your application.
+
+© 2026 Greenhouse 18 West 18th Street, 11th Floor, New York NY`
+	if got := extractSecurityCode(body); got != "uOSBQvRu" {
+		t.Errorf("got %q, want uOSBQvRu", got)
+	}
+}
+
+// The same message as Greenhouse actually sends it — HTML, with the code in
+// its own element.
+func TestExtractSecurityCode_HTMLBody(t *testing.T) {
+	body := `<html><body><p>Copy and paste this code into the security code field on your application:</p><h1>uOSBQvRu</h1><p>After you enter the code, resubmit your application.</p></body></html>`
+	if got := extractSecurityCode(body); got != "uOSBQvRu" {
+		t.Errorf("got %q, want uOSBQvRu", got)
+	}
+}
+
+// Prose must not yield a code — a false positive here types garbage into a
+// real application.
+func TestExtractSecurityCode_IgnoresOrdinaryProse(t *testing.T) {
+	body := `Thanks for applying to Greenhouse. Your application has been received and
+	our recruiting team will review it shortly. Regards, Recruiting`
+	if got := extractSecurityCode(body); got != "" {
+		t.Errorf("expected no code from prose, got %q", got)
+	}
+}
+
+func TestIsPlausibleCode(t *testing.T) {
+	for _, ok := range []string{"uOSBQvRu", "A1B2C3", "482915", "abc123XY"} {
+		if !isPlausibleCode(ok) {
+			t.Errorf("%q should be plausible", ok)
+		}
+	}
+	for _, bad := range []string{"application", "greenhouse", "short", "recruiting", "the", "reviewed"} {
+		if isPlausibleCode(bad) {
+			t.Errorf("%q is prose and must be rejected", bad)
+		}
+	}
+}
+
+// Only ATS senders are ever examined — this is the user's personal mailbox.
+func TestSubjectAnnouncesCode(t *testing.T) {
+	if !subjectAnnouncesCode("Security code for your application to Surt AI") {
+		t.Error("the real Greenhouse subject must match")
+	}
+	if subjectAnnouncesCode("Your application to Acme was received") {
+		t.Error("an ordinary acknowledgement is not a code notification")
+	}
+}
