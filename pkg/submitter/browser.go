@@ -1101,6 +1101,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				}
 
 				fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
+				// bugs.md #98: the model cannot see a react-select's permitted
+				// values -- they exist only once the widget is opened, and these
+				// forms carry no native <select>. Put the real options in front
+				// of it rather than leaving it to guess the wording.
+				if optionBlock := enumerateComboboxOptions(target, parser.InvalidFieldIdentifiers(prunedHTML)); optionBlock != "" {
+					fullProfileContext += "\n\n" + optionBlock
+				}
 				if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 					return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, domain)
 				}
@@ -1237,6 +1244,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			}
 
 			fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
+			// bugs.md #98: the model cannot see a react-select's permitted
+			// values -- they exist only once the widget is opened, and these
+			// forms carry no native <select>. Put the real options in front
+			// of it rather than leaving it to guess the wording.
+			if optionBlock := enumerateComboboxOptions(target, parser.InvalidFieldIdentifiers(prunedHTML)); optionBlock != "" {
+				fullProfileContext += "\n\n" + optionBlock
+			}
 			if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 				return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, ExtractDomain(applyURL))
 			}
@@ -1946,6 +1960,93 @@ func locatorHasValue(el playwright.Locator) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// bugs.md #98. react-select renders its options only into a listbox created
+// when the widget opens, and Greenhouse's forms contain zero native <select>
+// elements -- so no option text is ever present in the served HTML that the
+// model's prompt is built from. The model was being asked to supply a value
+// for a control whose permitted values it is never shown, so it guessed the
+// wording. Confirmed live on Reddit: it proposed "I am not a protected
+// veteran" on two consecutive attempts for a widget offering "No military
+// service" and "I don't wish to answer", filtering the list to zero both
+// times. Yes/No fields committed fine precisely because they are guessable.
+const (
+	// Bounds on how much this adds to the prompt. The payload already has a
+	// hard time budget (#83), so enumerating must not push a form past it.
+	maxEnumeratedComboboxes      = 25
+	maxEnumeratedOptionsPerField = 40
+)
+
+// enumerateComboboxOptions opens each named control that is genuinely a
+// combobox, reads its real option list, and renders a block naming the exact
+// permitted values.
+//
+// Only comboboxes are opened, gated on isComboboxLocator. That gate is a
+// correctness requirement, not an optimisation: the invalid-field list
+// routinely includes checkboxes (Greenhouse's GDPR consent among them), and
+// clicking one would toggle it -- silently changing the answer this function
+// exists to help the model get right.
+func enumerateComboboxOptions(target fillTarget, selectors []string) string {
+	if len(selectors) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	shown := 0
+	for _, sel := range selectors {
+		if shown >= maxEnumeratedComboboxes {
+			break
+		}
+		el, err := resolveFieldLocator(target, sel)
+		if err != nil {
+			continue
+		}
+		if combo, cErr := isComboboxLocator(el); cErr != nil || !combo {
+			continue
+		}
+		opts := openAndReadComboboxOptions(el)
+		if len(opts) == 0 {
+			continue
+		}
+		if len(opts) > maxEnumeratedOptionsPerField {
+			opts = opts[:maxEnumeratedOptionsPerField]
+		}
+		quoted := make([]string, 0, len(opts))
+		for _, o := range opts {
+			quoted = append(quoted, fmt.Sprintf("%q", o))
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", sel, strings.Join(quoted, " | "))
+		shown++
+	}
+	if shown == 0 {
+		return ""
+	}
+	return "AVAILABLE OPTIONS FOR DROPDOWN FIELDS.\n" +
+		"These controls accept ONLY the values listed. Reply with one of these " +
+		"strings copied exactly, character for character. Any other wording " +
+		"selects nothing and leaves the field empty.\n" + b.String()
+}
+
+// openAndReadComboboxOptions opens a combobox, reads its options, and closes
+// it again, leaving the control as it was found.
+//
+// Reads with no query typed. bugs.md #91 is the reason that matters: typing
+// filters the list, and a query the widget does not recognise filters it to
+// nothing -- which is exactly the state this function exists to reveal rather
+// than reproduce.
+func openAndReadComboboxOptions(el playwright.Locator) []string {
+	if err := el.Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(fillActionTimeoutMs),
+	}); err != nil {
+		return nil
+	}
+	waitForComboboxReady(el)
+	opts := readComboboxOptions(el)
+	// Leave the widget closed; an open menu can swallow a later click.
+	_ = el.Press("Escape", playwright.LocatorPressOptions{
+		Timeout: playwright.Float(fillActionTimeoutMs),
+	})
+	return opts
 }
 
 func isComboboxLocator(el playwright.Locator) (bool, error) {

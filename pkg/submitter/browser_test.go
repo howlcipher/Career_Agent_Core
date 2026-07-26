@@ -2437,3 +2437,92 @@ func TestUncommittableFieldNamesTheAttemptedValue(t *testing.T) {
 		t.Errorf("message must name the attempted value, got %q", msg)
 	}
 }
+
+// bugs.md #98: the model cannot see a react-select's permitted values -- they
+// exist only once the widget opens, and these forms carry no native <select>.
+// Confirmed live on Reddit, where it proposed "I am not a protected veteran"
+// on two consecutive attempts against a widget offering "No military service"
+// and "I don't wish to answer".
+
+// newComboboxProbeLocator builds a locator that answers the combobox probe and
+// the option read, and records whether it was clicked.
+func newComboboxProbeLocator(isCombo bool, options []string) *MockLocator {
+	loc := &MockLocator{
+		countFunc:     func() (int, error) { return 1, nil },
+		isVisibleFunc: func() (bool, error) { return true, nil },
+		pressFunc:     func(string) error { return nil },
+	}
+	loc.clickFunc = func(...playwright.LocatorClickOptions) error { return nil }
+	loc.evaluateFunc = func(expr string) (interface{}, error) {
+		switch {
+		case strings.Contains(expr, "role") && strings.Contains(expr, "combobox"):
+			return isCombo, nil
+		// aria-controls FIRST: comboboxOptionsJS mentions aria-activedescendant
+		// too, as a fallback, so probing for that first would swallow the
+		// option read entirely.
+		case strings.Contains(expr, "aria-controls"):
+			out := make([]interface{}, 0, len(options))
+			for _, o := range options {
+				out = append(out, o)
+			}
+			return out, nil
+		case strings.Contains(expr, "aria-activedescendant"):
+			// Answer the readiness probe immediately; otherwise
+			// waitForComboboxReady polls its full 5s budget in tests.
+			if isCombo && len(options) > 0 {
+				return "opt-0", nil
+			}
+			return "", nil
+		}
+		return nil, nil
+	}
+	return loc
+}
+
+func TestEnumerateComboboxOptions_NamesTheExactPermittedValues(t *testing.T) {
+	loc := newComboboxProbeLocator(true, []string{"No military service", "I don't wish to answer"})
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	got := enumerateComboboxOptions(pageTarget{page: page}, []string{"434"})
+	if got == "" {
+		t.Fatal("expected an option block for a combobox with options")
+	}
+	for _, want := range []string{`"No military service"`, `"I don't wish to answer"`, "434"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("option block missing %s; got:\n%s", want, got)
+		}
+	}
+	// The wording the model invented must NOT appear -- the block is the
+	// closed set of real values, not a suggestion.
+	if strings.Contains(got, "I am not a protected veteran") {
+		t.Error("option block must contain only values the widget actually offers")
+	}
+}
+
+// The safety-critical one. The invalid-field list routinely includes
+// checkboxes (Greenhouse's GDPR consent among them), and clicking one toggles
+// it -- silently changing the very answer this function exists to get right.
+func TestEnumerateComboboxOptions_NeverClicksANonCombobox(t *testing.T) {
+	checkbox := newComboboxProbeLocator(false, nil)
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return checkbox }}
+
+	got := enumerateComboboxOptions(pageTarget{page: page}, []string{"gdpr_processing_consent_given_1"})
+	if got != "" {
+		t.Errorf("a non-combobox must contribute nothing, got:\n%s", got)
+	}
+	if checkbox.clickCalls != 0 {
+		t.Fatalf("a non-combobox must NEVER be clicked (would toggle it); clicked %d time(s)", checkbox.clickCalls)
+	}
+}
+
+func TestEnumerateComboboxOptions_EmptyWhenNothingToReport(t *testing.T) {
+	if got := enumerateComboboxOptions(pageTarget{page: &MockPage{}}, nil); got != "" {
+		t.Errorf("no selectors must yield no block, got %q", got)
+	}
+	// A combobox that reports no options adds nothing rather than an empty row.
+	loc := newComboboxProbeLocator(true, nil)
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	if got := enumerateComboboxOptions(pageTarget{page: page}, []string{"434"}); got != "" {
+		t.Errorf("a combobox with no readable options must be skipped, got:\n%s", got)
+	}
+}

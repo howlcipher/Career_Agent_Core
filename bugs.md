@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 98 | [The model was never shown a dropdown's permitted values, so it guessed the wording](#98-the-model-was-never-shown-a-dropdowns-permitted-values-so-it-guessed-the-wording) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The last-mile blocker, caught by #97's diagnostic in one cycle.** Reddit reached a single remaining invalid field and proposed `"I am not a protected veteran"` on **two consecutive attempts** for a widget offering *No military service* / *I don't wish to answer* — a phrasing that filters the option list to **zero**. Probe: none of `#434`'s option strings exist in the page HTML until the widget is opened, and Greenhouse forms carry **zero native `<select>` elements**, so no option text is ever in the served document the prompt is built from. The model was asked to supply a value for a control whose permitted values it is never shown. Residual measured since #91/#92: **14 commits succeeded, 2 fields failed** — and both failures are exactly this unusual-wording case |
 | 97 | [An uncommittable field named the control but never the value that was tried](#97-an-uncommittable-field-named-the-control-but-never-the-value-that-was-tried) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Reddit reached **one remaining invalid field** — payload 7,212 → 497 chars, 13 fields down to 1 — and then failed twice on `#434` (veteran status) with the log saying only that the control was left empty. A probe shows `#434` is genuinely selectable (typing `I don't wish to answer` filters its 9 options to exactly that entry), so this is a **value mismatch, not a broken mechanism** — but the log could not distinguish those, and they need opposite fixes. Same class as #80/#96, one level down |
 | 96 | [Nothing recorded what a submit verdict was actually decided on](#96-nothing-recorded-what-a-submit-verdict-was-actually-decided-on) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Observability, filed the moment its absence cost a day. #95 was findable only by cross-referencing wall-clock seconds between unrelated log lines, because the sole record of a judged submit was the word "failed" — nothing said how long it waited, whether the URL moved, how many fields came back flagged, or how large the returned page was. Same class as #80, and #80 paid for itself within one cycle |
 | 95 | [The submit verdict was read from the DOM the instant the click returned, racing the submission itself](#95-the-submit-verdict-was-read-from-the-dom-the-instant-the-click-returned-racing-the-submission-itself) | Blocker | Resolved (2026-07-25, fix shipped; race inferred, not directly observed) | — | Opus 5 | Gemini 3 Pro | Three independent jobs (ClickHouse, Stack AV, Sporty Group) logged **every field committed, every fix applied, and `Submission failed validation` in the same second**. A probe proved those forms are fully satisfiable — after the agent's exact commit sequence ClickHouse's form reports `invalidCount: 0`, natively valid. So the verdict, not the fill, was wrong. `WaitForLoadState(networkidle)` can return immediately because Playwright's `Click` returns on event dispatch, before the app issues its request, so the page is read before the submission has happened. **#93 is direct evidence this misfires:** a Greenhouse security-code email timestamped the exact second of a submit the agent had written off. Cost of a premature verdict is a ~12-min model call plus a re-click on a form that may already have gone through (#89's duplicate-application risk) |
@@ -138,6 +139,43 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 98. The model was never shown a dropdown's permitted values, so it guessed the wording (Resolved 2026-07-25)
+
+**The last-mile blocker, and #97's diagnostic produced it in exactly one cycle** — the same way #80 paid for itself.
+
+Reddit got to a single remaining invalid field and then stalled on it twice with the value now visible:
+
+```
+22:41:35 Attempt 2: 1 fix(es) ... left the control empty: 434 (tried "I am not a protected veteran")
+22:42:39 Attempt 3: 1 fix(es) ... left the control empty: #434 (tried "I am not a protected veteran")
+```
+
+The **identical** wrong value on both attempts — the model is deterministic here and would never have converged, however many retries ran.
+
+**Root cause, established by probe.** `#434` is *Are you a veteran/have you served in the military?* and offers:
+
+> Active Reserve · Inactive Reserve · Other Protected Veteran · Retired · Unspecified Veteran · Vietnam Era Veteran · Vietnam Veteran and Other Protected Veteran · No military service · I don't wish to answer
+
+None of those strings appear in the page HTML until the widget is opened:
+
+| string | in page HTML before opening | after opening |
+| --- | --- | --- |
+| `Other Protected Veteran` | **false** | true |
+| `No military service` | **false** | true |
+| `I don't wish to answer` | **false** | true |
+
+Opening one widget grows the document 144,506 → 146,812 chars, and the form contains **zero native `<select>` elements** — Greenhouse is react-select throughout, so `<option>` text is never in the served markup. The narrowed validation payload is built from that markup. **The model was being asked to supply a value for a control whose permitted values it is never shown**, leaving it to invent plausible wording. `"I am not a protected veteran"` is a perfectly reasonable guess; it just is not on the menu, and typing it filters the list to nothing.
+
+**This explains the shape of the entire day.** Yes/No fields committed reliably because they are trivially guessable. Measured over the window since #91/#92 shipped: **14 autocomplete commits succeeded and 2 distinct fields failed** — `#434` and Sporty Group's `#question_7849575101` — and both failures are this same unusual-wording case. Nothing else in that window failed to commit.
+
+**Fix.** `enumerateComboboxOptions` opens each invalid control that is genuinely a combobox, reads its real option list with **no query typed** (bugs.md #91: typing filters the list, and an unrecognised query filters it to nothing — the very state this is meant to reveal rather than reproduce), closes it again, and renders a block into the prompt naming the exact permitted values and instructing that they be copied character for character.
+
+**Wired into both prompt paths**, the validation retry *and* `ExtractFormMapping`. That is deliberate: the standing check in this backlog records three prior instances of a capability added to one path and not the other (#65/#66→#67, #74→#75, #28→#31), and this is the same shape.
+
+**The `isComboboxLocator` gate is a correctness requirement, not an optimisation.** The invalid-field list routinely includes checkboxes — Greenhouse's GDPR consent among them — and clicking one would *toggle* it, silently changing the answer this function exists to get right. A test pins that a non-combobox is never clicked.
+
+Bounded at 25 controls and 40 options each, and the block is added *before* `likelyExceedsModelContext` runs, so the #83 time-budget ceiling still accounts for it. 3 new tests.
 
 ### 97. An uncommittable field named the control but never the value that was tried (Resolved 2026-07-25)
 
