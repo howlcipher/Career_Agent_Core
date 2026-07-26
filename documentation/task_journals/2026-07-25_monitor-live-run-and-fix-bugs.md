@@ -240,6 +240,8 @@ Orkes and AlphaSense are the cleanest cases yet: **`invalid fields: 0`** — the
   - **Retry path only.** `ExtractFormMapping` is not answering a list of rejected fields, so the field-count reasoning does not transfer; tightening it without evidence would refuse forms that currently work.
 - **Restarted (25th) at 02:37 for #104/#105.** PID `4092461` (`verify84f`), 59 queued, key strings verified by `strings`. Sporty Group had only just begun scoring, so almost nothing was lost. **Remote requeued** with dedup cleared — it lost 45 minutes through no fault of its own. Monitor `bvb6n83wo`.
 
+  - **Confirmed live at 02:47, on the same job that exposed it.** Remote, identical 34 fields and identical 19,481-char payload: narrowing at `02:47:28`, refusal at `02:47:30`. **45 minutes → 2 seconds**, `MANUAL_REQUIRED` with the tailored documents preserved instead of a `context deadline exceeded` that preserved nothing.
+
 ### Where the ceiling actually is now
 
 The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
