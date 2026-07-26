@@ -126,6 +126,15 @@ Page HTML grows 144,506 → 146,812 chars purely from opening one widget, and th
 
 The narrowed validation payload is built from page HTML. So the model is asked to supply a value for a control **whose permitted values are nowhere in what it is given**, and can only guess the wording. That is the structural root cause of #97's value mismatch, and it explains the shape of the whole day: Yes/No fields committed fine because they are trivially guessable, while `#434`'s unusual taxonomy did not.
 
+**Sized against the log (window since #91/#92 shipped at 20:34, i.e. the current machinery):**
+
+| outcome | count |
+| --- | --- |
+| autocomplete selections **committed** | **14** (2 + 4 + 8 across three jobs) |
+| distinct fields that reported success but stayed empty | **2** — `#434` (Reddit, veteran status) and `#question_7849575101` (Sporty Group, GDPR) |
+
+So the combobox machinery is now roughly **87% effective**, and the entire residual is the "unusual wording" case — exactly what the options-visibility gap predicts, and nothing else. Earlier day-wide counts are misleading here because they include `country`/`candidate-location` failures from before #78/#79 fixed them.
+
 **Deliberately not implemented yet**, for the reason recorded in #97: Reddit's next attempt will print `#434 (tried "…")`, and that value decides which fix is right.
 - Wrong phrasing → this finding is the blocker, and the fix is to put the real options in front of the model.
 - Correct phrasing (`I don't wish to answer`) → the commit mechanism is broken for this widget after all, this finding is true but *not* the blocker, and the probe replicated the wrong sequence again (#76/#81/#91's recurring trap).
