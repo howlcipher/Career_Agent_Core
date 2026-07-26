@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,6 +102,18 @@ type Job struct {
 	EndDate   string `yaml:"end_date"`
 }
 
+// nowFunc is indirected so the computed start date is testable.
+var nowFunc = time.Now
+
+// earliestStartDate returns the configured value, or two weeks from today when
+// none is set (improvements.md #33).
+func (p PII) earliestStartDate() string {
+	if v := strings.TrimSpace(p.Work.EarliestStart); v != "" {
+		return v
+	}
+	return nowFunc().AddDate(0, 0, 14).Format("2006-01-02")
+}
+
 // AttestationValue returns the configured answer for a category of
 // legally-loaded question, and whether one was configured at all.
 //
@@ -185,7 +198,10 @@ func (p PII) ApplicationFacts() string {
 	add("Years of experience", w.YearsExperience)
 	add("Desired salary", w.DesiredSalary)
 	add("Notice period", w.NoticePeriod)
-	add("Earliest start date", w.EarliestStart)
+	// improvements.md #33: the user's rule is "always two weeks from the date
+	// of applying", which is a moving target, not a value that can sit in a
+	// config file without going stale. Computed at render time when unset.
+	add("Earliest start date", p.earliestStartDate())
 	add("Remote work preference", w.RemotePreference)
 	add("Willing to relocate", w.WillingToRelocate)
 	add("Willing to travel", w.WillingToTravel)
@@ -307,12 +323,20 @@ func (p PII) LocationMustContain() []string {
 	if city := strings.Fields(strings.TrimSpace(p.City)); len(city) > 0 {
 		out = append(out, city[0])
 	}
-	// Prefer the spelled-out state: option labels read "Macomb, Illinois,
-	// United States", not "MI".
+	// improvements.md #33: accept EITHER spelling of the state. Geocoders
+	// disagree -- Greenhouse renders "Macomb, Illinois, United States" while
+	// Lever renders "Macomb, MI, USA" -- so requiring only the spelled-out
+	// form rejected the correct Lever option outright. Alternatives are
+	// separated by "|" and any one satisfies the token.
+	var alts []string
 	if fs := strings.TrimSpace(p.FullState); fs != "" {
-		out = append(out, fs)
-	} else if st := strings.TrimSpace(p.State); st != "" {
-		out = append(out, st)
+		alts = append(alts, fs)
+	}
+	if st := strings.TrimSpace(p.State); st != "" {
+		alts = append(alts, strings.ToUpper(st))
+	}
+	if len(alts) > 0 {
+		out = append(out, strings.Join(alts, "|"))
 	}
 	return out
 }
@@ -340,14 +364,61 @@ func (p PII) LocationSearchCandidates() []string {
 		seen[s] = true
 		out = append(out, s)
 	}
-	if st := strings.TrimSpace(p.State); st != "" {
-		add(city + ", " + strings.ToUpper(st))
+
+	// improvements.md #33: try the bare place name as well as the full civil
+	// division. Measured live -- Greenhouse's geocoder resolves "Macomb
+	// Township" happily while Lever's returns **zero** results for it, for
+	// "Macomb Township, MI" and for "Macomb, MI", yet indexes plenty of other
+	// Michigan places. Dropping "Township"/"City of" and friends gives the
+	// second geocoder something it recognises, without changing what the user
+	// configured. LocationMustContain still requires the place and the state,
+	// so a wrong "Macomb" in another state is rejected exactly as before.
+	names := []string{city}
+	if base := stripCivilDivisionSuffix(city); base != "" && base != city {
+		names = append(names, base)
 	}
-	if fs := strings.TrimSpace(p.FullState); fs != "" {
-		add(city + ", " + fs)
+
+	st := strings.ToUpper(strings.TrimSpace(p.State))
+	fs := strings.TrimSpace(p.FullState)
+	for _, n := range names {
+		if st != "" {
+			add(n + ", " + st)
+		}
+		if fs != "" {
+			add(n + ", " + fs)
+		}
 	}
-	add(city)
+	for _, n := range names {
+		add(n)
+	}
 	return out
+}
+
+// civilDivisionSuffixes are the administrative words a geocoder may or may not
+// carry. "Macomb Township" and "Macomb" are the same place to a human and to
+// one geocoder but not the other (improvements.md #33).
+var civilDivisionSuffixes = []string{
+	" township", " twp", " village", " borough", " municipality", " town",
+}
+
+// civilDivisionPrefixes cover the inverted spelling ATS geocoders often use.
+var civilDivisionPrefixes = []string{
+	"township of ", "city of ", "town of ", "village of ", "borough of ",
+}
+
+func stripCivilDivisionSuffix(city string) string {
+	lower := strings.ToLower(city)
+	for _, suf := range civilDivisionSuffixes {
+		if strings.HasSuffix(lower, suf) {
+			return strings.TrimSpace(city[:len(city)-len(suf)])
+		}
+	}
+	for _, pre := range civilDivisionPrefixes {
+		if strings.HasPrefix(lower, pre) {
+			return strings.TrimSpace(city[len(pre):])
+		}
+	}
+	return city
 }
 
 // EEO holds voluntary equal-employment-opportunity self-identification

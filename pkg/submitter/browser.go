@@ -1960,9 +1960,20 @@ func pickComboboxOption(options []string, want string, mustContain []string) (id
 		if optID == "" {
 			continue
 		}
+		// improvements.md #33: a token may list alternatives separated by "|",
+		// any one of which satisfies it. Geocoders disagree on state spelling
+		// ("Macomb, Illinois, United States" vs "Macomb, MI, USA"), so
+		// demanding one exact form rejected correct options.
 		matched := true
 		for _, tok := range mustContain {
-			if t := normalizeOptionText(tok); t != "" && !strings.Contains(text, t) {
+			anyAlt := false
+			for _, alt := range strings.Split(tok, "|") {
+				if t := normalizeOptionText(alt); t != "" && strings.Contains(text, t) {
+					anyAlt = true
+					break
+				}
+			}
+			if !anyAlt {
 				matched = false
 				break
 			}

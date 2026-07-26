@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -110,10 +111,18 @@ func TestPII_LoadsMixedCaseAddressKeys(t *testing.T) {
 	}
 }
 
+// improvements.md #33: the bare place name must be offered too. Measured live
+// -- Greenhouse resolves "Macomb Township" while Lever returns zero for it and
+// for "Macomb", but resolves "Macomb, MI". Only offering the civil-division
+// spelling left Lever with nothing it could match.
 func TestPII_LocationSearchCandidates(t *testing.T) {
 	p := PII{City: "Macomb Township", State: "Mi", FullState: "Michigan"}
 	got := p.LocationSearchCandidates()
-	want := []string{"Macomb Township, MI", "Macomb Township, Michigan", "Macomb Township"}
+	want := []string{
+		"Macomb Township, MI", "Macomb Township, Michigan",
+		"Macomb, MI", "Macomb, Michigan",
+		"Macomb Township", "Macomb",
+	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -201,5 +210,58 @@ func TestMissingAttestations(t *testing.T) {
 	partial := PII{Work: WorkFacts{AuthorizedToWorkUS: "Yes", VisaStatus: "U.S. Citizen"}}
 	if got := partial.MissingAttestations(all); len(got) != 0 {
 		t.Errorf("visa_status should satisfy the sponsorship question, got %v", got)
+	}
+}
+
+// improvements.md #33: geocoders disagree on state spelling, so the token
+// lists alternatives. Requiring only "Michigan" rejected Lever's correct
+// "Macomb, MI, USA" outright.
+func TestPII_LocationMustContain_AcceptsEitherStateSpelling(t *testing.T) {
+	got := PII{City: "Macomb Township", State: "Mi", FullState: "Michigan"}.LocationMustContain()
+	if len(got) != 2 {
+		t.Fatalf("got %v, want [place, state-alternatives]", got)
+	}
+	if got[0] != "Macomb" {
+		t.Errorf("place token = %q, want Macomb", got[0])
+	}
+	if !strings.Contains(got[1], "Michigan") || !strings.Contains(got[1], "MI") || !strings.Contains(got[1], "|") {
+		t.Errorf("state token = %q, want both spellings separated by |", got[1])
+	}
+}
+
+// The civil-division stripper must handle the inverted spelling too.
+func TestStripCivilDivisionSuffix(t *testing.T) {
+	cases := map[string]string{
+		"Macomb Township":    "Macomb",
+		"Township of Macomb": "Macomb",
+		"City of Detroit":    "Detroit",
+		"Shelby Twp":         "Shelby",
+		"Detroit":            "Detroit",
+	}
+	for in, want := range cases {
+		if got := stripCivilDivisionSuffix(in); got != want {
+			t.Errorf("stripCivilDivisionSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// improvements.md #33: "two weeks from the date of applying" is a moving
+// target, so it is computed at render time rather than stored.
+func TestApplicationFacts_ComputesEarliestStartTwoWeeksOut(t *testing.T) {
+	orig := nowFunc
+	nowFunc = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
+	defer func() { nowFunc = orig }()
+
+	got := PII{}.ApplicationFacts()
+	if !strings.Contains(got, "Earliest start date: 2026-08-08") {
+		t.Errorf("expected 2026-08-08 (14 days out), got:\n%s", got)
+	}
+}
+
+// An explicitly configured date must win over the computed one.
+func TestApplicationFacts_ConfiguredStartDateWins(t *testing.T) {
+	p := PII{Work: WorkFacts{EarliestStart: "2026-09-01"}}
+	if !strings.Contains(p.ApplicationFacts(), "Earliest start date: 2026-09-01") {
+		t.Error("a configured earliest_start_date must not be overwritten")
 	}
 }
