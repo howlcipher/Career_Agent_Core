@@ -1884,6 +1884,23 @@ func resolveFieldLocator(target fillTarget, selector string) (playwright.Locator
 			fmt.Sprintf("[id=%q]", id),
 			fmt.Sprintf("[name=%q]", id),
 		)
+	} else {
+		// bugs.md #106: the selector looked like CSS but has no tag#id to
+		// split, which is what a BARE bracketed identifier does --
+		// Greenhouse names checkbox-group controls
+		// "question_8242451101[]_54236360101", and the brackets alone make
+		// looksLikeCSSSelector true. It is not valid CSS for an id either,
+		// so it matched nothing and got no fallbacks at all: "tried 1
+		// form(s)". #73 fixed the "input#430" shape and #92 the
+		// "#question_...[]_..." shape; this is the third, with no prefix.
+		//
+		// Safe for genuine CSS: these are appended AFTER the verbatim
+		// selector, and an attribute form built from a real selector simply
+		// matches nothing.
+		candidates = append(candidates,
+			fmt.Sprintf("[id=%q]", selector),
+			fmt.Sprintf("[name=%q]", selector),
+		)
 	}
 	for _, c := range candidates {
 		loc := target.Loc(c)

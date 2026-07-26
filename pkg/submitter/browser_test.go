@@ -2926,3 +2926,70 @@ func TestMaxPromptCharsForTimeBudget_SitsBelowTheObservedFailure(t *testing.T) {
 			maxPromptCharsForTimeBudget, observedTimeoutChars)
 	}
 }
+
+// bugs.md #106: Greenhouse names checkbox-group controls
+// "question_8242451101[]_54236360101". The brackets alone make
+// looksLikeCSSSelector true, but there is no tag#id to split, so the selector
+// was used verbatim with NO fallbacks -- "tried 1 form(s)" -- and matched
+// nothing, because it is not valid CSS for an id either. Third shape of the
+// same defect: #73 fixed "input#430", #92 fixed "#question_...[]_...", this is
+// the bare form with no prefix.
+func TestResolveFieldLocator_BareBracketedIDGetsAttributeFallbacks(t *testing.T) {
+	const bracketed = "question_8242451101[]_54236360101"
+
+	var tried []string
+	page := &MockPage{locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+		tried = append(tried, sel)
+		// Only the attribute form resolves, as on the real page.
+		if sel == fmt.Sprintf("[id=%q]", bracketed) {
+			return &MockLocator{
+				countFunc:     func() (int, error) { return 1, nil },
+				isVisibleFunc: func() (bool, error) { return true, nil },
+			}
+		}
+		return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	}}
+
+	loc, err := resolveFieldLocator(pageTarget{page: page}, bracketed)
+	if err != nil {
+		t.Fatalf("bracketed id must resolve via its attribute form, got: %v", err)
+	}
+	if loc == nil {
+		t.Fatal("expected a locator")
+	}
+	if len(tried) < 2 {
+		t.Errorf("expected attribute fallbacks to be tried, only tried: %v", tried)
+	}
+	found := false
+	for _, s := range tried {
+		if s == fmt.Sprintf("[id=%q]", bracketed) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the [id=...] form must be among the candidates; tried: %v", tried)
+	}
+}
+
+// A genuine CSS selector must keep working: the extra candidates are appended
+// after the verbatim one and simply match nothing.
+func TestResolveFieldLocator_RealCSSSelectorStillWinsFirst(t *testing.T) {
+	const css = "input[type='email']"
+	var tried []string
+	page := &MockPage{locatorFunc: func(sel string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+		tried = append(tried, sel)
+		if sel == css {
+			return &MockLocator{
+				countFunc:     func() (int, error) { return 1, nil },
+				isVisibleFunc: func() (bool, error) { return true, nil },
+			}
+		}
+		return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	}}
+	if _, err := resolveFieldLocator(pageTarget{page: page}, css); err != nil {
+		t.Fatalf("a genuine CSS selector must still resolve: %v", err)
+	}
+	if len(tried) != 1 || tried[0] != css {
+		t.Errorf("the verbatim selector must be tried first and win; tried: %v", tried)
+	}
+}

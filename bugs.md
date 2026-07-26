@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 106 | [A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73](#106-a-bare-bracketed-checkbox-group-id-got-no-fallbacks-at-all--the-third-shape-of-73) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "question_8242451101[]_54236360101" failed: selector matched no element (**tried 1 form(s)**)`. Greenhouse names checkbox-group controls that way; the brackets alone make `looksLikeCSSSelector` true, but there is no `tag#id` to split, so the selector was used **verbatim with no fallbacks** — and it is not valid CSS for an id either, so it matched nothing. Third shape of one defect: **#73** fixed `input#430`, **#92** fixed `#question_...[]_...`, this is the bare form with no prefix. It was the remaining blocker on Sporty Group, which reached 11 invalid → 4 with three of the four being exactly these ids |
 | 105 | [The 45-minute time budget counted bytes to read, not answers to generate](#105-the-45-minute-time-budget-counted-bytes-to-read-not-answers-to-generate) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | The `Remote` job sent a **30,477-char** payload — comfortably inside #83's 40,000 ceiling — and burned the **entire 45-minute Ollama timeout** (01:46:03 → 02:31:03) before failing. #83 derived its ceiling from input size alone, but the run must *generate* a value for every rejected field, and **Remote had 34 of them**. Against ClickHouse (11,140 chars / 3 fields / ~7 min) and Reddit (18,639 / 13 / ~15 min), field count — not payload size — is what separates the runs that finish |
 | 104 | [A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired](#104-a-captcha-swallowed-submit-hid-behind-stale-invalid-flags-so-99-never-fired) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Predicted from #99+#102, then confirmed by #100's diagnostic on the next run. Reddit job `7956443` set all five custom questions to sensible values (`"company website"`, `"Stellantis Financial Services"`, `"Yes"`, `"No"`, `"I agree"`), committed all three comboboxes, and the **identical five** came back flagged with the page **byte-for-byte unchanged** (140544 chars twice). Nothing was left to fix — the submit was never reaching the server past the page's reCAPTCHA. #99 could not catch it because the verdict settles on flagged fields and never reaches budget exhaustion |
 | 103 | [#98 showed the model react-select's internal option ids, and it answered with them](#103-98-showed-the-model-react-selects-internal-option-ids-and-it-answered-with-them) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #98 fix, caught by #100's diagnostic within one cycle of that diagnostic shipping.** `readComboboxOptions` returns `"id\|label"` so `pickComboboxOption` can click by id; #98 put those raw strings into the prompt, and the model faithfully answered `react-select-question_67179376-option-0\|Yes` — an internal DOM id no widget offers. Live: `Rejected despite being set last attempt: question_67179376 = "react-select-question_67179376-option-0\|Yes"`. So #98 has been feeding garbage to the model since it shipped, on every combobox |
@@ -146,6 +147,25 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 106. A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73 (Resolved 2026-07-26)
+
+Caught live on Sporty Group, on the one line that names how many selector forms were attempted:
+
+```
+03:09:20 Validation fix for "question_8242451101[]_54236360101" failed:
+         selector matched no element (tried 1 form(s) of "question_8242451101[]_54236360101")
+```
+
+**`tried 1 form(s)`** is the tell. A bare identifier normally gets five candidate forms; a `tag#id` selector gets three. One means the selector was used verbatim and nothing else was attempted.
+
+**Root cause.** `resolveFieldLocator` branches on `looksLikeCSSSelector`. Greenhouse names checkbox-group controls `question_8242451101[]_54236360101`, and the `[`/`]` alone are enough to make that predicate true — so the bare-identifier fallbacks are skipped. It then tries `splitTagID`, which finds no `#` to split on, so **that** branch adds nothing either. The result is a selector that is simultaneously "too CSS-like" for the identifier path and "not CSS enough" for the tag path, and it falls through both with zero fallbacks. It is also not valid CSS for an id, so the verbatim attempt matches nothing.
+
+**Third shape of a single defect.** #73 fixed `input#430` (an id starting with a digit, used verbatim). #92 fixed `#question_...[]_...` (bracketed, with a `#` prefix, blocked because `splitTagID` refused bracketed ids). This is the same control class again with **no prefix at all** — the one arrangement neither previous fix covered.
+
+**Fix.** When the selector looks like CSS but has no `tag#id` to split, append the attribute forms built from the whole selector. Safe for genuine CSS selectors: the candidates are appended *after* the verbatim attempt, and an attribute form built from a real selector simply matches nothing. A test pins that `input[type='email']` still resolves on the first candidate and tries nothing else.
+
+**Consequence.** This was the remaining blocker on Sporty Group, which reached **11 invalid → 4** with three of the four survivors being exactly these bracketed ids. Verified failing against the old code before the fix was kept.
 
 ### 105. The 45-minute time budget counted bytes to read, not answers to generate (Resolved 2026-07-26)
 
