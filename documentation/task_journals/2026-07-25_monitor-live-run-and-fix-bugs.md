@@ -82,6 +82,22 @@
 - **Backlog groomed:** dated groom-pass note added to `bugs.md`. No re-ranking was warranted — all bug rows Resolved, both remaining `improvements.md` Pending rows below the ROI floor.
 - **Cleaned up 5 stale leftover monitor shells** (PIDs 2166044/2295635/2368407/2476472/2543238) from long-disconnected sessions, all targeting confirmed-dead PIDs 2165142-2542429. The 07-21 journal predicted they would self-terminate; they had not, and each held a `tail -F` on the log. Verified every target PID dead before killing.
 
+## Session 2 (new Claude Code context, resumed 2026-07-25 21:21)
+
+Context was cleared; re-oriented from this journal. Verified against the live tree rather than trusting it: working tree clean at `a30ffc3`, PID `3978328` genuinely alive, cohort `DISCOVERED=66 FAILED_SUBMIT=9 PROCESSING=1 SKIPPED=6`.
+
+**Cleaned up 10 orphaned monitor processes** from disconnected sessions before doing anything else — the previous session's `watch_82.sh` pair, its log tail, and five `tail -n0 -F` shells that the last session's cleanup had missed (it killed the wrapper shells; the `tail` children survived). Re-armed two fresh monitors in this session: `bmrzy93bu` (cohort + PID death, script at this session's `scratchpad/watch_82.sh`) and `b1h3bcrgz` (log signals, filter widened to include `Duplicate check`).
+
+- **bugs.md #94 (Blocker) — `9f6325a`.** Found in the 21:16 restart log, in four lines that look like routine housekeeping: `Duplicate check: Already applied to Reddit / Akuity / ClickHouse / Staff SRE. Skipping.` — all four of which the same day's log shows *failing*. `SaveApplication` ended with `RecordApplicationInDB`, so the `applied_jobs` row was written at **document generation**, minutes before the first submit click and regardless of outcome. ClickHouse is the clean case: dedup row timestamped `21:08:15.789`, the exact second its docs were saved, killed at 21:16 mid-attempt-3, never submitted. Because three separate mechanisms return the funnel row to `DISCOVERED` (the #55 reaper, #85's duplicate-path reset, requeue without `-clear-dedup`), such a job is loaded into **every** subsequent run, skipped in milliseconds, reset, and re-loaded — queued forever, never progressing, reading as `DISCOVERED` the whole time. **Silently unreachable rather than visibly failed.** Measured live: **7 of the 82 cohort, 66 rows DB-wide.** Fix: `SaveApplication` keeps the documents folder but writes no dedup row; `cmd/agent` writes it on the confirmed-submission branch only; `RecordApplicationInDB` is `ON CONFLICT DO NOTHING` because #89's re-check can legitimately confirm one URL twice.
+  - **This is the write-side of #53.** #53 corrected the *dashboard* to count `job_funnel.status='APPLIED'`; the bad write was never fixed and `HasApplied` still trusted it. `job_funnel` has **never** held a single `APPLIED` row across 3,884 rows, while `applied_jobs` held 261.
+  - **Two existing tests asserted the old behaviour and were deliberately inverted**, reasoning written into each test body so they read as corrections (the #83 precedent). All three new/changed tests verified failing against the old code before the fix was kept — done by temporarily restoring the old line, not by inspection.
+  - **Method note, the inverse of the standing one.** The recurring warning here is *an absent signal is not evidence of an absent event* (#77, #84, #81). This was the mirror image: **a present, benign-looking signal is not evidence of a benign event.** `Duplicate check: Already applied` is exactly what correct dedup looks like; the defect was visible only in the conjunction with a company name the log had shown failing an hour earlier.
+  - **Operational cleanup, scoped deliberately.** Cleared the dedup rows for the 7 stuck cohort jobs — safe to *assert*, not assume: all 7 timestamps fall inside the current log window, which contains **zero** `Submission confirmed` lines. **Did not clear the remaining DB-wide rows** — their timestamps predate the log, so there is no positive evidence either way, and re-applying to an employer who may already hold an application is outward-facing and the user's call. Left open for them rather than silently resolved in either direction.
+
+### Investigated and dismissed
+
+- **`Location set to` appears only 2× today against `Country set to` 13×.** Looked like location was silently failing on Greenhouse. It is not: `candidate-location` and `country` appear in **no** recent `still invalid:` list, and the only two `left the control empty` hits for them are at 15:39/15:49 — *before* #78/#79 shipped at ~15:52. The forms since simply do not flag location as outstanding. Benign absence; not filed.
+
 ## Run restarted onto the fixes
 
 Killed PID `3755906`, confirmed dead, confirmed zero other agent binaries running. Audited the cohort rather than blanket-resetting: of 7 `FAILED_SUBMIT`, 5 are the known-dead postings (Netcraft, NABIS, Postscript, Sphinx Defense, chownow) — left untouched. Requeued exactly **Reddit** (#70's victim) and **Zimperium** (#71's victim), both with `-clear-dedup`, or `HasApplied` would have silently skipped the retry.
@@ -221,14 +237,19 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 **Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-### Live state (accurate as of 2026-07-25 21:16)
+### Live state (accurate as of 2026-07-25 21:30)
 
-- **Agent PID `3978328`** (`/tmp/career_agent_bin_verify83c`), built from HEAD after improvements #32/#33. Startup log confirms `Security-code retrieval enabled (IMAP)` and `loaded 67 matching job(s)`.
+- **Agent PID `3978328`** (`/tmp/career_agent_bin_verify83c`), built from HEAD **before** #94 — it still writes the dedup row at document generation. Startup log confirms `Security-code retrieval enabled (IMAP)` and `loaded 67 matching job(s)`. Currently working **Stack AV** (Greenhouse, score 80), attempt-2 inference started 21:28:20.
+- **#94 is committed but NOT running.** Restart is batched deliberately rather than taken immediately: Stack AV is mid-inference, and #94's harm is *retroactive* (rows already written) rather than in-flight — the cleanup SQL already cleared the 7 that mattered. Restart at the next natural break and the new binary stops creating them. **On that restart, re-clear any dedup row written by this binary since 21:16.**
 - **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `bx3r0ftfc` — cohort status + PID death. Script: `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
-  - `b9yjeh7pw` — `tail -F career_agent.log` filtered to outcome/failure/diagnostic signatures.
+  - `bmrzy93bu` — cohort status + PID death. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `b1h3bcrgz` — `tail -F career_agent.log` filtered to outcome/failure/diagnostic signatures, **plus `Duplicate check`** (added after #94 — that line was not previously monitored, which is why the defect survived so long).
 - **Cohort:** `DISCOVERED=66 FAILED_SUBMIT=9 PROCESSING=1 SKIPPED=6`. **`MANUAL_REQUIRED` is 0** — every previously-stuck job was unblocked by the user's config and requeued.
-- **Still 0 confirmed `APPLIED`.** That remains the open question of the parent journal.
+- **Still 0 confirmed `APPLIED`.** That remains the open question of the parent journal. `job_funnel` has never held an `APPLIED` row at all (#94).
+
+### Open question for the user (not blocking, do not decide unilaterally)
+
+**~59 remaining DB-wide `applied_jobs` rows predate the current log**, on jobs sitting in `DISCOVERED`. Under #94 they are almost certainly bogus (documents generated, never submitted), and clearing them would return a large block of the ~3,100-job backlog to circulation. But there is **no positive evidence** either way for those specific rows, and clearing one where an application genuinely landed files a duplicate with a real employer. Deliberately left for the user. Same reasoning as #82 and #88: a wrong outward-facing action is worse than an omission.
 
 ### What to watch for
 
