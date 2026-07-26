@@ -45,6 +45,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 92 | [Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing](#92-checkbox-group-ids-contain-brackets-which-are-css-attribute-syntax-so-they-resolved-to-nothing) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "input#question_8242451101[]_54236360101" failed: selector matched no element (tried 1 form(s))`. Greenhouse names checkbox-group controls with a literal `[]` in the id; `#question_...[]_...` is not a valid CSS id selector because the brackets read as attribute syntax. **The same class as #73** (leading digits), and #73's own attribute-form fallback was blocked here because `splitTagID` explicitly refused any id containing brackets — note `tried 1 form(s)`, versus the 3 an eligible selector gets |
+| 91 | [#90's single-option rule could never fire, because typing filters the sole option out](#91-90s-single-option-rule-could-never-fire-because-typing-filters-the-sole-option-out) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in #90's own fix, caught on the very next run.** Sporty Group's `GDPR Acknowledgement*` still reported `left the control empty` with #90 shipped. #90 takes the sole option when `len(options) == 1` — but `setComboboxValue` types the model's proposed value *first*, and typing "Yes" into a widget whose only entry is "Acknowledge/Confirm" filters the list to **zero**. So the count was 0, never 1, and the rule could not fire for precisely the case it was written for |
 | 90 | [A required control with exactly one option was refused, sending a job to manual review one click from completion](#90-a-required-control-with-exactly-one-option-was-refused-sending-a-job-to-manual-review-one-click-from-completion) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Sporty Group (Greenhouse, score **90**) got **10 of its 11 invalid fields satisfied** — invalid payload collapsed 6389 → 610 chars, including 3 committed autocompletes, a GDPR checkbox and a checkbox-group entry. The sole holdout was `GDPR Acknowledgement*`, a combobox offering **exactly one option: "Acknowledge/Confirm"**. The model proposed a differently-worded affirmative, so #79's containment check matched nothing and selected nothing — correct caution where several options exist, over-conservative where there is only one and therefore no wrong choice to make |
 | 89 | [A late-rendering confirmation page is missed, so a successful submit is retried — filing duplicates](#89-a-late-rendering-confirmation-page-is-missed-so-a-successful-submit-is-retried--filing-duplicates) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Surfaced by Orkes routing to `MANUAL_REQUIRED` via #83 with a **43,411-char** payload — which only happens when narrowing finds **nothing flagged invalid** and falls back to the whole document. Combined with attempt 2 having applied both fixes, the likeliest reading is that the submit **succeeded** and the page became a confirmation page with no form. Greenhouse replaces the form in place, so `currentURL == applyURL` and only a confirmation *phrase* can prove success — and if that page renders after the 10s networkidle wait, the check right after the click sees the old DOM and reports failure. **The loop then re-submits an application that already went through** |
 | 88 | [A required widget that cannot accept the configured value was written off as a submit failure](#88-a-required-widget-that-cannot-accept-the-configured-value-was-written-off-as-a-submit-failure) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Confirmed live on Nova (Lever): `Attempt 3: 1 fix(es) reported success but left the control empty ... input[data-qa='location-input']`. The detection and commit machinery worked exactly as designed — it correctly saw the field as unset and tried to commit — but **Lever's geocoder returns zero results** for `Macomb`, `Macomb Township` and `Macomb, MI`, while Greenhouse's resolves the same address. With no option to select, the required hidden `selectedLocation` can never be populated. Not an automation failure: the job is perfectly applicable by hand, yet it burned 3 attempts and landed in `FAILED_SUBMIT` |
@@ -125,6 +127,42 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 92. Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing (Resolved 2026-07-25)
+
+Observed live on Sporty Group:
+
+```
+Validation fix for "input#question_8242451101[]_54236360101" failed:
+  selector matched no element (tried 1 form(s) of "input#question_8242451101[]_54236360101")
+```
+
+Greenhouse names checkbox-group controls with a literal `[]` in the id — `question_8242451101[]_54236360101`. As a CSS selector, `#question_8242451101[]_54236360101` is not an id: the brackets read as attribute syntax, so it matches nothing. The `[id="question_8242451101[]_54236360101"]` attribute form resolves it perfectly.
+
+**This is the same class as #73** (a leading digit making `#430` invalid), and #73's own fix should have caught it — the attribute-form retry exists for exactly this. It did not, because `splitTagID` explicitly refused any id containing `[` or `]`. The `tried 1 form(s)` in the log is the tell: an eligible selector gets three.
+
+**Fix:** brackets no longer disqualify. Combinators and separators still do (`#`, `.`, `>`, `:`, `,`, whitespace) — those indicate a compound selector where rewriting the tail as a single id would change the meaning.
+
+**Tests:** `TestSplitTagID_AllowsBracketsSoCheckboxGroupIDsResolve`, `TestSplitTagID_StillRefusesCompoundSelectors`.
+
+### 91. #90's single-option rule could never fire, because typing filters the sole option out (Resolved 2026-07-25)
+
+**A defect in #90's own fix, caught on the very next run** — the same shape as #76 (a defect in #74) and #81 (a defect in #76's fallback).
+
+Sporty Group re-run with #90 shipped:
+
+```
+20:30:50 Attempt 2: 1 fix(es) reported success but left the control empty
+         (autocomplete/combobox suspected): input#question_7849575101
+```
+
+Unchanged. #90 selects the sole option when `len(options) == 1`, and probing had confirmed `GDPR Acknowledgement*` offers exactly one: `Acknowledge/Confirm`. But `setComboboxValue` **types the model's proposed value before reading the options**, and typing "Yes" into a widget whose only entry is "Acknowledge/Confirm" filters the list to **zero**. So the observed count was 0, never 1 — and the rule could not fire for precisely the case it was written for.
+
+I had verified the option list by clicking the control open with **no query typed**; the agent always types first. The probe and the code were doing different things, and the difference was the whole bug.
+
+**Fix:** when typing yields no options at all, clear the query and re-read. An empty query restores the unfiltered list, which is where the lone option lives.
+
+**Method note:** this is the third time a fix of mine has been inert for a reason only a live run exposed (#76, #81, #91). The pattern is consistent — the probe reproduces *my* mental model of the sequence, not the code's actual sequence. Probing is still what found each one; the lesson is to replicate the code path exactly, including the order of operations, rather than the outcome I expect it to reach.
 
 ### 90. A required control with exactly one option was refused, sending a job to manual review one click from completion (Resolved 2026-07-25)
 

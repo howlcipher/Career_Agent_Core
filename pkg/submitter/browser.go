@@ -1470,7 +1470,14 @@ func splitTagID(selector string) (tag, id string, ok bool) {
 		return "", "", false
 	}
 	tag, id = selector[:hash], selector[hash+1:]
-	if id == "" || strings.ContainsAny(id, "#.[]>:,= \t") {
+	// bugs.md #92: brackets are deliberately allowed here. Greenhouse names
+	// checkbox-group controls id="question_8242451101[]_54236360101", and
+	// "#question_...[]_..." is not a valid CSS id selector -- the brackets read
+	// as attribute syntax -- so the verbatim match fails and the attribute
+	// form [id="..."] is the only thing that resolves it. Combinators and
+	// separators still disqualify, since those mean a compound selector where
+	// rewriting the whole tail as one id would change the meaning.
+	if id == "" || strings.ContainsAny(id, "#.>:, \t") {
 		return "", "", false
 	}
 	for _, r := range tag {
@@ -1800,7 +1807,18 @@ func setComboboxValue(target fillTarget, el playwright.Locator, want string, mus
 			continue
 		}
 		waitForComboboxReady(el)
-		optID, optIndex, ok := pickComboboxOption(readComboboxOptions(el), want, mustContain)
+		opts := readComboboxOptions(el)
+		if len(opts) == 0 {
+			// bugs.md #91: typing a value the widget does not recognise filters
+			// its list to nothing, so #90's "exactly one option is
+			// unambiguous" rule could never fire for the case it was written
+			// for -- a lone "Acknowledge/Confirm" is filtered out by a typed
+			// "Yes". Clearing the query restores the unfiltered list.
+			_ = el.Fill("", playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+			waitForComboboxReady(el)
+			opts = readComboboxOptions(el)
+		}
+		optID, optIndex, ok := pickComboboxOption(opts, want, mustContain)
 		if !ok {
 			continue
 		}

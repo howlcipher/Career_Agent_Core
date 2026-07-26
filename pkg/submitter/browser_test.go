@@ -2230,3 +2230,28 @@ func TestPickComboboxOption_StillRefusesWhenSeveralOptionsAndNoneMatch(t *testin
 		t.Errorf("selected %q — with several options and no match, nothing should be chosen", id)
 	}
 }
+
+// bugs.md #92: Greenhouse names checkbox-group controls
+// id="question_8242451101[]_54236360101". "#question_...[]_..." is not a valid
+// CSS id selector — the brackets read as attribute syntax — so the verbatim
+// match fails and the attribute form is the only thing that resolves it.
+// Measured live: `selector matched no element (tried 1 form(s))`.
+func TestSplitTagID_AllowsBracketsSoCheckboxGroupIDsResolve(t *testing.T) {
+	tag, id, ok := splitTagID("input#question_8242451101[]_54236360101")
+	if !ok {
+		t.Fatal("a bracketed id must still yield an attribute-form retry")
+	}
+	if tag != "input" || id != "question_8242451101[]_54236360101" {
+		t.Errorf("got tag=%q id=%q", tag, id)
+	}
+}
+
+// Combinators and separators must still disqualify: those mean a compound
+// selector, where rewriting the tail as one id would change the meaning.
+func TestSplitTagID_StillRefusesCompoundSelectors(t *testing.T) {
+	for _, sel := range []string{"div.wrap #x", "input#a, input#b", "div#a > input", "input#a.cls", "input#a:checked"} {
+		if _, _, ok := splitTagID(sel); ok {
+			t.Errorf("splitTagID(%q) must refuse — rewriting it as one id changes the meaning", sel)
+		}
+	}
+}
