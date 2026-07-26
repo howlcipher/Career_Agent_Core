@@ -1379,6 +1379,19 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				return nil
 			}
 
+			// bugs.md #99: a submit that produced neither confirmation nor
+			// rejection, on a page carrying a live bot-protection widget, is a
+			// silently swallowed submission -- not a validation bounce. Reddit
+			// reached invalid fields: 0 and still went nowhere, and no Greenhouse
+			// email arrived, so the request never reached the server. Report the
+			// real cause instead of spending another ~15-minute model call on a
+			// form that has nothing left to fix.
+			if reason == reasonNoOutcomeInBudget {
+				if hits := detectBotProtectionOnPage(page); len(hits) > 0 {
+					return fmt.Errorf("%w at %s (submit produced no outcome; %s present)",
+						ErrCaptchaBlocked, ExtractDomain(applyURL), strings.Join(hits, ", "))
+				}
+			}
 			log.Printf("[Auto-Submit] Submission failed validation (%s). Retrying...", reason)
 		} else {
 			return nil
@@ -2047,6 +2060,51 @@ func openAndReadComboboxOptions(el playwright.Locator) []string {
 		Timeout: playwright.Float(fillActionTimeoutMs),
 	})
 	return opts
+}
+
+// botProtectionAnchorJS reports whether the page embeds a live bot-protection
+// widget. Deliberately narrow: it matches the *iframe src* of the known
+// providers, not page wording.
+//
+// bugs.md #45/#46 are the reason for that narrowness. Both were CAPTCHA
+// false positives from phrase matching, and between them they killed the large
+// majority of Greenhouse/Lever/Ashby/Workable jobs before they ever reached
+// fit-scoring. A false positive here is far more expensive than a false
+// negative, so this only reports what it can point at.
+// botProtectionSrcPattern is the single source of truth for which iframe
+// sources count as a bot-protection widget. It is interpolated into the
+// browser-side check below AND compiled in Go for the tests, so the test
+// exercises the real pattern rather than a copy of it that can drift.
+const botProtectionSrcPattern = `(recaptcha\.net|google\.com)/recaptcha/|hcaptcha\.com/captcha|challenges\.cloudflare\.com|client-api\.arkoselabs|captcha\.datadome`
+
+var botProtectionAnchorJS = fmt.Sprintf(`() => {
+  const re = new RegExp(%q, 'i');
+  const hits = [];
+  document.querySelectorAll('iframe').forEach(f => {
+    const src = f.src || '';
+    if (re.test(src)) hits.push(src.split('?')[0]);
+  });
+  return hits;
+}`, botProtectionSrcPattern)
+
+// detectBotProtectionOnPage returns the provider endpoints of any live
+// bot-protection widget embedded in the page.
+func detectBotProtectionOnPage(page playwright.Page) []string {
+	got, err := page.Evaluate(botProtectionAnchorJS, nil)
+	if err != nil {
+		return nil
+	}
+	raw, ok := got.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func isComboboxLocator(el playwright.Locator) (bool, error) {

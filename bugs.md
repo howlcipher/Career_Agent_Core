@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 99 | [A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce](#99-a-submit-silently-swallowed-by-recaptcha-was-reported-as-an-ordinary-validation-bounce) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Reddit reached **`invalid fields: 0`** — the form fully satisfied for the first time — and the submit still produced no confirmation and no rejection. **No Greenhouse email arrived**, while ClickHouse's accepted submit produced one in the same second, so Reddit's request never reached the server. Read-only probe: the submit control is **clean** (one match, visible, enabled, in-form, unobstructed — ruling out #87's decoy and #34's overlay) and the page embeds **reCAPTCHA Enterprise**. Score-based invisible reCAPTCHA silently discards a headless submission. The cost was ~30 min of model calls per attempt on a form with nothing left to fix, ending in a misleading manual-review reason |
 | 98 | [The model was never shown a dropdown's permitted values, so it guessed the wording](#98-the-model-was-never-shown-a-dropdowns-permitted-values-so-it-guessed-the-wording) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The last-mile blocker, caught by #97's diagnostic in one cycle.** Reddit reached a single remaining invalid field and proposed `"I am not a protected veteran"` on **two consecutive attempts** for a widget offering *No military service* / *I don't wish to answer* — a phrasing that filters the option list to **zero**. Probe: none of `#434`'s option strings exist in the page HTML until the widget is opened, and Greenhouse forms carry **zero native `<select>` elements**, so no option text is ever in the served document the prompt is built from. The model was asked to supply a value for a control whose permitted values it is never shown. Residual measured since #91/#92: **14 commits succeeded, 2 fields failed** — and both failures are exactly this unusual-wording case |
 | 97 | [An uncommittable field named the control but never the value that was tried](#97-an-uncommittable-field-named-the-control-but-never-the-value-that-was-tried) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Reddit reached **one remaining invalid field** — payload 7,212 → 497 chars, 13 fields down to 1 — and then failed twice on `#434` (veteran status) with the log saying only that the control was left empty. A probe shows `#434` is genuinely selectable (typing `I don't wish to answer` filters its 9 options to exactly that entry), so this is a **value mismatch, not a broken mechanism** — but the log could not distinguish those, and they need opposite fixes. Same class as #80/#96, one level down |
 | 96 | [Nothing recorded what a submit verdict was actually decided on](#96-nothing-recorded-what-a-submit-verdict-was-actually-decided-on) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Observability, filed the moment its absence cost a day. #95 was findable only by cross-referencing wall-clock seconds between unrelated log lines, because the sole record of a judged submit was the word "failed" — nothing said how long it waited, whether the URL moved, how many fields came back flagged, or how large the returned page was. Same class as #80, and #80 paid for itself within one cycle |
@@ -139,6 +140,43 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 99. A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce (Resolved 2026-07-25)
+
+**Found by an outcome that could not be either of the two things the code knew about.** With #98 shipped, Reddit's form was fully satisfied for the first time in the entire effort:
+
+```
+23:19:28 Attempt 2 committed 9 autocomplete selection(s): 430, 431, 432, 433, 434, 436, question_67942418, question_67942419, question_67942420
+23:19:28 Attempt 2 applied 13/13 validation fix(es)
+23:19:43 Submit verdict after 15.1s: no confirmation and no rejection evidence within the settle budget (url moved: false, invalid fields: 0, page 169636 chars)
+```
+
+`invalid fields: 0` with no confirmation and no rejection, after a full 15s wait. **#95's budget-exhaustion branch existed precisely to represent this state honestly instead of guessing**, and #96's line is what made it legible.
+
+**The inbox discriminated the two cases.** ClickHouse's accepted submit produced a Greenhouse security-code email *in the same second*; Reddit's produced **nothing**. So Reddit's request never reached the server, where ClickHouse's plainly did.
+
+**Read-only probe of the submit control** (never clicking it — that files a real application):
+
+| check | result |
+| --- | --- |
+| matches for `button[type='submit'], input[type='submit']` | **1** |
+| identity | `BUTTON type=submit "Submit application"`, 190×40 |
+| visible / enabled / inside a `<form>` | yes / yes / yes |
+| `document.elementFromPoint` at its centre | **the button itself — nothing covering it** |
+
+That rules out **#87** (a decoy control winning precedence) and **#34** (an overlay intercepting the click). What the probe did find:
+
+```
+https://www.recaptcha.net/recaptcha/enterprise/anchor?ar=1&k=6LfmcbcpAAAAAChNTbhUShzUOAMj_wY9LQIvLFX0
+```
+
+**reCAPTCHA Enterprise, score-based and invisible** — no `.g-recaptcha` marker, just the anchor frame. A headless Chromium scores badly and the submission is discarded client-side: no error, no navigation, no request, no email. Every observation follows from that, including why ClickHouse (no such widget) went through.
+
+**Fix, and what it deliberately is not.** Solving CAPTCHAs is `improvements_paywall.md` #17 — paid, user-gated, and out of scope. What is free is *reporting the truth*: when a submit exhausts the settle budget with no outcome **and** the page carries a live bot-protection widget, that is `ErrCaptchaBlocked` (already wired to `BLOCKED_CAPTCHA`), not a validation bounce. Previously this burned another ~15-minute model call, then fell back to the whole form and landed in manual review via #83's size ceiling — with a reason that named the wrong cause entirely.
+
+**The detection is narrow on purpose, and the narrowness is the point.** It matches the **iframe `src`** of known providers, never page wording. Bugs **#45/#46** were CAPTCHA false positives from phrase matching, and between them they killed the large majority of Greenhouse/Lever/Ashby/Workable jobs before they ever reached fit-scoring. A false positive here costs a real application, so this only reports what it can point at, and it only runs *after* a submit has already produced no outcome — it can never pre-empt a working job. The provider pattern is a single Go constant interpolated into the browser check **and** compiled in the test, so the test exercises the real pattern rather than a copy that can drift. 9 sub-cases, including a `google.com` URL that is not reCAPTCHA.
+
+**Consequence worth stating plainly:** Reddit is not completable by this pipeline for free. It is now correctly labelled `BLOCKED_CAPTCHA` in ~15 seconds instead of ~30 minutes.
 
 ### 98. The model was never shown a dropdown's permitted values, so it guessed the wording (Resolved 2026-07-25)
 

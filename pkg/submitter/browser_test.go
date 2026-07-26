@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -2524,5 +2525,47 @@ func TestEnumerateComboboxOptions_EmptyWhenNothingToReport(t *testing.T) {
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
 	if got := enumerateComboboxOptions(pageTarget{page: page}, []string{"434"}); got != "" {
 		t.Errorf("a combobox with no readable options must be skipped, got:\n%s", got)
+	}
+}
+
+// bugs.md #99: Reddit's form reached invalid fields: 0 -- fully satisfied for
+// the first time -- and the submit still produced no confirmation and no
+// rejection. No Greenhouse security-code email arrived either, while
+// ClickHouse's accepted submit produced one within the same second, so
+// Reddit's request never reached the server. A read-only probe found the
+// submit control clean (single match, visible, enabled, unobstructed) and
+// reCAPTCHA Enterprise embedded in the page.
+func TestBotProtectionSrcPattern_MatchesKnownProvidersOnly(t *testing.T) {
+	re, err := regexp.Compile("(?i)" + botProtectionSrcPattern)
+	if err != nil {
+		t.Fatalf("botProtectionSrcPattern does not compile: %v", err)
+	}
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"reddit's actual recaptcha enterprise anchor",
+			"https://www.recaptcha.net/recaptcha/enterprise/anchor?ar=1&k=6LfmcbcpAAAA", true},
+		{"google-hosted recaptcha", "https://www.google.com/recaptcha/api2/anchor?k=x", true},
+		{"hcaptcha", "https://newassets.hcaptcha.com/captcha/v1/x/static/hcaptcha.html", true},
+		{"cloudflare turnstile", "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/x", true},
+		// The false-positive guard, and the reason this pattern matches iframe
+		// src rather than page wording. bugs.md #45/#46 were CAPTCHA
+		// mis-detections from phrase matching that between them killed the
+		// large majority of Greenhouse/Lever/Ashby/Workable jobs before they
+		// ever reached fit-scoring. A false positive here costs a real
+		// application, so unrelated frames must never match.
+		{"an ordinary tag-manager frame", "https://www.googletagmanager.com/ns.html?id=GTM-X", false},
+		{"a youtube embed", "https://www.youtube.com/embed/abc123", false},
+		{"greenhouse's own frame", "https://job-boards.greenhouse.io/embed/job_app?token=1", false},
+		{"a google domain that is not recaptcha", "https://www.google.com/maps/embed?pb=x", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := re.MatchString(tc.src); got != tc.want {
+				t.Errorf("match(%s) = %v, want %v", tc.src, got, tc.want)
+			}
+		})
 	}
 }
