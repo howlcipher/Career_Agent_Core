@@ -111,6 +111,29 @@ Context was cleared; re-oriented from this journal. Verified against the live tr
   - **Watch out: the stored URL is `https://`, and the log prints `http://`.** A scoped `UPDATE`/`DELETE` written from the log's spelling matched **zero rows** and silently did nothing. Caught it because the verification `SELECT` in the same statement returned no row — worth keeping that pattern, since a requeue that quietly no-ops looks identical to one that worked.
   - Log monitor replaced (`b1h3bcrgz` → `bkmg640jz`) to add `Submit verdict after` and the dedup-record failure line. #77's lesson: a diagnostic missing from the filter is invisible.
 
+### Confirmed structural finding, implementation deliberately held (2026-07-25 22:27)
+
+**The model cannot see any combobox's permitted values.** Probed Reddit's form for four distinctive strings from `#434`'s option list:
+
+| string | in page HTML before opening | after opening |
+| --- | --- | --- |
+| `Other Protected Veteran` | **false** | true |
+| `Vietnam Era Veteran` | **false** | true |
+| `No military service` | **false** | true |
+| `I don't wish to answer` | **false** | true |
+
+Page HTML grows 144,506 → 146,812 chars purely from opening one widget, and the form contains **zero native `<select>` elements** — Greenhouse is react-select throughout, so no `<option>` text is ever in the served document.
+
+The narrowed validation payload is built from page HTML. So the model is asked to supply a value for a control **whose permitted values are nowhere in what it is given**, and can only guess the wording. That is the structural root cause of #97's value mismatch, and it explains the shape of the whole day: Yes/No fields committed fine because they are trivially guessable, while `#434`'s unusual taxonomy did not.
+
+**Deliberately not implemented yet**, for the reason recorded in #97: Reddit's next attempt will print `#434 (tried "…")`, and that value decides which fix is right.
+- Wrong phrasing → this finding is the blocker, and the fix is to put the real options in front of the model.
+- Correct phrasing (`I don't wish to answer`) → the commit mechanism is broken for this widget after all, this finding is true but *not* the blocker, and the probe replicated the wrong sequence again (#76/#81/#91's recurring trap).
+
+Two candidate fixes, to be chosen on that evidence rather than now:
+- **(a)** enumerate every combobox's options into the narrowed payload up front — thorough, but requires opening each widget before building it;
+- **(b)** on a failed containment match, capture the widget's real options and inject them into the *next* attempt's context — smaller, cheaper, and closes the loop exactly where it breaks.
+
 ### Investigated and dismissed
 
 - **`Location set to` appears only 2× today against `Country set to` 13×.** Looked like location was silently failing on Greenhouse. It is not: `candidate-location` and `country` appear in **no** recent `still invalid:` list, and the only two `left the control empty` hits for them are at 15:39/15:49 — *before* #78/#79 shipped at ~15:52. The forms since simply do not flag location as outstanding. Benign absence; not filed.
