@@ -183,6 +183,23 @@ Attempt 3 then found nothing invalid, fell back to the whole 54,190-char form, a
   - **Corrected headline: the pipeline submitted FOUR applications today** (Surt AI, ClickHouse ×2, Akuity) **and recorded every one as a failure.** "0 confirmed `APPLIED`" was never a submission problem.
 - **Restarted (23rd) at 00:14 for #99/#100/#101/#102**, promptly rather than at a natural break: until #102 runs, every Greenhouse job submits up to **three** times, each accepted, each generating a pending application — #89's duplicate risk actually materialising rather than theorised. ClickHouse alone accumulated three tonight. PID `4052202` (`verify84d`), 63 queued, all nine of this session's fixes verified present by `strings`. **ClickHouse and Akuity requeued** with dedup cleared so #102 + #32 can *complete* their pending applications rather than leave them stranded. Monitor `bx8k9li2z`.
 
+- **bugs.md #103 (Blocker) — `fcce44a`. A defect in my own #98 fix, caught by #100's diagnostic within one cycle of #100 shipping.** The first job under the new binary printed:
+
+```
+00:31:55 Rejected despite being set last attempt:
+  question_67179376 = "react-select-question_67179376-option-0|Yes";
+  question_67179377 = "react-select-question_67179377-option-1|No";
+  question_67179378 = "react-select-question_67179378-option-0|I agree"
+```
+
+  The model was answering with **react-select's internal DOM option ids**. Cause: `readComboboxOptions` deliberately returns `"id|label"` so `pickComboboxOption` can click the right entry — that is how #79's never-commit-the-wrong-entry guarantee works — and #98 rendered that raw into the prompt. So **#98, the fix whose entire purpose was to stop the model guessing wording it had never been shown, was showing it wording no human could choose**, on every combobox, from the moment it shipped. `optionLabel` now strips the id; bare entries (Lever's shape) pass through and a label containing a pipe keeps everything after the *first* separator. 2 tests, including an end-to-end assertion that no `react-select-`/`option-N` string can reach the generated block.
+  - **Invisible to #97**, which names values only for fields that *fail* to land — these committed, because `setComboboxValue` types the bogus value, matches nothing, and #91's clear-and-re-read then commits *something*. Only **#100**, written for the "reported as set, rejected anyway" case and shipped **before its own root cause was known**, could surface it. Fourth consecutive observability fix to pay for itself within one cycle (#80, #96, #97, #100).
+- **Restarted (24th) at 00:35 for #103.** PID `4059119` (`verify84e`), 63 queued. Restarted immediately rather than letting the run continue: #98 was actively feeding garbage to every combobox, so leaving it running was worse than losing the in-flight job. Staff SRE requeued with dedup cleared. Monitor `b5o4vor1f`.
+
+### The session's dominant pattern, stated plainly
+
+Three of this session's fixes were defects in *earlier fixes from the same session*: **#95 → #102**, **#98 → #103**, and #96/#97/#100 were each written because the previous diagnostic could not see the next failure. The recurring cause is always the same — **a signal that looks like evidence is really residue of the previous step** (#76's `el.value`, #81's `[data-value]`, #102's `aria-invalid`, #103's `id|label`). The defence that has actually worked is not more care up front; it is shipping the diagnostic *before* the root cause is known, which has now paid off four times in a row within a single cycle each.
+
 ### Investigated and dismissed
 
 - **`Location set to` appears only 2× today against `Country set to` 13×.** Looked like location was silently failing on Greenhouse. It is not: `candidate-location` and `country` appear in **no** recent `still invalid:` list, and the only two `left the control empty` hits for them are at 15:39/15:49 — *before* #78/#79 shipped at ~15:52. The forms since simply do not flag location as outstanding. Benign absence; not filed.
@@ -326,11 +343,11 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 **Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-### Live state (accurate as of 2026-07-26 00:15)
+### Live state (accurate as of 2026-07-26 00:36)
 
-- **Agent PID `4052202`** (`/tmp/career_agent_bin_verify84d`), built from HEAD carrying **#94-#102** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
+- **Agent PID `4059119`** (`/tmp/career_agent_bin_verify84e`), built from HEAD carrying **#94-#103** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
 - **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `bx8k9li2z` — cohort status + PID death, pointed at `4052202`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `b5o4vor1f` — cohort status + PID death, pointed at `4059119`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
   - `bkmg640jz` — `tail -F career_agent.log`, filter now including `Submit verdict after` (#96) and the dedup-record failure line.
 - **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV** (#83's size ceiling — a correct route, not a failure). Reddit was requeued out of it.
 - **Still 0 confirmed `APPLIED`**, but the gap is now one field wide on the best job in the cohort. `job_funnel` has never held an `APPLIED` row at all (#94).
