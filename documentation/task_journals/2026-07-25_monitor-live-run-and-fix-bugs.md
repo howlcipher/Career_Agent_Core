@@ -304,6 +304,22 @@ Measured from the log, not estimated. **Seven** jobs reached `invalid fields: 0`
 
 **What follows.** Running the remaining `DISCOVERED` jobs will mostly generate accurate `BLOCKED_CAPTCHA` labels: useful for measuring the true rate, but it will not produce applications. The only two paths that can are (a) ClickHouse and Akuity completing through #102/#32's code-gate path, still untested end to end, and (b) a paid solver (`improvements_paywall.md` #17), which is outside this session's constraint and is now **the deciding factor rather than a nice-to-have**. That call is the user's and is worth making before more compute goes into this cohort.
 
+### Lever escalates from suspect to evidenced: 2 of 2 blocked (2026-07-26 05:18)
+
+Zimperium — one of the three jobs that ended earlier today with a bare `playwright: timeout: Timeout 30000ms exceeded` and **no cause at all** — now reports:
+
+```
+05:17:50 Location set to "Macomb, Michigan" on the initial fill        <- improvements #33 working on Lever
+05:18:20 Zimperium is behind a bot-protection challenge — marked BLOCKED_CAPTCHA
+         (submit click did not land; https://newassets.hcaptcha.com/... present)
+```
+
+**#101 retroactively explains one of the day's mystery timeouts**, which is what it was written to do.
+
+**The Lever risk is no longer a hypothesis.** Earlier I deliberately refused to conclude that Lever was broadly blocked from widget presence alone — correctly, since Akuity carries reCAPTCHA and submits fine. That caution is now resolved by outcomes rather than presence: **both Lever jobs attempted (DexCare, Zimperium) were blocked**, on top of all four additional Lever boards sampled carrying hCaptcha. **Lever is 39 of the 82 cohort jobs.**
+
+Seven boards now confirmed blocked. Combined with the 6-of-7 completed-fill figure above, the projection for the remaining queue is that most of it is unreachable without a paid solver.
+
 ### Where the ceiling actually is now
 
 The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
