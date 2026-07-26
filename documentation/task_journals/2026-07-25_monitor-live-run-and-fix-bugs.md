@@ -236,6 +236,19 @@ Orkes and AlphaSense are the cleanest cases yet: **`invalid fields: 0`** — the
 
 **Checked and dismissed:** the cohort monitor briefly reported `BLOCKED_CAPTCHA=2` after having reported `4`, which would mean rows leaving that status — nothing in the agent does that. Verified directly: **one** agent process (`4059119`), and the DB consistently holds 4, on exactly the four boards above. A transient read in the polling script, not a status regression, and not the orphan-process trap.
 
+- **bugs.md #105 (Major) — `a8b77dd`.** The most expensive failure mode in the pipeline, recurring after #83 was meant to have closed it. `Remote` sent a **30,477-char** payload — comfortably inside #83's 40,000 ceiling — and burned the **entire 45-minute Ollama timeout** (01:46:03 → 02:31:03) before failing. #83 derived its ceiling from *reading* cost (~17.5 chars/s), which accounts for the prompt going in but not the answers coming out, and `SolveValidationErrors` must generate a value for **every** rejected field. Three live points separate on field count, not size: ClickHouse 11,140/3 → ~7 min ✓; Reddit 18,639/13 → ~15 min ✓; **Remote 30,477/34 → 45 min ✗**. Remote's payload is 1.6× Reddit's, its field count 2.6×, and it did not merely take longer — it never finished. `exceedsRetryTimeBudget` adds a **20-field** ceiling and the character ceiling drops **40,000 → 28,000**, below the observed failure. 3 new tests, one pinning the ceiling under the measured value so a future widening has to argue with the data.
+  - **Retry path only.** `ExtractFormMapping` is not answering a list of rejected fields, so the field-count reasoning does not transfer; tightening it without evidence would refuse forms that currently work.
+- **Restarted (25th) at 02:37 for #104/#105.** PID `4092461` (`verify84f`), 59 queued, key strings verified by `strings`. Sporty Group had only just begun scoring, so almost nothing was lost. **Remote requeued** with dedup cleared — it lost 45 minutes through no fault of its own. Monitor `bvb6n83wo`.
+
+### Where the ceiling actually is now
+
+The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
+
+1. **Bot protection** — 4 boards confirmed blocked across both platforms; needs the user's decision on a paid solver (`improvements_paywall.md` #17), which is out of scope here.
+2. **Local model throughput on large forms** — #105 now fails fast into `MANUAL_REQUIRED` with documents preserved, rather than burning 45 minutes to preserve nothing.
+
+Further fill-path engineering has diminishing value while those two stand.
+
 ### The session's dominant pattern, stated plainly
 
 Four of this session's fixes were defects in *earlier fixes from the same session*: **#95 → #102**, **#98 → #103**, **#104 → its own follow-up**, and #96/#97/#100 were each written because the previous diagnostic could not see the next failure. The recurring cause is always the same — **a signal that looks like evidence is really residue of the previous step** (#76's `el.value`, #81's `[data-value]`, #102's `aria-invalid`, #103's `id|label`). The defence that has actually worked is not more care up front; it is shipping the diagnostic *before* the root cause is known, which has now paid off four times in a row within a single cycle each.
@@ -383,11 +396,11 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 **Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-### Live state (accurate as of 2026-07-26 00:36)
+### Live state (accurate as of 2026-07-26 02:38)
 
-- **Agent PID `4059119`** (`/tmp/career_agent_bin_verify84e`), built from HEAD carrying **#94-#103** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
+- **Agent PID `4092461`** (`/tmp/career_agent_bin_verify84f`), built from HEAD carrying **#94-#105** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
 - **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `b5o4vor1f` — cohort status + PID death, pointed at `4059119`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `bvb6n83wo` — cohort status + PID death, pointed at `4092461`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
   - `bkmg640jz` — `tail -F career_agent.log`, filter now including `Submit verdict after` (#96) and the dedup-record failure line.
 - **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV** (#83's size ceiling — a correct route, not a failure). Reddit was requeued out of it.
 - **Still 0 confirmed `APPLIED`**, but the gap is now one field wide on the best job in the cohort. `job_funnel` has never held an `APPLIED` row at all (#94).
