@@ -256,6 +256,18 @@ Orkes and AlphaSense are the cleanest cases yet: **`invalid fields: 0`** — the
   - **#110:** `pickComboboxOption` matched by raw bidirectional `strings.Contains`. Normalisation strips punctuation but not word boundaries, so **a short label hides inside longer prose**: `"no"` sits inside `"prefer **no**t to say"`, and asking for **"Prefer not to say" selected the box labelled "No"**. `"male"` inside `"female"` is identical in shape. **On an EEO question that converts a declined answer into a substantive one submitted under the user's name** — the exact failure #79 exists to prevent, inside the function that enforces it. `optionTextMatches` now compares **whole words in sequence**; every match the old rule was written for survives with a test each, and **all six pre-existing `pickComboboxOption` tests pass unchanged**, which is the evidence the looseness was never needed.
 - **Restarted (27th) at 04:09 for #109/#110, immediately rather than at a break.** #110 could commit a materially wrong EEO answer on a real application — outward-facing harm, the standard that justified the urgent restarts for #82 and #102. PID `4125158` (`verify84h`), 58 queued; verified the loose substring matcher is gone from the source and the group-refusal string is in the binary. Sporty Group and Ethos requeued. Monitor `bjejz88wb`.
 
+### #108 confirmed live, and Ethos is a genuinely separate category (2026-07-26 04:48)
+
+```
+04:48:49 Submit verdict after 15.3s: no confirmation and no rejection ... invalid fields: 0
+04:48:50 Ethos needs manual completion — queued for manual submission:
+         form is fully filled but the submit produced no confirmation and no rejection
+```
+
+The accurate reason replaces `form content exceeds the local model's context window`, routed via #84's catch-all with documents preserved — and it returned in **one second** instead of spending a third ~10-minute model call on a form with nothing left to fix.
+
+**Ethos is the one job that does not fit either explanation.** Fully filled (`invalid fields: 0`), **no** bot-protection frame on the page, **no** Greenhouse email, and the submit goes nowhere. Distinct from the five captcha-blocked boards and from the accepted-awaiting-code pair. **Its cause is still unknown** — #108 gives it a name and a countable sentinel so a second instance is recognisable, which is the whole point of shipping the diagnostic before the explanation.
+
 ### DEFINITIVE: Sporty Group reached a complete form and was stopped only by reCAPTCHA (2026-07-26 04:32)
 
 The single clearest result of the session, on the job that has been its best diagnostic all night:
