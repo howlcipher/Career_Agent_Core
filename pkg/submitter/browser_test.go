@@ -2764,3 +2764,48 @@ func TestSubmitOutcomeSettleFloor_LeavesRoomForALateChallenge(t *testing.T) {
 		t.Errorf("settle floor %v must stay below the budget %v", submitOutcomeSettleFloor, submitOutcomeBudget)
 	}
 }
+
+// bugs.md #103: #100's diagnostic caught this within one cycle of shipping.
+// readComboboxOptions returns "id|label" so pickComboboxOption can click by
+// id, and #98 put those raw strings in front of the model, which faithfully
+// answered "react-select-question_67179376-option-0|Yes" -- an internal DOM id
+// no widget offers. Live evidence:
+//
+//	Rejected despite being set last attempt: question_67179376 =
+//	"react-select-question_67179376-option-0|Yes"
+func TestOptionLabel_StripsTheInternalOptionID(t *testing.T) {
+	cases := map[string]string{
+		"react-select-question_67179376-option-0|Yes":     "Yes",
+		"react-select-question_67179377-option-1|No":      "No",
+		"react-select-question_67179378-option-0|I agree": "I agree",
+		// A label containing a pipe keeps everything after the FIRST separator.
+		"opt-3|Yes | No | Maybe": "Yes | No | Maybe",
+		// Already-bare labels pass through (Lever's shape).
+		"No military service": "No military service",
+		"":                    "",
+	}
+	for entry, want := range cases {
+		if got := optionLabel(entry); got != want {
+			t.Errorf("optionLabel(%q) = %q, want %q", entry, got, want)
+		}
+	}
+}
+
+// The end-to-end guarantee: no internal identifier may reach the prompt.
+func TestEnumerateComboboxOptions_NeverLeaksInternalIDsToTheModel(t *testing.T) {
+	loc := newComboboxProbeLocator(true, []string{
+		"react-select-question_67179376-option-0|Yes",
+		"react-select-question_67179376-option-1|No",
+	})
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	got := enumerateComboboxOptions(pageTarget{page: page}, []string{"question_67179376"})
+	if strings.Contains(got, "react-select-") || strings.Contains(got, "option-0") {
+		t.Errorf("option block leaked an internal id to the model:\n%s", got)
+	}
+	for _, want := range []string{`"Yes"`, `"No"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("option block missing the human-readable label %s; got:\n%s", want, got)
+		}
+	}
+}

@@ -2080,7 +2080,12 @@ func enumerateComboboxOptions(target fillTarget, selectors []string) string {
 		}
 		quoted := make([]string, 0, len(opts))
 		for _, o := range opts {
-			quoted = append(quoted, fmt.Sprintf("%q", o))
+			// bugs.md #103: readComboboxOptions returns "id|label" so
+			// pickComboboxOption can click by id. Showing that raw to the model
+			// made it answer with "react-select-question_67179376-option-0|Yes"
+			// -- an internal DOM id the widget does not offer. Only the label
+			// is a value a human could pick, so only the label goes in.
+			quoted = append(quoted, fmt.Sprintf("%q", optionLabel(o)))
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", sel, strings.Join(quoted, " | "))
 		shown++
@@ -2092,6 +2097,20 @@ func enumerateComboboxOptions(target fillTarget, selectors []string) string {
 		"These controls accept ONLY the values listed. Reply with one of these " +
 		"strings copied exactly, character for character. Any other wording " +
 		"selects nothing and leaves the field empty.\n" + b.String()
+}
+
+// optionLabel strips the "id|" prefix readComboboxOptions attaches to every
+// entry, leaving the human-readable text.
+//
+// bugs.md #103. The pairing exists so pickComboboxOption can click an option by
+// id, which is internal machinery; a value the model proposes has to be a
+// string a person could actually choose. Entries with no separator are already
+// bare labels and pass through unchanged.
+func optionLabel(entry string) string {
+	if i := strings.Index(entry, "|"); i >= 0 {
+		return strings.TrimSpace(entry[i+1:])
+	}
+	return strings.TrimSpace(entry)
 }
 
 // openAndReadComboboxOptions opens a combobox, reads its options, and closes

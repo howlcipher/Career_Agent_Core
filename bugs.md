@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 103 | [#98 showed the model react-select's internal option ids, and it answered with them](#103-98-showed-the-model-react-selects-internal-option-ids-and-it-answered-with-them) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #98 fix, caught by #100's diagnostic within one cycle of that diagnostic shipping.** `readComboboxOptions` returns `"id\|label"` so `pickComboboxOption` can click by id; #98 put those raw strings into the prompt, and the model faithfully answered `react-select-question_67179376-option-0\|Yes` — an internal DOM id no widget offers. Live: `Rejected despite being set last attempt: question_67179376 = "react-select-question_67179376-option-0\|Yes"`. So #98 has been feeding garbage to the model since it shipped, on every combobox |
 | 102 | [#95's early exit read stale invalid flags and called four accepted submissions failures](#102-95s-early-exit-read-stale-invalid-flags-and-called-four-accepted-submissions-failures) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #95 fix, and the biggest single misreading of the effort.** Greenhouse *accepts* a submission and issues an emailed security-code challenge within ~1s, then re-renders the challenge later while the previous attempt's `aria-invalid` markers are **still on the page**. #95's flagged-field early exit fired at 2s on those stale markers and called the accepted submission a validation failure. Proven by timestamps: the Akuity code email is stamped **23:40:07, between** its submit click (~23:40:06) and its verdict (23:40:08); ClickHouse's is stamped **00:05:34, the same second** as its submit. **Four applications reached Greenhouse today** (Surt AI, ClickHouse ×2, Akuity) and every one was recorded as a failure |
 | 101 | [A submit click that timed out reported nothing about what blocked it](#101-a-submit-click-that-timed-out-reported-nothing-about-what-blocked-it) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | **Three jobs ended the day this way** — Akuity, Nova and Zimperium — each with a bare `playwright: timeout: Timeout 30000ms exceeded` from the submit click and no indication of why the control was unactionable, all written off as generic `FAILED_SUBMIT`. A timeout says the click never landed; it says nothing about what stopped it. Now reads `elementFromPoint` at the control's centre — the same check that cleared Reddit's button in #99 — and names whatever covers it |
 | 100 | [A field that lands and is rejected anyway had no diagnostic at all](#100-a-field-that-lands-and-is-rejected-anyway-had-no-diagnostic-at-all) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Akuity logged `applied 7/7`, **no** not-landed line — so `verifyFixLanded` reported every control as set — and the **identical 7 fields** came back flagged. #97 names values only for fields that *fail* to land, so this opposite case had no diagnostic whatsoever and the loop could only re-guess. Probe ruled out the obvious causes: all 7 are plain required `INPUT`/`TEXTAREA`, single match, no `pattern`, and React genuinely *does* observe `Fill()` (`reactValue` matches the DOM). Fourth instance of the same lesson as #80/#96/#97 |
@@ -143,6 +144,31 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 103. #98 showed the model react-select's internal option ids, and it answered with them (Resolved 2026-07-26)
+
+**#100's diagnostic caught this within one cycle of #100 itself shipping** — the fourth time an observability fix in this session paid for itself immediately (#80, #96, #97, now #100).
+
+The first job to run under the new binary produced:
+
+```
+00:31:55 Rejected despite being set last attempt:
+  question_67179374 = "company website";
+  question_67179375 = "Stellantis Financial Services";
+  question_67179376 = "react-select-question_67179376-option-0|Yes";
+  question_67179377 = "react-select-question_67179377-option-1|No";
+  question_67179378 = "react-select-question_67179378-option-0|I agree"
+```
+
+The model answered three fields with **react-select's internal DOM option ids**.
+
+**Root cause, and it is mine.** `readComboboxOptions` deliberately returns each entry as `"id|label"` — `pickComboboxOption` needs the id so it can click the right option, which is how #79's "never commit the wrong entry" guarantee is enforced. #98's `enumerateComboboxOptions` reused that helper and rendered its output straight into the prompt, so the block told the model that `react-select-question_67179376-option-0|Yes` was a permitted value. It copied it exactly, as #98 instructed it to ("copied exactly, character for character").
+
+So #98 — the fix whose whole purpose was to stop the model guessing wording it had never been shown — was **showing it wording no human could choose**, on every combobox, from the moment it shipped.
+
+**Fix.** `optionLabel` strips the `id|` prefix, so only the human-readable text reaches the prompt. Entries with no separator (Lever's shape) pass through unchanged, and a label that itself contains a pipe keeps everything after the *first* separator. Two tests: one on the splitting, and an end-to-end one asserting no `react-select-` or `option-N` string can appear in the generated block at all.
+
+**Why it was invisible before.** #97 names values only for fields that fail to land; these three *did* land (`committed 3 autocomplete selection(s)`), because `setComboboxValue` types the value, gets zero matches, and #91's clear-and-re-read then commits *something*. Only #100 — written for exactly the "reported as set, rejected anyway" case, and shipped before its own root cause was known — could surface the value that was actually written.
 
 ### 102. #95's early exit read stale invalid flags and called four accepted submissions failures (Resolved 2026-07-26)
 
