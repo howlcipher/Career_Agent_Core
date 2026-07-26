@@ -266,11 +266,26 @@ func HasApplied(url string) bool {
 	return err == nil
 }
 
+// RecordApplicationInDB writes the dedup row that HasApplied gates on.
+//
+// bugs.md #94: call this ONLY after a submission is genuinely confirmed. It
+// used to run from SaveApplication, i.e. at document-generation time, so any
+// job that generated documents and then failed to submit was recorded as
+// applied. Combined with the funnel row returning to DISCOVERED (the startup
+// reaper, #85's duplicate-path reset, or cmd/requeue without -clear-dedup),
+// that job was then re-queued every run and skipped instantly, forever --
+// silently unreachable rather than visibly failed.
+//
+// ON CONFLICT DO NOTHING because the row is no longer written on a path that
+// is guaranteed to run once: a confirmation re-check (#89) can legitimately
+// observe success twice for one URL, and the UNIQUE constraint on url would
+// otherwise turn that into a spurious error on an application that worked.
 func RecordApplicationInDB(companyName, jobTitle, url string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
-	_, err := db.Exec("INSERT INTO applied_jobs (company_name, job_title, url, applied_at) VALUES (?, ?, ?, ?)", companyName, jobTitle, url, time.Now())
+	_, err := db.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, companyName, jobTitle, url, time.Now())
 	return err
 }
 
@@ -345,7 +360,12 @@ func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverL
 		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
-	return RecordApplicationInDB(companyName, jobTitle, url)
+	// bugs.md #94: deliberately does NOT write the applied_jobs dedup row.
+	// Generating documents is not applying -- the submit can still bounce,
+	// need manual review, or be interrupted. cmd/agent records the row on the
+	// confirmed-submission branch instead. This function stays responsible for
+	// the folder MoveToManualApply archives and the record the dashboard reads.
+	return nil
 }
 
 var logMutex sync.Mutex

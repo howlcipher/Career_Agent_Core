@@ -547,10 +547,10 @@ func main() {
 						// its per-job resume never reaches the employer anyway since
 						// the uploaded file is always masterResumePath below.
 						//
-						// SaveApplication still runs, because it is not just a file
-						// write: RecordApplicationInDB behind it is what HasApplied
-						// dedups against, and the folder it creates is what
-						// MoveToManualApply archives for MANUAL_REQUIRED jobs.
+						// SaveApplication still runs, because the folder it creates is
+						// what MoveToManualApply archives for MANUAL_REQUIRED jobs and
+						// what the dashboard reads. It no longer writes the dedup row
+						// (bugs.md #94) -- that happens only on confirmed submission.
 						if prof.UseMasterCoverLetter {
 							// An empty coverPath is the documented "no cover letter"
 							// signal: fillCoverLetterIfPresent returns immediately on
@@ -717,6 +717,14 @@ func main() {
 					} else {
 						pipeline.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")
 						storage.UpdateFunnelStatus(job.URL, "APPLIED")
+						// bugs.md #94: the dedup row is written HERE, on confirmed
+						// submission, and nowhere else. SaveApplication used to write
+						// it at document-generation time, which marked jobs as applied
+						// that had never been submitted -- they were then skipped on
+						// every subsequent run and could never be retried.
+						if err := storage.RecordApplicationInDB(job.CompanyName, job.Title, job.URL); err != nil {
+							log.Printf("[Worker-%d] Submitted %s but failed to record the dedup row: %v", workerID, job.CompanyName, err)
+						}
 					}
 				} else {
 					// If not auto-submitting, we still consider the pipeline processing done

@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 94 | [The dedup row was written at document generation, so a job that never submitted was skipped forever](#94-the-dedup-row-was-written-at-document-generation-so-a-job-that-never-submitted-was-skipped-forever) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: the 21:16 restart logged `Duplicate check: Already applied` for **Reddit, Akuity, ClickHouse and Staff SRE** — four jobs the same day's log shows failing, and which have **never** reached `APPLIED`. `SaveApplication` wrote the `applied_jobs` row at document-generation time, so any job that generated documents and then bounced, needed manual review, or was killed mid-submit was permanently marked applied. Combined with the funnel row returning to `DISCOVERED` (startup reaper / #85's reset / requeue without `-clear-dedup`), the job was re-queued every run and skipped instantly, forever — **silently unreachable rather than visibly failed**. 7 of the 82-job cohort and 66 rows DB-wide were in this state |
 | 93 | [Greenhouse's emailed security-code gate read as a validation error, burning the full 45-minute timeout](#93-greenhouses-emailed-security-code-gate-read-as-a-validation-error-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found from the user's inbox, not the logs.** A Greenhouse submit to Surt AI produced an email at **20:58:03 UTC — the exact second of the click**: *"Copy and paste this code into the security code field on your application ... After you enter the code, resubmit your application."* So the submit **succeeded** and Greenhouse issued an out-of-band verification challenge. The resulting security-code input read as just another unsatisfied required field, so the whole 50,501-char form went to the model and burned the full 45-minute timeout. **This reframes #83:** the oversized payload was a *symptom* of the code gate, not the underlying event |
 | 92 | [Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing](#92-checkbox-group-ids-contain-brackets-which-are-css-attribute-syntax-so-they-resolved-to-nothing) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "input#question_8242451101[]_54236360101" failed: selector matched no element (tried 1 form(s))`. Greenhouse names checkbox-group controls with a literal `[]` in the id; `#question_...[]_...` is not a valid CSS id selector because the brackets read as attribute syntax. **The same class as #73** (leading digits), and #73's own attribute-form fallback was blocked here because `splitTagID` explicitly refused any id containing brackets — note `tried 1 form(s)`, versus the 3 an eligible selector gets |
 | 91 | [#90's single-option rule could never fire, because typing filters the sole option out](#91-90s-single-option-rule-could-never-fire-because-typing-filters-the-sole-option-out) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in #90's own fix, caught on the very next run.** Sporty Group's `GDPR Acknowledgement*` still reported `left the control empty` with #90 shipped. #90 takes the sole option when `len(options) == 1` — but `setComboboxValue` types the model's proposed value *first*, and typing "Yes" into a widget whose only entry is "Acknowledge/Confirm" filters the list to **zero**. So the count was 0, never 1, and the rule could not fire for precisely the case it was written for |
@@ -128,6 +129,41 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 94. The dedup row was written at document generation, so a job that never submitted was skipped forever (Resolved 2026-07-25)
+
+**Found in the restart log, in four lines that looked like routine housekeeping.** The 21:16 relaunch reported:
+
+```
+21:16:42 [Worker-1] Duplicate check: Already applied to Reddit. Skipping.
+21:16:43 [Worker-1] Duplicate check: Already applied to Akuity. Skipping.
+21:16:43 [Worker-1] Duplicate check: Already applied to ClickHouse. Skipping.
+21:16:43 [Worker-1] Duplicate check: Already applied to Staff Site Reliability Engineer. Skipping.
+```
+
+Every one of those four is a job this same day's log shows *failing*. ClickHouse is the cleanest case: its dedup row is timestamped `21:08:15.789`, which is the exact second `SaveApplication` ran for it, and the process was killed at 21:16 while it was still mid-attempt-3. It had never submitted anything.
+
+**Root cause.** `SaveApplication` ended with `return RecordApplicationInDB(...)`, so the `applied_jobs` row — the sole thing `HasApplied` gates on — was written at **document-generation** time, minutes before the first submit click and regardless of its outcome. Generating documents is not applying.
+
+**Why it was permanent rather than merely wrong.** On its own, a spurious dedup row would only matter if the job were re-queued. Three separate mechanisms re-queue it, all added or exercised the same day:
+
+- the startup reaper resetting orphaned `PROCESSING` rows to `DISCOVERED` (#55),
+- #85's duplicate-path reset, which deliberately returns the row to `DISCOVERED`,
+- `cmd/requeue` run without `-clear-dedup`.
+
+So the job returns to `DISCOVERED`, is loaded into the next run's queue, hits `HasApplied` → true, is skipped in milliseconds, and is reset to `DISCOVERED` again. It is queued every single run, forever, and never progresses. The funnel status reads `DISCOVERED` — indistinguishable from a job genuinely waiting its turn — so nothing in the dashboard or the status breakdown shows it as stuck. **The failure mode is silent unreachability, not visible failure.**
+
+Measured live at the time of the fix: **7 of the 82-job cohort** and **66 rows DB-wide** sat in `DISCOVERED` carrying a dedup row.
+
+**This is the mechanism behind #53's falsehood, seen from the write side.** #53 recorded that `applied_jobs` overstates what was applied to, and `cmd/dashboard` was already patched to count `job_funnel.status = 'APPLIED'` instead. That fixed the *reporting*. The write itself was never corrected, and `HasApplied` still trusted it — so the same bad data kept silently suppressing work. `job_funnel` has **never** contained a single `APPLIED` row across all 3,884 rows, while `applied_jobs` holds 261.
+
+**Fix.** `SaveApplication` no longer writes the dedup row; it remains responsible for the documents folder (`MoveToManualApply` archives it) and the record the dashboard reads. `cmd/agent` writes the row on the confirmed-submission branch, next to `UpdateFunnelStatus(job.URL, "APPLIED")`, and nowhere else. `RecordApplicationInDB` became `ON CONFLICT(url) DO NOTHING`: the row is no longer written on a path guaranteed to run exactly once, and #89's confirmation re-check can legitimately observe success twice for one URL, where the `UNIQUE` constraint would have reported an error against an application that actually worked.
+
+**Two existing tests asserted the old behaviour and were deliberately inverted**, each with the reasoning written into the test body so it reads as a correction rather than a regression: `TestSaveApplication` required `HasApplied` to be true after saving documents, and `TestApplicationsAndDuplicates` required a duplicate insert to error. Three tests total now pin the new contract, including `TestSaveApplicationLeavesJobRetryableUntilConfirmed`, which drives the full failed-then-confirmed sequence. All three were verified failing against the old code before the fix was kept.
+
+**Operational cleanup.** The 7 stuck cohort rows had their dedup rows cleared. That was safe to assert rather than assume: all 7 dedup timestamps fall inside the current log window, and that window contains **zero** `Submission confirmed` lines, so none of them was ever submitted. The remaining DB-wide rows were **not** cleared — their timestamps predate the log, so there is no positive evidence either way, and re-applying to an employer who already has an application is an outward-facing action that is the user's call, not the agent's. Left as an open question for the user rather than silently resolved in either direction.
+
+**Method note, and it is the recurring one.** This was found by reading a log line that announced itself as normal operation. `Duplicate check: Already applied to X. Skipping.` is what a correctly-working dedup looks like; the defect was only visible in the conjunction of that line with a company name the same log had shown failing an hour earlier. Related to the standing warning that *an absent signal is not evidence of an absent event* (#77, #84, #81) — here the inverse: **a present, benign-looking signal is not evidence of a benign event.**
 
 ### 93. Greenhouse's emailed security-code gate read as a validation error, burning the full 45-minute timeout (Resolved 2026-07-25)
 

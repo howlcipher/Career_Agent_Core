@@ -120,10 +120,24 @@ func TestApplicationsAndDuplicates(t *testing.T) {
 		t.Fatalf("HasApplied returned false after recording")
 	}
 
-	// Try inserting duplicate URL - should fail due to UNIQUE constraint
+	// bugs.md #94 -- this expectation is INVERTED from what it used to be.
+	// It formerly required a duplicate insert to surface the UNIQUE-constraint
+	// error. That made sense while the row was written once, at document
+	// generation. Now it is written on confirmed submission, a path #89's
+	// confirmation re-check can legitimately reach twice for one URL, where an
+	// error would be reported against an application that actually succeeded.
+	// A duplicate is now a silent no-op; the row must stay singular.
 	err = RecordApplicationInDB("Example Inc", "Tester 2", url)
-	if err == nil {
-		t.Fatalf("Expected error when inserting duplicate URL, got nil")
+	if err != nil {
+		t.Fatalf("Duplicate record must be a no-op, got: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM applied_jobs WHERE url = ?", url).Scan(&n); err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected the dedup row to stay singular, got %d rows", n)
 	}
 }
 
@@ -275,9 +289,70 @@ func TestSaveApplication(t *testing.T) {
 		t.Errorf("interview_prep.md content mismatch or error: %v", err)
 	}
 
-	// Verify DB record
-	if !HasApplied("http://test.com") {
-		t.Errorf("Expected URL to be marked as applied in DB")
+	// bugs.md #94 -- this assertion is INVERTED from what it used to be, and
+	// deliberately so. It previously required SaveApplication to mark the job
+	// applied, which is what caused the defect: documents generated for a job
+	// whose submit then failed left a dedup row behind, so the job was skipped
+	// on every later run and could never be retried. Generating documents is
+	// not applying; only cmd/agent's confirmed-submission branch records that.
+	if HasApplied("http://test.com") {
+		t.Errorf("SaveApplication must not write the dedup row: generating documents is not a confirmed submission")
+	}
+}
+
+// bugs.md #94: the live failure was a job stuck in an unreachable loop -- its
+// funnel row back at DISCOVERED (via the startup reaper / #85's reset /
+// requeue) while a dedup row from document generation made the worker skip it
+// instantly, every run, forever. This pins the full sequence.
+func TestSaveApplicationLeavesJobRetryableUntilConfirmed(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	companyName := "Test_Retryable_Company"
+	defer os.RemoveAll(filepath.Join("applications", companyName))
+	url := "http://example.com/jobs/retryable"
+
+	// Attempt 1: documents generated, submission then fails.
+	if err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
+		t.Fatalf("SaveApplication failed: %v", err)
+	}
+	if HasApplied(url) {
+		t.Fatal("job became undeduplicatable after a failed submit -- it can never be retried")
+	}
+
+	// Attempt 2: documents generated again, this time the submit is confirmed.
+	if err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
+		t.Fatalf("second SaveApplication failed: %v", err)
+	}
+	if err := RecordApplicationInDB(companyName, "SRE", url); err != nil {
+		t.Fatalf("RecordApplicationInDB failed: %v", err)
+	}
+	if !HasApplied(url) {
+		t.Error("a confirmed submission must record the dedup row")
+	}
+}
+
+// bugs.md #94: url is UNIQUE, and the confirmation re-check added by #89 can
+// legitimately observe success twice for one URL. A second record must be a
+// no-op, not an error on an application that actually worked.
+func TestRecordApplicationInDBIsIdempotent(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "http://example.com/jobs/twice"
+	if err := RecordApplicationInDB("Acme", "SRE", url); err != nil {
+		t.Fatalf("first record failed: %v", err)
+	}
+	if err := RecordApplicationInDB("Acme", "SRE", url); err != nil {
+		t.Fatalf("second record must be a no-op, got: %v", err)
+	}
+
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM applied_jobs WHERE url = ?", url).Scan(&n); err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected exactly 1 dedup row, got %d", n)
 	}
 }
 
