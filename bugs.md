@@ -168,6 +168,10 @@ So #98 — the fix whose whole purpose was to stop the model guessing wording it
 
 **Fix.** `optionLabel` strips the `id|` prefix, so only the human-readable text reaches the prompt. Entries with no separator (Lever's shape) pass through unchanged, and a label that itself contains a pipe keeps everything after the *first* separator. Two tests: one on the splitting, and an end-to-end one asserting no `react-select-` or `option-N` string can appear in the generated block at all.
 
+**Correction, made the same night: this is a real defect but NOT proven to be the cause of that job's rejection.** After filing, I read `pickComboboxOption` properly. It splits each entry on `|` and matches the model's value against the **label** bidirectionally — `strings.Contains(text, wantN) || strings.Contains(wantN, text)`. Normalisation strips punctuation, so `react-select-question_67179376-option-0|Yes` becomes a string *ending* in `yes`, and the reverse-containment arm still matches the `Yes` option. The same holds for the `No` and `I agree` cases. **So the correct option may well have been committed regardless**, and something else is rejecting those five fields.
+
+What remains unambiguously true: the model was being handed internal identifiers as if they were permitted values, which is wrong on its own terms, defeats the stated purpose of #98, and only worked by accident of a containment rule that was never designed to carry it. The fix stands. The causal claim does not, and the live re-run is what will settle it.
+
 **Why it was invisible before.** #97 names values only for fields that fail to land; these three *did* land (`committed 3 autocomplete selection(s)`), because `setComboboxValue` types the value, gets zero matches, and #91's clear-and-re-read then commits *something*. Only #100 — written for exactly the "reported as set, rejected anyway" case, and shipped before its own root cause was known — could surface the value that was actually written.
 
 ### 102. #95's early exit read stale invalid flags and called four accepted submissions failures (Resolved 2026-07-26)
