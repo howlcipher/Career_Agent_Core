@@ -104,6 +104,13 @@ Context was cleared; re-oriented from this journal. Verified against the live tr
 - **bugs.md #96 (Major, observability) — `acd1c5c`.** Filed the moment its absence had cost a day. The only trace of a judged submit was `Submission failed validation. Retrying...` — the decision, never the evidence. #95 was findable *only* by noticing four unrelated log lines shared a wall-clock second. `awaitSubmissionOutcome` now emits one line per submit click when it settles, carrying elapsed time, whether the URL moved, the flagged-field count and the returned page size — each separating cases previously indistinguishable (premature vs settled, in-place re-render vs navigation, same fields again vs different fields now, and the #83/#93 oversized-payload shape). Same class as #80, filed for the same reason.
 - **#95 confirmed working live within minutes, on Reddit.** `21:56:20 Country set ... 21:56:22 Submission failed validation (page re-rendered with fields flagged invalid)` — **two seconds apart, not the same second**, and settled on positive rejection evidence rather than an empty read. The settle floor is doing exactly what it was written to do, and the new reason string is visible in the log rather than inferred. Reddit's *first* bounce is genuine: 13 custom questions are unanswered on the initial fill, which is expected. The open question is what attempt 2 does after the model answers them.
 
+- **bugs.md #97 (Major, observability) — `39728b3`. Filed at the closest the pipeline has ever come to finishing.** Reddit went **13 invalid fields → 1**, narrowed payload **7,212 → 497 chars**, with 8 autocompletes committed *including both legal attestations*. The lone survivor was `#434` (*Are you a veteran/have you served in the military?*), which failed twice reporting only that the control was left empty. That is consistent with two opposite situations — broken commit machinery, or a value the widget does not offer — which need opposite fixes, and nothing in the log separated them. **A probe settled it: the mechanism is fine.** `#434` offers 9 options and typing `I don't wish to answer` filters it to *exactly that entry*, so #90/#91's sole-option path would commit it; `Prefer not to say` and `I am not a protected veteran` each filter it to **zero** (the #91 shape). So it is a **value mismatch**. The not-landed entry now carries `#434 (tried "…")`, which also flows into the `ErrUncommittableField` message. 1 new test.
+  - **Deliberately did not also "fix" the model's wording.** Choosing a convergence rule before a single log line shows what the model actually proposes is exactly how #90 shipped a rule that #91 proved could never fire. Measure first — the next Reddit run will print the value.
+  - **Third instance of one lesson in this session** (#80, #96, #97): every expensive failure here is *"the mechanism reported success and the outcome was failure"*, and each time the fix was to log the evidence a decision rested on, not the decision.
+- **Restarted (21st) at 22:16 for #96/#97.** PID `4007419` (`verify84b`), 66 queued, all four of this session's fixes verified present by `strings` on the binary. Killed PID `3995985` (SIGKILL again). **Reddit requeued** `MANUAL_REQUIRED → DISCOVERED` with its dedup row cleared, so `#434` gets re-tested with the value now logged. Cost was ~3 min of Akuity scoring, cheap against having the diagnostic on every subsequent Greenhouse job.
+  - **Watch out: the stored URL is `https://`, and the log prints `http://`.** A scoped `UPDATE`/`DELETE` written from the log's spelling matched **zero rows** and silently did nothing. Caught it because the verification `SELECT` in the same statement returned no row — worth keeping that pattern, since a requeue that quietly no-ops looks identical to one that worked.
+  - Log monitor replaced (`b1h3bcrgz` → `bkmg640jz`) to add `Submit verdict after` and the dedup-record failure line. #77's lesson: a diagnostic missing from the filter is invisible.
+
 ### Investigated and dismissed
 
 - **`Location set to` appears only 2× today against `Country set to` 13×.** Looked like location was silently failing on Greenhouse. It is not: `candidate-location` and `country` appear in **no** recent `still invalid:` list, and the only two `left the control empty` hits for them are at 15:39/15:49 — *before* #78/#79 shipped at ~15:52. The forms since simply do not flag location as outstanding. Benign absence; not filed.
@@ -247,18 +254,22 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 **Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-### Live state (accurate as of 2026-07-25 21:48)
+### Live state (accurate as of 2026-07-25 22:17)
 
-- **Agent PID `3995985`** (`/tmp/career_agent_bin_verify84a`), built from HEAD **carrying both #94 and #95** — verified by `strings` on the binary, not by inference (#84's lesson). Startup log confirms `Security-code retrieval enabled (IMAP)` and `loaded 66 matching job(s)`.
-- **Restarted (20th) at 21:47 for #95.** Justified as urgent on the same grounds as #82 and #89: under #95 the previous binary was liable to re-click submit on applications that had already gone through — an outward-facing duplicate risk, not merely a throughput cost. Killed PID `3978328` (needed `SIGKILL`; plain `kill` did not stick, as the Operational Trap warns), confirmed no agent binaries remained.
-- **#94 confirmed working live at the same moment:** the previous run logged `Duplicate check: Already applied to Reddit. Skipping.`; this one logs `Fetching job description for Reddit...` and proceeds to score it. Reddit is back in circulation.
-- **Dedup cleanup on restart:** cleared the 2 bogus rows the pre-#94 binary had written since 21:16 (Stack AV 21:28:06, DexCare 21:45:48) — neither ever submitted, `Submission confirmed` still count 0 in the log. 4 cohort dedup rows remain, all on `FAILED_SUBMIT` jobs that `GetDiscoveredJobs` does not queue anyway; they need `-clear-dedup` if ever requeued.
+- **Agent PID `4007419`** (`/tmp/career_agent_bin_verify84b`), built from HEAD carrying **#94, #95, #96 and #97** — all four verified present by `strings` on the binary, not by inference (#84's lesson). `Security-code retrieval enabled (IMAP)`, `loaded 66 matching job(s)`.
 - **Monitors armed in this session** (they do **not** survive a session boundary — see below):
-  - `br7egny38` — cohort status + PID death, pointed at `3995985`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart). *(Supersedes `bmrzy93bu`, which ended when it observed the old PID die — that is the script working as designed.)*
-  - `b1h3bcrgz` — `tail -F career_agent.log` filtered to outcome/failure/diagnostic signatures, **plus `Duplicate check`** (added after #94 — that line was not previously monitored, which is why the defect survived so long).
-- **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV**, routed there by #83's size ceiling (`form content exceeds the local model's context window`) — a correct route, not a failure.
-- **Still 0 confirmed `APPLIED`.** That remains the open question of the parent journal. `job_funnel` has never held an `APPLIED` row at all (#94).
-- **#95 is the most consequential fix of this session and is now live but unproven.** If the race was the blocker, the first `Submission confirmed` should appear on this run. If nothing changes, the premise is wrong and the next move is to instrument the submit click itself (log the URL, response status and DOM delta at 0s/2s/5s/15s) rather than reason further from timing.
+  - `bjoxh5nwy` — cohort status + PID death, pointed at `4007419`. Script: this session's `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `bkmg640jz` — `tail -F career_agent.log`, filter now including `Submit verdict after` (#96) and the dedup-record failure line.
+- **Cohort:** `DISCOVERED=65 FAILED_SUBMIT=9 MANUAL_REQUIRED=1 PROCESSING=1 SKIPPED=6`. The `MANUAL_REQUIRED` is **Stack AV** (#83's size ceiling — a correct route, not a failure). Reddit was requeued out of it.
+- **Still 0 confirmed `APPLIED`**, but the gap is now one field wide on the best job in the cohort. `job_funnel` has never held an `APPLIED` row at all (#94).
+
+### The single thing to watch next
+
+**Reddit's `#434`.** It is the only field standing between this effort and its first confirmed application. The next Reddit run will log `#434 (tried "…")`. That value decides the fix:
+- If it is a phrasing the widget does not offer (`Prefer not to say`, `I am not a protected veteran`), the fix is to make the model choose from the offered options — a prompt/containment change, and the sole-option path already handles the rest.
+- If it *is* `I don't wish to answer`, then the mechanism is broken for this widget after all, despite the probe, and the probe replicated the wrong sequence again (#76/#81/#91's recurring trap).
+
+Do not guess between those before the line appears.
 
 ### Open question for the user (not blocking, do not decide unilaterally)
 
