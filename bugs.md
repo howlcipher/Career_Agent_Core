@@ -43,6 +43,24 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md` gained **#28** (score 2.33) from this session's findings — filling Greenhouse's required Location/Country on the first pass, which would remove a guaranteed ~12-minute retry cycle per Greenhouse posting; it is blocked on a `pii.yaml` schema change only the user can populate, so it is not autonomous work. The other two Pending improvement rows (#14, #27) remain below the ROI floor.
 
+**2026-07-26 groom-pass note (overnight monitoring session, at close of #108):** all **96** bug rows are Resolved; **zero** Pending. `improvements.md` still holds three Pending rows (#30, #14, #27), all ⚠️ below the 0.5 ROI floor and correctly scored; `improvements_paywall.md` holds one. No re-ranking was warranted — with nothing Pending in this file, row order carries no scheduling weight.
+
+**Fifteen bugs were filed and fixed in this session (#94-#108), and the shape of them is the finding.** Only the first few were about *filling forms*. From #95 onward, nearly every defect was the pipeline **misreading its own outcome**:
+
+| # | what was misread | what it really was |
+| --- | --- | --- |
+| #95 | DOM read the instant the click returned | the submission had not happened yet |
+| #102 | `aria-invalid` flags | the **previous** attempt's leftovers, on an *accepted* submission |
+| #103 | the option list shown to the model | react-select's internal `id\|label` pairs |
+| #107 | "control holds no value" | a checkbox the model had **correctly declined** |
+| #108 | "form too large for the local model" | a complete form whose submit went nowhere; the size check merely touched it last |
+
+**The single most valuable habit, and it is now evidence-backed: ship the diagnostic before the root cause is known.** #80, #96, #97 and #100 each paid for themselves within *one* cycle, and #100 caught a defect in #98 within one cycle of #100 itself shipping. Three of this session's fixes were defects in earlier fixes *from the same session* (#95→#102, #98→#103, #104→its own follow-up), and two claims had to be publicly retracted after measurement (#103's causation, #104's "every Greenhouse page carries reCAPTCHA"). Care up front did not prevent those; measuring afterwards caught them.
+
+**Standing check earned this session, and it is the generalisation of #76/#81/#102/#103/#107:** *a check that reads only current state, without the intent behind it, will eventually mistake residue for evidence.* Give the verification access to what was **asked for**, not just what is **present**.
+
+**The backlog's centre of gravity has moved.** The fill path now reaches `invalid fields: 0` routinely on both Greenhouse and Lever. The two live ceilings are **bot protection** (4 boards confirmed blocked across both platforms; needs the user's decision on `improvements_paywall.md` #17, out of scope here) and **local-model throughput on large forms** (#105, now failing fast with documents preserved). Further fill-path work has diminishing value until the first is settled.
+
 **2026-07-25 groom-pass note (second monitoring session, at close of #94):** every bug row is Resolved, #94 included. No re-ranking was warranted — nothing is Pending here, so the table's order carries no scheduling weight.
 
 **Both remaining backlogs re-checked, no changes needed.** `improvements.md` holds three Pending rows (#30, #14, #27), all ⚠️ below the 0.5 ROI floor and all correctly scored; `improvements_paywall.md` holds one, out of scope under this session's no-monetary-cost constraint. One row is worth flagging as *further* devalued rather than re-scored: **#30 (detect unanswerable attestations before fit-scoring)** was worth 0.4 when `MissingAttestations` routinely refused jobs after ~10 minutes of scoring. The user has since populated every attestation, so that function now returns empty and the refusal path it optimises is unreachable. Left Pending at 0.4 rather than closed — the guard will matter again the moment a form asks something `pii.yaml` does not cover — but it should not be picked up on ROI grounds.
