@@ -132,6 +132,41 @@ Shipped as **`a79744d`**: `enumerateComboboxOptions` opens each invalid control 
 
 **Restarted (22nd) at 22:47.** PID `4019401` (`verify84c`), 66 queued, all **five** of this session's fixes verified present by `strings`. Reddit requeued (status verified `DISCOVERED`, dedup 0) — this run is the decisive test. Monitor `bnr24opx1`.
 
+### THE CENTRAL QUESTION IS ANSWERED: submissions ARE reaching Greenhouse (2026-07-25 23:25)
+
+Checked the inbox after Reddit's run ended ambiguously. Two Greenhouse security-code emails exist:
+
+| email (UTC) | = EDT | subject |
+| --- | --- | --- |
+| `2026-07-26T01:15:58Z` | **21:15:58** | Security code for your application to **ClickHouse** |
+| `2026-07-25T20:58:03Z` | 16:58:03 | Security code for your application to Surt AI (this is #93's) |
+
+**`21:15:58` is the exact second of ClickHouse's attempt-2 submit** — the one the agent logged as `Submission failed validation. Retrying...`. That submit **reached Greenhouse's servers and was accepted**; Greenhouse then issued an out-of-band verification challenge.
+
+**This is independent, artifact-based confirmation of #95's race**, arrived at from a completely different direction than the timing argument — and it is the second time an email has proved a submit succeeded while the agent recorded failure (#93 was the first). #95 was shipped on inferred evidence and explicitly flagged as unproven; it is now proven.
+
+**It also reframes the parent journal's open question.** "0 confirmed `APPLIED`" has been read all along as *the pipeline cannot submit*. It is not: **the pipeline submits, and cannot tell that it did.** ClickHouse ran on the pre-#95 binary, whose verdict came from a single instantaneous DOM read.
+
+**Why #93's detector did not catch it:** ClickHouse's attempt 3 went straight to `SolveValidationErrors` with no `Security-code gate detected` line, so `DetectSecurityCodeChallenge` saw nothing. Most plausibly the challenge had not rendered yet when the DOM was read — the same race — which would mean #95's 15s settle also fixes #93's detection timing. **Not established**: the browser state is gone and this is inference, not measurement.
+
+**Two real, incomplete applications exist.** Greenhouse's own wording is *"After you enter the code, resubmit your application"*, so neither is filed yet: **ClickHouse** (code issued 21:15) and **Surt AI** (16:58). Codes of this kind usually expire. ClickHouse is already back in the queue as `DISCOVERED` with its dedup row cleared, so the current run will reach it and improvements #32's IMAP retrieval should complete it end to end — the designed path, and the first real test of #32 in the wild.
+
+### Reddit at 23:19 is a DIFFERENT failure — the submit never reached the server
+
+Same run, opposite evidence. #98 worked completely:
+
+```
+23:19:28 Attempt 2 committed 9 autocomplete selection(s): 430, 431, 432, 433, 434, 436, question_67942418, question_67942419, question_67942420
+23:19:28 Attempt 2 applied 13/13 validation fix(es)
+23:19:43 Submit verdict after 15.1s: no confirmation and no rejection evidence within the settle budget (url moved: false, invalid fields: 0, page 169636 chars)
+```
+
+**`invalid fields: 0`** — the form was completely satisfied for the first time ever, `#434` included. And then: no confirmation, no rejection, a full 15s wait, and **no email**. So unlike ClickHouse, this submit did **not** reach Greenhouse.
+
+`firstVisibleSubmit` raised no `none visible` error and the click returned no error, so a visible submit control was found and clicked and nothing happened. Open hypotheses, none yet tested: a decoy control winning precedence (#87's shape), an overlay intercepting the click (#34's shape), or a bot-protection gate. **Cannot be probed the usual way — clicking submit on a live posting files a real application** — so the probe must read the control's identity, obstruction and any challenge widget without clicking.
+
+Attempt 3 then found nothing invalid, fell back to the whole 54,190-char form, and #83's ceiling routed it to `MANUAL_REQUIRED`. **That accidentally prevented a re-submit** of a form that might already have gone through — #89's exact risk, avoided by an unrelated guard rather than by design.
+
 ### Investigated and dismissed
 
 - **`Location set to` appears only 2× today against `Country set to` 13×.** Looked like location was silently failing on Greenhouse. It is not: `candidate-location` and `country` appear in **no** recent `still invalid:` list, and the only two `left the control empty` hits for them are at 15:39/15:49 — *before* #78/#79 shipped at ~15:52. The forms since simply do not flag location as outstanding. Benign absence; not filed.
