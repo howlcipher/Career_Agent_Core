@@ -995,9 +995,24 @@ func TestConfirmOrError_CatchesNativeValidationBlock(t *testing.T) {
 		urlValue:     urlBeforeClick,
 		contentValue: "<html><body>Apply for this job</body></html>",
 	}
+	// bugs.md #95: with no evidence either way this now legitimately waits out
+	// the settle budget before ruling. Shorten it rather than sit through 15s.
+	defer withShortSubmitOutcomeTiming()()
 	err := confirmOrError(page, "Acme", urlBeforeClick, true)
 	if err == nil {
 		t.Fatal("expected an error when the URL never changed from the pre-click baseline, got nil")
+	}
+}
+
+// withShortSubmitOutcomeTiming compresses #95's settle timings for tests that
+// exercise the full polling loop. Returns a restore func.
+func withShortSubmitOutcomeTiming() func() {
+	floor, budget, interval := submitOutcomeSettleFloor, submitOutcomeBudget, submitOutcomePollInterval
+	submitOutcomeSettleFloor = 10 * time.Millisecond
+	submitOutcomeBudget = 40 * time.Millisecond
+	submitOutcomePollInterval = 5 * time.Millisecond
+	return func() {
+		submitOutcomeSettleFloor, submitOutcomeBudget, submitOutcomePollInterval = floor, budget, interval
 	}
 }
 
@@ -2315,5 +2330,85 @@ func TestFillSecurityCode_FillsAVisibleField(t *testing.T) {
 	}
 	if filled != "uOSBQvRu" {
 		t.Errorf("filled %q, want uOSBQvRu", filled)
+	}
+}
+
+// bugs.md #95: the submit verdict used to come from one page read taken the
+// instant WaitForLoadState(networkidle) returned -- which is frequently at
+// once, because Click returns on event dispatch and the app has not issued its
+// request yet. These pin the timing rules that replaced it.
+
+func TestDecideSubmissionOutcome_UnchangedPageBeforeFloorIsNotYetRejection(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	// The exact live signature: every field committed, the DOM still showing
+	// the form, a few milliseconds after the click. Judging here is what
+	// produced "applied N/N ... Submission failed validation" in one second.
+	v := decideSubmissionOutcome(same, same, "<form>still here</form>", 5*time.Millisecond, 3)
+	if v.Done {
+		t.Fatalf("verdict at 5ms must be inconclusive, got %+v", v)
+	}
+}
+
+func TestDecideSubmissionOutcome_FlaggedFieldsAfterFloorAreRejection(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	v := decideSubmissionOutcome(same, same, "<form>still here</form>", submitOutcomeSettleFloor, 3)
+	if !v.Done || v.Confirmed {
+		t.Fatalf("flagged fields past the floor must be a settled rejection, got %+v", v)
+	}
+	if v.Reason != reasonFieldsFlagged {
+		t.Errorf("reason = %q, want %q", v.Reason, reasonFieldsFlagged)
+	}
+}
+
+func TestDecideSubmissionOutcome_ConfirmationWinsImmediatelyEvenBeforeFloor(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	// A thank-you view that renders fast is no less real than a slow one.
+	v := decideSubmissionOutcome(same, same, "<h1>Thank you for applying</h1>", time.Millisecond, 0)
+	if !v.Done || !v.Confirmed {
+		t.Fatalf("early confirmation must be accepted, got %+v", v)
+	}
+}
+
+// The case the fix exists for: nothing has changed yet because the submission
+// is still in flight. Before #95 this read as failure and cost a ~12-minute
+// model call plus a duplicate submit click (#89).
+func TestDecideSubmissionOutcome_LateConfirmationIsCaught(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	if v := decideSubmissionOutcome(same, same, "<form>still here</form>", time.Second, 0); v.Done {
+		t.Fatalf("must still be waiting at 1s with no evidence either way, got %+v", v)
+	}
+	v := decideSubmissionOutcome(same, same, "<h1>Application submitted</h1>", 6*time.Second, 0)
+	if !v.Done || !v.Confirmed {
+		t.Fatalf("a confirmation arriving at 6s must be caught, got %+v", v)
+	}
+}
+
+func TestDecideSubmissionOutcome_GivesUpAtBudget(t *testing.T) {
+	const same = "https://job-boards.greenhouse.io/acme/jobs/1"
+	v := decideSubmissionOutcome(same, same, "<div>nothing conclusive</div>", submitOutcomeBudget, 0)
+	if !v.Done || v.Confirmed {
+		t.Fatalf("budget exhaustion must settle as unconfirmed, got %+v", v)
+	}
+	if v.Reason != reasonNoOutcomeInBudget {
+		t.Errorf("reason = %q, want %q", v.Reason, reasonNoOutcomeInBudget)
+	}
+}
+
+// bugs.md #95: validation-error *wording* is rejection evidence even when the
+// theme sets no aria-invalid anywhere -- the gap #83 ran into. Without this the
+// poll burned its full budget on a form that had already visibly come back.
+func TestDecideSubmissionOutcome_ErrorWordingIsRejectionWithoutAriaInvalid(t *testing.T) {
+	const before = "https://job-boards.greenhouse.io/acme/jobs/1"
+	const after = "https://job-boards.greenhouse.io/acme/jobs/1?err=1"
+	content := "<form>Please correct the errors below</form>"
+	if v := decideSubmissionOutcome(before, after, content, time.Millisecond, 0); v.Done {
+		t.Fatalf("error wording before the floor is still too early, got %+v", v)
+	}
+	v := decideSubmissionOutcome(before, after, content, submitOutcomeSettleFloor, 0)
+	if !v.Done || v.Confirmed {
+		t.Fatalf("error wording past the floor must settle as rejection, got %+v", v)
+	}
+	if v.Reason != reasonErrorPhrase {
+		t.Errorf("reason = %q, want %q", v.Reason, reasonErrorPhrase)
 	}
 }

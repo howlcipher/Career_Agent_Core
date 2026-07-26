@@ -302,7 +302,97 @@ const (
 	reasonURLUnchanged       submissionConfirmationReason = "URL did not change after submit"
 	reasonErrorPhrase        submissionConfirmationReason = "validation-error wording found on page"
 	reasonURLChangedNoError  submissionConfirmationReason = "URL changed, no confirmation or error wording found (weakest signal)"
+	reasonFieldsFlagged      submissionConfirmationReason = "page re-rendered with fields flagged invalid"
+	reasonNoOutcomeInBudget  submissionConfirmationReason = "no confirmation and no rejection evidence within the settle budget"
 )
+
+// bugs.md #95. A submit click used to be judged from a single page read taken
+// immediately after WaitForLoadState(networkidle). That wait can return at
+// once: Playwright's Click returns when the event is dispatched, not when the
+// application reacts, so at the moment it is called the page frequently has no
+// request in flight yet and already counts as idle. The verdict was then read
+// off a DOM that had not changed because the submission had not happened yet.
+//
+// The costs are asymmetric, which is why this waits rather than guesses. A
+// premature "failed" sends the whole form back through a ~12-minute model call
+// and then re-clicks submit -- #89's duplicate-application risk, filed against
+// a real employer. A few extra seconds costs nothing by comparison.
+// Vars rather than consts so tests can shorten them. The no-evidence-either-way
+// case legitimately waits the whole budget, which is correct behaviour but not
+// something the suite should sit through.
+var (
+	// Minimum time after the click before an unchanged page is allowed to
+	// count as rejection. Below this, "nothing changed" means "too early to
+	// tell", not "rejected".
+	submitOutcomeSettleFloor = 2 * time.Second
+	// Upper bound on waiting for any outcome at all.
+	submitOutcomeBudget = 15 * time.Second
+	// Gap between polls inside the budget.
+	submitOutcomePollInterval = 500 * time.Millisecond
+)
+
+// submissionOutcomeVerdict is one poll's decision inside awaitSubmissionOutcome.
+// Split out from the Playwright loop so the timing rules are unit-testable --
+// branching inside the driver loop is what let bugs.md #76 ship inert.
+type submissionOutcomeVerdict struct {
+	Done      bool
+	Confirmed bool
+	Reason    submissionConfirmationReason
+}
+
+// decideSubmissionOutcome applies one poll's evidence.
+//
+// Ordering matters and is deliberate:
+//  1. Confirmation always wins, at any elapsed time -- a thank-you page that
+//     renders in 200ms is just as real as one that takes 8s.
+//  2. Past the settle floor, either flagged fields OR explicit validation-error
+//     wording counts as rejection. Both are positive evidence that the server
+//     answered and the form came back, which is why this may exit early
+//     instead of burning the whole budget -- but before the floor they are
+//     simply the pre-submit DOM, unchanged. Both forms are needed: a Greenhouse
+//     theme that sets no aria-invalid still renders error text (the gap #83
+//     hit), and a form flagged purely via aria-invalid may carry no wording.
+//  3. Otherwise keep waiting until the budget runs out.
+func decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent string, elapsed time.Duration, invalidFieldCount int) submissionOutcomeVerdict {
+	confirmed, reason := isSubmissionConfirmed(urlBeforeClick, currentURL, pageContent)
+	if confirmed {
+		return submissionOutcomeVerdict{Done: true, Confirmed: true, Reason: reason}
+	}
+	if elapsed >= submitOutcomeSettleFloor {
+		if invalidFieldCount > 0 {
+			return submissionOutcomeVerdict{Done: true, Confirmed: false, Reason: reasonFieldsFlagged}
+		}
+		if reason == reasonErrorPhrase {
+			return submissionOutcomeVerdict{Done: true, Confirmed: false, Reason: reasonErrorPhrase}
+		}
+	}
+	if elapsed >= submitOutcomeBudget {
+		return submissionOutcomeVerdict{Done: true, Confirmed: false, Reason: reasonNoOutcomeInBudget}
+	}
+	return submissionOutcomeVerdict{Done: false}
+}
+
+// awaitSubmissionOutcome drives decideSubmissionOutcome against the live page
+// after a submit click, replacing the previous single instantaneous read.
+func awaitSubmissionOutcome(page playwright.Page, urlBeforeClick string) (bool, submissionConfirmationReason, string) {
+	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State:   playwright.LoadStateNetworkidle,
+		Timeout: playwright.Float(10000),
+	})
+
+	start := time.Now()
+	currentURL := page.URL()
+	for {
+		currentURL = page.URL()
+		pageContent, _ := page.Content()
+		v := decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent,
+			time.Since(start), len(parser.InvalidFieldIdentifiers(pageContent)))
+		if v.Done {
+			return v.Confirmed, v.Reason, currentURL
+		}
+		page.WaitForTimeout(float64(submitOutcomePollInterval.Milliseconds()))
+	}
+}
 
 // isSubmissionConfirmed decides whether a post-submit-click page state
 // represents a genuine success, given the URL before/after the click and
@@ -354,18 +444,14 @@ func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, au
 	if !autoSubmitClick {
 		return nil
 	}
-	page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State:   playwright.LoadStateNetworkidle,
-		Timeout: playwright.Float(10000),
-	})
-	currentURL := page.URL()
-	pageContent, _ := page.Content()
-	if confirmed, reason := isSubmissionConfirmed(urlBeforeClick, currentURL, pageContent); confirmed {
+	// bugs.md #95: wait for evidence of an outcome instead of reading the DOM
+	// the instant the click returns.
+	confirmed, reason, currentURL := awaitSubmissionOutcome(page, urlBeforeClick)
+	if confirmed {
 		log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
 		return nil
-	} else {
-		return fmt.Errorf("submission not confirmed for %s: %s (at %s)", companyName, reason, currentURL)
 	}
+	return fmt.Errorf("submission not confirmed for %s: %s (at %s)", companyName, reason, currentURL)
 }
 
 // ErrAuthWall marks an application flow gated behind account creation or
@@ -1255,19 +1341,16 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		}
 
 		if autoSubmitClick {
-			page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-				State:   playwright.LoadStateNetworkidle,
-				Timeout: playwright.Float(10000),
-			})
-
-			currentURL := page.URL()
-			pageContent, _ := page.Content()
-			if confirmed, reason := isSubmissionConfirmed(urlBeforeSubmitClick, currentURL, pageContent); confirmed {
+			// bugs.md #95: same race as confirmOrError, and more costly here --
+			// a premature verdict spends another ~12-minute model call and then
+			// re-clicks submit on a form that may already have gone through.
+			confirmed, reason, currentURL := awaitSubmissionOutcome(page, urlBeforeSubmitClick)
+			if confirmed {
 				log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
 				return nil
 			}
 
-			log.Printf("[Auto-Submit] Submission failed validation. Retrying...")
+			log.Printf("[Auto-Submit] Submission failed validation (%s). Retrying...", reason)
 		} else {
 			return nil
 		}

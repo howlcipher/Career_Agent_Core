@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 95 | [The submit verdict was read from the DOM the instant the click returned, racing the submission itself](#95-the-submit-verdict-was-read-from-the-dom-the-instant-the-click-returned-racing-the-submission-itself) | Blocker | Resolved (2026-07-25, fix shipped; race inferred, not directly observed) | — | Opus 5 | Gemini 3 Pro | Three independent jobs (ClickHouse, Stack AV, Sporty Group) logged **every field committed, every fix applied, and `Submission failed validation` in the same second**. A probe proved those forms are fully satisfiable — after the agent's exact commit sequence ClickHouse's form reports `invalidCount: 0`, natively valid. So the verdict, not the fill, was wrong. `WaitForLoadState(networkidle)` can return immediately because Playwright's `Click` returns on event dispatch, before the app issues its request, so the page is read before the submission has happened. **#93 is direct evidence this misfires:** a Greenhouse security-code email timestamped the exact second of a submit the agent had written off. Cost of a premature verdict is a ~12-min model call plus a re-click on a form that may already have gone through (#89's duplicate-application risk) |
 | 94 | [The dedup row was written at document generation, so a job that never submitted was skipped forever](#94-the-dedup-row-was-written-at-document-generation-so-a-job-that-never-submitted-was-skipped-forever) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: the 21:16 restart logged `Duplicate check: Already applied` for **Reddit, Akuity, ClickHouse and Staff SRE** — four jobs the same day's log shows failing, and which have **never** reached `APPLIED`. `SaveApplication` wrote the `applied_jobs` row at document-generation time, so any job that generated documents and then bounced, needed manual review, or was killed mid-submit was permanently marked applied. Combined with the funnel row returning to `DISCOVERED` (startup reaper / #85's reset / requeue without `-clear-dedup`), the job was re-queued every run and skipped instantly, forever — **silently unreachable rather than visibly failed**. 7 of the 82-job cohort and 66 rows DB-wide were in this state |
 | 93 | [Greenhouse's emailed security-code gate read as a validation error, burning the full 45-minute timeout](#93-greenhouses-emailed-security-code-gate-read-as-a-validation-error-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found from the user's inbox, not the logs.** A Greenhouse submit to Surt AI produced an email at **20:58:03 UTC — the exact second of the click**: *"Copy and paste this code into the security code field on your application ... After you enter the code, resubmit your application."* So the submit **succeeded** and Greenhouse issued an out-of-band verification challenge. The resulting security-code input read as just another unsatisfied required field, so the whole 50,501-char form went to the model and burned the full 45-minute timeout. **This reframes #83:** the oversized payload was a *symptom* of the code gate, not the underlying event |
 | 92 | [Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing](#92-checkbox-group-ids-contain-brackets-which-are-css-attribute-syntax-so-they-resolved-to-nothing) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "input#question_8242451101[]_54236360101" failed: selector matched no element (tried 1 form(s))`. Greenhouse names checkbox-group controls with a literal `[]` in the id; `#question_...[]_...` is not a valid CSS id selector because the brackets read as attribute syntax. **The same class as #73** (leading digits), and #73's own attribute-form fallback was blocked here because `splitTagID` explicitly refused any id containing brackets — note `tried 1 form(s)`, versus the 3 an eligible selector gets |
@@ -135,6 +136,52 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 95. The submit verdict was read from the DOM the instant the click returned, racing the submission itself (Resolved 2026-07-25)
+
+**Three independent jobs produced the identical impossible signature.** ClickHouse:
+
+```
+21:15:58 Attempt 2 committed 2 autocomplete selection(s) ... #question_15561491004, #question_15653623004
+21:15:58 Attempt 2 applied 3/3 validation fix(es) to: ...
+21:15:58 Submission failed validation. Retrying...
+21:15:58 Narrowed validation retry ... still invalid: <the same three fields>
+```
+
+Stack AV reproduced it exactly at 21:36:22 (`committed 4`, `applied 4/4`, `Submission failed validation`, all in one second), and Sporty Group had done the same earlier in the day.
+
+**The fill was ruled out by probe, not by argument.** Against ClickHouse's real form, driving the agent's own commit sequence (click, clear, type, pick the option scoped via `aria-controls`):
+
+| field | kind | result |
+| --- | --- | --- |
+| `question_15561491004` (sponsorship) | react-select | committed `"No"` |
+| `question_15653623004` (AI-evaluation consent) | react-select | committed `"Yes"` |
+| `question_15561492004` (current location) | plain text | holds `"Macomb, MI"` |
+
+and then, critically, native constraint validation over the form containing `#first_name`: **`formValid: true`, `invalidCount: 0`**. Before the commits it was `false` with 2 invalid controls — react-select's hidden `input.requiredInput` proxies, which carry **no id and no name**, and which react-select *removes from the DOM* once a value is selected. So the agent's commits fully satisfy these forms client-side. The fill machinery is not the problem; the verdict is.
+
+**Root cause.** Both the initial path (`confirmOrError`) and the retry loop judged the click from a single page read taken immediately after:
+
+```go
+page.WaitForLoadState(networkidle, 10s)
+currentURL := page.URL()
+pageContent, _ := page.Content()
+isSubmissionConfirmed(...)
+```
+
+Playwright's `Click` returns when the event is dispatched, not when the application reacts. At the moment `WaitForLoadState` is called there is frequently no request in flight yet, so the page already counts as idle and the wait returns at once. The DOM is then read **before the submission has happened**, shows the form still present and unchanged, and is scored as a validation failure. That is exactly why all four log lines share one second: there is no network round-trip in between because none had started.
+
+**#93 is direct live evidence this misfires.** It found a Greenhouse security-code email timestamped *the exact second of a submit the agent had written off as failed* — the submission reached Greenhouse's servers while the agent concluded it had not.
+
+**Fix.** `awaitSubmissionOutcome` replaces the single read with a bounded poll, and the per-poll rules live in a pure `decideSubmissionOutcome` so they are unit-testable — branching inside the driver loop is what let #76 ship inert:
+
+1. Confirmation wins at any elapsed time; a thank-you view rendering in 200ms is as real as one taking 8s.
+2. Past a 2s settle floor, **either** fields flagged `aria-invalid` **or** explicit validation-error wording settles it as rejection — both are positive evidence the server answered. Both forms are needed: the theme in #83 sets no `aria-invalid` but still renders error text, and a form flagged only via `aria-invalid` may carry no wording. Before the floor, neither counts: that is just the pre-submit DOM.
+3. Otherwise keep waiting, to a 15s budget.
+
+The change is deliberately one-directional: it can turn a premature "failed" into a correct "confirmed", never the reverse. 6 new tests. The timings are `var`s so the genuine no-evidence-either-way case — which now correctly waits out the full budget — does not make the suite sit through 15s.
+
+**Stated plainly: the race is inferred, not directly observed.** It is consistent with every symptom (the same-second timing, forms proven satisfiable, payloads unchanged between attempts, #93's email, #89's late-render finding), but confirming it directly would require clicking submit on a live posting, which files a real application. Treat the mechanism as strongly supported rather than proven, and watch for the first `Submission confirmed` to settle it.
 
 ### 94. The dedup row was written at document generation, so a job that never submitted was skipped forever (Resolved 2026-07-25)
 
