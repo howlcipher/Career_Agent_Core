@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 113 | [The emailed code was retrieved and then discarded, because the code field had not rendered yet](#113-the-emailed-code-was-retrieved-and-then-discarded-because-the-code-field-had-not-rendered-yet) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **One step from the first confirmed application.** Akuity's submit was ACCEPTED, the gate was detected, and #32 **successfully retrieved the code** — then `fillSecurityCode` failed instantly with `could not find a visible security-code field to fill` and the job went to manual review. Detection substring-matches the HTML; filling needs a real *visible* locator, and the input renders later than the markers. Everything happened in one second, ~11s after the submit. Same DOM-lag as #95, #102 and #111, one layer further in |
 | 112 | [The same posting exists twice, once per URL scheme, and their statuses have diverged](#112-the-same-posting-exists-twice-once-per-url-scheme-and-their-statuses-have-diverged) | Major | Resolved for the dedup path (2026-07-26); funnel row merge left open | — | Opus 5 | Gemini 3 Pro | Measured: **20 scheme-duplicate pairs** in `job_funnel` (`http://x` and `https://x` for one posting), **11 of them holding different statuses** — `SKIPPED`/`DISCOVERED` ×5, `FAILED_SUBMIT`/`DISCOVERED` ×4, `BLOCKED_CAPTCHA`/`DISCOVERED`, `FAILED_SUBMIT`/`PROCESSING`. `AddToFunnel` keys on the raw URL via `ON CONFLICT(url)`, so the two are separate jobs. **Outward-facing consequence on the dedup path:** a job recorded as applied under one scheme was not deduped under the other, so it could be applied to twice |
 | 111 | [#104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance](#111-104-labelled-an-accepted-application-captcha-blocked-because-the-dom-lags-the-acceptance) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A false positive in my own #104, of exactly the kind #104's guard was written to prevent.** Akuity's submit was **accepted** — Greenhouse emailed code `82taTsxA` at **05:59:19** — and the verdict at 05:59:27 still reported `BLOCKED_CAPTCHA`, because the guard tested `DetectSecurityCodeChallenge(prunedHTML)` and the code input had **not yet rendered** 8s after the click. The DOM cannot distinguish accepted from blocked on this timescale; the mailbox can, and #32's fetcher only returns codes issued after the triggering click |
 | 110 | [A short option label could hijack a longer answer — "Prefer not to say" selected "No"](#110-a-short-option-label-could-hijack-a-longer-answer--prefer-not-to-say-selected-no) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found by a test written for #109, not by the log.** `pickComboboxOption` matched by raw bidirectional `strings.Contains`, and a short label hides inside longer prose: `"no"` sits inside `"prefer **no**t to say"`. Asking for **"Prefer not to say" selected the box labelled "No"** — on an EEO question that converts a declined answer into a substantive one on a real application. The precise failure **#79** exists to prevent, in the function that enforces it. `"male"` vs `"female"` is the same shape |
@@ -181,6 +182,29 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 113. The emailed code was retrieved and then discarded, because the code field had not rendered yet (Resolved 2026-07-26)
+
+**The closest the pipeline has come to a confirmed application.** Every link in the chain fired, in order, for the first time:
+
+```
+06:30:40 Attempt 2 applied 7/7 validation fix(es)              <- form satisfied
+06:30:49 Submit verdict after 8.5s: ... invalid fields: 7      <- stale flags, submit was actually ACCEPTED
+06:30:51 Security-code gate detected for akuity — waiting for the emailed code...
+06:30:51 Retrieved a security code for akuity but could not enter it:
+         could not find a visible security-code field to fill
+06:30:51 akuity needs manual completion — form is waiting on a one-time code sent by email
+```
+
+The submit was accepted. The gate was found. **improvements #32 retrieved the real code from the mailbox.** And then the code was thrown away because the input could not be filled — one step short.
+
+**Root cause.** `DetectSecurityCodeChallenge` substring-matches the page HTML for markers like `name="security_code"` and `security-code`. `fillSecurityCode` needs something stronger: a locator that exists *and* is visible. The markers reach the HTML before the input becomes fillable, and the whole sequence above ran inside **one second**, roughly 11s after the submit. So the fill was attempted against a field that was on its way but not yet there, and it failed immediately with no retry.
+
+**This is the same DOM-lag that produced #95** (read before the submission happened), **#102** (read the previous attempt's `aria-invalid`) **and #111** (read a gate that had not rendered) — now one layer further in, at the field rather than the gate. Fifth instance. The recurring lesson holds: **anything read from this page needs a bounded wait, not an instantaneous read.**
+
+**Fix.** `fillSecurityCode` polls its selector list on a 20-second budget instead of failing on the first pass, and reports the budget in its error so a genuine absence is distinguishable from a slow render. The timing is a `var` so tests can compress it; one test drives a field that appears 600ms late and must still be filled, another pins that a truly absent field still errors.
+
+**Not changed:** the retrieved code is still discarded when the field never appears, and the job still routes to `ErrNeedsEmailVerification` → manual review with documents preserved. That remains correct — the code is in the user's inbox either way, and printing it into the log is explicitly out of bounds (improvements #32 never logs the code, only the subject).
 
 ### 112. The same posting exists twice, once per URL scheme, and their statuses have diverged (Resolved for the dedup path 2026-07-26; funnel row merge left open)
 

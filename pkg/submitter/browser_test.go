@@ -2368,6 +2368,12 @@ func TestSecurityCodeFetcher_NilByDefaultIsSupported(t *testing.T) {
 func TestFillSecurityCode_ReportsWhenNoFieldIsPresent(t *testing.T) {
 	loc := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	// bugs.md #113: this now waits for a late-rendering field, so shorten the
+	// budget rather than have the suite sit through it.
+	origBudget := securityCodeFieldBudget
+	securityCodeFieldBudget = 30 * time.Millisecond
+	defer func() { securityCodeFieldBudget = origBudget }()
+
 	if err := fillSecurityCode(pageTarget{page: page}, "uOSBQvRu"); err == nil {
 		t.Error("expected an error when there is no security-code field to fill")
 	}
@@ -3225,5 +3231,39 @@ func TestPendingSecurityCodeAfter_SafeWithoutAFetcherOrClick(t *testing.T) {
 	}
 	if called {
 		t.Error("must not query the mailbox when no submit click has been recorded")
+	}
+}
+
+// bugs.md #113: the gate is detected by substring-matching the HTML, but
+// filling needs a real visible locator, and the input renders later than the
+// markers do. Measured on Akuity: gate detected and the emailed code retrieved
+// at 06:30:51, ~11s after an ACCEPTED submit, and the field was not yet
+// fillable -- so a genuinely accepted application with its code in hand went to
+// manual review one step from completion.
+func TestFillSecurityCode_WaitsForALateRenderingField(t *testing.T) {
+	origBudget := securityCodeFieldBudget
+	securityCodeFieldBudget = 3 * time.Second
+	defer func() { securityCodeFieldBudget = origBudget }()
+
+	var filled string
+	appearsAt := time.Now().Add(600 * time.Millisecond)
+
+	loc := &MockLocator{
+		countFunc: func() (int, error) {
+			if time.Now().Before(appearsAt) {
+				return 0, nil // not in the DOM yet
+			}
+			return 1, nil
+		},
+		isVisibleFunc: func() (bool, error) { return true, nil },
+		fillFunc:      func(v string) error { filled = v; return nil },
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	if err := fillSecurityCode(pageTarget{page: page}, "82taTsxA"); err != nil {
+		t.Fatalf("a field that appears shortly after the submit must still be filled: %v", err)
+	}
+	if filled != "82taTsxA" {
+		t.Errorf("filled %q, want the emailed code", filled)
 	}
 }

@@ -590,22 +590,40 @@ func waitForSecurityCode(notBefore time.Time) (string, error) {
 	}
 }
 
+// securityCodeFieldBudget bounds how long fillSecurityCode waits for the code
+// input to become visible.
+//
+// bugs.md #113: the gate is *detected* by substring-matching the HTML, but
+// filling needs a real visible locator, and the input renders later than the
+// markers do. Measured on Akuity: gate detected and code retrieved at 06:30:51,
+// ~11s after the accepted submit, and the field was not yet fillable -- so a
+// genuinely accepted application with its code in hand was sent to manual review
+// one step from completion. Same DOM-lag that produced #95, #102 and #111, one
+// layer further in.
+var securityCodeFieldBudget = 20 * time.Second
+
 func fillSecurityCode(target fillTarget, code string) error {
-	for _, sel := range securityCodeSelectors {
-		loc := target.Loc(sel)
-		count, err := loc.Count()
-		if err != nil || count == 0 {
-			continue
+	deadline := time.Now().Add(securityCodeFieldBudget)
+	for {
+		for _, sel := range securityCodeSelectors {
+			loc := target.Loc(sel)
+			count, err := loc.Count()
+			if err != nil || count == 0 {
+				continue
+			}
+			el, ok := firstVisibleSubmit(loc, count)
+			if !ok {
+				continue
+			}
+			if err := el.Fill(code, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
+				return nil
+			}
 		}
-		el, ok := firstVisibleSubmit(loc, count)
-		if !ok {
-			continue
+		if time.Now().After(deadline) {
+			return fmt.Errorf("could not find a visible security-code field to fill within %s", securityCodeFieldBudget)
 		}
-		if err := el.Fill(code, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err == nil {
-			return nil
-		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("could not find a visible security-code field to fill")
 }
 
 // manualReviewErrors are the outcomes that are not automation failures: the
