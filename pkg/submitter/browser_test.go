@@ -1823,7 +1823,7 @@ func TestVerifyFixLanded_DetectsAControlLeftEmpty(t *testing.T) {
 	}
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
 
-	landed, err := verifyFixLanded(pageTarget{page: page}, "#candidate-location")
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#candidate-location", "Macomb, MI")
 	if err != nil {
 		t.Fatalf("verifyFixLanded: %v", err)
 	}
@@ -1841,7 +1841,7 @@ func TestVerifyFixLanded_AcceptsAReformattedValue(t *testing.T) {
 	}
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
 
-	landed, err := verifyFixLanded(pageTarget{page: page}, "#phone")
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#phone", "555-0100")
 	if err != nil {
 		t.Fatalf("verifyFixLanded: %v", err)
 	}
@@ -1857,12 +1857,56 @@ func TestVerifyFixLanded_TreatsAnUncheckedBoxAsNotLanded(t *testing.T) {
 	}
 	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
 
-	landed, err := verifyFixLanded(pageTarget{page: page}, "#consent")
+	landed, err := verifyFixLanded(pageTarget{page: page}, "#consent", "Yes")
 	if err != nil {
 		t.Fatalf("verifyFixLanded: %v", err)
 	}
 	if landed {
 		t.Error("expected landed=false for a checkbox still reporting checked=false")
+	}
+}
+
+// bugs.md #107: the mirror image, and the one that cost a real job. When the
+// model deliberately declines a checkbox ("No"), UNCHECKED IS the requested
+// state -- reporting it as not-landed marks a correct answer uncommittable and
+// routes the whole job to manual review. Live on Sporty Group:
+//
+//	Attempt 3: 1 fix(es) reported success but left the control empty
+//	... input[id='question_8242451101[]_54236360101'] (tried "No")
+func TestVerifyFixLanded_AcceptsADeliberatelyUncheckedBox(t *testing.T) {
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expr string) (interface{}, error) {
+			if strings.Contains(expr, "tagName") {
+				return "input|checkbox", nil
+			}
+			return "false", nil
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	for _, no := range []string{"No", "no", "false", "0", "unchecked", "  No  "} {
+		landed, err := verifyFixLanded(pageTarget{page: page}, "#optin", no)
+		if err != nil {
+			t.Fatalf("verifyFixLanded(%q): %v", no, err)
+		}
+		if !landed {
+			t.Errorf("a checkbox declined with %q is in the requested state and must count as landed", no)
+		}
+	}
+}
+
+// The negative set must not swallow real answers that merely contain "no".
+func TestIsNegativeCheckboxValue_DoesNotOvermatch(t *testing.T) {
+	for _, yes := range []string{"No", "false", "0", "unchecked"} {
+		if !isNegativeCheckboxValue(yes) {
+			t.Errorf("%q should read as negative", yes)
+		}
+	}
+	for _, notNegative := range []string{"Yes", "I agree", "Nope, I have no objection", "none of the above", "November"} {
+		if isNegativeCheckboxValue(notNegative) {
+			t.Errorf("%q must NOT read as negative -- it would silently untick a real answer", notNegative)
+		}
 	}
 }
 

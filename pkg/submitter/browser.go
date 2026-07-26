@@ -1388,7 +1388,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				// this condition entirely -- the field was recorded as neither
 				// landed nor failed, so it vanished from the logs and no commit
 				// was attempted. Treat an unverifiable field as not landed.
-				landed, vErr := verifyFixLanded(target, selector)
+				landed, vErr := verifyFixLanded(target, selector, value)
 				if vErr != nil {
 					log.Printf("[Auto-Submit] Could not verify whether %q was set (%v); treating as not set", selector, vErr)
 				}
@@ -1936,7 +1936,7 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 		return err
 	}
 
-	kind, evalErr := el.Evaluate("el => el.tagName.toLowerCase() + '|' + ((el.type || '').toLowerCase())", nil)
+	kind, evalErr := el.Evaluate(controlShapeJS, nil)
 	shape, _ := kind.(string)
 	if evalErr != nil {
 		shape = ""
@@ -1960,12 +1960,10 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 	case shape == "input|checkbox", shape == "input|radio":
 		// A checkbox's "value" is its checked state; anything affirmative
 		// means tick it, and an explicit negative must not silently tick it.
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "false", "no", "0", "unchecked":
+		if isNegativeCheckboxValue(value) {
 			return el.Uncheck(playwright.LocatorUncheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
-		default:
-			return el.Check(playwright.LocatorCheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 		}
+		return el.Check(playwright.LocatorCheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
 
 	default:
 		return el.Fill(value, playwright.LocatorFillOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
@@ -2059,10 +2057,21 @@ const isComboboxInputJS = `el => {
                   p.querySelector('input[type="hidden"][name^="selected"]')));
 }`
 
-func verifyFixLanded(target fillTarget, selector string) (bool, error) {
+// verifyFixLanded reports whether a fix produced the state the model asked for.
+//
+// bugs.md #107: the intended value matters. For a checkbox the model
+// deliberately declined ("No"), *unchecked is the requested state*, and the
+// generic "does it hold a value" read reports false -- so a correct answer was
+// recorded as an uncommittable field and routed the whole job to manual
+// review. Live on Sporty Group: `left the control empty ...
+// input[id='question_8242451101[]_54236360101'] (tried "No")`.
+func verifyFixLanded(target fillTarget, selector, value string) (bool, error) {
 	el, err := resolveFieldLocator(target, selector)
 	if err != nil {
 		return false, err
+	}
+	if isNegativeCheckboxValue(value) && isTickableControl(el) {
+		return true, nil
 	}
 	return locatorHasValue(el)
 }
@@ -2279,6 +2288,32 @@ func allFieldsWereSet(rejectedIDs []string, applied map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// controlShapeJS reports "tagname|type" for a control, e.g. "input|checkbox".
+const controlShapeJS = `el => el.tagName.toLowerCase() + '|' + ((el.type || '').toLowerCase())`
+
+// isNegativeCheckboxValue reports whether a model-supplied value means "leave
+// this box unticked". Single source of truth for applyValidationFix (which
+// unchecks) and verifyFixLanded (which must then accept unchecked as correct).
+//
+// bugs.md #107.
+func isNegativeCheckboxValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "false", "no", "0", "unchecked":
+		return true
+	}
+	return false
+}
+
+// isTickableControl reports whether the control is a checkbox or radio.
+func isTickableControl(el playwright.Locator) bool {
+	kind, err := el.Evaluate(controlShapeJS, nil)
+	if err != nil {
+		return false
+	}
+	shape, _ := kind.(string)
+	return shape == "input|checkbox" || shape == "input|radio"
 }
 
 // rejectedDespiteLanding pairs each still-rejected field with the value the

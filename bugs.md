@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 107 | [A checkbox the model deliberately declined was recorded as uncommittable](#107-a-checkbox-the-model-deliberately-declined-was-recorded-as-uncommittable) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live on Sporty Group, visible only because #97 logs the value: `1 fix(es) reported success but left the control empty ... input[id='question_8242451101[]_54236360101'] **(tried "No")**`. `applyValidationFix` correctly *unchecks* on a negative, then `verifyFixLanded` reads the generic "does it hold a value" and sees `checked=false` → not landed → `ErrUncommittableField` → the whole job to manual review. **A correct answer was recorded as a failure**, on every checkbox the model declines |
 | 106 | [A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73](#106-a-bare-bracketed-checkbox-group-id-got-no-fallbacks-at-all--the-third-shape-of-73) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "question_8242451101[]_54236360101" failed: selector matched no element (**tried 1 form(s)**)`. Greenhouse names checkbox-group controls that way; the brackets alone make `looksLikeCSSSelector` true, but there is no `tag#id` to split, so the selector was used **verbatim with no fallbacks** — and it is not valid CSS for an id either, so it matched nothing. Third shape of one defect: **#73** fixed `input#430`, **#92** fixed `#question_...[]_...`, this is the bare form with no prefix. It was the remaining blocker on Sporty Group, which reached 11 invalid → 4 with three of the four being exactly these ids |
 | 105 | [The 45-minute time budget counted bytes to read, not answers to generate](#105-the-45-minute-time-budget-counted-bytes-to-read-not-answers-to-generate) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | The `Remote` job sent a **30,477-char** payload — comfortably inside #83's 40,000 ceiling — and burned the **entire 45-minute Ollama timeout** (01:46:03 → 02:31:03) before failing. #83 derived its ceiling from input size alone, but the run must *generate* a value for every rejected field, and **Remote had 34 of them**. Against ClickHouse (11,140 chars / 3 fields / ~7 min) and Reddit (18,639 / 13 / ~15 min), field count — not payload size — is what separates the runs that finish |
 | 104 | [A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired](#104-a-captcha-swallowed-submit-hid-behind-stale-invalid-flags-so-99-never-fired) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Predicted from #99+#102, then confirmed by #100's diagnostic on the next run. Reddit job `7956443` set all five custom questions to sensible values (`"company website"`, `"Stellantis Financial Services"`, `"Yes"`, `"No"`, `"I agree"`), committed all three comboboxes, and the **identical five** came back flagged with the page **byte-for-byte unchanged** (140544 chars twice). Nothing was left to fix — the submit was never reaching the server past the page's reCAPTCHA. #99 could not catch it because the verdict settles on flagged fields and never reaches budget exhaustion |
@@ -147,6 +148,29 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 107. A checkbox the model deliberately declined was recorded as uncommittable (Resolved 2026-07-26)
+
+**Visible only because #97 logs the attempted value.** Without it this reads as an ordinary uncommittable field:
+
+```
+03:12:53 Attempt 3: 1 fix(es) reported success but left the control empty (autocomplete/combobox suspected):
+         input[id='question_8242451101[]_54236360101'] (tried "No")
+03:13:01 Sporty Group needs manual completion — queued for manual submission:
+         a required field could not be committed with the configured value: ... (tried "No")
+```
+
+**The two halves disagree.** `applyValidationFix` handles a checkbox correctly: a value of `false`/`no`/`0`/`unchecked` calls `Uncheck`, everything else calls `Check` — with a comment that an explicit negative "must not silently tick it". So `"No"` did exactly the right thing.
+
+Then `verifyFixLanded` re-reads the control with the generic *does it hold a value* check, sees `checked=false`, and reports **not landed**. That routes to the combobox-commit fallback (it is not a combobox), fails, and lands in `ErrUncommittableField` → `MANUAL_REQUIRED`.
+
+**So a correct answer is recorded as a failure, on every checkbox the model declines.** The verification never knew what was asked for; it only knew what the control now holds, and for a deliberately-unticked box those are the same thing but mean opposite outcomes. Third instance this session of a check reading state without the intent behind it (#102's stale `aria-invalid`, #103's `id|label`, now this).
+
+**Fix.** `verifyFixLanded` takes the intended value. When that value is negative *and* the control is a checkbox or radio, unchecked **is** the requested state and counts as landed. The negative set is extracted into `isNegativeCheckboxValue`, now the single source of truth for both the action and its verification, so the two halves cannot drift apart again — which is what caused this.
+
+**Guarded against over-matching.** A test pins that `"Nope, I have no objection"`, `"none of the above"` and `"November"` do **not** read as negative. Exact-match on the trimmed, lowercased value only: a substring rule would silently untick real answers, which is worse than the bug being fixed.
+
+**Consequence.** Sporty Group is the clearest case — it reached **11 invalid → 3** and was sent to manual over a checkbox it had answered correctly. Documents were preserved and the field and value named, so the outcome was safe; it was simply wrong.
 
 ### 106. A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73 (Resolved 2026-07-26)
 
