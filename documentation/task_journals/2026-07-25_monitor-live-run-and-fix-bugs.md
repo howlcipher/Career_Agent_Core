@@ -256,6 +256,26 @@ Orkes and AlphaSense are the cleanest cases yet: **`invalid fields: 0`** — the
   - **#110:** `pickComboboxOption` matched by raw bidirectional `strings.Contains`. Normalisation strips punctuation but not word boundaries, so **a short label hides inside longer prose**: `"no"` sits inside `"prefer **no**t to say"`, and asking for **"Prefer not to say" selected the box labelled "No"**. `"male"` inside `"female"` is identical in shape. **On an EEO question that converts a declined answer into a substantive one submitted under the user's name** — the exact failure #79 exists to prevent, inside the function that enforces it. `optionTextMatches` now compares **whole words in sequence**; every match the old rule was written for survives with a test each, and **all six pre-existing `pickComboboxOption` tests pass unchanged**, which is the evidence the looseness was never needed.
 - **Restarted (27th) at 04:09 for #109/#110, immediately rather than at a break.** #110 could commit a materially wrong EEO answer on a real application — outward-facing harm, the standard that justified the urgent restarts for #82 and #102. PID `4125158` (`verify84h`), 58 queued; verified the loose substring matcher is gone from the source and the group-refusal string is in the binary. Sporty Group and Ethos requeued. Monitor `bjejz88wb`.
 
+### DEFINITIVE: Sporty Group reached a complete form and was stopped only by reCAPTCHA (2026-07-26 04:32)
+
+The single clearest result of the session, on the job that has been its best diagnostic all night:
+
+```
+04:16:16 Narrowed ... still invalid: <11 fields>
+04:31:45 Submit verdict after 8s: ... invalid fields: 1        <- only gdpr_processing_consent_given_1
+04:32:32 Submit verdict after 15.5s: no confirmation and no rejection ... invalid fields: 0
+04:32:32 Sporty Group is behind a bot-protection challenge — marked BLOCKED_CAPTCHA
+         (submit produced no outcome; https://www.recaptcha.net/recaptcha/enterprise/anchor present)
+```
+
+**11 → 1 → 0.** The narrowed payload collapsed **6,389 → 631 chars**. Inbox checked: no Greenhouse email, so the submit never reached the server.
+
+**What this proves.** The pipeline can now completely fill a hard Greenhouse form — 11 required custom questions spanning a **checkbox group** (#109), **EEO comboboxes** (#98/#110), a **GDPR consent box**, react-select autocompletes and free text — and reach `invalid fields: 0`. The only thing standing between that and a filed application is **reCAPTCHA**, correctly identified and labelled in 15 seconds instead of the ~30 minutes it used to cost.
+
+**Sporty Group is also the session's clearest illustration of layered defects.** It surfaced **#90, #91, #92, #106, #107, #109 and #110** — each one invisible until the previous was fixed, and the last two only found because the job was re-run after every fix.
+
+**Five boards now confirmed blocked** across both platforms: `reddit`, `orkes`, `alphasense`, `sportygroup` (reCAPTCHA) and `dexcarehealth` (hCaptcha).
+
 ### Where the ceiling actually is now
 
 The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
