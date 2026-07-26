@@ -3316,3 +3316,68 @@ type MechanicalEvalPage struct {
 func (m *MechanicalEvalPage) Evaluate(string, ...interface{}) (interface{}, error) {
 	return m.payload, m.err
 }
+
+// bugs.md #115: discovered from #114's diagnostic dump. Greenhouse renders the
+// one-time code as EIGHT separate inputs, security-input-0 .. security-input-7,
+// each maxlength=1 and each with an EMPTY name attribute:
+//
+//	id:security-input-0  label:Security code  maxlength:1  visible:true
+//	id:security-input-1  maxlength:1  visible:true   ... through -7
+//
+// Every previous selector looked for a single security_code/security-code
+// field, so none could match, and filling one box with an 8-character code
+// would have failed regardless.
+func TestFillSplitSecurityCode_DistributesOneCharacterPerBox(t *testing.T) {
+	const code = "82taTsxA" // the real 8-character shape
+
+	boxes := make([]string, 8)
+	loc := &MockLocator{
+		countFunc:     func() (int, error) { return 8, nil },
+		isVisibleFunc: func() (bool, error) { return true, nil },
+	}
+	// nth(i) returns a locator that records into boxes[i].
+	loc.nthFunc = func(i int) playwright.Locator {
+		return &MockLocator{
+			countFunc:     func() (int, error) { return 1, nil },
+			isVisibleFunc: func() (bool, error) { return true, nil },
+			fillFunc:      func(v string) error { boxes[i] = v; return nil },
+		}
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	if !fillSplitSecurityCode(pageTarget{page: page}, code) {
+		t.Fatal("an 8-box widget must accept an 8-character code")
+	}
+	if got := strings.Join(boxes, ""); got != code {
+		t.Errorf("reassembled %q from the boxes, want %q", got, code)
+	}
+}
+
+// Fewer boxes than characters is not this widget: a partial fill would submit a
+// truncated code, which is worse than reporting failure.
+func TestFillSplitSecurityCode_RefusesWhenThereAreTooFewBoxes(t *testing.T) {
+	loc := &MockLocator{
+		countFunc:     func() (int, error) { return 4, nil },
+		isVisibleFunc: func() (bool, error) { return true, nil },
+		nthFunc: func(int) playwright.Locator {
+			return &MockLocator{
+				countFunc:     func() (int, error) { return 1, nil },
+				isVisibleFunc: func() (bool, error) { return true, nil },
+				fillFunc:      func(string) error { return nil },
+			}
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	if fillSplitSecurityCode(pageTarget{page: page}, "82taTsxA") {
+		t.Error("4 boxes must not accept an 8-character code -- that would submit a truncated answer")
+	}
+}
+
+func TestFillSplitSecurityCode_NoWidgetIsNotAnError(t *testing.T) {
+	loc := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+	if fillSplitSecurityCode(pageTarget{page: page}, "82taTsxA") {
+		t.Error("no widget present must simply report false so the single-field path runs")
+	}
+}

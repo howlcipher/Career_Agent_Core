@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 115 | [Greenhouse splits the one-time code across eight single-character inputs](#115-greenhouse-splits-the-one-time-code-across-eight-single-character-inputs) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **#114's diagnostic answered it in one cycle.** The real markup is `security-input-0` … `security-input-7`, **eight inputs, each `maxlength=1`, each with an EMPTY `name`**. Every prior selector looked for a single `security_code`/`security-code` field — none could match, and filling one box with an 8-character code would have failed anyway. This was the last unimplemented link between an accepted submission and a completed application |
 | 114 | [When the emailed code cannot be entered, nothing records what IS on the page](#114-when-the-emailed-code-cannot-be-entered-nothing-records-what-is-on-the-page) | Major | Resolved (2026-07-26, diagnostic added) | — | Opus 5 | Gemini 3 Pro | #113 proved the field is **absent, not late** — a full 20s wait found nothing (`could not find a visible security-code field to fill within 20s`). But the error can only name the selectors that *failed*, so the real field cannot be identified without reproducing an accepted submit, which means **filing a real application**. Detection fires on substrings like `security-code`, which a CSS class or notice text satisfies with no input present. Same move as #80/#96/#97/#100, each of which paid off within one cycle |
 | 113 | [The emailed code was retrieved and then discarded, because the code field had not rendered yet](#113-the-emailed-code-was-retrieved-and-then-discarded-because-the-code-field-had-not-rendered-yet) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **One step from the first confirmed application.** Akuity's submit was ACCEPTED, the gate was detected, and #32 **successfully retrieved the code** — then `fillSecurityCode` failed instantly with `could not find a visible security-code field to fill` and the job went to manual review. Detection substring-matches the HTML; filling needs a real *visible* locator, and the input renders later than the markers. Everything happened in one second, ~11s after the submit. Same DOM-lag as #95, #102 and #111, one layer further in |
 | 112 | [The same posting exists twice, once per URL scheme, and their statuses have diverged](#112-the-same-posting-exists-twice-once-per-url-scheme-and-their-statuses-have-diverged) | Major | Resolved for the dedup path (2026-07-26); funnel row merge left open | — | Opus 5 | Gemini 3 Pro | Measured: **20 scheme-duplicate pairs** in `job_funnel` (`http://x` and `https://x` for one posting), **11 of them holding different statuses** — `SKIPPED`/`DISCOVERED` ×5, `FAILED_SUBMIT`/`DISCOVERED` ×4, `BLOCKED_CAPTCHA`/`DISCOVERED`, `FAILED_SUBMIT`/`PROCESSING`. `AddToFunnel` keys on the raw URL via `ON CONFLICT(url)`, so the two are separate jobs. **Outward-facing consequence on the dedup path:** a job recorded as applied under one scheme was not deduped under the other, so it could be applied to twice |
@@ -183,6 +184,36 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 115. Greenhouse splits the one-time code across eight single-character inputs (Resolved 2026-07-26)
+
+**#114 answered this within one cycle of shipping — the sixth consecutive time that "log the evidence before guessing the cause" has paid off** (#80, #96, #97, #100, #114, now this).
+
+The diagnostic dumped every fillable input present at the moment the code could not be entered, and the answer was unmistakable:
+
+```
+id:security-input-0  label:Security code  maxlength:1  type:text  visible:true
+id:security-input-1  maxlength:1  visible:true
+id:security-input-2  maxlength:1  visible:true
+...
+id:security-input-7  maxlength:1  visible:true
+```
+
+**Eight separate inputs, one character each, every `name` attribute empty.**
+
+Three independent reasons the old code could never have worked, and none of them were guessable:
+
+1. The ids are `security-input-N`. Every selector looked for `security_code`, `securityCode`, `verification_code`, or `id*='security-code'` — **`security-input` contains none of those**.
+2. `name` is empty on all eight, so the four name-based selectors were dead on arrival regardless.
+3. Even a matching selector would have called `Fill("82taTsxA")` on a box with `maxlength=1`.
+
+**This was the last unimplemented link** between an accepted submission and a completed application. Everything either side of it was already confirmed live: the form fills to `invalid fields: 0`, #111 recognises the acceptance from the mailbox, #93 detects the gate, and improvements #32 retrieves the real code.
+
+**Fix.** `fillSplitSecurityCode` tries the split-box layout **first**, since it is what Greenhouse actually uses, and distributes one character per box. It requires **at least as many boxes as characters** and fills exactly `len(code)` of them: fewer boxes means this is not the widget for this code, and a partial fill would submit a **truncated** answer, which is worse than reporting failure. Three tests, including one that reassembles the code from the boxes and asserts it round-trips, and one pinning that a 4-box widget refuses an 8-character code.
+
+The single-field path is retained and still runs when no split widget is present, so other ATS platforms are unaffected.
+
+**Also visible in that dump, worth recording:** `g-recaptcha-response` was present on the page while this submission was **accepted** — direct confirmation of the score-based behaviour inferred in #104's correction, and of why widget presence alone must never be treated as blocking.
 
 ### 114. When the emailed code cannot be entered, nothing records what IS on the page (Resolved 2026-07-26)
 

@@ -602,9 +602,61 @@ func waitForSecurityCode(notBefore time.Time) (string, error) {
 // layer further in.
 var securityCodeFieldBudget = 20 * time.Second
 
+// splitSecurityCodeSelectors match one-character-per-box one-time-code widgets.
+//
+// bugs.md #115: Greenhouse renders the code as EIGHT separate inputs --
+// security-input-0 .. security-input-7, each maxlength=1, each with an empty
+// name attribute. Discovered from #114's diagnostic dump; every previous
+// selector looked for a single `security_code`/`security-code` field, so none
+// could match, and filling one box with an 8-character code would have failed
+// anyway.
+var splitSecurityCodeSelectors = []string{
+	"input[id^='security-input-']",
+	"input[id^='verification-input-']",
+	"input[data-testid^='security-input']",
+}
+
+// fillSplitSecurityCode distributes one character per box across a
+// one-time-code widget, and reports whether it filled the whole code.
+//
+// Requires at least as many boxes as characters, and fills exactly len(code) of
+// them. Fewer boxes than characters means this is not the widget for this code,
+// and a partial fill would submit a truncated answer.
+func fillSplitSecurityCode(target fillTarget, code string) bool {
+	for _, sel := range splitSecurityCodeSelectors {
+		loc := target.Loc(sel)
+		count, err := loc.Count()
+		if err != nil || count < len(code) {
+			continue
+		}
+		filled := 0
+		for i, ch := range code {
+			box := loc.Nth(i)
+			if vis, vErr := box.IsVisible(); vErr != nil || !vis {
+				break
+			}
+			if fErr := box.Fill(string(ch), playwright.LocatorFillOptions{
+				Timeout: playwright.Float(fillActionTimeoutMs),
+			}); fErr != nil {
+				break
+			}
+			filled++
+		}
+		if filled == len(code) {
+			return true
+		}
+	}
+	return false
+}
+
 func fillSecurityCode(target fillTarget, code string) error {
 	deadline := time.Now().Add(securityCodeFieldBudget)
 	for {
+		// bugs.md #115: the split-box layout first -- it is what Greenhouse
+		// actually uses, and a single-field selector can never match it.
+		if fillSplitSecurityCode(target, code) {
+			return nil
+		}
 		for _, sel := range securityCodeSelectors {
 			loc := target.Loc(sel)
 			count, err := loc.Count()
