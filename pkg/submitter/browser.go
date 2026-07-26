@@ -385,9 +385,18 @@ func awaitSubmissionOutcome(page playwright.Page, urlBeforeClick string) (bool, 
 	for {
 		currentURL = page.URL()
 		pageContent, _ := page.Content()
-		v := decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent,
-			time.Since(start), len(parser.InvalidFieldIdentifiers(pageContent)))
+		invalid := parser.InvalidFieldIdentifiers(pageContent)
+		elapsed := time.Since(start)
+		v := decideSubmissionOutcome(urlBeforeClick, currentURL, pageContent, elapsed, len(invalid))
 		if v.Done {
+			// bugs.md #96: one line per submit click recording what the verdict
+			// was actually made on. #95 took a full day to find because the only
+			// evidence a submit had been judged was the word "failed" -- nothing
+			// said how long it waited, whether the page moved, or what came
+			// back. Same reasoning as #80: the diagnostic is written the moment
+			// its absence costs a cycle, not after the next one.
+			log.Printf("[Auto-Submit] Submit verdict after %s: %s (url moved: %t, invalid fields: %d, page %d chars)",
+				elapsed.Round(100*time.Millisecond), v.Reason, currentURL != urlBeforeClick, len(invalid), len(pageContent))
 			return v.Confirmed, v.Reason, currentURL
 		}
 		page.WaitForTimeout(float64(submitOutcomePollInterval.Milliseconds()))
