@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 93 | [Greenhouse's emailed security-code gate read as a validation error, burning the full 45-minute timeout](#93-greenhouses-emailed-security-code-gate-read-as-a-validation-error-burning-the-full-45-minute-timeout) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found from the user's inbox, not the logs.** A Greenhouse submit to Surt AI produced an email at **20:58:03 UTC — the exact second of the click**: *"Copy and paste this code into the security code field on your application ... After you enter the code, resubmit your application."* So the submit **succeeded** and Greenhouse issued an out-of-band verification challenge. The resulting security-code input read as just another unsatisfied required field, so the whole 50,501-char form went to the model and burned the full 45-minute timeout. **This reframes #83:** the oversized payload was a *symptom* of the code gate, not the underlying event |
 | 92 | [Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing](#92-checkbox-group-ids-contain-brackets-which-are-css-attribute-syntax-so-they-resolved-to-nothing) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "input#question_8242451101[]_54236360101" failed: selector matched no element (tried 1 form(s))`. Greenhouse names checkbox-group controls with a literal `[]` in the id; `#question_...[]_...` is not a valid CSS id selector because the brackets read as attribute syntax. **The same class as #73** (leading digits), and #73's own attribute-form fallback was blocked here because `splitTagID` explicitly refused any id containing brackets — note `tried 1 form(s)`, versus the 3 an eligible selector gets |
 | 91 | [#90's single-option rule could never fire, because typing filters the sole option out](#91-90s-single-option-rule-could-never-fire-because-typing-filters-the-sole-option-out) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in #90's own fix, caught on the very next run.** Sporty Group's `GDPR Acknowledgement*` still reported `left the control empty` with #90 shipped. #90 takes the sole option when `len(options) == 1` — but `setComboboxValue` types the model's proposed value *first*, and typing "Yes" into a widget whose only entry is "Acknowledge/Confirm" filters the list to **zero**. So the count was 0, never 1, and the rule could not fire for precisely the case it was written for |
 | 90 | [A required control with exactly one option was refused, sending a job to manual review one click from completion](#90-a-required-control-with-exactly-one-option-was-refused-sending-a-job-to-manual-review-one-click-from-completion) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Sporty Group (Greenhouse, score **90**) got **10 of its 11 invalid fields satisfied** — invalid payload collapsed 6389 → 610 chars, including 3 committed autocompletes, a GDPR checkbox and a checkbox-group entry. The sole holdout was `GDPR Acknowledgement*`, a combobox offering **exactly one option: "Acknowledge/Confirm"**. The model proposed a differently-worded affirmative, so #79's containment check matched nothing and selected nothing — correct caution where several options exist, over-conservative where there is only one and therefore no wrong choice to make |
@@ -127,6 +128,38 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 93. Greenhouse's emailed security-code gate read as a validation error, burning the full 45-minute timeout (Resolved 2026-07-25)
+
+**Found from the user's inbox, not from the logs** — which is the whole point of this entry. The agent's own telemetry could not see it.
+
+The user forwarded a Greenhouse email:
+
+> **Security code for your application to Surt AI**
+> Hi William, Copy and paste this code into the security code field on your application: `uOSBQvRu`
+> After you enter the code, resubmit your application.
+
+Timestamp: **2026-07-25 20:58:03 UTC**. The surtai submit clicked at **16:58:03 local — the same second.**
+
+**What actually happened**, versus what the logs said:
+
+| logged | actually |
+| --- | --- |
+| `Submission failed validation. Retrying...` | the submit reached Greenhouse and **succeeded** |
+| retry payload 50,501 chars, no `aria-invalid` | the page now showed a **security-code field** |
+| `context deadline exceeded` after 45 min | the model was asked to "fix" a field only an emailed code can satisfy |
+
+**This reframes #83.** That entry blamed a theme with no `aria-invalid` markers forcing a full-form payload. The size ceiling it added is still correct and still worth having — but the *reason* this particular form had nothing flagged invalid was that it was no longer a validation failure at all. It was a verification gate.
+
+**Why no number of retries could ever work:** the code exists only in the applicant's mailbox. The agent has no access to it, so each attempt asked a local model to invent a value that cannot be invented — at ~12 minutes a go, then 45 for the timeout.
+
+**Fix:** `parser.DetectSecurityCodeChallenge` checks for a code input **and** the matching page wording, and the retry loop returns `ErrNeedsEmailVerification` **before any model call** — ahead of even the attestation guard, since a code the agent cannot obtain makes everything downstream pointless. It joins `manualReviewErrors`, so #84's routing preserves the job with its documents.
+
+**Both conditions are required deliberately.** Wording alone would strand real applications — job descriptions mention "security" and "verification" routinely — and a bare field without the wording is not evidence of a gate. Pinned by two negative tests.
+
+**Open question for the user, not decided here:** making the agent retrieve these codes itself would need Gmail API credentials wired into `cmd/agent`. That is free but a genuine new capability with real access implications, and it is the user's call. Filed as improvements #32.
+
+**Tests:** `TestDetectSecurityCodeChallenge_FindsTheGreenhouseCodeGate`, `TestDetectSecurityCodeChallenge_IgnoresWordingWithoutAField`, `TestDetectSecurityCodeChallenge_IgnoresAFieldWithoutTheWording`.
 
 ### 92. Checkbox-group ids contain brackets, which are CSS attribute syntax, so they resolved to nothing (Resolved 2026-07-25)
 

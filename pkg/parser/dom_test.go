@@ -374,3 +374,40 @@ func TestDetectAttestationQuestions_FindsClearanceAndCriminalHistory(t *testing.
 		t.Fatalf("got %v, want security clearance + criminal history", got)
 	}
 }
+
+// bugs.md #93: confirmed live. A Greenhouse submit to Surt AI produced an
+// email at the exact second of the click — "Copy and paste this code into the
+// security code field on your application ... After you enter the code,
+// resubmit your application." The form then renders a security-code input,
+// which reads as just another unsatisfied required field, so the whole 50k
+// form went to the model and burned the full 45-minute timeout.
+func TestDetectSecurityCodeChallenge_FindsTheGreenhouseCodeGate(t *testing.T) {
+	form := `<form>
+		<label for="security_code">Security code</label>
+		<input id="security_code" name="security_code" type="text">
+		<p>Copy and paste this code into the security code field on your application.</p>
+	</form>`
+	if !DetectSecurityCodeChallenge(form) {
+		t.Error("a security-code input plus the matching wording is a code gate the agent cannot satisfy")
+	}
+}
+
+// Wording alone must not strand a real application — job descriptions mention
+// "verification" and "security" routinely.
+func TestDetectSecurityCodeChallenge_IgnoresWordingWithoutAField(t *testing.T) {
+	form := `<form>
+		<label for="q">Describe your experience with security code review</label>
+		<textarea id="q" name="q"></textarea>
+	</form>`
+	if DetectSecurityCodeChallenge(form) {
+		t.Error("wording without an actual code input must not be treated as a code gate")
+	}
+}
+
+// And a code field without the wording is not enough either.
+func TestDetectSecurityCodeChallenge_IgnoresAFieldWithoutTheWording(t *testing.T) {
+	form := `<form><input id="security_code" name="security_code"><p>Tell us about yourself.</p></form>`
+	if DetectSecurityCodeChallenge(form) {
+		t.Error("a bare field with no code wording is not evidence of an emailed-code gate")
+	}
+}

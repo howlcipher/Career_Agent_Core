@@ -412,6 +412,18 @@ var ErrNeedsUnprovidedAttestation = errors.New("form requires a legal attestatio
 // reaching the same wall.
 var ErrUncommittableField = errors.New("a required field could not be committed with the configured value")
 
+// ErrNeedsEmailVerification marks a form waiting on a one-time code that was
+// delivered out of band.
+//
+// bugs.md #93: confirmed live. A Greenhouse submit to Surt AI produced an
+// email at the exact second of the click -- "Copy and paste this code into the
+// security code field on your application ... After you enter the code,
+// resubmit your application." The agent has no access to the mailbox, so no
+// number of retries can satisfy it. Worse, the code field reads as an ordinary
+// unsatisfied required field, so the previous behaviour was to send the entire
+// form to the model and burn the full 45-minute timeout on it.
+var ErrNeedsEmailVerification = errors.New("form is waiting on a one-time code sent by email")
+
 // manualReviewErrors are the outcomes that are not automation failures: the
 // job is sound, something outside the agent's authority is simply required to
 // finish it. Every one of them must be preserved for manual completion rather
@@ -427,6 +439,7 @@ var manualReviewErrors = []error{
 	ErrFormTooLargeForModel,
 	ErrNeedsUnprovidedAttestation,
 	ErrUncommittableField,
+	ErrNeedsEmailVerification,
 }
 
 // IsManualReviewError reports whether err means "queue this for a human"
@@ -1017,6 +1030,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// combobox commit works (#81), whatever the model picks here is
 			// really submitted -- so an unanswerable attestation has to stop
 			// the job, not produce a guess.
+			// bugs.md #93: check before the attestation guard and before any
+			// model call -- a code the agent cannot obtain makes everything
+			// downstream pointless, and this is what silently cost 45 minutes.
+			if parser.DetectSecurityCodeChallenge(prunedHTML) {
+				return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
+			}
+
 			if missing := pii.MissingAttestations(parser.DetectAttestationQuestions(prunedHTML)); len(missing) > 0 {
 				return fmt.Errorf("%w: %s", ErrNeedsUnprovidedAttestation, strings.Join(missing, ", "))
 			}

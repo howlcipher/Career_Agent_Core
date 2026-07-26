@@ -417,3 +417,61 @@ func DetectAttestationQuestions(formHTML string) []string {
 	}
 	return found
 }
+
+// securityCodePatterns are the phrasings ATS platforms use when they have
+// emailed a one-time code and are waiting for it to be typed back.
+//
+// bugs.md #93: confirmed live. A Greenhouse submit to Surt AI produced an
+// email at the exact second of the click -- "Copy and paste this code into the
+// security code field on your application ... After you enter the code,
+// resubmit your application." The form then renders a security-code input,
+// which reads as just another unsatisfied required field. The agent cannot
+// obtain the code, so every attempt to "fix" it is wasted.
+var securityCodePatterns = []string{
+	"security code field",
+	"enter the code",
+	"verification code",
+	"security code",
+	"one-time code",
+	"code we emailed",
+	"code sent to your email",
+}
+
+// DetectSecurityCodeChallenge reports whether a form is waiting for a one-time
+// code that was delivered out of band.
+//
+// bugs.md #93. Deliberately requires an actual input whose name/id mentions a
+// code as well as the page wording: job descriptions mention "verification"
+// and "security" often enough that wording alone would strand real
+// applications.
+func DetectSecurityCodeChallenge(formHTML string) bool {
+	lower := strings.ToLower(formHTML)
+
+	hasField := false
+	for _, marker := range []string{
+		`name="security_code"`, `id="security_code"`,
+		`name="securitycode"`, `id="securitycode"`,
+		`name="verification_code"`, `id="verification_code"`,
+		"security-code", "verification-code",
+	} {
+		if strings.Contains(lower, marker) {
+			hasField = true
+			break
+		}
+	}
+	if !hasField {
+		return false
+	}
+
+	text, err := PruneDOMToText(formHTML)
+	if err != nil {
+		text = formHTML
+	}
+	text = strings.ToLower(text)
+	for _, p := range securityCodePatterns {
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
+}
