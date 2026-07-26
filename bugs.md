@@ -194,6 +194,12 @@ Normalisation strips punctuation but not word boundaries, so a **short label hid
 
 All six pre-existing `pickComboboxOption` tests pass unchanged, which is the evidence that the loosening this replaces was never actually needed.
 
+**Retroactive exposure, stated because it affects work already done.** The loose matcher was live for the whole 2026-07-25/26 session and every prior one. Any single-choice question where a short option label is a substring of the intended answer could have been committed wrongly, and several of those commits happened on forms that genuinely reached Greenhouse.
+
+**Which specific answers were affected cannot be determined.** Values were not logged until #97 shipped, and the browser state is gone. What *is* established: the four applications that reached Greenhouse (Surt AI, ClickHouse ×2, Akuity) are all **incomplete**, held at an emailed security-code challenge, so nothing has been finally filed carrying a wrong answer. That is fortunate rather than by design.
+
+**Action for the user:** if any of those pending applications is completed by hand, check the EEO / self-identification answers rather than trusting what the agent selected.
+
 ### 109. A single-choice question rendered as a checkbox group was read as one box to untick (Resolved 2026-07-26)
 
 Probed Sporty Group's real form after #106/#107 made its last fields settable and it *still* rejected them:
