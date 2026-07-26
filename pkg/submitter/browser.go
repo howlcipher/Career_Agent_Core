@@ -673,11 +673,43 @@ const maxPromptCharsForModelContext = 80000
 // the request is mathematically doomed — which matches the 50,501-char
 // observation precisely. Set to 40,000 to leave headroom for token generation
 // and for CPU contention with the browser.
-const maxPromptCharsForTimeBudget = 40000
+const maxPromptCharsForTimeBudget = 28000
+
+// maxInvalidFieldsForTimeBudget caps how many fields one retry may ask the
+// model to answer.
+//
+// bugs.md #105. #83 derived its character ceiling from input size alone, and
+// that model is wrong: the run has to *generate* a value for every rejected
+// field, and output dominates once the field count grows. Measured on this
+// hardware:
+//
+//	ClickHouse   11,140 chars,  3 fields -> ~7 min   ok
+//	Reddit       18,639 chars, 13 fields -> ~15 min  ok
+//	Remote       30,477 chars, 34 fields -> 45 min   TIMED OUT
+//
+// Remote passed the old 40,000-char ceiling comfortably and still burned the
+// entire Ollama timeout. Field count, not payload size, is what separates it
+// from the two that finished -- so the guard needs both, and the character
+// ceiling drops below the observed failure as well.
+const maxInvalidFieldsForTimeBudget = 20
 
 func likelyExceedsModelContext(domContent, profileContext string) bool {
 	total := len(domContent) + len(profileContext)
 	return total > maxPromptCharsForModelContext || total > maxPromptCharsForTimeBudget
+}
+
+// exceedsRetryTimeBudget reports whether one validation retry is too expensive
+// for the local model, by size OR by the number of answers it must generate.
+//
+// bugs.md #105: the second half is the part #83 missed. A 34-field form sat
+// well inside the character ceiling and still consumed the full 45-minute
+// timeout, because the cost is dominated by generating 34 values rather than
+// by reading the form.
+func exceedsRetryTimeBudget(domContent, profileContext string, invalidFieldCount int) bool {
+	if likelyExceedsModelContext(domContent, profileContext) {
+		return true
+	}
+	return invalidFieldCount > maxInvalidFieldsForTimeBudget
 }
 
 // authGatedATSHosts lists ATS platforms whose application flow always requires
@@ -1299,7 +1331,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if optionBlock := enumerateComboboxOptions(target, parser.InvalidFieldIdentifiers(prunedHTML)); optionBlock != "" {
 				fullProfileContext += "\n\n" + optionBlock
 			}
-			if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
+			// bugs.md #105: count the answers this retry must generate, not just
+			// the bytes it must read.
+			if exceedsRetryTimeBudget(prunedHTML, fullProfileContext, len(parser.InvalidFieldIdentifiers(prunedHTML))) {
 				return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, ExtractDomain(applyURL))
 			}
 			fixesMap, fixErr := mapper.SolveValidationErrors(prunedHTML, fullProfileContext)

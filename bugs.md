@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 105 | [The 45-minute time budget counted bytes to read, not answers to generate](#105-the-45-minute-time-budget-counted-bytes-to-read-not-answers-to-generate) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | The `Remote` job sent a **30,477-char** payload — comfortably inside #83's 40,000 ceiling — and burned the **entire 45-minute Ollama timeout** (01:46:03 → 02:31:03) before failing. #83 derived its ceiling from input size alone, but the run must *generate* a value for every rejected field, and **Remote had 34 of them**. Against ClickHouse (11,140 chars / 3 fields / ~7 min) and Reddit (18,639 / 13 / ~15 min), field count — not payload size — is what separates the runs that finish |
 | 104 | [A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired](#104-a-captcha-swallowed-submit-hid-behind-stale-invalid-flags-so-99-never-fired) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Predicted from #99+#102, then confirmed by #100's diagnostic on the next run. Reddit job `7956443` set all five custom questions to sensible values (`"company website"`, `"Stellantis Financial Services"`, `"Yes"`, `"No"`, `"I agree"`), committed all three comboboxes, and the **identical five** came back flagged with the page **byte-for-byte unchanged** (140544 chars twice). Nothing was left to fix — the submit was never reaching the server past the page's reCAPTCHA. #99 could not catch it because the verdict settles on flagged fields and never reaches budget exhaustion |
 | 103 | [#98 showed the model react-select's internal option ids, and it answered with them](#103-98-showed-the-model-react-selects-internal-option-ids-and-it-answered-with-them) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #98 fix, caught by #100's diagnostic within one cycle of that diagnostic shipping.** `readComboboxOptions` returns `"id\|label"` so `pickComboboxOption` can click by id; #98 put those raw strings into the prompt, and the model faithfully answered `react-select-question_67179376-option-0\|Yes` — an internal DOM id no widget offers. Live: `Rejected despite being set last attempt: question_67179376 = "react-select-question_67179376-option-0\|Yes"`. So #98 has been feeding garbage to the model since it shipped, on every combobox |
 | 102 | [#95's early exit read stale invalid flags and called four accepted submissions failures](#102-95s-early-exit-read-stale-invalid-flags-and-called-four-accepted-submissions-failures) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A defect in my own #95 fix, and the biggest single misreading of the effort.** Greenhouse *accepts* a submission and issues an emailed security-code challenge within ~1s, then re-renders the challenge later while the previous attempt's `aria-invalid` markers are **still on the page**. #95's flagged-field early exit fired at 2s on those stale markers and called the accepted submission a validation failure. Proven by timestamps: the Akuity code email is stamped **23:40:07, between** its submit click (~23:40:06) and its verdict (23:40:08); ClickHouse's is stamped **00:05:34, the same second** as its submit. **Four applications reached Greenhouse today** (Surt AI, ClickHouse ×2, Akuity) and every one was recorded as a failure |
@@ -145,6 +146,36 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 105. The 45-minute time budget counted bytes to read, not answers to generate (Resolved 2026-07-26)
+
+The single most expensive failure mode in this pipeline, recurring after #83 was supposed to have closed it:
+
+```
+01:46:01 Narrowed validation retry to the rejected fields only (79608 -> 19481 chars); still invalid: <34 fields>
+01:46:03 SolveValidationErrors API Call #16 executed. Payload length: 30477 characters.
+02:31:03 Auto-Submit failed for Remote: ... context deadline exceeded
+```
+
+**45 minutes exactly**, then nothing. And the payload was **30,477 chars against a 40,000 ceiling** — it passed the guard #83 added specifically to prevent this.
+
+**Why #83's model was incomplete.** It derived the ceiling from *reading* cost: ~7 tok/s × ~2.5 chars/token ≈ 17.5 chars/s, so 45 minutes buys ~47,000 chars, and 40,000 was set as the margin. That accounts for the prompt going in. It does not account for the answers coming out — and `SolveValidationErrors` must generate a value for **every** rejected field.
+
+Three live data points on this hardware separate cleanly on field count, not size:
+
+| job | payload | fields | outcome |
+| --- | --- | --- | --- |
+| ClickHouse | 11,140 | 3 | ~7 min, completed |
+| Reddit | 18,639 | 13 | ~15 min, completed |
+| **Remote** | **30,477** | **34** | **45 min, timed out** |
+
+Remote's payload is 1.6× Reddit's, but its field count is 2.6× — and it did not merely take longer, it failed to finish at all.
+
+**Fix.** `exceedsRetryTimeBudget` adds a field-count ceiling (**20**) alongside the character ceiling, and the character ceiling drops **40,000 → 28,000**, below the payload that was observed to fail. A retry over either limit routes to `ErrFormTooLargeForModel` → `MANUAL_REQUIRED`, which preserves the tailored documents for a human instead of spending 45 minutes to preserve nothing.
+
+Applied to the **retry** call site only. The initial `ExtractFormMapping` path keeps the size-only guard: it is not answering a list of rejected fields, so the field-count reasoning does not apply to it, and tightening it without evidence would refuse forms that currently work.
+
+A test pins the ceiling below the observed 30,477-char failure, so any future widening has to argue with the measurement rather than silently regress past it — the same treatment #83's own corrected test case got.
 
 ### 104. A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired (Resolved 2026-07-26)
 

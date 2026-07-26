@@ -2883,3 +2883,46 @@ func TestSecurityCodeGateOutranksTheCaptchaVerdict(t *testing.T) {
 		t.Error("with no gate present the captcha verdict must remain reachable")
 	}
 }
+
+// bugs.md #105: #83's ceiling models input size only. Measured on this
+// hardware, field count is what actually separates the runs that finish from
+// the one that burned the whole 45-minute Ollama timeout:
+//
+//	ClickHouse   11,140 chars,  3 fields -> ~7 min   ok
+//	Reddit       18,639 chars, 13 fields -> ~15 min  ok
+//	Remote       30,477 chars, 34 fields -> 45 min   TIMED OUT
+func TestExceedsRetryTimeBudget_CountsAnswersNotJustBytes(t *testing.T) {
+	// Remote's real shape: comfortably inside the old 40,000-char ceiling,
+	// and it still timed out. Field count has to be what catches it.
+	dom := strings.Repeat("x", 19481)
+	profile := strings.Repeat("y", 11000) // ~30,481 total, as sent
+	if !exceedsRetryTimeBudget(dom, profile, 34) {
+		t.Error("a 34-field retry must be refused; it consumed the full timeout live")
+	}
+
+	// Reddit's shape must still be allowed -- it completed in ~15 minutes.
+	okDom := strings.Repeat("x", 7212)
+	okProfile := strings.Repeat("y", 11400) // ~18,612 total
+	if exceedsRetryTimeBudget(okDom, okProfile, 13) {
+		t.Error("a 13-field retry of Reddit's size completed live and must not be refused")
+	}
+}
+
+func TestExceedsRetryTimeBudget_FieldCountAloneCanRefuse(t *testing.T) {
+	tiny := strings.Repeat("x", 500)
+	if exceedsRetryTimeBudget(tiny, "", maxInvalidFieldsForTimeBudget) {
+		t.Error("exactly at the field limit must be allowed")
+	}
+	if !exceedsRetryTimeBudget(tiny, "", maxInvalidFieldsForTimeBudget+1) {
+		t.Error("one field over the limit must be refused even on a tiny payload")
+	}
+}
+
+// The character ceiling must sit below the size that was observed to fail.
+func TestMaxPromptCharsForTimeBudget_SitsBelowTheObservedFailure(t *testing.T) {
+	const observedTimeoutChars = 30477
+	if maxPromptCharsForTimeBudget >= observedTimeoutChars {
+		t.Errorf("ceiling %d must be below the %d-char payload that timed out live (bugs.md #105)",
+			maxPromptCharsForTimeBudget, observedTimeoutChars)
+	}
+}
