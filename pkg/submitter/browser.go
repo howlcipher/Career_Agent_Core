@@ -1234,6 +1234,15 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				prunedHTML = stripped
 			}
 
+			// bugs.md #111: ask the mailbox whether the previous submit was in fact
+			// accepted. The DOM lags the acceptance by longer than the settle
+			// budget, so this is the only signal available at this point that can
+			// distinguish "blocked" from "accepted, code pending".
+			emailedCode := pendingSecurityCodeAfter(submitClickedAt)
+			if emailedCode != "" {
+				log.Printf("[Auto-Submit] %s issued a security code after the last submit — that submission was ACCEPTED", companyName)
+			}
+
 			// bugs.md #64: send only the fields the page actually rejected.
 			// The whole form is typically ~55k chars, which at this machine's
 			// measured prompt-processing rate is over half an hour of
@@ -1288,7 +1297,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						// otherwise label an accepted application captcha-blocked. This
 						// check sits above #93's gate handling below, so it has to test the
 						// gate itself rather than rely on ordering.
-						if allFieldsWereSet(ids, lastApplied) && !parser.DetectSecurityCodeChallenge(prunedHTML) {
+						if allFieldsWereSet(ids, lastApplied) && !parser.DetectSecurityCodeChallenge(prunedHTML) && emailedCode == "" {
 							if hits := detectBotProtectionOnPage(page); len(hits) > 0 {
 								return fmt.Errorf("%w at %s (every rejected field was already set; %s present)",
 									ErrCaptchaBlocked, ExtractDomain(applyURL), strings.Join(hits, ", "))
@@ -1308,7 +1317,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// bugs.md #93: check before the attestation guard and before any
 			// model call -- a code the agent cannot obtain makes everything
 			// downstream pointless, and this is what silently cost 45 minutes.
-			if parser.DetectSecurityCodeChallenge(prunedHTML) {
+			if parser.DetectSecurityCodeChallenge(prunedHTML) || emailedCode != "" {
 				// improvements.md #32: the code is obtainable if a fetcher is
 				// wired up. Without one this is a dead end, exactly as #93
 				// described.
@@ -1316,7 +1325,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
 				}
 				log.Printf("[Auto-Submit] Security-code gate detected for %s — waiting for the emailed code...", companyName)
-				code, cErr := waitForSecurityCode(submitClickedAt)
+				// bugs.md #111: if the code is already in hand from the check above,
+				// do not spend another 90 seconds waiting for it.
+				code, cErr := emailedCode, error(nil)
+				if code == "" {
+					code, cErr = waitForSecurityCode(submitClickedAt)
+				}
 				if cErr != nil || code == "" {
 					log.Printf("[Auto-Submit] No security code arrived for %s (%v) — queued for manual submission", companyName, cErr)
 					return fmt.Errorf("%w: %s", ErrNeedsEmailVerification, ExtractDomain(applyURL))
@@ -2418,6 +2432,34 @@ func checkboxGroupOptions(el playwright.Locator) []string {
 		}
 	}
 	return out
+}
+
+// pendingSecurityCodeAfter does ONE mailbox check for a security code issued
+// after the given submit click, and reports it if present.
+//
+// bugs.md #111. Greenhouse ACCEPTS a submission and emails the code within ~1s,
+// but the code input does not appear in the DOM for far longer -- measured on
+// Akuity, where the email is timestamped 05:59:19 and the verdict at 05:59:27
+// still saw no gate. So DOM detection alone cannot tell an accepted submission
+// apart from a blocked one, and #104's captcha verdict fired on an application
+// that had in fact gone through.
+//
+// The mailbox is the ground truth: SecurityCodeFetcher only returns codes that
+// arrived AFTER the click that triggered them, so a hit here means "the server
+// accepted this submission", independently of what the page is showing.
+//
+// One fetch, not waitForSecurityCode's 90-second poll: this runs on a path that
+// must stay cheap, and a code that has not arrived within the settle budget is
+// handled by the existing wait further down.
+func pendingSecurityCodeAfter(clickedAt time.Time) string {
+	if SecurityCodeFetcher == nil || clickedAt.IsZero() {
+		return ""
+	}
+	code, err := SecurityCodeFetcher(clickedAt)
+	if err != nil {
+		return ""
+	}
+	return code
 }
 
 // rejectedDespiteLanding pairs each still-rejected field with the value the

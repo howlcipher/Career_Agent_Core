@@ -3169,3 +3169,61 @@ func TestOptionTextMatches_RequiresAContiguousWordRun(t *testing.T) {
 		t.Error("non-contiguous words must not match")
 	}
 }
+
+// bugs.md #111: Greenhouse accepts a submission and emails the security code
+// within ~1s, but the code input does not reach the DOM for far longer.
+// Measured on Akuity: email timestamped 05:59:19, and the verdict at 05:59:27
+// still saw no gate -- so #104's captcha verdict fired on an application that
+// had actually gone through. The mailbox is the ground truth; the DOM is not.
+func TestPendingSecurityCodeAfter_UsesTheMailboxNotTheDOM(t *testing.T) {
+	origFetcher := SecurityCodeFetcher
+	defer func() { SecurityCodeFetcher = origFetcher }()
+
+	clickedAt := time.Now()
+
+	// A code issued after the click means the submit was accepted.
+	var askedSince time.Time
+	SecurityCodeFetcher = func(since time.Time) (string, error) {
+		askedSince = since
+		return "82taTsxA", nil
+	}
+	if got := pendingSecurityCodeAfter(clickedAt); got != "82taTsxA" {
+		t.Errorf("pendingSecurityCodeAfter = %q, want the emailed code", got)
+	}
+	if !askedSince.Equal(clickedAt) {
+		t.Error("must ask only for codes issued after the submit click, or a stale code could be reused")
+	}
+
+	// No code: silent, so the caller's captcha reasoning proceeds.
+	SecurityCodeFetcher = func(time.Time) (string, error) { return "", nil }
+	if got := pendingSecurityCodeAfter(clickedAt); got != "" {
+		t.Errorf("no code must yield empty, got %q", got)
+	}
+
+	// A fetch error must not be mistaken for acceptance.
+	SecurityCodeFetcher = func(time.Time) (string, error) { return "", fmt.Errorf("imap down") }
+	if got := pendingSecurityCodeAfter(clickedAt); got != "" {
+		t.Errorf("a fetch error must not read as acceptance, got %q", got)
+	}
+}
+
+// With no fetcher wired, or no click recorded, this must stay silent rather
+// than block or panic -- it runs on the hot retry path.
+func TestPendingSecurityCodeAfter_SafeWithoutAFetcherOrClick(t *testing.T) {
+	origFetcher := SecurityCodeFetcher
+	defer func() { SecurityCodeFetcher = origFetcher }()
+
+	SecurityCodeFetcher = nil
+	if got := pendingSecurityCodeAfter(time.Now()); got != "" {
+		t.Errorf("no fetcher must yield empty, got %q", got)
+	}
+
+	called := false
+	SecurityCodeFetcher = func(time.Time) (string, error) { called = true; return "x", nil }
+	if got := pendingSecurityCodeAfter(time.Time{}); got != "" {
+		t.Errorf("a zero click time must yield empty, got %q", got)
+	}
+	if called {
+		t.Error("must not query the mailbox when no submit click has been recorded")
+	}
+}

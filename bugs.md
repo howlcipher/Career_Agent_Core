@@ -79,6 +79,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 111 | [#104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance](#111-104-labelled-an-accepted-application-captcha-blocked-because-the-dom-lags-the-acceptance) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **A false positive in my own #104, of exactly the kind #104's guard was written to prevent.** Akuity's submit was **accepted** — Greenhouse emailed code `82taTsxA` at **05:59:19** — and the verdict at 05:59:27 still reported `BLOCKED_CAPTCHA`, because the guard tested `DetectSecurityCodeChallenge(prunedHTML)` and the code input had **not yet rendered** 8s after the click. The DOM cannot distinguish accepted from blocked on this timescale; the mailbox can, and #32's fetcher only returns codes issued after the triggering click |
 | 110 | [A short option label could hijack a longer answer — "Prefer not to say" selected "No"](#110-a-short-option-label-could-hijack-a-longer-answer--prefer-not-to-say-selected-no) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **Found by a test written for #109, not by the log.** `pickComboboxOption` matched by raw bidirectional `strings.Contains`, and a short label hides inside longer prose: `"no"` sits inside `"prefer **no**t to say"`. Asking for **"Prefer not to say" selected the box labelled "No"** — on an EEO question that converts a declined answer into a substantive one on a real application. The precise failure **#79** exists to prevent, in the function that enforces it. `"male"` vs `"female"` is the same shape |
 | 109 | [A single-choice question rendered as a checkbox group was read as one box to untick](#109-a-single-choice-question-rendered-as-a-checkbox-group-was-read-as-one-box-to-untick) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Probed live: Sporty Group renders a Yes / No / Prefer-not-to-say question as **three checkboxes sharing one `name`**. A model value of `"No"` means *tick the box labelled No*, but `applyValidationFix` read it as *untick this box* — opposite results. #107 then made the wrong reading report as **landed**, so the job degraded from `MANUAL_REQUIRED` (documents preserved, field named) to a bare `FAILED_SUBMIT` |
 | 108 | [A submit that went nowhere was reported as "form too large for the local model"](#108-a-submit-that-went-nowhere-was-reported-as-form-too-large-for-the-local-model) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Ethos reached **`invalid fields: 0`** — fully satisfied — exhausted the settle budget with **no bot-protection frame** to explain it, and was then written up as `form content exceeds the local model's context window`. The form was never the problem: narrowing found nothing to narrow, fell back to the whole document, and the size check caught it incidentally. Right outcome (manual review, documents preserved), wrong cause — and a wrong cause has real cost, since that is exactly how #83 misdiagnosed the case #93 later reframed |
@@ -179,6 +180,35 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 111. #104 labelled an ACCEPTED application captcha-blocked, because the DOM lags the acceptance (Resolved 2026-07-26)
+
+**A false positive in my own #104, of precisely the kind #104's own guard was written to prevent.** I had identified this risk hours earlier, added a guard, claimed a test pinned "both directions", and it still fired.
+
+```
+05:59:19  (Greenhouse email) Security code for your application to Akuity: 82taTsxA
+05:59:27  Submit verdict after 8.5s: page re-rendered with fields flagged invalid (invalid fields: 7)
+05:59:27  akuity is behind a bot-protection challenge — marked BLOCKED_CAPTCHA
+          (every rejected field was already set; recaptcha.net/... present)
+```
+
+The email is timestamped **eight seconds before** the verdict that called the submission blocked. It was **accepted**.
+
+**Why the guard failed.** #104 skips its captcha verdict when `parser.DetectSecurityCodeChallenge(prunedHTML)` is true. That reads the **DOM**, and Greenhouse emails the code within ~1s while the code *input* does not appear for far longer — certainly not within the 8s settle. So the guard asked a question whose answer had not arrived yet, and the stale answer looked like "no gate".
+
+**The mistake behind the mistake.** My test pinned the logic *given a rendered gate*; it could not pin the case where the gate has not rendered, because that case has nothing to assert against in a mock DOM. I stated the guard "pins both directions" — it pinned both directions of one branch, not both real-world situations. **A test over a mocked signal cannot establish that the signal is available when needed.**
+
+**This is the same error class a fourth time**: #95 read the DOM before the submission happened, #102 read `aria-invalid` left over from the previous attempt, #103 read internal option ids, and now #104's guard read a DOM gate that had not rendered. Each time the fix was to stop asking the page and ask something authoritative.
+
+**Fix.** The **mailbox** is the ground truth. `pendingSecurityCodeAfter` does **one** cheap `SecurityCodeFetcher` call per retry attempt, and that fetcher only returns codes issued *after* the click that triggered them (improvements #32's design) — so a hit means "the server accepted this submission", regardless of what the page shows. It now:
+
+1. **blocks #104's captcha verdict** when a code is pending;
+2. **triggers the #93/#32 code-entry path** on the email alone, not only on a rendered gate;
+3. **reuses the code already fetched**, skipping `waitForSecurityCode`'s 90-second poll.
+
+Fetch errors and a missing fetcher both read as "no code" rather than as acceptance, and a zero click-time never queries the mailbox — tests pin all three, plus that the query is scoped to codes issued after the click so a stale one can never be reused.
+
+**Consequence for the run:** Akuity currently sits in `BLOCKED_CAPTCHA` while actually holding an accepted, code-pending application. It needs requeuing, and the same is likely true of any other board that reached this branch.
 
 ### 110. A short option label could hijack a longer answer — "Prefer not to say" selected "No" (Resolved 2026-07-26)
 
