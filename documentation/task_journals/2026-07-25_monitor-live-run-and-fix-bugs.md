@@ -219,15 +219,39 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 ## Next Step
 
-**Keep monitoring PID `3778859` and keep fixing what surfaces.** That is the standing instruction for this session; it does not complete until the user says so.
+**Standing instruction: keep monitoring the live run and keep fixing what surfaces.** The user set this as a `/goal`; it does not complete until they say so.
 
-The immediate question is now sharply posed: **Reddit (90) and Zimperium (85) are both back in the queue running against #70's and #71's fixes.** Reddit is being processed first (started 12:43:52). Watch for:
-- `Attempt N applied X/Y validation fix(es) to: <selectors>` — new in #70. If the *same* selectors recur across attempts, the fix still is not landing and the diagnosis was incomplete.
-- `found N submit control(s) but none visible` — new in #71. If Zimperium produces this, the real question ("why does Lever show no visible submit control?") is finally askable, and that becomes the next bug.
-- `Submission confirmed for ...` — the first genuine `APPLIED` of the whole 82-job effort, still 0 as of this writing.
+### Live state (accurate as of 2026-07-25 21:16)
 
-**Do not restart PID `3778859`** unless there is a new fix worth picking up. It carries everything through `4234fba`, including #69 and #26, which the previous run did not.
+- **Agent PID `3978328`** (`/tmp/career_agent_bin_verify83c`), built from HEAD after improvements #32/#33. Startup log confirms `Security-code retrieval enabled (IMAP)` and `loaded 67 matching job(s)`.
+- **Monitors armed in this session** (they do **not** survive a session boundary — see below):
+  - `bx3r0ftfc` — cohort status + PID death. Script: `scratchpad/watch_82.sh` (edit its `pid=` line on restart).
+  - `b9yjeh7pw` — `tail -F career_agent.log` filtered to outcome/failure/diagnostic signatures.
+- **Cohort:** `DISCOVERED=66 FAILED_SUBMIT=9 PROCESSING=1 SKIPPED=6`. **`MANUAL_REQUIRED` is 0** — every previously-stuck job was unblocked by the user's config and requeued.
+- **Still 0 confirmed `APPLIED`.** That remains the open question of the parent journal.
 
-**Note #26 (ATS feed discovery) still has not run live** — this is an isolated `TARGET_JOB_URL` run, which skips `FunnelEngine.DiscoverJobs` entirely. `discoverWithATSFeeds` only executes on the next *normal* batch start. Watch then for `ATS board feeds contributed N new posting(s)` and check the title gate is not over-filtering.
+### What to watch for
 
-**Standing warnings carried forward:** monitor liveness is best checked by reading the monitor's own output file, not `TaskList`; Ollama serves warm prompt caches so benchmark only on unseen jobs; `OLLAMA_FAST_MODEL` is intentionally unset (improvements #24).
+- `Submission confirmed for ...` — the first genuine `APPLIED` of the whole 82-job effort.
+- `Security-code gate detected ... waiting for the emailed code` then `Entered the emailed security code` — improvements #32 firing live. **Not yet observed in the wild**; the capability is tested but unproven end to end.
+- `Location set to "Macomb, MI"` on a **Lever** job — improvements #33's payoff. Greenhouse already commits `Township of Macomb, Michigan`.
+- `committed N autocomplete selection(s)` / `left the control empty` / `still invalid: <fields>` — the diagnostics from #80/#81 that have driven most of today's finds.
+
+### Everything is unblocked on the user's side
+
+All attestations are set (`MissingAttestations` returns empty), the location resolves on both geocoders, `earliest_start_date` is computed at render time, and code retrieval is live. **There are no open questions for the user.**
+
+### Standing procedure and hard-won warnings
+
+- **Restart procedure:** kill the PID, requeue affected rows (`cmd/requeue` for `FAILED_SUBMIT`/`BLOCKED_CAPTCHA`/`APPLIED` — it does **not** accept `MANUAL_REQUIRED`, use scoped SQL for that), **clear the `applied_jobs` dedup row** or `HasApplied` silently skips the retry, rebuild via `scratchpad/relaunch.sh` (bump the binary suffix), update `watch_82.sh`'s `pid=`, re-arm the cohort monitor.
+- **Monitors do not survive a session boundary.** They keep running as host processes but their notifications cannot reach a new session. On `/resume_task`: `pgrep -af watch_82.sh` and `pgrep -af 'tail -F.*career_agent.log'`, kill them, arm fresh ones. Five orphans from disconnected sessions were found and cleaned up this morning.
+- **Probe the real page instead of iterating through the agent.** The single most effective technique of this session — ~30s per hypothesis versus ~12 minutes. Build it in the scratchpad with a `replace` back to the repo module, pin `playwright-go` to the repo's version, run inside the `career-agent` distrobox. **Never let a probe click submit on a live posting** — that files a real, incomplete application. Read `aria-required`/`aria-invalid` and option lists instead.
+- **Replicate the code path, not the expected outcome.** Three fixes (#76, #81, #91) shipped inert because the probe reproduced my mental model of the sequence rather than the code's actual order of operations. #91 is the clearest case: I read the option list with no query typed; the agent always types first, which filtered the list to zero.
+- **An absent signal is not evidence of an absent event.** Bit me repeatedly — a log line missing from a monitor's grep (#77), a compiler that never complained about code I never wrote (#84), a `data-value` that was really just typed text (#81).
+- **Verify an edit landed, not just that the build passed.** #84 shipped with the `cmd/agent` branch silently missing; `go build` was green because the other half compiled.
+- **A flaky external service needs a clean re-test before its answer becomes fact.** #88 recorded "Lever cannot find Macomb, MI"; that was rate-limiting, corrected in #33.
+- Ollama serves warm prompt caches — benchmark only on unseen jobs. `OLLAMA_FAST_MODEL` is intentionally unset (improvements #24).
+
+### Not yet exercised
+
+**improvements #26 (ATS feed discovery) still has not run live.** This is an isolated `TARGET_JOB_URL` run, which skips `FunnelEngine.DiscoverJobs` entirely. `discoverWithATSFeeds` only executes on the next *normal* batch start — watch then for `ATS board feeds contributed N new posting(s)` and check the title gate is not over-filtering.
