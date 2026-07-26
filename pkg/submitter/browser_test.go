@@ -1,6 +1,7 @@
 package submitter
 
 import (
+	"errors"
 	"fmt"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"os"
@@ -3035,5 +3036,29 @@ func TestResolveFieldLocator_RealCSSSelectorStillWinsFirst(t *testing.T) {
 	}
 	if len(tried) != 1 || tried[0] != css {
 		t.Errorf("the verbatim selector must be tried first and win; tried: %v", tried)
+	}
+}
+
+// bugs.md #108: Ethos reached `invalid fields: 0`, exhausted the settle budget
+// with NO bot-protection frame to explain it, and was then reported as
+// "form content exceeds the local model's context window" -- because narrowing
+// found nothing to narrow, fell back to the whole document, and the size check
+// caught it incidentally. Right outcome, wrong cause. A misleading reason has
+// real cost: it is how #83 misdiagnosed the case #93 later reframed.
+func TestErrSubmitProducedNoOutcome_IsAManualReviewOutcome(t *testing.T) {
+	if !IsManualReviewError(ErrSubmitProducedNoOutcome) {
+		t.Fatal("a fully-filled form whose submit went nowhere must be preserved for a human, not written off")
+	}
+	wrapped := fmt.Errorf("%w: %s", ErrSubmitProducedNoOutcome, "job-boards.greenhouse.io/ethos")
+	if !IsManualReviewError(wrapped) {
+		t.Error("the wrapped form must still route to manual review")
+	}
+	// It must be distinguishable from the size sentinel it used to be
+	// misreported as -- that distinction is the entire point.
+	if errors.Is(wrapped, ErrFormTooLargeForModel) {
+		t.Error("must NOT be conflated with ErrFormTooLargeForModel; naming the wrong cause is the bug")
+	}
+	if !strings.Contains(wrapped.Error(), "no confirmation and no rejection") {
+		t.Errorf("the message must state what actually happened, got %q", wrapped.Error())
 	}
 }

@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 108 | [A submit that went nowhere was reported as "form too large for the local model"](#108-a-submit-that-went-nowhere-was-reported-as-form-too-large-for-the-local-model) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Ethos reached **`invalid fields: 0`** — fully satisfied — exhausted the settle budget with **no bot-protection frame** to explain it, and was then written up as `form content exceeds the local model's context window`. The form was never the problem: narrowing found nothing to narrow, fell back to the whole document, and the size check caught it incidentally. Right outcome (manual review, documents preserved), wrong cause — and a wrong cause has real cost, since that is exactly how #83 misdiagnosed the case #93 later reframed |
 | 107 | [A checkbox the model deliberately declined was recorded as uncommittable](#107-a-checkbox-the-model-deliberately-declined-was-recorded-as-uncommittable) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live on Sporty Group, visible only because #97 logs the value: `1 fix(es) reported success but left the control empty ... input[id='question_8242451101[]_54236360101'] **(tried "No")**`. `applyValidationFix` correctly *unchecks* on a negative, then `verifyFixLanded` reads the generic "does it hold a value" and sees `checked=false` → not landed → `ErrUncommittableField` → the whole job to manual review. **A correct answer was recorded as a failure**, on every checkbox the model declines |
 | 106 | [A bare bracketed checkbox-group id got no fallbacks at all — the third shape of #73](#106-a-bare-bracketed-checkbox-group-id-got-no-fallbacks-at-all--the-third-shape-of-73) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: `Validation fix for "question_8242451101[]_54236360101" failed: selector matched no element (**tried 1 form(s)**)`. Greenhouse names checkbox-group controls that way; the brackets alone make `looksLikeCSSSelector` true, but there is no `tag#id` to split, so the selector was used **verbatim with no fallbacks** — and it is not valid CSS for an id either, so it matched nothing. Third shape of one defect: **#73** fixed `input#430`, **#92** fixed `#question_...[]_...`, this is the bare form with no prefix. It was the remaining blocker on Sporty Group, which reached 11 invalid → 4 with three of the four being exactly these ids |
 | 105 | [The 45-minute time budget counted bytes to read, not answers to generate](#105-the-45-minute-time-budget-counted-bytes-to-read-not-answers-to-generate) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | The `Remote` job sent a **30,477-char** payload — comfortably inside #83's 40,000 ceiling — and burned the **entire 45-minute Ollama timeout** (01:46:03 → 02:31:03) before failing. #83 derived its ceiling from input size alone, but the run must *generate* a value for every rejected field, and **Remote had 34 of them**. Against ClickHouse (11,140 chars / 3 fields / ~7 min) and Reddit (18,639 / 13 / ~15 min), field count — not payload size — is what separates the runs that finish |
@@ -148,6 +149,25 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 108. A submit that went nowhere was reported as "form too large for the local model" (Resolved 2026-07-26)
+
+```
+03:29:26 Attempt 2 applied 3/3 validation fix(es) to: #preferred_name, #question_6122095009, #question_6122097009
+03:29:42 Submit verdict after 15.3s: no confirmation and no rejection evidence within the settle budget
+         (url moved: false, invalid fields: 0, page 105262 chars)
+03:29:42 Ethos's form is too large for the local model — queued for manual submission
+```
+
+**Every part of that last line is misleading.** The form was *fully satisfied* — `invalid fields: 0`. It was not too large; its narrowed payload had been 1,491 chars. What actually happened is that the submit produced no outcome at all, narrowing then found nothing to narrow, the code fell back to sending the whole 43,672-char document, and #105's size ceiling refused it. The size check was the last thing to touch the job, so it named the outcome.
+
+**Distinct from #99 and #104**, which cover the same "no outcome" state *when a bot-protection frame is present*. Here the inbox showed **no Greenhouse email** and the page carried **no provider frame**, so neither explanation applies and the true cause is still unknown. That is precisely why it needs its own name rather than borrowing one that fits badly.
+
+**Why a wrong reason is worth fixing on its own.** #83 diagnosed an oversized payload and was correct about the size while being wrong about the cause; #93 later established the payload was a *symptom* of a security-code gate. A manual-review entry is something a human acts on, and one that says "too large for the local model" invites exactly the wrong follow-up — tuning context limits — for a job whose form was already complete.
+
+**Fix.** `ErrSubmitProducedNoOutcome` is returned when nothing is flagged invalid **and** the previous verdict was budget exhaustion, before the whole-form fallback runs. That also saves the wasted cycle: there is nothing for the model to fix, so sending the entire document could only burn inference and then be refused.
+
+Registered in `manualReviewErrors`, which is the structural guarantee **#84** added after a sentinel shipped with no routing branch and stranded a job's documents. A test pins that it routes to manual review, that the wrapped form still does, that it is **not** conflated with `ErrFormTooLargeForModel`, and that the message states what actually happened.
 
 ### 107. A checkbox the model deliberately declined was recorded as uncommittable (Resolved 2026-07-26)
 

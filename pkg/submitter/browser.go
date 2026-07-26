@@ -499,6 +499,18 @@ var ErrAuthWall = errors.New("application form is gated behind account sign-in")
 // that already happened before it) only to fail with an ugly HTTP 400.
 var ErrFormTooLargeForModel = errors.New("form content exceeds the local model's context window")
 
+// ErrSubmitProducedNoOutcome marks a form that is fully satisfied -- nothing
+// flagged invalid -- whose submit produced neither confirmation nor rejection.
+//
+// bugs.md #108. Ethos reached `invalid fields: 0`, exhausted the settle budget
+// with no bot-protection frame present to explain it, and was then reported as
+// "form content exceeds the local model's context window" -- because narrowing
+// found nothing to narrow, fell back to the whole document, and the size check
+// caught it incidentally. The outcome (manual review, documents preserved) was
+// right; the reason named the wrong cause entirely, which is the same
+// diagnostic failure #83 suffered before #93 reframed it.
+var ErrSubmitProducedNoOutcome = errors.New("form is fully filled but the submit produced no confirmation and no rejection")
+
 // ErrNeedsUnprovidedAttestation marks a form that cannot be completed without
 // the applicant declaring something they have not configured.
 //
@@ -612,6 +624,10 @@ var manualReviewErrors = []error{
 	ErrNeedsUnprovidedAttestation,
 	ErrUncommittableField,
 	ErrNeedsEmailVerification,
+	// bugs.md #108: fully filled, submit went nowhere, no bot protection to
+	// explain it. Not an automation failure -- a human can finish it in
+	// seconds, and the tailored documents must survive.
+	ErrSubmitProducedNoOutcome,
 }
 
 // IsManualReviewError reports whether err means "queue this for a human"
@@ -1065,6 +1081,10 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// an uncommittable required widget can be reported as needing a human
 	// rather than as a generic automation failure.
 	var lastNotLanded []string
+	// bugs.md #108: the previous attempt's verdict, so an attempt that finds
+	// nothing left to fix can tell "the form is satisfied" from "the submit
+	// went nowhere".
+	var lastVerdict submissionConfirmationReason
 	// bugs.md #100: what the previous attempt actually wrote, so a field that
 	// lands and is still rejected can be diagnosed. Keyed by the model's selector.
 	lastApplied := map[string]string{}
@@ -1229,6 +1249,15 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if _, ok, _ := parser.PruneDOMToInvalidFields(prunedHTML); !ok {
 				log.Printf("[Auto-Submit] Attempt %d: no field is flagged invalid (form present: %v, payload %d chars) — sending the whole form",
 					attempt, strings.Contains(strings.ToLower(prunedHTML), "<form"), len(prunedHTML))
+				// bugs.md #108: nothing is flagged invalid AND the previous
+				// submit produced no outcome at all. There is nothing for the
+				// model to fix, so sending the whole form can only waste a
+				// cycle and then be refused for its size -- naming a cause
+				// that has nothing to do with what happened. Report the real
+				// state instead.
+				if lastVerdict == reasonNoOutcomeInBudget {
+					return fmt.Errorf("%w: %s", ErrSubmitProducedNoOutcome, ExtractDomain(applyURL))
+				}
 			}
 			if narrowed, ok, nErr := parser.PruneDOMToInvalidFields(prunedHTML); nErr == nil && ok {
 				// bugs.md #80: name the fields, not just the byte count. The
@@ -1474,6 +1503,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// a premature verdict spends another ~12-minute model call and then
 			// re-clicks submit on a form that may already have gone through.
 			confirmed, reason, currentURL := awaitSubmissionOutcome(page, urlBeforeSubmitClick)
+			lastVerdict = reason
 			if confirmed {
 				log.Printf("[Auto-Submit] Submission confirmed for %s (%s) at %s", companyName, reason, currentURL)
 				return nil
