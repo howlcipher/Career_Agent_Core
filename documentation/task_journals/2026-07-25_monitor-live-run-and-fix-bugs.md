@@ -128,6 +128,8 @@ Shipped as **`a79744d`**: `enumerateComboboxOptions` opens each invalid control 
 
 **Caught a dispatch-order bug in my own test mock while writing it** — the readiness probe case matched before the options case, and `comboboxOptionsJS` mentions `aria-activedescendant` too, so it swallowed the option read entirely. Same class as the ordering defects this session has been fixing all day (#76, #91), which is a fair reminder that the technique does not exempt the person applying it.
 
+**Overhead of #98 measured, not assumed.** Suspected `openAndReadComboboxOptions` would burn `waitForComboboxReady`'s full 5s budget per field, since that polls for `aria-activedescendant` and it was unclear whether react-select sets it on a *bare* open with no query typed — which would have cost ~65s per retry on Reddit's 13-field form. Probed it: `aria-activedescendant` appears at **60-130ms**, essentially alongside the options (70-150ms), on all three fields tested. So enumeration costs ~150ms per field, **~2s per attempt**, against a ~15-minute model call. **No change made** — the 30s measurement replaced a fix for a problem that did not exist.
+
 **Restarted (22nd) at 22:47.** PID `4019401` (`verify84c`), 66 queued, all **five** of this session's fixes verified present by `strings`. Reddit requeued (status verified `DISCOVERED`, dedup 0) — this run is the decisive test. Monitor `bnr24opx1`.
 
 ### Investigated and dismissed
