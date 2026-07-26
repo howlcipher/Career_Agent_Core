@@ -288,6 +288,22 @@ The single clearest result of the session, on the job that has been its best dia
 
 **Five boards now confirmed blocked** across both platforms: `reddit`, `orkes`, `alphasense`, `sportygroup` (reCAPTCHA) and `dexcarehealth` (hCaptcha).
 
+### THE DECISION NUMBER: 6 of 7 completed fills were captcha-blocked (2026-07-26 05:10)
+
+Measured from the log, not estimated. **Seven** jobs reached `invalid fields: 0` — a fully satisfied form:
+
+| outcome | count |
+| --- | --- |
+| **Blocked by bot protection** | **6 boards** — `reddit`, `orkes`, `alphasense`, `sportygroup`, `pointwild` (reCAPTCHA); `dexcarehealth` (hCaptcha) |
+| Fully filled, no provider frame, cause unknown | **1** — Ethos (#108) |
+| Accepted, awaiting emailed code | 2 earlier — ClickHouse, Akuity (neither carried a blocking challenge) |
+
+**The fill path succeeds on essentially everything it attempts. The submit path is blocked about 6 times in 7.**
+
+**This corrects my own earlier framing twice over.** I first called the captcha scope "narrow" when only Reddit was known, then widened it to four boards while still treating it as a subset. With six of seven completed fills blocked, the honest read is that **bot protection is the normal case on this cohort, not the exception** — ClickHouse is the only board confirmed to carry no challenge at all.
+
+**What follows.** Running the remaining `DISCOVERED` jobs will mostly generate accurate `BLOCKED_CAPTCHA` labels: useful for measuring the true rate, but it will not produce applications. The only two paths that can are (a) ClickHouse and Akuity completing through #102/#32's code-gate path, still untested end to end, and (b) a paid solver (`improvements_paywall.md` #17), which is outside this session's constraint and is now **the deciding factor rather than a nice-to-have**. That call is the user's and is worth making before more compute goes into this cohort.
+
 ### Where the ceiling actually is now
 
 The fill path is essentially solved: `invalid fields: 0` is reached routinely, on Greenhouse and Lever alike. What remains is **two ceilings, neither of them form-filling**:
