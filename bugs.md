@@ -177,6 +177,8 @@ Applied to the **retry** call site only. The initial `ExtractFormMapping` path k
 
 A test pins the ceiling below the observed 30,477-char failure, so any future widening has to argue with the measurement rather than silently regress past it — the same treatment #83's own corrected test case got.
 
+**Known limitation, stated rather than hidden: the field ceiling of 20 is interpolated, not measured.** The evidence brackets it loosely — 13 fields completed in ~15 min, 34 fields did not complete in 45 — and there is **no data point between 13 and 34**. So a form with, say, 22 fields might well have succeeded and will now be routed to `MANUAL_REQUIRED` instead. That is the deliberate direction to err: a wrongly-refused form costs one manual completion with its documents intact, while a wrongly-accepted one costs 45 minutes of the machine's only inference capacity and produces nothing. The number should be revisited the first time a refused form's real field count and timing can be measured, and this note is the reason to revisit it rather than treat 20 as established.
+
 ### 104. A captcha-swallowed submit hid behind stale invalid flags, so #99 never fired (Resolved 2026-07-26)
 
 **Predicted before it was seen, then confirmed by measurement** — which is worth noting because the previous prediction this session (#103's causal claim) was wrong and had to be retracted.
