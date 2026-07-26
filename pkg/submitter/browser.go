@@ -2529,18 +2529,35 @@ func checkboxGroupOptions(el playwright.Locator) []string {
 // arrived AFTER the click that triggered them, so a hit here means "the server
 // accepted this submission", independently of what the page is showing.
 //
-// One fetch, not waitForSecurityCode's 90-second poll: this runs on a path that
-// must stay cheap, and a code that has not arrived within the settle budget is
-// handled by the existing wait further down.
+// bugs.md #117: a SINGLE fetch is not enough. Measured on ClickHouse: Greenhouse
+// sent the code at 08:48:11 and a fetch at 08:48:21 -- ten seconds later --
+// still returned nothing, because IMAP had not indexed it yet. The agent
+// concluded the submit was not accepted, proceeded to another attempt, and
+// clicked a submit button that was by then disabled (`disabled=true`), burning
+// the 30s action timeout on an application that had in fact gone through.
+//
+// So this polls briefly. It stays far below waitForSecurityCode's 90s budget
+// because it runs on every retry attempt, but long enough to outlast the
+// indexing lag actually observed.
+var (
+	pendingCodeBudget = 25 * time.Second
+	pendingCodeTick   = 5 * time.Second
+)
+
 func pendingSecurityCodeAfter(clickedAt time.Time) string {
 	if SecurityCodeFetcher == nil || clickedAt.IsZero() {
 		return ""
 	}
-	code, err := SecurityCodeFetcher(clickedAt)
-	if err != nil {
-		return ""
+	deadline := time.Now().Add(pendingCodeBudget)
+	for {
+		if code, err := SecurityCodeFetcher(clickedAt); err == nil && code != "" {
+			return code
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(pendingCodeTick)
 	}
-	return code
 }
 
 // codeFieldCandidatesJS lists every text-ish input on the page with the

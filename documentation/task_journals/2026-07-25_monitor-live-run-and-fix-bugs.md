@@ -72,6 +72,23 @@ That millisecond match is **#94** working as designed: before it, the dedup row 
 
 **Note on the funnel rows:** `Akuity` still shows `FAILED_SUBMIT` alongside `akuity` → `APPLIED`. That is **#112**'s scheme-duplicate issue, documented rather than guessed at. The application is real; the stale twin row is bookkeeping.
 
+## ⚠️ DUPLICATE APPLICATION FILED TO AKUITY — disclosure (2026-07-26)
+
+**Akuity received TWO applications for the same role.** Found by checking the inbox after the confirmed run, not from the logs:
+
+| "Thank you for applying to Akuity" | corresponds to |
+| --- | --- |
+| **08:01:01** | the run the agent reported as `(code entered, no confirmation)` |
+| **08:32:03** | the run reported here as the first confirmed application |
+
+**So #115 completed the application at 08:01 as well.** The code was entered, the resubmit went through, and Greenhouse acknowledged receipt — the agent simply could not *detect* it, which was **#116**'s bug. I then requeued Akuity and it applied a second time at 08:31.
+
+**This is #89's duplicate-application risk materialising**, through the combination of an undetected success and my own restart-and-requeue loop. #116 prevents the recurrence — the first success is now detected and the loop stops — but the duplicate already exists and cannot be undone.
+
+**Honest attribution:** the requeue decisions were mine. Each was individually justified by a specific fix, but the cumulative effect on a job that had already succeeded invisibly was a second real application to a real employer. The lesson is narrower than "requeue less": **before requeuing a job that reached the code-entry stage, check the inbox for a completion email**, because that is the only place the success is visible when the in-page verdict fails.
+
+**Also established in the same check:** ClickHouse has a **pending accepted application** (code `p5Kqsn22`, emailed 08:48:11) that was never completed — see #117 for why the agent missed it. Four further Akuity code emails (05:59, 06:30, 07:00, 07:30) are from accepted attempts that did not complete.
+
 ## Shipped this session
 
 - **bugs.md #70 (Blocker) — `d68ce61`.** The validation-retry loop stripped the page's own error text. `aria-describedby` was in `presentationalAttrs`, so `StripPresentationalAttrs` severed the WCAG link from a rejected control to its error message *before* `PruneDOMToInvalidFields` ran; the pruner then dropped the message element as neither control nor label. The model was told a field was invalid but never what would make it valid. Plus an empty fix map fell through to re-submitting a byte-identical form. Fixed all three; 2 new regression tests, verified failing first.

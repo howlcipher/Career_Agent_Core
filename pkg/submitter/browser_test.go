@@ -3185,6 +3185,11 @@ func TestPendingSecurityCodeAfter_UsesTheMailboxNotTheDOM(t *testing.T) {
 	origFetcher := SecurityCodeFetcher
 	defer func() { SecurityCodeFetcher = origFetcher }()
 
+	// bugs.md #117: this polls now, so compress the timing for tests.
+	origBudget, origTick := pendingCodeBudget, pendingCodeTick
+	pendingCodeBudget, pendingCodeTick = 30*time.Millisecond, 5*time.Millisecond
+	defer func() { pendingCodeBudget, pendingCodeTick = origBudget, origTick }()
+
 	clickedAt := time.Now()
 
 	// A code issued after the click means the submit was accepted.
@@ -3408,5 +3413,55 @@ func TestNoUnpolledPostClickConfirmationChecks(t *testing.T) {
 			"awaitSubmissionOutcome instead of reading the page once (bugs.md #95/#116). "+
 			"If the new site is genuinely a re-check of settled state, update this count "+
 			"and say why.", calls, want)
+	}
+}
+
+// bugs.md #117: a single mailbox fetch misses a code that has been sent but not
+// yet indexed. Measured on ClickHouse: Greenhouse sent the code at 08:48:11 and
+// a fetch at 08:48:21 still returned nothing, so the agent concluded the submit
+// was not accepted, tried again, and clicked a by-then DISABLED submit button --
+// burning the 30s action timeout on an application that had gone through.
+func TestPendingSecurityCodeAfter_OutlastsIMAPIndexingLag(t *testing.T) {
+	origFetcher := SecurityCodeFetcher
+	origBudget, origTick := pendingCodeBudget, pendingCodeTick
+	defer func() {
+		SecurityCodeFetcher = origFetcher
+		pendingCodeBudget, pendingCodeTick = origBudget, origTick
+	}()
+	pendingCodeBudget, pendingCodeTick = 500*time.Millisecond, 10*time.Millisecond
+
+	calls := 0
+	SecurityCodeFetcher = func(time.Time) (string, error) {
+		calls++
+		if calls < 4 { // not indexed yet
+			return "", nil
+		}
+		return "p5Kqsn22", nil
+	}
+	if got := pendingSecurityCodeAfter(time.Now()); got != "p5Kqsn22" {
+		t.Errorf("a code that appears on the 4th poll must still be found, got %q", got)
+	}
+	if calls < 4 {
+		t.Errorf("expected repeated fetches, got %d", calls)
+	}
+}
+
+// It must still give up, so a genuinely-unaccepted submit is not delayed forever.
+func TestPendingSecurityCodeAfter_GivesUpWithinBudget(t *testing.T) {
+	origFetcher := SecurityCodeFetcher
+	origBudget, origTick := pendingCodeBudget, pendingCodeTick
+	defer func() {
+		SecurityCodeFetcher = origFetcher
+		pendingCodeBudget, pendingCodeTick = origBudget, origTick
+	}()
+	pendingCodeBudget, pendingCodeTick = 60*time.Millisecond, 10*time.Millisecond
+
+	SecurityCodeFetcher = func(time.Time) (string, error) { return "", nil }
+	start := time.Now()
+	if got := pendingSecurityCodeAfter(time.Now()); got != "" {
+		t.Errorf("no code must yield empty, got %q", got)
+	}
+	if elapsed := time.Since(start); elapsed > 400*time.Millisecond {
+		t.Errorf("gave up after %v, expected to respect the budget", elapsed)
 	}
 }

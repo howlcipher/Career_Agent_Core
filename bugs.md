@@ -83,6 +83,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 117 | [A single mailbox fetch misses a code that IMAP has not indexed yet](#117-a-single-mailbox-fetch-misses-a-code-that-imap-has-not-indexed-yet) | Major | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Measured on ClickHouse: Greenhouse sent the code at **08:48:11**, and #111's single fetch at **08:48:21** — ten seconds later — returned **nothing**. The agent concluded the submit was not accepted, made another attempt, and clicked a submit button that was by then **`disabled=true`** (#101's diagnostic said so), burning the 30s action timeout on an application that had actually gone through. `pendingSecurityCodeAfter` now polls on a 25s budget instead of fetching once |
 | 116 | [The post-security-code resubmit still judged the page in one instantaneous read](#116-the-post-security-code-resubmit-still-judged-the-page-in-one-instantaneous-read) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **#115 worked — `Entered the emailed security code for akuity; resubmitting` — and the verdict still failed, in the same second.** This third submit site kept the original `WaitForLoadState` + single `page.Content()` read that **#95 replaced in the other two**, so the post-code resubmit was judged before the page could answer. Fifth instance of a capability wired into one path and not the others (#65/#66→#67, #74→#75, #28→#31, #98's two prompt paths). It is also the **last step before a confirmed application**, so the most expensive place to get it wrong |
 | 115 | [Greenhouse splits the one-time code across eight single-character inputs](#115-greenhouse-splits-the-one-time-code-across-eight-single-character-inputs) | Blocker | Resolved (2026-07-26, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **#114's diagnostic answered it in one cycle.** The real markup is `security-input-0` … `security-input-7`, **eight inputs, each `maxlength=1`, each with an EMPTY `name`**. Every prior selector looked for a single `security_code`/`security-code` field — none could match, and filling one box with an 8-character code would have failed anyway. This was the last unimplemented link between an accepted submission and a completed application |
 | 114 | [When the emailed code cannot be entered, nothing records what IS on the page](#114-when-the-emailed-code-cannot-be-entered-nothing-records-what-is-on-the-page) | Major | Resolved (2026-07-26, diagnostic added) | — | Opus 5 | Gemini 3 Pro | #113 proved the field is **absent, not late** — a full 20s wait found nothing (`could not find a visible security-code field to fill within 20s`). But the error can only name the selectors that *failed*, so the real field cannot be identified without reproducing an accepted submit, which means **filing a real application**. Detection fires on substrings like `security-code`, which a CSS class or notice text satisfies with no input present. Same move as #80/#96/#97/#100, each of which paid off within one cycle |
@@ -189,6 +190,23 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 117. A single mailbox fetch misses a code that IMAP has not indexed yet (Resolved 2026-07-26)
+
+#111 made the mailbox the acceptance signal, and deliberately used **one** fetch to keep the retry path cheap. That was too tight, and ClickHouse measured it:
+
+| event | time |
+| --- | --- |
+| Attempt 2 submit | 08:48:11 |
+| Greenhouse sent the code (`p5Kqsn22`) | **08:48:11** |
+| #111's fetch found nothing | **08:48:21** |
+| Attempt 3 clicked a `disabled=true` submit control | 08:50:10 → 30s timeout |
+
+The email existed for ten seconds before the check ran and was still not returned — IMAP had not indexed it. So the agent concluded "not accepted", proceeded to another attempt, and clicked a button that was disabled *because the form had already been accepted*. #101's diagnostic named it exactly: `submit control: disabled=true inViewport=false, nothing covering it`.
+
+**Fix.** `pendingSecurityCodeAfter` polls on a 25-second budget with a 5-second tick, rather than fetching once. That stays well under `waitForSecurityCode`'s 90 seconds because it runs on every retry attempt, while comfortably outlasting the lag actually observed. Tests pin both directions: a code appearing on the fourth poll is found, and a genuinely absent code still gives up inside the budget.
+
+**Wider point worth keeping.** This is the sixth instance of the same underlying mistake in this session — reading a signal before it is available. #95 read the DOM before the submission happened, #102 read the previous attempt's `aria-invalid`, #111 read a gate that had not rendered, #113 read a field that had not rendered, #116 judged a resubmit instantly, and now #117 read a mailbox that had not indexed. **Every signal this pipeline depends on arrives late; none of them should be read once.**
 
 ### 116. The post-security-code resubmit still judged the page in one instantaneous read (Resolved 2026-07-26)
 
