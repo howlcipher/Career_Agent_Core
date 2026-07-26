@@ -1016,6 +1016,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// an uncommittable required widget can be reported as needing a human
 	// rather than as a generic automation failure.
 	var lastNotLanded []string
+	// bugs.md #100: what the previous attempt actually wrote, so a field that
+	// lands and is still rejected can be diagnosed. Keyed by the model's selector.
+	lastApplied := map[string]string{}
 	for attempt := 1; attempt <= 3; attempt++ {
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
@@ -1186,6 +1189,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					sort.Strings(ids)
 					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars); still invalid: %s",
 						len(prunedHTML), len(narrowed), strings.Join(ids, ", "))
+					// bugs.md #100: a field the last attempt reported as successfully
+					// set, and which came back rejected anyway, is the one case #97
+					// does not cover -- it names values only for fields that failed to
+					// land. Without this the rejected value is invisible and the loop
+					// can only re-guess it.
+					if rej := rejectedDespiteLanding(ids, lastApplied); rej != "" {
+						log.Printf("[Auto-Submit] Rejected despite being set last attempt: %s", rej)
+					}
 				} else {
 					log.Printf("[Auto-Submit] Narrowed validation retry to the rejected fields only (%d -> %d chars)", len(prunedHTML), len(narrowed))
 				}
@@ -1286,6 +1297,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			// reporting progress the loop was not making.
 			appliedAny := false
 			applied := make([]string, 0, len(fixesMap))
+			appliedValues := make(map[string]string, len(fixesMap))
 			empty := make([]string, 0)
 			notLanded := make([]string, 0)
 			comboCommitted := make([]string, 0)
@@ -1299,6 +1311,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					continue
 				}
 				applied = append(applied, selector)
+				appliedValues[selector] = value
 				appliedAny = true
 				// bugs.md #81: a verification *error* previously fell through
 				// this condition entirely -- the field was recorded as neither
@@ -1329,6 +1342,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				log.Printf("[Auto-Submit] Attempt %d committed %d autocomplete selection(s) that Fill() alone had left empty: %s", attempt, len(comboCommitted), strings.Join(comboCommitted, ", "))
 			}
 			lastNotLanded = notLanded
+			lastApplied = appliedValues
 			if len(notLanded) > 0 {
 				sort.Strings(notLanded)
 				log.Printf("[Auto-Submit] Attempt %d: %d fix(es) reported success but left the control empty (autocomplete/combobox suspected): %s", attempt, len(notLanded), strings.Join(notLanded, ", "))
@@ -2105,6 +2119,67 @@ func detectBotProtectionOnPage(page playwright.Page) []string {
 		}
 	}
 	return out
+}
+
+// rejectedDespiteLanding pairs each still-rejected field with the value the
+// previous attempt successfully wrote into it.
+//
+// bugs.md #100. #97 names the value only when a fix fails to land. The
+// opposite case -- verifyFixLanded reports the control as set, and the form
+// rejects it anyway -- had no diagnostic at all. Akuity produced exactly that:
+// "applied 7/7", no not-landed line, and the identical 7 fields flagged again,
+// so nothing in the log said what had been written or why it was refused.
+//
+// Matching is by suffix because the identifiers come from different places:
+// the model's selector is `input#question_6039579009` or `#question_...`,
+// while parser.InvalidFieldIdentifiers reports the bare id.
+func rejectedDespiteLanding(rejectedIDs []string, applied map[string]string) string {
+	if len(applied) == 0 || len(rejectedIDs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(rejectedIDs))
+	for _, id := range rejectedIDs {
+		for selector, value := range applied {
+			if !selectorTargetsID(selector, id) {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s = %q", id, truncateForLog(value, 80)))
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
+}
+
+// selectorTargetsID reports whether a model-supplied selector addresses the
+// bare control id that parser.InvalidFieldIdentifiers reported.
+func selectorTargetsID(selector, id string) bool {
+	if id == "" {
+		return false
+	}
+	if selector == id {
+		return true
+	}
+	// input#question_1, #question_1, input[id='question_1'], [id="question_1"]
+	for _, suffix := range []string{"#" + id, "[id='" + id + "']", `[id="` + id + `"]`} {
+		if strings.HasSuffix(selector, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncateForLog keeps a free-text answer readable in the log without
+// dumping an entire essay response into it.
+func truncateForLog(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func isComboboxLocator(el playwright.Locator) (bool, error) {

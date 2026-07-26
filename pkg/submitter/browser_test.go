@@ -2569,3 +2569,66 @@ func TestBotProtectionSrcPattern_MatchesKnownProvidersOnly(t *testing.T) {
 		})
 	}
 }
+
+// bugs.md #100: Akuity applied 7/7 fixes with no not-landed line -- every
+// control reported as successfully set -- and the identical 7 fields came back
+// flagged. #97 names values only for fields that FAIL to land, so this case
+// had no diagnostic at all and the loop could only re-guess.
+func TestRejectedDespiteLanding_PairsFieldsWithWhatWasWritten(t *testing.T) {
+	applied := map[string]string{
+		"input#question_6039579009":    "https://linkedin.com/in/example",
+		"textarea#question_6051659009": "Ran production Kubernetes clusters for four years.",
+		"input#question_9999999999":    "not rejected, must not appear",
+	}
+	got := rejectedDespiteLanding([]string{"question_6039579009", "question_6051659009"}, applied)
+
+	if !strings.Contains(got, "question_6039579009 = \"https://linkedin.com/in/example\"") {
+		t.Errorf("missing the rejected input's value; got %q", got)
+	}
+	if !strings.Contains(got, "Ran production Kubernetes clusters") {
+		t.Errorf("missing the rejected textarea's value; got %q", got)
+	}
+	if strings.Contains(got, "must not appear") {
+		t.Errorf("a field that was not rejected must not be reported; got %q", got)
+	}
+}
+
+// The identifiers come from different places: the model writes a selector,
+// parser.InvalidFieldIdentifiers reports the bare id. bugs.md #73/#92 are the
+// precedent for how many shapes those selectors take.
+func TestSelectorTargetsID_AcceptsTheSelectorShapesTheModelEmits(t *testing.T) {
+	const id = "question_6039579009"
+	for _, sel := range []string{
+		id,
+		"#" + id,
+		"input#" + id,
+		"textarea#" + id,
+		"input[id='" + id + "']",
+		`[id="` + id + `"]`,
+	} {
+		if !selectorTargetsID(sel, id) {
+			t.Errorf("selector %q should target %q", sel, id)
+		}
+	}
+	// Must not match a different control that merely shares a prefix.
+	for _, sel := range []string{"input#question_60395790091", "#question_6039579", "input#other"} {
+		if selectorTargetsID(sel, id) {
+			t.Errorf("selector %q must NOT target %q", sel, id)
+		}
+	}
+}
+
+func TestTruncateForLog_KeepsLongAnswersReadable(t *testing.T) {
+	long := strings.Repeat("word ", 60)
+	got := truncateForLog(long, 40)
+	if len(got) > 43 {
+		t.Errorf("expected a truncated value, got %d chars", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("truncated value should be marked with an ellipsis, got %q", got)
+	}
+	// Newlines collapse so one answer stays on one log line.
+	if got := truncateForLog("line one\nline two", 100); got != "line one line two" {
+		t.Errorf("newlines must collapse, got %q", got)
+	}
+}

@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 100 | [A field that lands and is rejected anyway had no diagnostic at all](#100-a-field-that-lands-and-is-rejected-anyway-had-no-diagnostic-at-all) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Akuity logged `applied 7/7`, **no** not-landed line — so `verifyFixLanded` reported every control as set — and the **identical 7 fields** came back flagged. #97 names values only for fields that *fail* to land, so this opposite case had no diagnostic whatsoever and the loop could only re-guess. Probe ruled out the obvious causes: all 7 are plain required `INPUT`/`TEXTAREA`, single match, no `pattern`, and React genuinely *does* observe `Fill()` (`reactValue` matches the DOM). Fourth instance of the same lesson as #80/#96/#97 |
 | 99 | [A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce](#99-a-submit-silently-swallowed-by-recaptcha-was-reported-as-an-ordinary-validation-bounce) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Reddit reached **`invalid fields: 0`** — the form fully satisfied for the first time — and the submit still produced no confirmation and no rejection. **No Greenhouse email arrived**, while ClickHouse's accepted submit produced one in the same second, so Reddit's request never reached the server. Read-only probe: the submit control is **clean** (one match, visible, enabled, in-form, unobstructed — ruling out #87's decoy and #34's overlay) and the page embeds **reCAPTCHA Enterprise**. Score-based invisible reCAPTCHA silently discards a headless submission. The cost was ~30 min of model calls per attempt on a form with nothing left to fix, ending in a misleading manual-review reason |
 | 98 | [The model was never shown a dropdown's permitted values, so it guessed the wording](#98-the-model-was-never-shown-a-dropdowns-permitted-values-so-it-guessed-the-wording) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The last-mile blocker, caught by #97's diagnostic in one cycle.** Reddit reached a single remaining invalid field and proposed `"I am not a protected veteran"` on **two consecutive attempts** for a widget offering *No military service* / *I don't wish to answer* — a phrasing that filters the option list to **zero**. Probe: none of `#434`'s option strings exist in the page HTML until the widget is opened, and Greenhouse forms carry **zero native `<select>` elements**, so no option text is ever in the served document the prompt is built from. The model was asked to supply a value for a control whose permitted values it is never shown. Residual measured since #91/#92: **14 commits succeeded, 2 fields failed** — and both failures are exactly this unusual-wording case |
 | 97 | [An uncommittable field named the control but never the value that was tried](#97-an-uncommittable-field-named-the-control-but-never-the-value-that-was-tried) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Reddit reached **one remaining invalid field** — payload 7,212 → 497 chars, 13 fields down to 1 — and then failed twice on `#434` (veteran status) with the log saying only that the control was left empty. A probe shows `#434` is genuinely selectable (typing `I don't wish to answer` filters its 9 options to exactly that entry), so this is a **value mismatch, not a broken mechanism** — but the log could not distinguish those, and they need opposite fixes. Same class as #80/#96, one level down |
@@ -140,6 +141,38 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 100. A field that lands and is rejected anyway had no diagnostic at all (Resolved 2026-07-25)
+
+Akuity produced a signature none of the existing diagnostics could speak to:
+
+```
+23:40:05 Attempt 2 applied 7/7 validation fix(es) to: input#question_6039579009 ... textarea#question_6051662009
+23:40:08 Submit verdict after 2.2s: page re-rendered with fields flagged invalid (url moved: false, invalid fields: 7, page 126557 chars)
+23:40:08 Narrowed validation retry ... still invalid: question_6039579009, ... question_6110764009   [the identical 7]
+```
+
+**No not-landed line**, so `verifyFixLanded` reported all seven controls as genuinely set — and the form rejected the same seven anyway. #97 names the attempted value only when a fix *fails to land*; the opposite case had no diagnostic whatsoever, so the log could not say what had been written or why it was refused, and the loop could only re-guess.
+
+**Probing ruled out every convenient explanation.** All seven are plain required `INPUT`/`TEXTAREA` (`LinkedIn Profile*`, `Github*`, three free-text questions), each a **single** DOM match, no `pattern`, no `minLength`. The React-controlled-input trap does **not** apply either — reading React's own props alongside the DOM after a plain `Fill()`:
+
+| control | DOM value | React prop value |
+| --- | --- | --- |
+| `question_6039579009` (input) | `https://linkedin.com/in/probe` | **same** |
+| `question_6110764009` (input, real keystrokes) | `https://github.com/probe` | **same** |
+| `question_6051659009` (textarea) | set correctly | uncontrolled — DOM is the source of truth |
+
+So React observes `Fill()`, and the values genuinely land. One structural note worth keeping: these controls have **no `name` attribute**, so `FormData` serialises nothing for them — Greenhouse submits from React state, which is why "the DOM says it is set" is not by itself proof the submission carries it.
+
+**What the diagnostic adds.** `rejectedDespiteLanding` pairs each still-rejected id with the value the previous attempt wrote into it:
+
+```
+[Auto-Submit] Rejected despite being set last attempt: question_6039579009 = "https://..."; question_6051659009 = "Ran production Kubernetes..."
+```
+
+Matching is by suffix because the two sides name controls differently — the model emits `input#question_1`, `#question_1` or `input[id='question_1']`, while `parser.InvalidFieldIdentifiers` reports the bare id (the same selector-shape problem as **#73** and **#92**). A test pins that `question_60395790091` and `question_6039579` do **not** match `question_6039579009`, so a prefix collision cannot mis-attribute a value. Free-text answers are whitespace-collapsed and truncated so one answer stays on one log line.
+
+**Fourth instance of one lesson** (#80, #96, #97, now #100): every expensive failure in this pipeline is *"the mechanism reported success and the outcome was failure"*, and each time the fix has been to log the evidence a decision rested on. The root cause of Akuity's rejection is **still open** — this makes the next occurrence diagnosable rather than guessing now.
 
 ### 99. A submit silently swallowed by reCAPTCHA was reported as an ordinary validation bounce (Resolved 2026-07-25)
 
