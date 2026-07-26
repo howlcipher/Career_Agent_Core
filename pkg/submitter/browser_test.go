@@ -2195,3 +2195,38 @@ func TestIsSubmissionConfirmed_StillRefusesWithNoEvidence(t *testing.T) {
 		t.Error("an unchanged URL with no confirmation phrase is not evidence of success")
 	}
 }
+
+// bugs.md #90: a required control offering exactly one option is unambiguous.
+// Measured live on Sporty Group: "GDPR Acknowledgement*" offers only
+// "Acknowledge/Confirm", the model proposed a differently-worded affirmative,
+// nothing matched, and the job went to manual review one click from
+// completion — with 10 of its 11 other fields already satisfied.
+func TestPickComboboxOption_TakesTheSoleOptionWhenThereIsOnlyOne(t *testing.T) {
+	options := []string{"gdpr-0|Acknowledge/Confirm"}
+	id, idx, ok := pickComboboxOption(options, "Yes, I acknowledge", nil)
+	if !ok {
+		t.Fatal("a lone option on a required control is unambiguous and must be selected")
+	}
+	if id != "gdpr-0" || idx != 0 {
+		t.Errorf("got id=%q idx=%d, want gdpr-0/0", id, idx)
+	}
+}
+
+// But NOT when mustContain is set: those tokens exist because the identity of
+// the option matters (#79), so a lone option failing them is a wrong answer,
+// not an obvious one. Selecting it would file the wrong location.
+func TestPickComboboxOption_StillRefusesALoneOptionThatFailsMustContain(t *testing.T) {
+	options := []string{"loc-0|Detroit, ME, USA"}
+	if id, _, ok := pickComboboxOption(options, "Macomb Township, MI", []string{"Macomb", "Michigan"}); ok {
+		t.Errorf("selected %q — a lone wrong-state option must still be refused", id)
+	}
+}
+
+// Two options with no match remains a refusal: there is a real choice to get
+// wrong.
+func TestPickComboboxOption_StillRefusesWhenSeveralOptionsAndNoneMatch(t *testing.T) {
+	options := []string{"o-0|Alpha", "o-1|Beta"}
+	if id, _, ok := pickComboboxOption(options, "Gamma", nil); ok {
+		t.Errorf("selected %q — with several options and no match, nothing should be chosen", id)
+	}
+}

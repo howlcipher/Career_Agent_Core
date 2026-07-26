@@ -1936,6 +1936,24 @@ func pickComboboxOption(options []string, want string, mustContain []string) (id
 			return optID, i, true
 		}
 	}
+
+	// bugs.md #90: a required control offering exactly one option is
+	// unambiguous -- there is no wrong choice to protect against, so refusing
+	// it is over-conservative and costs a real application. Measured live:
+	// Sporty Group's "GDPR Acknowledgement*" offers only "Acknowledge/Confirm",
+	// and the model proposed a differently-worded affirmative, so nothing
+	// matched and the job went to manual review one click from completion.
+	//
+	// Deliberately NOT applied when mustContain is set. Those tokens exist
+	// because the *identity* of the option matters (#79: "Detroit, ME" sits
+	// beneath "Detroit, MI"), and a lone option that fails them is a wrong
+	// answer, not an obvious one.
+	if len(mustContain) == 0 && len(options) == 1 {
+		parts := strings.SplitN(options[0], "|", 2)
+		if len(parts) == 2 && parts[0] != "" {
+			return parts[0], 0, true
+		}
+	}
 	return "", 0, false
 }
 

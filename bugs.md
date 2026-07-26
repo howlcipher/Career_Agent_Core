@@ -45,6 +45,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 90 | [A required control with exactly one option was refused, sending a job to manual review one click from completion](#90-a-required-control-with-exactly-one-option-was-refused-sending-a-job-to-manual-review-one-click-from-completion) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Sporty Group (Greenhouse, score **90**) got **10 of its 11 invalid fields satisfied** — invalid payload collapsed 6389 → 610 chars, including 3 committed autocompletes, a GDPR checkbox and a checkbox-group entry. The sole holdout was `GDPR Acknowledgement*`, a combobox offering **exactly one option: "Acknowledge/Confirm"**. The model proposed a differently-worded affirmative, so #79's containment check matched nothing and selected nothing — correct caution where several options exist, over-conservative where there is only one and therefore no wrong choice to make |
 | 89 | [A late-rendering confirmation page is missed, so a successful submit is retried — filing duplicates](#89-a-late-rendering-confirmation-page-is-missed-so-a-successful-submit-is-retried--filing-duplicates) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Surfaced by Orkes routing to `MANUAL_REQUIRED` via #83 with a **43,411-char** payload — which only happens when narrowing finds **nothing flagged invalid** and falls back to the whole document. Combined with attempt 2 having applied both fixes, the likeliest reading is that the submit **succeeded** and the page became a confirmation page with no form. Greenhouse replaces the form in place, so `currentURL == applyURL` and only a confirmation *phrase* can prove success — and if that page renders after the 10s networkidle wait, the check right after the click sees the old DOM and reports failure. **The loop then re-submits an application that already went through** |
 | 88 | [A required widget that cannot accept the configured value was written off as a submit failure](#88-a-required-widget-that-cannot-accept-the-configured-value-was-written-off-as-a-submit-failure) | Major | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Confirmed live on Nova (Lever): `Attempt 3: 1 fix(es) reported success but left the control empty ... input[data-qa='location-input']`. The detection and commit machinery worked exactly as designed — it correctly saw the field as unset and tried to commit — but **Lever's geocoder returns zero results** for `Macomb`, `Macomb Township` and `Macomb, MI`, while Greenhouse's resolves the same address. With no option to select, the required hidden `selectedLocation` can never be populated. Not an automation failure: the job is perfectly applicable by hand, yet it burned 3 attempts and landed in `FAILED_SUBMIT` |
 | 87 | [The submit locator clicked the click-to-reveal "Apply" button, so no retry ever actually submitted](#87-the-submit-locator-clicked-the-click-to-reveal-apply-button-so-no-retry-ever-actually-submitted) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | **The one that was silently blocking everything.** Orkes (Greenhouse, 85) applied `2/2` fixes — both verifiably settable by probe — and still failed all 3 attempts, with `applied` and `Submission failed validation` in the **same second**, too fast for any navigation. The submit locator put `button:has-text('Apply')` in the same CSS alternation as the real controls, and alternations have **no precedence** — matches return in DOM order. Measured live: `[0] Apply (type=button)`, `[1] Quick Apply with MyGreenhouse`, `[2] Submit application (type=submit)`. Every retry clicked index 0, the click-to-reveal button, which does nothing once the form is open. The page never changed, the same fields stayed flagged, and all three attempts failed identically |
@@ -124,6 +125,36 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 90. A required control with exactly one option was refused, sending a job to manual review one click from completion (Resolved 2026-07-25)
+
+**The closest the pipeline has come to finishing.** Sporty Group (Greenhouse, fit **90**) on the full fix stack:
+
+```
+19:54:03 still invalid: gdpr_processing_consent_given_1, question_7849567101, ... (11 fields)
+20:07:46 Attempt 2 committed 3 autocomplete selection(s) that Fill() alone had left empty
+20:07:46 Attempt 2 applied 9/9 validation fix(es)
+20:07:46 Narrowed ... (50136 -> 610 chars); still invalid: question_7849575101
+```
+
+**Eleven invalid fields down to one.** The payload collapsed from 6,389 to 610 characters. Three autocompletes committed, a GDPR consent checkbox ticked, a checkbox-group entry set — the whole machinery from #70 through #89 working together on a genuinely hard form.
+
+Probing the survivor:
+
+```
+label:   "GDPR Acknowledgement*"
+options: [Acknowledge/Confirm]      <- exactly one
+```
+
+**Root cause:** the model proposed a reasonable affirmative ("Yes", "I acknowledge", or similar) and `pickComboboxOption` requires the option text and the wanted value to contain one another. "acknowledge confirm" neither contains nor is contained by "yes", so **nothing was selected**. #88 then correctly routed the job to `MANUAL_REQUIRED`.
+
+That caution is right when there are several options — it is exactly what stops "Detroit, ME" being filed instead of "Detroit, MI" (#79). But with **one** option there is no wrong choice available. Refusing it costs a real application on a 90-fit job that was otherwise complete.
+
+**Fix:** when `mustContain` is empty and the control offers exactly one option, take it. **Deliberately not applied when `mustContain` is set** — those tokens exist precisely because the *identity* of the option matters, so a lone option that fails them is a wrong answer rather than an obvious one. A lone `Detroit, ME` must still be refused.
+
+**Tests:** `TestPickComboboxOption_TakesTheSoleOptionWhenThereIsOnlyOne`, `TestPickComboboxOption_StillRefusesALoneOptionThatFailsMustContain` (the #79 guarantee survives), `TestPickComboboxOption_StillRefusesWhenSeveralOptionsAndNoneMatch`.
+
+**Worth noting:** #88 did its job here — the outcome was a preserved manual-review job naming the exact field, not a silent `FAILED_SUBMIT`. That is what made this diagnosable in one probe.
 
 ### 89. A late-rendering confirmation page is missed, so a successful submit is retried — filing duplicates (Resolved 2026-07-25)
 
