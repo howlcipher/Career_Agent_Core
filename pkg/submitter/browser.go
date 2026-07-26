@@ -1300,7 +1300,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					if committed, cErr := commitComboboxSelection(target, selector, value); cErr == nil && committed {
 						comboCommitted = append(comboCommitted, selector)
 					} else {
-						notLanded = append(notLanded, selector)
+						// bugs.md #97: record the value that was attempted, not
+						// just the control that refused it. Without it the log says
+						// a commit failed and gives no way to tell a broken
+						// mechanism from a value the widget simply does not offer --
+						// the difference between a code bug and a data mismatch,
+						// which need opposite fixes.
+						notLanded = append(notLanded, fmt.Sprintf("%s (tried %q)", selector, value))
 					}
 				}
 			}

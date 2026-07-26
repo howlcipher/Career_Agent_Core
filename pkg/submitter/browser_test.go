@@ -2412,3 +2412,28 @@ func TestDecideSubmissionOutcome_ErrorWordingIsRejectionWithoutAriaInvalid(t *te
 		t.Errorf("reason = %q, want %q", v.Reason, reasonErrorPhrase)
 	}
 }
+
+// bugs.md #97: an uncommittable field must name the value that was attempted,
+// not just the control. Reddit's veteran-status question (#434) refused two
+// consecutive attempts and the log said only that #434 was left empty --
+// giving no way to tell a broken commit mechanism from a value the widget
+// does not offer. Those need opposite fixes, so the log has to distinguish
+// them. The option list is real: typing "I don't wish to answer" filters it
+// to exactly that entry, so the control is genuinely selectable.
+func TestUncommittableFieldNamesTheAttemptedValue(t *testing.T) {
+	notLanded := []string{
+		fmt.Sprintf("%s (tried %q)", "#434", "I am not a protected veteran"),
+	}
+	err := fmt.Errorf("%w: %s", ErrUncommittableField, strings.Join(notLanded, ", "))
+
+	if !IsManualReviewError(err) {
+		t.Fatal("an uncommittable field must still route to manual review")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "#434") {
+		t.Errorf("message must name the control, got %q", msg)
+	}
+	if !strings.Contains(msg, "I am not a protected veteran") {
+		t.Errorf("message must name the attempted value, got %q", msg)
+	}
+}

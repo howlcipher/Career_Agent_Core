@@ -51,6 +51,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 97 | [An uncommittable field named the control but never the value that was tried](#97-an-uncommittable-field-named-the-control-but-never-the-value-that-was-tried) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Reddit reached **one remaining invalid field** — payload 7,212 → 497 chars, 13 fields down to 1 — and then failed twice on `#434` (veteran status) with the log saying only that the control was left empty. A probe shows `#434` is genuinely selectable (typing `I don't wish to answer` filters its 9 options to exactly that entry), so this is a **value mismatch, not a broken mechanism** — but the log could not distinguish those, and they need opposite fixes. Same class as #80/#96, one level down |
 | 96 | [Nothing recorded what a submit verdict was actually decided on](#96-nothing-recorded-what-a-submit-verdict-was-actually-decided-on) | Major | Resolved (2026-07-25, diagnostic added) | — | Opus 5 | Gemini 3 Pro | Observability, filed the moment its absence cost a day. #95 was findable only by cross-referencing wall-clock seconds between unrelated log lines, because the sole record of a judged submit was the word "failed" — nothing said how long it waited, whether the URL moved, how many fields came back flagged, or how large the returned page was. Same class as #80, and #80 paid for itself within one cycle |
 | 95 | [The submit verdict was read from the DOM the instant the click returned, racing the submission itself](#95-the-submit-verdict-was-read-from-the-dom-the-instant-the-click-returned-racing-the-submission-itself) | Blocker | Resolved (2026-07-25, fix shipped; race inferred, not directly observed) | — | Opus 5 | Gemini 3 Pro | Three independent jobs (ClickHouse, Stack AV, Sporty Group) logged **every field committed, every fix applied, and `Submission failed validation` in the same second**. A probe proved those forms are fully satisfiable — after the agent's exact commit sequence ClickHouse's form reports `invalidCount: 0`, natively valid. So the verdict, not the fill, was wrong. `WaitForLoadState(networkidle)` can return immediately because Playwright's `Click` returns on event dispatch, before the app issues its request, so the page is read before the submission has happened. **#93 is direct evidence this misfires:** a Greenhouse security-code email timestamped the exact second of a submit the agent had written off. Cost of a premature verdict is a ~12-min model call plus a re-click on a form that may already have gone through (#89's duplicate-application risk) |
 | 94 | [The dedup row was written at document generation, so a job that never submitted was skipped forever](#94-the-dedup-row-was-written-at-document-generation-so-a-job-that-never-submitted-was-skipped-forever) | Blocker | Resolved (2026-07-25, root-caused and fixed) | — | Opus 5 | Gemini 3 Pro | Live: the 21:16 restart logged `Duplicate check: Already applied` for **Reddit, Akuity, ClickHouse and Staff SRE** — four jobs the same day's log shows failing, and which have **never** reached `APPLIED`. `SaveApplication` wrote the `applied_jobs` row at document-generation time, so any job that generated documents and then bounced, needed manual review, or was killed mid-submit was permanently marked applied. Combined with the funnel row returning to `DISCOVERED` (startup reaper / #85's reset / requeue without `-clear-dedup`), the job was re-queued every run and skipped instantly, forever — **silently unreachable rather than visibly failed**. 7 of the 82-job cohort and 66 rows DB-wide were in this state |
@@ -137,6 +138,33 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
 ## Details
+
+### 97. An uncommittable field named the control but never the value that was tried (Resolved 2026-07-25)
+
+**Found at the closest the pipeline has ever come to finishing.** Reddit (fit 90, the job that opened this whole investigation) went from 13 invalid fields to **one**, with the narrowed payload collapsing **7,212 → 497 chars**:
+
+```
+22:11:40 Attempt 2 committed 8 autocomplete selection(s) ... #430, #431, #432, #433, #436, #question_67942418, #question_67942419, #question_67942420
+22:11:40 Attempt 2: 1 fix(es) reported success but left the control empty ... #434
+22:11:43 Narrowed validation retry to the rejected fields only (54218 -> 497 chars); still invalid: 434
+22:12:39 Reddit needs manual completion ... a required field could not be committed with the configured value: #434
+```
+
+Eight autocompletes committed, including both legal attestations. One field stood between this and the first confirmed application of the entire effort, and the log said only that `#434` came back empty.
+
+**That is not enough to act on.** "Left the control empty" is consistent with two opposite situations: the commit machinery is broken for this widget, or the machinery works fine and was handed a value the widget does not offer. The first needs a code fix, the second needs different data or a different prompt. Nothing in the log separated them.
+
+**A probe settled it — the mechanism is fine.** `#434` is *Are you a veteran/have you served in the military?*, a react-select offering:
+
+> Active Reserve · Inactive Reserve · Other Protected Veteran · Retired · Unspecified Veteran · Vietnam Era Veteran · Vietnam Veteran and Other Protected Veteran · No military service · I don't wish to answer
+
+Typing `I don't wish to answer` filters that list to **exactly that one entry**, so the control is genuinely selectable and #90/#91's sole-option path would commit it. Two other plausible phrasings (`Prefer not to say`, `I am not a protected veteran`) filter it to **zero** — the #91 shape, where the typed query eliminates every option. So this is a **value mismatch**, and the missing datum was always the value.
+
+**Fix.** The not-landed entry now carries it: `#434 (tried "…")`. It flows into the `ErrUncommittableField` message too, so the manual-review entry and the log both name the exact string that failed. 1 new test.
+
+Deliberately not done in the same change: making the model's answer converge on the offered wording. That is a real follow-up, but choosing it blind — before a single log line shows what the model actually proposes — is how #90 shipped a rule that #91 proved could never fire. Measure first.
+
+**Third instance of the same lesson in one session** (#80, #96, #97): this pipeline's expensive failures are all *"the mechanism reported success and the outcome was failure"*, and each time the fix has been to log the evidence a decision rested on rather than the decision itself.
 
 ### 96. Nothing recorded what a submit verdict was actually decided on (Resolved 2026-07-25)
 
