@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** Bug #122 is complete; the requested backlog grooming pass is next. No live application agent or monitor process is running.
+- **Status:** Paused behind the Usability Gate after bug #122 and the requested backlog groom. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
 - **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the security and networking implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
@@ -37,11 +37,11 @@
 - [x] Implement the centralized network boundary and route every external HTTP and Playwright path through it.
 - [x] Update the security documentation, bug closure, changelog, and journal with durable evidence.
 - [x] Run focused race checks plus the full build, vet, and test loop.
-- [ ] Commit and push the verified implementation, then advance this journal to the next open gate bug.
+- [x] Commit and push the verified implementation, then advance this journal to the next open gate bug.
 
 ## Current authoritative state
 
-- Bug #122 is resolved: one injectable public-address policy protects the agent worker and every free discovery HTTP client, and authenticated loopback proxies bind both Playwright entry points to the same resolver-bound dialer.
+- Bug #122 is resolved in signed commit `e56b41f`: one injectable public-address policy protects the agent worker and every free discovery HTTP client, and authenticated loopback proxies bind both Playwright entry points to the same resolver-bound dialer.
 - The default and focused race suites pass. A host-built submitter test binary also passed the opt-in real-Chromium proxy integration inside the `career-agent` distrobox, including positive public traversal and negative loopback reachability.
 - Bug #127 is resolved in signed implementation commit `e4e48e1`: maintained commands enforce owner-only creation and repair existing private workspace paths without following symlinks.
 - `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #129. The focused agent and shared-configuration race suite also passes.
@@ -52,7 +52,8 @@
 - Bug #121 is resolved: one typed deterministic boundary protects posting embedding/scoring and every model-facing browser path; detections keep the CSV audit, receive a terminal funnel status, and never reach an LLM judge. The full build, vet, test, and focused race gates pass.
 - Bug #120 is resolved in signed commit `6453177`: batch mode runs one unlimited cycle, while daemon mode refreshes database and discovery work every six hours, admits at most 15 jobs by default, and cancels its inter-cycle wait through the signal context. The configurable cap and deterministic lifecycle are covered by injected-cycle and injected-clock tests.
 - The post-#120 groom re-verified all 11 Pending rows across the three backlogs. Bug ranks are unchanged and #122 is next. Free improvement #35 rises from 1.0 to 1.2 because the daemon cap makes queue order more consequential. Correct live schema-key checks conflict with the post-#121 note and show both motivating #30 answers configured; #30 returns to 0.20 and remains below floor.
-- The Usability Gate remains **UNMET** because 3 Major/Blocker bugs are open. `bugs.md` is authoritative; #122 is the next autonomous item.
+- The post-#122 groom re-verified and re-scored all 10 Pending rows across the three backlogs. No score changed. Free improvements #27 and #30 and paywalled #14 remain below floor.
+- The Usability Gate remains **UNMET** because 2 Major bugs are open. `bugs.md` is authoritative; #128 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -92,7 +93,7 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 2. **Bug #112 merge policy:** 20 `http`/`https` duplicate pairs were re-measured on 2026-07-27, 15 with different statuses. Outward application dedup is fixed, but funnel insertion, updates, queueing, and reporting remain split. The merge must preserve strong evidence and must not silently promote an ambiguous row to `APPLIED`.
 3. **Historical dedup rows:** older `applied_jobs` entries predate confirmation-only recording. Do not bulk-clear them: a false row suppresses a valid retry, but clearing a true row can file a duplicate.
 4. **Paid CAPTCHA solving:** improvement #17 is worthwhile on evidence but remains out of scope without the user's provider choice and paid key.
-5. **Low-ROI improvements:** #14 remains a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should be re-scoped to safe control-level detection or bypassed by configuring the currently blank answers.
+5. **Low-ROI improvements:** #14 remains a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should close unless a newly unanswered attestation appears because the accepted work-attestation keys are currently configured.
 
 ## Operating procedure and hazards
 
@@ -109,4 +110,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Commit the verified bug #122 implementation, then run `/groom_backlogs` before advancing the resume point to bug #128.
+Run `/work_next_item` for bug #128, the highest-ranked remaining gate bug.

@@ -1,5 +1,14 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-SSRF backlog grooming
+
+* **Backlog:** Re-verified and recomputed all 3 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #122.
+* **Priority:** Bugs #128 and #112 remain Major, so the Usability Gate stays open and company-only artifact storage, bug #128, is next.
+* **Scoring:** No score or rank changed. The groom removed the now-fixed live SSRF gap from improvement #36's rationale while retaining its 5.0 score for broken clean setup and false payload, timeout, performance, and historical claims.
+* **Recommendations:** Close free improvements #27 and #30 absent new evidence, defer paid-compute #14 until preference labels exist, and keep CAPTCHA solving gated on a user-selected paid provider and key.
+* **Live checks:** Required Ollama models remain installed, both dashboard routes return HTTP 200 on loopback, no Career Agent batch process is running, and read-only aggregates reconfirm 20 scheme pairs with 15 divergent statuses.
+* **Verification:** The uncached build, vet, full test suite, and focused security, scraper, submitter, and agent race suites pass.
+
 ## 2026-07-27 — Resolver-bound outbound network security
 
 * **Security:** Centralized HTTP and HTTPS target validation rejects malformed targets and any DNS answer set containing loopback, private, link-local, multicast, carrier-grade NAT, documentation, benchmarking, transition, or other special-use addresses.
