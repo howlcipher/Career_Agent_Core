@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-26 — Post-fix backlog grooming
+
+* **Changed:** Re-verified and re-ranked every Pending bug and improvement against current code and documented live-run evidence; bug #124 remains the next autonomous gate item.
+* **Changed:** Reduced improvement #30 to 0.20 after its motivating attestations were configured, kept #14/#27 below the ROI floor with explicit recommendations, and raised paywalled CAPTCHA solving to 1.75 while preserving its paid-key gate.
+* **Documentation:** Consolidated the oversized live-monitoring journal to its durable conclusions, unresolved decisions, operating hazards, and current resume point.
+* **Verification:** Re-ran `go build ./...`, `go vet ./...`, and `go test ./...`; all pass.
+
 ## 2026-07-26 — Free discovery without SerpApi
 
 * **Fixed:** RemoteOK, Hacker News, and public Greenhouse/Lever feed discovery now run whether or not `SERPAPI_API_KEY` is configured.

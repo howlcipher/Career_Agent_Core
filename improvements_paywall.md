@@ -8,7 +8,7 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- |
-| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.25 = 5×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | Medium effort; needs a paid 2captcha/capsolver key — confirm with user before implementing |
+| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |
 
 ## Details
 
@@ -20,3 +20,5 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 **Re-scored 2026-07-25 (`/groom_backlogs`):** score unchanged at 1.25 (Value 5 × Decay 1.0 ÷ Effort 4) — above the ROI floor on merit, but **still gated on a paid key and therefore still out of scope for autonomous work**, per this file's whole reason for existing. Re-confirmed against current code that no solving integration exists: `pkg/submitter/browser.go` detects CAPTCHAs (`isCaptchaBlocked`, bugs #23/#45/#46) and routes to `BLOCKED_CAPTCHA`, but nothing attempts a solve. Unchanged otherwise; only work it if the user provisions a key and names the item.
 
 **Model reassessed 2026-07-26 (application sweep):** live model discovery reports `claude-sonnet-4-6` and `gemini-3.1-pro-high`; those replace the stale future-model labels. This remains a medium-complexity API integration (a new provider client plus a detect-and-solve flow wired into two existing submit paths), not a reason to use the largest reasoning model.
+
+**Re-scored 2026-07-26 (`/groom_backlogs`):** the monitoring cohort measured 6 of 7 completed fills blocked after submit, making bot protection the strongest documented live constraint. Value rises from 5 to 7; Decay 1.0 and Effort 4 remain, producing **1.75**. Repository-wide checks still find detection and `BLOCKED_CAPTCHA` routing but no solver client or provider dependency. The item remains paywalled and must not be worked until the user explicitly chooses a provider and supplies a paid key.
