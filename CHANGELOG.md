@@ -1,5 +1,11 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — OS-specific run documentation
+
+* **Documentation:** Replaced the Linux-only setup path with concrete run instructions for Windows, macOS, mainstream Linux distributions, immutable Linux, and WSL 2.
+* **Dashboard:** Added separate UI-dashboard launch, browser-access, loopback-address, and shared-database guidance.
+* **Setup:** Corrected the obsolete reference to a nonexistent `pii.yaml.template`; the README now gives a minimal local PII file and preserves the user-controlled legal-attestation boundary.
+
 ## 2026-07-27 — Post-SSRF backlog grooming
 
 * **Backlog:** Re-verified and recomputed all 3 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #122.

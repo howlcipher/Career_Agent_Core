@@ -60,42 +60,118 @@ graph TD
 Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](CHANGELOG.md)!
 
 ## Requirements
-- **Go 1.26+** (see `go.mod` for the exact pinned version)
-- **Playwright System Dependencies**: Headless auto-submission requires specific system libraries (like `libicu`). On standard Linux, run the following to install the necessary dependencies before starting the agent:
-  ```bash
-  go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install --with-deps
-  ```
+- **Git** to clone the repository.
+- **Go 1.26.5 or newer in the 1.26 release line**. The required version is defined by [`go.mod`](go.mod).
+- **Ollama** for the default local LLM provider, or credentials for Claude or Gemini. Claude still requires local Ollama embeddings.
+- **Playwright and its browser dependencies** for application submission. The dashboard itself does not need Playwright.
 
-### Running on Immutable OS (Bazzite / Fedora Silverblue / SteamOS)
-If you are running an immutable atomic OS where the root filesystem is read-only, you cannot natively install Playwright's system C libraries (like `libX11` or `libicu`). Instead, use **Distrobox** to safely run the agent in a container while maintaining full access to your host filesystem:
+## Run by Operating System
 
-1. Open a terminal and create an Ubuntu container:
-   ```bash
-   distrobox create --name career-agent --image ubuntu:22.04
-   distrobox enter career-agent
-   ```
-2. Once inside the container, install the base dependencies:
-   ```bash
-   sudo apt-get update && sudo apt-get install -y golang-go nodejs npm
-   ```
-3. Run the Playwright installer and the agent from inside the container:
-   ```bash
-   cd ~/dev/Career_Agent_Core
-   npx playwright install-deps
-   go run cmd/agent/main.go
-   ```
-*(Note: Because Distrobox perfectly mirrors your home folder, you can run the HTTP Web Dashboard `go run cmd/dashboard/main.go` natively on your host OS and it will instantly read the database updates being written by the containerized agent!)*
+Run the commands from the repository root. First clone the repository on every platform:
 
+```bash
+git clone https://github.com/howlcipher/Career_Agent_Core.git
+cd Career_Agent_Core
+```
 
-## Getting Started (How to Use)
+### Windows 10 or 11
 
-Follow these steps immediately after cloning the repository:
+Use 64-bit PowerShell. Install a compatible Go release, then restart PowerShell so `go` is on `PATH`:
+
+```powershell
+winget install --id GoLang.Go -e
+```
+
+Install Ollama and the default models with the included PowerShell script. If Windows blocks local scripts, the execution-policy change below applies only to the current PowerShell session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install_ollama.ps1
+go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install
+```
+
+### macOS (Apple Silicon or Intel)
+
+Install Go with Homebrew, then install Ollama and Playwright. If you do not use Homebrew, install the required Go version from the official Go distribution before continuing.
+
+```bash
+brew install go
+./scripts/install_ollama.sh
+go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install
+```
+
+### Linux: Debian, Ubuntu, Linux Mint, Pop!_OS
+
+Install Go with APT, confirm that it meets the required version, then install Ollama and the Playwright browser plus its system libraries. If your distribution's Go package is older than 1.26.5, install a compatible Go release before continuing.
+
+```bash
+sudo apt update
+sudo apt install -y golang-go
+go version
+./scripts/install_ollama.sh
+go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install --with-deps
+```
+
+### Linux: Fedora, RHEL, Rocky, AlmaLinux, openSUSE, or Arch
+
+Install Go through the distribution's package manager, then use the same local Ollama and Playwright setup. Confirm `go version` reports 1.26.5 or a newer compatible 1.26 release.
+
+```bash
+# Fedora / RHEL-family
+sudo dnf install -y golang
+
+# openSUSE
+sudo zypper install -y go
+
+# Arch / Manjaro
+sudo pacman -S --needed go
+
+go version
+./scripts/install_ollama.sh
+go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install --with-deps
+```
+
+Run only the package-manager command for your distribution, not all three.
+
+### Immutable Linux: Bazzite, Fedora Silverblue/Kinoite, SteamOS
+
+Run the agent in Distrobox so Playwright's system libraries stay inside a mutable container while the database and configuration remain in your home directory. Create the container once, then enter it whenever you run the agent:
+
+```bash
+distrobox create --name career-agent --image ubuntu:24.04
+distrobox enter career-agent
+sudo apt update
+sudo apt install -y golang-go
+go version
+cd ~/dev/Career_Agent_Core
+./scripts/install_ollama.sh --user
+go run github.com/mxschmitt/playwright-go/cmd/playwright@latest install --with-deps
+```
+
+If the container's Go package is older than the required version, install a compatible Go release there before launching the agent. Distrobox exposes your home directory, so the agent and a dashboard started from the host use the same `applications.db`. Running both from inside the container is also supported.
+
+### Windows Subsystem for Linux (WSL 2)
+
+Use the instructions for your Linux distribution inside WSL. The bundled Ollama installer detects WSL. For visible browser automation, use WSLg or set `headless_browser: true` in `profile.yaml`; the dashboard is available from a Windows browser at `http://127.0.0.1:8080` when it runs in WSL.
+
+## Configure the Agent
+
+Follow these steps after the platform setup.
 
 ### 1. Set Up Your Personal Identifiable Information (PII)
-To protect your sensitive data from version control, your email, phone, and address are handled locally:
-1. Copy the template: `cp pii.yaml.template pii.yaml`
-2. Open `pii.yaml` and fill in your actual contact details. 
-*(Note: `pii.yaml` is intentionally tracked in `.gitignore` so your personal data is never pushed to GitHub).*
+Create a local `pii.yaml` for contact and application facts. It is ignored by Git; do not commit it. A minimal starting file is:
+
+```yaml
+first_name: "Your first name"
+last_name: "Your last name"
+email: "you@example.com"
+phone: "555-555-5555"
+city: "Your city"
+state: "MI"
+country: "United States"
+```
+
+Add only facts you want the agent to use. Legal attestations, such as work authorization and sponsorship, must be entered by you when applicable; the agent does not infer them.
 
 ### 2. Configure Your Profile & Toggles
 Open `profile.yaml` to customize your search parameters:
@@ -167,10 +243,12 @@ IMAP_USER="your_email@gmail.com"
 IMAP_APP_PASSWORD="your_16_digit_app_password"
 ```
 
-### 5. Launch the Suite
-The Core Agent can be run in batch or daemon mode:
+## Launch the Agent and Dashboard
+
+Start the agent in one terminal. Choose one mode:
+
 ```bash
-# Run one massive batch and exit
+# Process the current discovery and backlog once, then exit
 go run cmd/agent/main.go
 
 # Run continuously with fresh discovery and at most 15 jobs every 6 hours
@@ -186,14 +264,16 @@ result, and exits. Daemon mode repeats that same fresh cycle every six hours.
 it is ignored in batch mode. `SIGINT` and `SIGTERM` stop the daemon instead of
 leaving it asleep until the next cycle.
 
-*Note: On its very first run, Playwright will automatically download the necessary Chromium browser binaries.*
+In a second terminal, start the UI dashboard:
 
-While the agent runs, open a new terminal window to serve your live metrics via the HTTP Web Dashboard:
 ```bash
 go run cmd/dashboard/main.go
 ```
 
-The dashboard listens only on `127.0.0.1:8080` by default. To choose another address, pass `-addr` explicitly:
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion metrics. It can run before or after the agent; it shows data once the database exists.
+
+The dashboard listens only on `127.0.0.1:8080` by default. To choose a different loopback port:
+
 ```bash
 go run cmd/dashboard/main.go -addr 127.0.0.1:9090
 ```
