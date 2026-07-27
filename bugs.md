@@ -229,6 +229,18 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 | 44 | [BambooHR corporate subdomains kept slipping past a growing denylist](#44-bamboohr-corporate-subdomains-kept-slipping-past-a-growing-denylist-resolved-2026-07-23) | Minor | Resolved (2026-07-23) | — | Sonnet 5 | Gemini 3 Pro | Confirmed live overnight 2026-07-22→23: after #42 excluded `www.`/`app.bamboohr.com` specifically, two more corporate subdomains (`learn.`, `trust.bamboohr.com`) were discovered and processed as postings during unattended running, and a log grep found two more still unexcluded (`developers.`, `documentation.bamboohr.com`). Replaced the denylist with a positive check: every real posting seen across dozens of tenants uses `/jobs/questions...` or `/careers/<id>`; anything else on any `*.bamboohr.com` subdomain is now junk, catching all current and future corporate subdomains at once instead of one at a time |
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | Sonnet 5 | Gemini 3 Pro | Long-observed cosmetic defect, never filed on its own (referenced in passing in #12 and #17): Workday jobs get company names like `en-US`, `External_Career_Site`, `apply`, `en` from URL path segments instead of the real employer (GDIT, U-Haul, etc.), polluting `job_funnel`/dashboard rows and making log lines ambiguous |
 
+## OpenAI task-fit model assignments
+
+These assignments cover current Pending bugs only. They are task-fit starting points, not a claim that the strongest model is always required. Resolved and historical rows retain their existing model metadata so the backlog structure and history remain intact.
+
+| # | OpenAI model | Task-fit reason |
+| --- | --- | --- |
+| 128 | `gpt-5.6-sol` | Storage and data-integrity fix spanning persistence, naming, and concurrency behavior. |
+| 112 | `gpt-5.6-sol` | Cross-layer URL canonicalization, database state, queueing, and reporting require deeper reasoning. |
+| 125 | `gpt-5.6-terra` | Bounded retry-state logic and tests are substantial but well-scoped engineering work. |
+| 130 | `gpt-5.6-terra` | Network retry/backoff behavior needs balanced implementation and verification. |
+| 131 | `gpt-5.6-terra` | Parser and polling resilience is a moderate, testable reliability change. |
+
 ## Details
 
 ### 118. Resume-selector fallback work breaks every submitter path without a readable resume (Resolved 2026-07-26)

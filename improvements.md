@@ -89,6 +89,19 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 23 | [Static master cover letter, reused across every application](#23-static-master-cover-letter-reused-across-every-application) | Done (2026-07-24) | — | Opus 5 | Gemini 3 Pro | User-requested: one generic, job-agnostic letter for every application instead of a per-job LLM-generated one. Skips the single most expensive step in the pipeline (~15-20+ min/job). Surfaced and fixed bugs #61/#62 along the way — cover letters had never actually been reaching employers at all |
 | 22 | [Rank the discovery queue by resume-fit similarity, not just source-priority](#22-rank-the-discovery-queue-by-resume-fit-similarity-not-just-source-priority) | Done (2026-07-24) | — | Sonnet 5 | Gemini 3 Pro | Shipped as designed in the investigation: title/company embedding vs. resume `career_chunks`, backfilled out-of-band via `cmd/rankjobs`, blended as a secondary sort key after `sourcePriorityCASE` |
 
+## OpenAI task-fit model assignments
+
+These assignments cover current Pending improvements only. They are task-fit starting points, not a claim that the strongest model is always required. Resolved and historical rows retain their existing model metadata so the backlog structure and history remain intact.
+
+| # | OpenAI model | Task-fit reason |
+| --- | --- | --- |
+| 36 | `gpt-5.6-luna` | A small, bounded documentation and configuration audit is a good fit for an efficient model. |
+| 37 | `gpt-5.6-terra` | Freshness checks span HTTP, status handling, and workers but remain balanced implementation work. |
+| 34 | `gpt-5.6-terra` | Dashboard accessibility and self-contained frontend behavior need careful but conventional engineering. |
+| 35 | `gpt-5.6-sol` | Outcome-based queue ranking combines data analysis, policy, and algorithm design. |
+| 27 | `gpt-5.6-terra` | MCP protocol plumbing and career-context integration are multi-component but bounded. |
+| 30 | `gpt-5.6-sol` | Unanswerable-attestation detection is safety-sensitive and benefits from deeper reasoning. |
+
 ## Details
 
 ### 36. Reconcile setup and feature documentation with executable behavior
