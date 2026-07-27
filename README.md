@@ -161,6 +161,13 @@ While the agent runs, open a new terminal window to serve your live metrics via 
 go run cmd/dashboard/main.go
 ```
 
+The dashboard listens only on `127.0.0.1:8080` by default. To choose another address, pass `-addr` explicitly:
+```bash
+go run cmd/dashboard/main.go -addr 127.0.0.1:9090
+```
+
+Binding a non-loopback address exposes private application data without authentication; the dashboard prints a warning when such an address is selected.
+
 To enable auto-tracking of employer rejections and interview requests, launch the Email Tracker in the background:
 ```bash
 go run cmd/tracker/main.go

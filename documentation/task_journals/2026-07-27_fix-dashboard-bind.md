@@ -16,15 +16,17 @@
 
 ## Plan
 
-- [ ] Add failing tests for the loopback default, configured address, non-loopback warning, validation, and server timeouts.
-- [ ] Add an explicit `http.Server`, a `-addr` option defaulting to `127.0.0.1:8080`, and a prominent warning for non-loopback binds.
-- [ ] Run focused tests, full build/vet/tests, and a loopback-only end-to-end probe on an unused port.
+- [x] Add failing tests for the loopback default, configured address, non-loopback warning, validation, and server timeouts.
+- [x] Add an explicit `http.Server`, a `-addr` option defaulting to `127.0.0.1:8080`, and a prominent warning for non-loopback binds.
+- [x] Run focused tests, full build/vet/tests, and a loopback-only end-to-end probe on an unused port.
 - [ ] Update README, changelog, bug 126, and the monitoring journal; remove this journal; create signed commits and push.
 
 ## Progress Log
 
 - 2026-07-27 00:43 EDT: Re-verified the code and live listener. Chose an explicit CLI address over environment-only configuration because it requires no hidden `.env` loading and makes intentional remote exposure visible at startup.
+- 2026-07-27 00:45 EDT: Added the focused tests first and observed the expected compile failure. Implemented address validation, loopback warning logic, dedicated routing, and explicit server timeouts. Focused and full dashboard tests pass.
+- 2026-07-27 00:45 EDT: `go build ./...`, `go vet ./...`, `go test ./...`, and `go test -race ./cmd/dashboard -count=1` all pass. A separately built dashboard returned HTTP 200 for both routes on `127.0.0.1:18080`; `ss` showed only the loopback listener, and the host's non-loopback address could not reach that port.
 
 ## Next Step
 
-Add focused failing tests in `cmd/dashboard/main_test.go` before changing production code.
+Review the complete diff, scan staged files for secrets and PII, and create the signed implementation milestone commit.

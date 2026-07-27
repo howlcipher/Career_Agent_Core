@@ -299,3 +299,116 @@ func TestServeFavicon(t *testing.T) {
 		t.Error("expected non-empty favicon body")
 	}
 }
+
+func TestNormalizeDashboardAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "empty uses loopback default",
+			raw:  "",
+			want: defaultDashboardAddress,
+		},
+		{
+			name: "configured loopback",
+			raw:  "127.0.0.1:9090",
+			want: "127.0.0.1:9090",
+		},
+		{
+			name: "configured IPv6 loopback",
+			raw:  "[::1]:9090",
+			want: "[::1]:9090",
+		},
+		{
+			name: "configured wildcard",
+			raw:  ":9090",
+			want: ":9090",
+		},
+		{
+			name:    "missing port",
+			raw:     "127.0.0.1",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric port",
+			raw:     "127.0.0.1:http",
+			wantErr: true,
+		},
+		{
+			name:    "port out of range",
+			raw:     "127.0.0.1:70000",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeDashboardAddress(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeDashboardAddress(%q) returned no error", tt.raw)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeDashboardAddress(%q): %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeDashboardAddress(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDashboardExposureWarning(t *testing.T) {
+	tests := []struct {
+		address  string
+		wantWarn bool
+	}{
+		{address: "127.0.0.1:8080"},
+		{address: "localhost:8080"},
+		{address: "[::1]:8080"},
+		{address: ":8080", wantWarn: true},
+		{address: "0.0.0.0:8080", wantWarn: true},
+		{address: "192.168.1.20:8080", wantWarn: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.address, func(t *testing.T) {
+			got := dashboardExposureWarning(tt.address)
+			if tt.wantWarn && got == "" {
+				t.Fatalf("dashboardExposureWarning(%q) returned no warning", tt.address)
+			}
+			if !tt.wantWarn && got != "" {
+				t.Fatalf("dashboardExposureWarning(%q) = %q, want no warning", tt.address, got)
+			}
+		})
+	}
+}
+
+func TestNewDashboardServerUsesAddressHandlerAndTimeouts(t *testing.T) {
+	handler := http.NewServeMux()
+	server := newDashboardServer("127.0.0.1:9090", handler)
+
+	if server.Addr != "127.0.0.1:9090" {
+		t.Fatalf("server address = %q, want 127.0.0.1:9090", server.Addr)
+	}
+	if server.Handler != handler {
+		t.Fatal("server does not use the configured handler")
+	}
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %v, want 5s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 15*time.Second {
+		t.Fatalf("ReadTimeout = %v, want 15s", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 30*time.Second {
+		t.Fatalf("WriteTimeout = %v, want 30s", server.WriteTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
+	}
+}

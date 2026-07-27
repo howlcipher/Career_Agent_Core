@@ -4,23 +4,27 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Metrics struct {
-	Discovered         int    `json:"discovered"`
-	Processing         int    `json:"processing"`
-	Skipped            int    `json:"skipped"`
-	Applied            int    `json:"applied"`
-	Failed             int    `json:"failed"`
-	ManualRequired     int    `json:"manual_required"`
-	BlockedCaptcha     int    `json:"blocked_captcha"`
-	InvalidURL         int    `json:"invalid_url"`
+	Discovered                int    `json:"discovered"`
+	Processing                int    `json:"processing"`
+	Skipped                   int    `json:"skipped"`
+	Applied                   int    `json:"applied"`
+	Failed                    int    `json:"failed"`
+	ManualRequired            int    `json:"manual_required"`
+	BlockedCaptcha            int    `json:"blocked_captcha"`
+	InvalidURL                int    `json:"invalid_url"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -136,8 +140,67 @@ var faviconPNG embed.FS
 
 var db *sql.DB
 
+const defaultDashboardAddress = "127.0.0.1:8080"
+
+func normalizeDashboardAddress(raw string) (string, error) {
+	address := strings.TrimSpace(raw)
+	if address == "" {
+		address = defaultDashboardAddress
+	}
+
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fmt.Errorf("dashboard address must use host:port form: %w", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", fmt.Errorf("dashboard address has invalid port %q", portText)
+	}
+	return address, nil
+}
+
+func dashboardExposureWarning(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Sprintf("WARNING: dashboard address %q is invalid", address)
+	}
+
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	return fmt.Sprintf(
+		"WARNING: dashboard address %q is not loopback; this unauthenticated server exposes private application data",
+		address,
+	)
+}
+
+func newDashboardServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
 func main() {
-	var err error
+	requestedAddress := flag.String(
+		"addr",
+		defaultDashboardAddress,
+		"dashboard listen address in host:port form",
+	)
+	flag.Parse()
+	address, err := normalizeDashboardAddress(*requestedAddress)
+	if err != nil {
+		log.Fatalf("Invalid dashboard address: %v", err)
+	}
+
 	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL")
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
@@ -145,12 +208,16 @@ func main() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	http.HandleFunc("/", serveDashboard)
-	http.HandleFunc("/api/metrics", serveMetrics)
-	http.HandleFunc("/favicon.png", serveFavicon)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", serveDashboard)
+	mux.HandleFunc("/api/metrics", serveMetrics)
+	mux.HandleFunc("/favicon.png", serveFavicon)
 
-	log.Println("🚀 Career Agent Web Dashboard running at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	if warning := dashboardExposureWarning(address); warning != "" {
+		log.Print(warning)
+	}
+	log.Printf("🚀 Career Agent Web Dashboard running at http://%s", address)
+	log.Fatal(newDashboardServer(address, mux).ListenAndServe())
 }
 
 func serveMetrics(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Loopback-only dashboard default
+
+* **Security:** The unauthenticated dashboard now defaults to `127.0.0.1:8080` instead of every network interface.
+* **Changed:** Added an explicit `-addr` option. Non-loopback addresses remain available for intentional use but print a warning that private application data has no authentication boundary.
+* **Hardening:** Replaced the package-level default server with a dedicated `http.Server` using read-header, read, write, and idle timeouts.
+* **Tests:** Added coverage for default and configured addresses, invalid ports, IPv4 and IPv6 loopback detection, remote-bind warnings, handler selection, and every server timeout.
+
 ## 2026-07-27 — Post-transaction backlog grooming
 
 * **Changed:** Re-verified and re-scored every Pending row across the bug, free-improvement, and paywalled-improvement backlogs against current code and live environment evidence.
