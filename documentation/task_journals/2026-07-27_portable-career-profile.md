@@ -16,16 +16,18 @@
 
 ## Plan
 
-- [ ] Add failing tests for shared path precedence/readability and agent startup behavior with missing, configured, stale-cache, and explicit no-RAG inputs.
-- [ ] Implement shared portable profile resolution, fail-closed RAG initialization, and no-RAG retrieval bypass.
+- [x] Add failing tests for shared path precedence/readability and agent startup behavior with missing, configured, stale-cache, and explicit no-RAG inputs.
+- [x] Implement shared portable profile resolution, fail-closed RAG initialization, and no-RAG retrieval bypass.
 - [ ] Update user-facing configuration documentation and the bug record.
-- [ ] Run the full build, vet, test, and focused race verification.
+- [x] Run the full build, vet, test, and focused race verification.
 
 ## Progress Log
 
 - 2026-07-27 — Re-verified the journal resume point, clean branch, backlog ranking, acceptance criteria, affected commands, and current RAG retrieval path.
 - 2026-07-27 — Baseline `go build ./...`, `go vet ./...`, and `go test ./...` all pass before implementation.
+- 2026-07-27 — Added red tests, then implemented the shared resolver and fail-closed startup. Focused `go test ./pkg/config ./cmd/agent ./cmd/reingest` passes.
+- 2026-07-27 — Full build, vet, test, and focused agent/config race gates pass. Built command binaries expose the new flags and both exit nonzero on a missing configured profile before model or browser startup; output contains no profile content or removed machine-specific path.
 
 ## Next Step
 
-Write the regression tests before changing the implementation.
+Commit the reviewed implementation, then close bug #129 and remove this journal.

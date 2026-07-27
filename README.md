@@ -100,7 +100,22 @@ Open `profile.yaml` to customize your search parameters:
 - **`headless_browser`**: Set to `true` to run the bot silently in the background, or `false` to watch it operate visibly.
 
 ### 3. Ensure Your Context Exists
-The AI relies on a base resume or profile to tailor against job descriptions. Ensure you have your base markdown profile (e.g., `USER_PROFILE.md`) accessible to the system or a fallback `__William_Elias_Resume__.pdf` in the root directory.
+The AI relies on a readable Markdown career profile for grounded scoring and screening context. Resolution is shared by `cmd/agent` and `cmd/reingest`, in this order:
+
+1. The `-profile` command flag.
+2. `CAREER_PROFILE_PATH` from `.env` or the process environment.
+3. `USER_PROFILE.md` in this repository.
+4. `../ai_knowledge_library/USER_PROFILE.md` in the standard sibling checkout.
+
+Startup stops if no readable regular file is found, even when old career chunks remain in the database. This prevents stale personal context from being used silently. To run deliberately without career-profile retrieval, pass `-no-rag` to `cmd/agent`; the agent then skips both startup ingestion and per-job RAG retrieval.
+
+Examples:
+
+```bash
+go run cmd/agent/main.go -profile /path/to/USER_PROFILE.md
+CAREER_PROFILE_PATH=/path/to/USER_PROFILE.md go run ./cmd/reingest
+go run cmd/agent/main.go -no-rag
+```
 
 ### 4. Choose an LLM Provider & Authenticate APIs
 The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git — copy `.env.example` as a starting point). The default is **Ollama** (local, free, no API key required).

@@ -46,6 +46,7 @@ const (
 	minJobDescriptionRunes       = 200
 	jobFetchBaseBackoff          = time.Second
 	jobFetchMaxBackoff           = 4 * time.Second
+	careerRAGDimensionProbe      = "dimension probe"
 )
 
 var errJobPageWeakContent = errors.New("job page has too little visible text")
@@ -70,6 +71,84 @@ type httpDoer interface {
 }
 
 type jobFetchWaitFunc func(context.Context, time.Duration) error
+
+type careerRAGDependencies struct {
+	getChunks    func() ([]storage.CareerChunk, error)
+	getEmbedding func(string) ([]float32, error)
+	ingest       func(func(string) ([]float32, error), string) (int, error)
+}
+
+type careerRAGInitialization struct {
+	chunkCount int
+	reingested bool
+}
+
+func resolveAgentCareerProfile(
+	flagPath, envPath, baseDir string,
+	noRAG bool,
+) (string, bool, error) {
+	if noRAG {
+		return "", false, nil
+	}
+	path, err := config.ResolveCareerProfilePath(flagPath, envPath, baseDir)
+	if err != nil {
+		return "", false, err
+	}
+	return path, true, nil
+}
+
+func initializeCareerRAG(
+	profilePath string,
+	deps careerRAGDependencies,
+) (careerRAGInitialization, error) {
+	var result careerRAGInitialization
+	resolvedPath, err := config.ValidateCareerProfilePath(profilePath)
+	if err != nil {
+		return result, fmt.Errorf("validate career profile: %w", err)
+	}
+	if deps.getChunks == nil || deps.getEmbedding == nil || deps.ingest == nil {
+		return result, errors.New("career RAG dependencies are incomplete")
+	}
+
+	existingChunks, err := deps.getChunks()
+	if err != nil {
+		return result, fmt.Errorf("read career chunk cache: %w", err)
+	}
+	needsIngest := len(existingChunks) == 0
+	if !needsIngest {
+		probeEmbedding, err := deps.getEmbedding(careerRAGDimensionProbe)
+		if err != nil {
+			return result, fmt.Errorf("verify career chunk cache: %w", err)
+		}
+		if len(probeEmbedding) == 0 {
+			return result, errors.New(
+				"verify career chunk cache: embedding probe was empty",
+			)
+		}
+		needsIngest = parser.CareerChunksNeedReingest(
+			existingChunks,
+			len(probeEmbedding),
+		)
+	}
+
+	if !needsIngest {
+		result.chunkCount = len(existingChunks)
+		return result, nil
+	}
+
+	chunkCount, err := deps.ingest(deps.getEmbedding, resolvedPath)
+	if err != nil {
+		return result, fmt.Errorf("ingest career profile: %w", err)
+	}
+	if chunkCount == 0 {
+		return result, errors.New(
+			"ingest career profile: no grounded career chunks were created",
+		)
+	}
+	result.chunkCount = chunkCount
+	result.reingested = true
+	return result, nil
+}
 
 func waitForJobFetchRetry(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
@@ -259,10 +338,30 @@ func main() {
 	}
 
 	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
+	careerProfileFlag := flag.String(
+		"profile",
+		"",
+		"path to career profile markdown (overrides CAREER_PROFILE_PATH)",
+	)
+	noRAG := flag.Bool(
+		"no-rag",
+		false,
+		"disable career-profile ingestion and retrieval explicitly",
+	)
 	flag.Parse()
 
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or error loading it. Relying on system environment variables.")
+	}
+
+	careerProfilePath, ragEnabled, err := resolveAgentCareerProfile(
+		*careerProfileFlag,
+		os.Getenv(config.CareerProfilePathEnv),
+		".",
+		*noRAG,
+	)
+	if err != nil {
+		log.Fatalf("Career profile configuration error: %v", err)
 	}
 
 	// Setup rotating logs
@@ -285,6 +384,40 @@ func main() {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
 	}
 	defer storage.CloseDB()
+
+	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
+	if ragEnabled {
+		ragResult, err := initializeCareerRAG(
+			careerProfilePath,
+			careerRAGDependencies{
+				getChunks:    storage.GetAllCareerChunks,
+				getEmbedding: client.GetEmbedding,
+				ingest:       parser.IngestResumeChunks,
+			},
+		)
+		if err != nil {
+			log.Fatalf(
+				"Career RAG startup failed; fix the profile/cache or use "+
+					"-no-rag explicitly: %v",
+				err,
+			)
+		}
+		if ragResult.reingested {
+			log.Printf(
+				"[RAG] Successfully embedded and cached %d career chunks.",
+				ragResult.chunkCount,
+			)
+		} else {
+			log.Printf(
+				"[RAG] Found %d verified career chunks in local SQLite Vector DB.",
+				ragResult.chunkCount,
+			)
+		}
+	} else {
+		log.Println(
+			"[RAG] Disabled explicitly by -no-rag; career context retrieval is off.",
+		)
+	}
 
 	// Any row still PROCESSING at startup can only be orphaned from a
 	// previous run being killed mid-job (confirmed live 2026-07-24: 235
@@ -419,40 +552,7 @@ func main() {
 		close(jobChan)
 	}()
 
-	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 	pipeline := submitter.NewPipeline(filter, client, client, browser)
-
-	// Local Embedded RAG Ingestion
-	const profilePath = "/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md"
-	existingChunks, err := storage.GetAllCareerChunks()
-	if err != nil {
-		log.Printf("[Agent] [RAG] Failed to get career chunks from storage: %v", err)
-	}
-	needsIngest := len(existingChunks) == 0
-	if !needsIngest {
-		// A changed OLLAMA_EMBED_MODEL (or provider switch) silently breaks
-		// CosineSimilarity-based retrieval otherwise — its own mismatched-size
-		// guard returns 0 for every comparison with no error surfaced. Probe
-		// the currently configured model's actual dimension and compare
-		// against what's already stored (bugs.md: "stale RAG chunk dimension").
-		if probeEmb, err := client.GetEmbedding("dimension probe"); err != nil {
-			log.Printf("[Agent] [RAG] Failed to probe embedding dimension: %v", err)
-		} else if parser.CareerChunksNeedReingest(existingChunks, len(probeEmb)) {
-			log.Printf("[RAG] Stored career chunks use a different embedding dimension than the current model (%d-dim) — re-ingesting.", len(probeEmb))
-			needsIngest = true
-		}
-	}
-	if needsIngest {
-		log.Println("[RAG] Knowledge Library cache empty or stale. Ingesting USER_PROFILE.md into local SQLite Vector DB...")
-		n, err := parser.IngestResumeChunks(client.GetEmbedding, profilePath)
-		if err != nil {
-			log.Printf("[RAG] Failed to ingest resume chunks: %v", err)
-		} else {
-			log.Printf("[RAG] Successfully embedded and cached %d career chunks.", n)
-		}
-	} else {
-		log.Printf("[RAG] Found %d career chunks in local SQLite Vector DB.", len(existingChunks))
-	}
 
 	var wg sync.WaitGroup
 	numWorkers := defaultWorkerCount()
@@ -618,35 +718,66 @@ func main() {
 					"desc":  job.Description,
 				}
 
-				// RAG Retrieval: Dynamically build tailored context
-				jobDescText := job.Title + "\n" + job.Description
-
-				var jobEmb []float32
-				var embErr error
-				for attempt := 1; attempt <= 3; attempt++ {
-					jobEmb, embErr = client.GetEmbedding(jobDescText)
-					if embErr == nil {
-						break
-					}
-					if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-						log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
-						time.Sleep(60 * time.Second)
-					} else {
-						break
-					}
-				}
-
 				var tailoredContext string
-				if embErr == nil {
-					topChunks, _ := parser.RetrieveTopK(jobEmb, 5)
-					var sb strings.Builder
-					sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
-					for _, tc := range topChunks {
-						sb.WriteString(tc.Text + "\n\n")
+				if ragEnabled {
+					// RAG Retrieval: Dynamically build tailored context.
+					jobDescText := job.Title + "\n" + job.Description
+
+					var jobEmb []float32
+					var embErr error
+					for attempt := 1; attempt <= 3; attempt++ {
+						jobEmb, embErr = client.GetEmbedding(jobDescText)
+						if embErr == nil {
+							break
+						}
+						if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
+							time.Sleep(60 * time.Second)
+						} else {
+							break
+						}
 					}
-					tailoredContext = sb.String()
-				} else {
-					log.Printf("[RAG] Embedding failed after retries, falling back to empty context: %v", embErr)
+
+					if embErr == nil {
+						topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
+						if retrieveErr != nil {
+							log.Printf(
+								"[Worker-%d] Failed to retrieve grounded career context: %v",
+								workerID,
+								retrieveErr,
+							)
+							if statusErr := storage.UpdateFunnelStatus(
+								job.URL,
+								"DISCOVERED",
+							); statusErr != nil {
+								log.Printf(
+									"[Worker-%d] Failed to return job after RAG retrieval error: %v",
+									workerID,
+									statusErr,
+								)
+							}
+							continue
+						}
+						var sb strings.Builder
+						sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
+						for _, tc := range topChunks {
+							sb.WriteString(tc.Text + "\n\n")
+						}
+						tailoredContext = sb.String()
+					} else {
+						log.Printf("[RAG] Embedding failed after retries: %v", embErr)
+						if statusErr := storage.UpdateFunnelStatus(
+							job.URL,
+							"DISCOVERED",
+						); statusErr != nil {
+							log.Printf(
+								"[Worker-%d] Failed to return job after RAG embedding error: %v",
+								workerID,
+								statusErr,
+							)
+						}
+						continue
+					}
 				}
 
 				if err := filter.CheckPayload(tailoredContext); err != nil {

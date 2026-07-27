@@ -7,10 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 type httpDoerFunc func(*http.Request) (*http.Response, error)
@@ -415,5 +419,186 @@ func TestParseTargetJobURLs(t *testing.T) {
 				t.Errorf("parseTargetJobURLs(%q) = %v, want %v", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInitializeCareerRAGRejectsMissingProfileDespiteStaleCache(t *testing.T) {
+	getChunksCalled := false
+	deps := careerRAGDependencies{
+		getChunks: func() ([]storage.CareerChunk, error) {
+			getChunksCalled = true
+			return []storage.CareerChunk{
+				{Text: "stale private context", Embedding: []float32{1, 2, 3}},
+			}, nil
+		},
+		getEmbedding: func(string) ([]float32, error) {
+			t.Fatal("embedding must not run when the configured profile is missing")
+			return nil, nil
+		},
+		ingest: func(
+			func(string) ([]float32, error),
+			string,
+		) (int, error) {
+			t.Fatal("ingestion must not run when the configured profile is missing")
+			return 0, nil
+		},
+	}
+
+	_, err := initializeCareerRAG(filepath.Join(t.TempDir(), "missing.md"), deps)
+	if err == nil {
+		t.Fatal("missing profile must fail closed even when stale chunks exist")
+	}
+	if getChunksCalled {
+		t.Fatal("stale chunks were consulted before validating the configured profile")
+	}
+	if strings.Contains(err.Error(), "stale private context") {
+		t.Fatal("error exposed cached profile contents")
+	}
+}
+
+func TestResolveAgentCareerProfileAllowsExplicitNoRAG(t *testing.T) {
+	path, enabled, err := resolveAgentCareerProfile(
+		filepath.Join(t.TempDir(), "missing.md"),
+		"",
+		".",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("explicit no-RAG mode returned an error: %v", err)
+	}
+	if enabled {
+		t.Fatal("RAG remained enabled after explicit opt-out")
+	}
+	if path != "" {
+		t.Errorf("profile path = %q, want empty path when RAG is disabled", path)
+	}
+}
+
+func TestInitializeCareerRAGAcceptsConfiguredProfileAndMatchingCache(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "configured.md")
+	if err := os.WriteFile(profilePath, []byte("# Configured profile\n"), 0600); err != nil {
+		t.Fatalf("write configured profile: %v", err)
+	}
+	ingestCalled := false
+	deps := careerRAGDependencies{
+		getChunks: func() ([]storage.CareerChunk, error) {
+			return []storage.CareerChunk{
+				{Text: "cached context", Embedding: []float32{1, 2, 3}},
+			}, nil
+		},
+		getEmbedding: func(string) ([]float32, error) {
+			return []float32{4, 5, 6}, nil
+		},
+		ingest: func(
+			func(string) ([]float32, error),
+			string,
+		) (int, error) {
+			ingestCalled = true
+			return 0, nil
+		},
+	}
+
+	result, err := initializeCareerRAG(profilePath, deps)
+	if err != nil {
+		t.Fatalf("initializeCareerRAG returned an error: %v", err)
+	}
+	if result.chunkCount != 1 || result.reingested {
+		t.Errorf("result = %+v, want one matching cached chunk without reingestion", result)
+	}
+	if ingestCalled {
+		t.Fatal("matching cache was unnecessarily reingested")
+	}
+}
+
+func TestInitializeCareerRAGRebuildsStaleCache(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "configured.md")
+	if err := os.WriteFile(profilePath, []byte("# Current profile\n"), 0600); err != nil {
+		t.Fatalf("write configured profile: %v", err)
+	}
+	deps := careerRAGDependencies{
+		getChunks: func() ([]storage.CareerChunk, error) {
+			return []storage.CareerChunk{
+				{Text: "stale context", Embedding: []float32{1, 2}},
+			}, nil
+		},
+		getEmbedding: func(text string) ([]float32, error) {
+			if text != careerRAGDimensionProbe {
+				t.Errorf("embedding probe text = %q, want the fixed non-profile probe", text)
+			}
+			return []float32{3, 4, 5}, nil
+		},
+		ingest: func(
+			embed func(string) ([]float32, error),
+			gotPath string,
+		) (int, error) {
+			if gotPath != profilePath {
+				t.Errorf("ingest path = %q, want %q", gotPath, profilePath)
+			}
+			if embed == nil {
+				t.Fatal("ingest received a nil embedding function")
+			}
+			return 4, nil
+		},
+	}
+
+	result, err := initializeCareerRAG(profilePath, deps)
+	if err != nil {
+		t.Fatalf("initializeCareerRAG returned an error: %v", err)
+	}
+	if result.chunkCount != 4 || !result.reingested {
+		t.Errorf("result = %+v, want four rebuilt chunks", result)
+	}
+}
+
+func TestInitializeCareerRAGFailsWhenCacheCannotBeVerified(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "configured.md")
+	if err := os.WriteFile(profilePath, []byte("# Current profile\n"), 0600); err != nil {
+		t.Fatalf("write configured profile: %v", err)
+	}
+	deps := careerRAGDependencies{
+		getChunks: func() ([]storage.CareerChunk, error) {
+			return []storage.CareerChunk{
+				{Text: "possibly stale context", Embedding: []float32{1, 2}},
+			}, nil
+		},
+		getEmbedding: func(string) ([]float32, error) {
+			return nil, errors.New("injected probe failure")
+		},
+		ingest: func(
+			func(string) ([]float32, error),
+			string,
+		) (int, error) {
+			t.Fatal("ingestion cannot safely proceed without the embedding provider")
+			return 0, nil
+		},
+	}
+
+	if _, err := initializeCareerRAG(profilePath, deps); err == nil {
+		t.Fatal("unverifiable cache must fail closed")
+	}
+}
+
+func TestInitializeCareerRAGRejectsEmptyRebuild(t *testing.T) {
+	profilePath := filepath.Join(t.TempDir(), "configured.md")
+	if err := os.WriteFile(profilePath, []byte("# Current profile\n"), 0600); err != nil {
+		t.Fatalf("write configured profile: %v", err)
+	}
+	deps := careerRAGDependencies{
+		getChunks: func() ([]storage.CareerChunk, error) {
+			return nil, nil
+		},
+		getEmbedding: func(string) ([]float32, error) {
+			return []float32{1}, nil
+		},
+		ingest: func(
+			func(string) ([]float32, error),
+			string,
+		) (int, error) {
+			return 0, nil
+		},
+	}
+
+	if _, err := initializeCareerRAG(profilePath, deps); err == nil {
+		t.Fatal("an empty rebuild must fail instead of starting without grounded context")
 	}
 }

@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Portable, fail-closed career context
+
+* **Fixed:** Removed the developer-specific career-profile path from `cmd/agent` and `cmd/reingest`. Both commands now share flag, environment, repository-local, and sibling-library resolution.
+* **Safety:** Agent startup validates the selected profile before consulting cached chunks, rejects an empty or unverifiable RAG rebuild, and no longer falls back to empty context after per-job retrieval failures.
+* **Control:** Added explicit `-no-rag` mode for intentional operation without career context. It bypasses both startup ingestion and per-job retrieval instead of silently reusing old chunks.
+* **Configuration:** Documented `CAREER_PROFILE_PATH`, `-profile`, default lookup order, and the fail-closed behavior.
+* **Tests:** Added path-precedence, missing-file, sibling-layout, non-regular-file, stale-cache, cache-probe, empty-ingestion, and explicit no-RAG coverage.
+
 ## 2026-07-27 — Post-fetch backlog grooming
 
 * **Backlog:** Re-verified and re-scored all seven remaining bugs, five free improvements, and two paywalled improvements after bug #123; no score or rank changed.

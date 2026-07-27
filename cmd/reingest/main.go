@@ -15,6 +15,7 @@
 //
 //	go run ./cmd/reingest
 //	go run ./cmd/reingest -profile /path/to/USER_PROFILE.md
+//	CAREER_PROFILE_PATH=/path/to/USER_PROFILE.md go run ./cmd/reingest
 package main
 
 import (
@@ -22,6 +23,9 @@ import (
 	"log"
 	"os"
 
+	"github.com/joho/godotenv"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
@@ -33,17 +37,34 @@ func main() {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
 	}
 
-	profilePath := flag.String("profile", "/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md", "path to USER_PROFILE.md")
+	profileFlag := flag.String(
+		"profile",
+		"",
+		"path to career profile markdown (overrides CAREER_PROFILE_PATH)",
+	)
 	flag.Parse()
+
+	_ = godotenv.Load()
+	profilePath, err := config.ResolveCareerProfilePath(
+		*profileFlag,
+		os.Getenv(config.CareerProfilePathEnv),
+		".",
+	)
+	if err != nil {
+		log.Fatalf("Career profile configuration error: %v", err)
+	}
 
 	if err := storage.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-	n, err := parser.IngestResumeChunks(client.GetEmbedding, *profilePath)
+	n, err := parser.IngestResumeChunks(client.GetEmbedding, profilePath)
 	if err != nil {
 		log.Fatalf("Ingestion failed: %v", err)
 	}
-	log.Printf("Re-ingested %d career chunk(s) from %s.", n, *profilePath)
+	if n == 0 {
+		log.Fatal("Ingestion failed: no grounded career chunks were created")
+	}
+	log.Printf("Re-ingested %d career chunk(s) from %s.", n, profilePath)
 }
