@@ -22,8 +22,7 @@
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
 - Bug #123 is resolved in signed implementation commit `13c5a35`: failed, non-2xx, and weak job-page fetches can no longer reach embedding or fit scoring; response bodies close per attempt and transient failures use bounded retries before returning to `DISCOVERED`.
 - Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
-- The post-#129 groom re-verified and re-scored all 13 Pending rows across the three backlogs. Scores and ranks are unchanged; #121 remains the next autonomous item.
-- Bug #121 is selected and re-verified. Implementation must centralize pre-model quarantine, persist a terminal quarantine outcome, preserve the CSV audit log, and prove with spies that flagged posting text reaches no embedding, scoring, mapping, or judging model path.
+- The post-#121 groom re-verified and re-scored all 12 Pending rows across the three backlogs. Bug ranks are unchanged and #120 remains next. Free improvement #30 rose from 0.20 to 0.40 after live boolean-only inspection showed its motivating answers are blank again; it remains below floor.
 - Bug #121 is resolved: one typed deterministic boundary protects posting embedding/scoring and every model-facing browser path; detections keep the CSV audit, receive a terminal funnel status, and never reach an LLM judge. The full build, vet, test, and focused race gates pass.
 - The Usability Gate remains **UNMET** because 4 Major/Blocker bugs are open. `bugs.md` is authoritative; #120 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
@@ -65,7 +64,7 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 2. **Bug #112 merge policy:** 20 `http`/`https` duplicate pairs were re-measured on 2026-07-27, 15 with different statuses. Outward application dedup is fixed, but funnel insertion, updates, queueing, and reporting remain split. The merge must preserve strong evidence and must not silently promote an ambiguous row to `APPLIED`.
 3. **Historical dedup rows:** older `applied_jobs` entries predate confirmation-only recording. Do not bulk-clear them: a false row suppresses a valid retry, but clearing a true row can file a duplicate.
 4. **Paid CAPTCHA solving:** improvement #17 is worthwhile on evidence but remains out of scope without the user's provider choice and paid key.
-5. **Low-ROI improvements:** #14 is now a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should close because its two motivating attestations are now configured.
+5. **Low-ROI improvements:** #14 remains a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should be re-scoped to safe control-level detection or bypassed by configuring the currently blank answers.
 
 ## Operating procedure and hazards
 

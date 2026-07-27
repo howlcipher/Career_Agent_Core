@@ -1,5 +1,14 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-quarantine backlog grooming
+
+* **Backlog:** Re-verified and recomputed all 5 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #121.
+* **Live correction:** Boolean-only configuration checks show the authorization and sponsorship answers are blank again, superseding stale backlog notes. Improvement #30 returns from 0.20 to 0.40 and stays below the ROI floor.
+* **Priority:** Four Major or Blocker bugs still hold the Usability Gate open. Broken daemon behavior, bug #120, is next.
+* **Recommendations:** Re-scope #30 or configure the answers, close #27 absent a real MCP client, defer paid-compute #14 until preference labels exist, and keep CAPTCHA solving gated on a user-selected paid provider and key.
+* **Live checks:** Required Ollama models remain installed, both dashboard routes return HTTP 200 on loopback, and no Career Agent batch process is running.
+* **Verification:** The uncached build, vet, full test suite, and race checks for the security, agent, and submitter packages pass.
+
 ## 2026-07-27 — Deterministic pre-model quarantine
 
 * **Security:** Fetched posting text and relevant browser DOM now cross one deterministic quarantine boundary before embedding, scoring, form mapping, validation solving, or visual mapping.
