@@ -3,9 +3,9 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** Paused behind the Usability Gate after bug #120 and the requested backlog groom. No live application agent or monitor process is running.
+- **Status:** In progress on bug #122. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
-- **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the bounded security implementation.
+- **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the security and networking implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
 
 ## Bug #120 pre-flight
@@ -22,6 +22,22 @@
 - [x] Document the daemon flags and lifecycle in `README.md` and `CHANGELOG.md`.
 - [x] Groom all three backlogs and refresh the journal resume point.
 - [x] Prepare the verified grooming pass for commit and push.
+
+## Bug #122 pre-flight
+
+- **Usability Gate:** UNMET; #122 is the highest-ranked open gate bug and the only Blocker.
+- **Model choice:** OpenAI `gpt-5.6-sol` at high reasoning, working inline. The user reports that Claude and Gemini are session-limited, and this cross-cutting DNS, HTTP transport, redirect, and browser-proxy boundary needs the strongest available OpenAI coding model.
+- **Skills routed:** `hallucination_guardrails`, `systems_logic`, `cyber_security`, `network_engineering`, `software_development`, `architectural_guardrails`, `quality_assurance`, `test_and_verify`, `defensive_debugging`, `technical_writing`, `devops`, and `commit_and_changelog`.
+- **Code re-verified:** the agent worker, RemoteOK, Hacker News, ATS-feed, SerpApi, and Yahoo clients use ordinary `http.Client` instances. Their URL checks only compare three literal hosts. The Playwright route guard parses literal IPs but never resolves hostnames. No connection-bound DNS validation exists.
+- **Architecture decision:** use one injectable public-address policy and resolver-bound dialer for Go HTTP clients. Route Playwright through an authenticated loopback proxy backed by the same dialer so DNS validation and the browser's actual connection cannot be separated by rebinding. Keep request routing checks as defense in depth.
+
+## Bug #122 plan
+
+- [ ] Write failing unit and integration tests for address classification, DNS resolution, connection-bound dialing, redirects, mixed answers, and the browser proxy.
+- [ ] Implement the centralized network boundary and route every external HTTP and Playwright path through it.
+- [ ] Update the security documentation, bug closure, changelog, and journal with durable evidence.
+- [ ] Run focused race checks plus the full build, vet, and test loop.
+- [ ] Commit and push the verified implementation, then advance this journal to the next open gate bug.
 
 ## Current authoritative state
 
@@ -91,4 +107,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #122, the highest-ranked remaining gate bug. Only after all Major and Blocker rows close should a clean monitored cohort restart from the latest green build.
+Write the failing bug #122 security-boundary tests before implementing the resolver-bound HTTP transport and Playwright proxy.
