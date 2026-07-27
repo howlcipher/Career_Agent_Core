@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-dashboard backlog grooming
+
+* **Backlog:** Re-verified and re-scored all 9 Pending bugs, all 6 free improvements, and the paywalled CAPTCHA item after dashboard hardening; no rank or score changed.
+* **Priority:** Eight Major or Blocker defects still hold the Usability Gate open. Bug #127 remains the next autonomous item at 3.5.
+* **Recommendations:** Kept improvements #14, #27, and #30 below the ROI floor with explicit defer or close guidance; CAPTCHA solving remains at 1.75 but still requires a user-selected paid provider and key.
+* **Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` pass. The live dashboard still returns HTTP 200 on both routes, listens only on `127.0.0.1:8080`, and refuses the host's non-loopback address.
+
 ## 2026-07-27 — Loopback-only dashboard default
 
 * **Security:** The unauthenticated dashboard now defaults to `127.0.0.1:8080` instead of every network interface.

@@ -11,6 +11,7 @@
 
 - Bug #126 is resolved in signed implementation commit `b717e53`: the dashboard now defaults to loopback, warns on explicit remote binds, and uses defensive server timeouts.
 - `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #126. The focused dashboard race suite also passes.
+- The post-#126 groom re-verified and re-scored every remaining backlog row. No score or rank changed; #127 remains the next autonomous item.
 - The Usability Gate remains **UNMET** because 8 Major/Blocker bugs are open. `bugs.md` is authoritative; #127 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
