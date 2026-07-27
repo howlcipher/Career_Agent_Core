@@ -53,7 +53,8 @@
 - Bug #120 is resolved in signed commit `6453177`: batch mode runs one unlimited cycle, while daemon mode refreshes database and discovery work every six hours, admits at most 15 jobs by default, and cancels its inter-cycle wait through the signal context. The configurable cap and deterministic lifecycle are covered by injected-cycle and injected-clock tests.
 - The post-#120 groom re-verified all 11 Pending rows across the three backlogs. Bug ranks are unchanged and #122 is next. Free improvement #35 rises from 1.0 to 1.2 because the daemon cap makes queue order more consequential. Correct live schema-key checks conflict with the post-#121 note and show both motivating #30 answers configured; #30 returns to 0.20 and remains below floor.
 - The post-#122 groom re-verified and re-scored all 10 Pending rows across the three backlogs. No score changed. Free improvements #27 and #30 and paywalled #14 remain below floor.
-- The Usability Gate remains **UNMET** because 2 Major bugs are open. `bugs.md` is authoritative; #128 is the next autonomous item.
+- Bug #128 is resolved: role artifacts use URL-hashed directories, atomic private-file replacement, and exact-path manual handoff. Build, vet, and the full suite pass.
+- The Usability Gate remains **UNMET** because #112 remains an open Major bug. `bugs.md` is authoritative; #112 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -110,4 +111,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #128, the highest-ranked remaining gate bug.
+Run `/work_next_item` for bug #112, the highest-ranked remaining gate bug.

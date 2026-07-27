@@ -1,12 +1,14 @@
 package storage
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -369,47 +371,68 @@ func safeCompanyDirName(companyName string) string {
 // SaveApplication writes under safeCompanyDirName's sanitized one, so the two
 // silently disagreed for any company whose name contains a space or
 // punctuation (bugs.md #62).
-func CoverLetterPath(companyName string) string {
-	return filepath.Join("applications", safeCompanyDirName(companyName), "coverletter.txt")
+func applicationDir(companyName, postingURL string) string {
+	parsed, err := url.Parse(postingURL)
+	if err == nil {
+		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		parsed.Host = strings.ToLower(parsed.Host)
+		parsed.Fragment = ""
+		postingURL = parsed.String()
+	}
+	digest := sha256.Sum256([]byte(postingURL))
+	return filepath.Join("applications", safeCompanyDirName(companyName), fmt.Sprintf("%x", digest[:8]))
 }
 
-func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
-	companyDir := filepath.Join("applications", safeCompanyDirName(companyName))
-	if err := os.MkdirAll(companyDir, security.PrivateDirMode); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
+// CoverLetterPath returns the exact role-specific cover letter saved for a
+// posting. Company names alone are not a stable artifact key (bugs.md #128).
+func CoverLetterPath(companyName, postingURL string) string {
+	return filepath.Join(applicationDir(companyName, postingURL), "coverletter.txt")
+}
+
+var applicationSaveMutex sync.Mutex
+
+// SaveApplication writes a role's documents into its own stable URL-keyed
+// directory and returns that exact directory for later manual handoff.
+func SaveApplication(companyName, jobTitle, location, postingURL, resumeContent, coverLetterContent, interviewPrepContent string) (string, error) {
+	applicationSaveMutex.Lock()
+	defer applicationSaveMutex.Unlock()
+
+	docsDir := applicationDir(companyName, postingURL)
+	if err := os.MkdirAll(docsDir, security.PrivateDirMode); err != nil {
+		return "", fmt.Errorf("failed to create application directory: %w", err)
 	}
 
-	resumePath := filepath.Join(companyDir, "resume.md")
-	if err := writePrivateFile(resumePath, []byte(resumeContent)); err != nil {
-		return fmt.Errorf("failed to write resume: %w", err)
+	resumePath := filepath.Join(docsDir, "resume.md")
+	if err := atomicWritePrivateFile(resumePath, []byte(resumeContent)); err != nil {
+		return "", fmt.Errorf("failed to write resume: %w", err)
 	}
 
-	coverLetterPath := filepath.Join(companyDir, "coverletter.txt")
-	if err := writePrivateFile(coverLetterPath, []byte(coverLetterContent)); err != nil {
-		return fmt.Errorf("failed to write cover letter: %w", err)
+	coverLetterPath := filepath.Join(docsDir, "coverletter.txt")
+	if err := atomicWritePrivateFile(coverLetterPath, []byte(coverLetterContent)); err != nil {
+		return "", fmt.Errorf("failed to write cover letter: %w", err)
 	}
 
-	interviewPrepPath := filepath.Join(companyDir, "interview_prep.md")
-	if err := writePrivateFile(interviewPrepPath, []byte(interviewPrepContent)); err != nil {
-		return fmt.Errorf("failed to write interview prep: %w", err)
+	interviewPrepPath := filepath.Join(docsDir, "interview_prep.md")
+	if err := atomicWritePrivateFile(interviewPrepPath, []byte(interviewPrepContent)); err != nil {
+		return "", fmt.Errorf("failed to write interview prep: %w", err)
 	}
 
 	metadata := Metadata{
 		CompanyName:        companyName,
 		JobTitle:           jobTitle,
 		Location:           location,
-		OriginalPostingURL: url,
+		OriginalPostingURL: postingURL,
 		ApplicationDate:    time.Now(),
 	}
 
 	metadataBytes, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
+		return "", fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	metadataPath := filepath.Join(companyDir, "metadata.json")
-	if err := writePrivateFile(metadataPath, metadataBytes); err != nil {
-		return fmt.Errorf("failed to write metadata: %w", err)
+	metadataPath := filepath.Join(docsDir, "metadata.json")
+	if err := atomicWritePrivateFile(metadataPath, metadataBytes); err != nil {
+		return "", fmt.Errorf("failed to write metadata: %w", err)
 	}
 
 	// bugs.md #94: deliberately does NOT write the applied_jobs dedup row.
@@ -417,7 +440,7 @@ func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverL
 	// need manual review, or be interrupted. cmd/agent records the row on the
 	// confirmed-submission branch instead. This function stays responsible for
 	// the folder MoveToManualApply archives and the record the dashboard reads.
-	return nil
+	return docsDir, nil
 }
 
 var logMutex sync.Mutex
@@ -460,28 +483,27 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 // on: the queue file plus each account-gated job's tailored-docs folder.
 var manualApplyBase = filepath.Join("applications", "needs_manual_apply")
 
-// MoveToManualApply relocates a company's saved docs folder from
-// applications/<company>/ into applications/needs_manual_apply/<company>/
+// MoveToManualApply relocates one exact saved docs directory into
+// applications/needs_manual_apply/.
 // so account-gated jobs live in one clearly-labeled place. Returns the
 // destination path, or "" if the source folder doesn't exist (docs may
 // have failed to save). A pre-existing destination gets a numeric suffix
 // rather than being overwritten — company-name collisions are real
 // (pre-#19 rows share labels like "en_US").
-func MoveToManualApply(companyName string) (string, error) {
-	safeCompany := safeCompanyDirName(companyName)
-	src := filepath.Join("applications", safeCompany)
+func MoveToManualApply(src string) (string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return "", nil
 	}
 	if err := os.MkdirAll(manualApplyBase, security.PrivateDirMode); err != nil {
 		return "", fmt.Errorf("failed to create manual-apply dir: %w", err)
 	}
-	dst := filepath.Join(manualApplyBase, safeCompany)
+	baseName := filepath.Base(src)
+	dst := filepath.Join(manualApplyBase, baseName)
 	for i := 2; ; i++ {
 		if _, err := os.Stat(dst); os.IsNotExist(err) {
 			break
 		}
-		dst = filepath.Join(manualApplyBase, fmt.Sprintf("%s-%d", safeCompany, i))
+		dst = filepath.Join(manualApplyBase, fmt.Sprintf("%s-%d", baseName, i))
 	}
 	if err := os.Rename(src, dst); err != nil {
 		return "", fmt.Errorf("failed to move docs to manual-apply dir: %w", err)
@@ -621,6 +643,31 @@ func writePrivateFile(path string, data []byte) error {
 		return err
 	}
 	return f.Close()
+}
+
+func atomicWritePrivateFile(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".partial-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(security.PrivateFileMode); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func openPrivateAppendFile(path string) (*os.File, error) {

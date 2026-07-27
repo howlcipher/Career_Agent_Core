@@ -1205,6 +1205,7 @@ func main() {
 							log.Printf("[Worker-%d] Failed to checkpoint: %v", workerID, err)
 						}
 
+						var docsDir string
 						generateDocsFunc := func() (string, string, error) {
 							// One static, job-agnostic cover letter for every application
 							// (profile.yaml's use_master_cover_letter). Skips the
@@ -1240,9 +1241,11 @@ func main() {
 									letterText = text
 								}
 								const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
-								if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, letterText, untailoredNote); err != nil {
-									log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
-									return "", "", err
+								var saveErr error
+								docsDir, saveErr = storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, letterText, untailoredNote)
+								if saveErr != nil {
+									log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, saveErr)
+									return "", "", saveErr
 								}
 								if coverPath == "" {
 									log.Printf("[Worker-%d] Using master resume for %s (no per-job tailoring, cover letter disabled)", workerID, job.CompanyName)
@@ -1276,9 +1279,10 @@ func main() {
 								return "", "", processErr
 							}
 
-							if err := storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep); err != nil {
-								log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, err)
-								return "", "", err
+							docsDir, processErr = storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep)
+							if processErr != nil {
+								log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, processErr)
+								return "", "", processErr
 							}
 							if hasToneVariant {
 								if err := storage.UpdateToneVariant(job.URL, toneVariantLabel); err != nil {
@@ -1300,7 +1304,7 @@ func main() {
 							// for any company whose name isn't already sanitize-stable
 							// ("Backend Software Engineer" -> "Backend_Software_Engineer")
 							// the path pointed at a file that did not exist.
-							return masterResumePath, storage.CoverLetterPath(job.CompanyName), nil
+							return masterResumePath, storage.CoverLetterPath(job.CompanyName, job.URL), nil
 						}
 
 						if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, security.ErrPromptInjectionDetected) {
@@ -1340,7 +1344,7 @@ func main() {
 							log.Printf("[Worker-%d] %s requires an account to apply — queued for manual submission: %v", workerID, job.CompanyName, err)
 							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+							docsDir, mvErr := storage.MoveToManualApply(docsDir)
 							if mvErr != nil {
 								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
 							}
@@ -1359,7 +1363,7 @@ func main() {
 							log.Printf("[Worker-%d] %s needs a legal attestation not set in pii.yaml — queued for manual submission: %v", workerID, job.CompanyName, err)
 							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+							docsDir, mvErr := storage.MoveToManualApply(docsDir)
 							if mvErr != nil {
 								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
 							}
@@ -1375,7 +1379,7 @@ func main() {
 							log.Printf("[Worker-%d] %s's form is too large for the local model — queued for manual submission: %v", workerID, job.CompanyName, err)
 							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+							docsDir, mvErr := storage.MoveToManualApply(docsDir)
 							if mvErr != nil {
 								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
 							}
@@ -1396,7 +1400,7 @@ func main() {
 								log.Printf("[Worker-%d] %s needs manual completion — queued for manual submission: %v", workerID, job.CompanyName, err)
 								pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 								storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-								docsDir, mvErr := storage.MoveToManualApply(job.CompanyName)
+								docsDir, mvErr := storage.MoveToManualApply(docsDir)
 								if mvErr != nil {
 									log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
 								}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -248,7 +249,7 @@ func TestSaveApplication(t *testing.T) {
 	companyName := "Test_Save_Company"
 	defer os.RemoveAll(filepath.Join("applications", companyName))
 
-	err := SaveApplication(
+	companyDir, err := SaveApplication(
 		companyName,
 		"Test Role",
 		"Remote",
@@ -262,7 +263,6 @@ func TestSaveApplication(t *testing.T) {
 	}
 
 	// Check if directory and files exist
-	companyDir := filepath.Join("applications", companyName)
 	if _, err := os.Stat(companyDir); os.IsNotExist(err) {
 		t.Fatalf("Expected directory %s to be created", companyDir)
 	}
@@ -300,6 +300,53 @@ func TestSaveApplication(t *testing.T) {
 	}
 }
 
+func TestSaveApplicationKeepsRolesAndSanitizedCompaniesSeparate(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	jobs := []struct {
+		company string
+		title   string
+		url     string
+		resume  string
+	}{
+		{"Acme, Inc.", "Platform Engineer", "https://jobs.example.com/acme/1", "resume-one"},
+		{"Acme, Inc.", "Site Reliability Engineer", "https://jobs.example.com/acme/2", "resume-two"},
+		{"Acme? Inc.", "Backend Engineer", "https://jobs.example.com/acme/3", "resume-three"},
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(jobs))
+	for _, job := range jobs {
+		job := job
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := SaveApplication(job.company, job.title, "Remote", job.url, job.resume, "letter", "prep")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("SaveApplication failed: %v", err)
+		}
+	}
+
+	seenDirs := make(map[string]bool)
+	for _, job := range jobs {
+		docsDir := applicationDir(job.company, job.url)
+		if seenDirs[docsDir] {
+			t.Fatalf("jobs collided in %q", docsDir)
+		}
+		seenDirs[docsDir] = true
+		got, err := os.ReadFile(filepath.Join(docsDir, "resume.md"))
+		if err != nil || string(got) != job.resume {
+			t.Fatalf("resume for %s = %q, %v; want %q", job.title, got, err, job.resume)
+		}
+	}
+}
+
 // bugs.md #94: the live failure was a job stuck in an unreachable loop -- its
 // funnel row back at DISCOVERED (via the startup reaper / #85's reset /
 // requeue) while a dedup row from document generation made the worker skip it
@@ -313,7 +360,7 @@ func TestSaveApplicationLeavesJobRetryableUntilConfirmed(t *testing.T) {
 	url := "http://example.com/jobs/retryable"
 
 	// Attempt 1: documents generated, submission then fails.
-	if err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
+	if _, err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
 		t.Fatalf("SaveApplication failed: %v", err)
 	}
 	if HasApplied(url) {
@@ -321,7 +368,7 @@ func TestSaveApplicationLeavesJobRetryableUntilConfirmed(t *testing.T) {
 	}
 
 	// Attempt 2: documents generated again, this time the submit is confirmed.
-	if err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
+	if _, err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
 		t.Fatalf("second SaveApplication failed: %v", err)
 	}
 	if err := RecordApplicationInDB(companyName, "SRE", url); err != nil {
@@ -394,7 +441,7 @@ func TestPrivateArtifactsUseRestrictiveModes(t *testing.T) {
 		db = nil
 	})
 
-	if err := SaveApplication(
+	if _, err := SaveApplication(
 		"Private Corp",
 		"Engineer",
 		"Remote",
@@ -413,15 +460,17 @@ func TestPrivateArtifactsUseRestrictiveModes(t *testing.T) {
 		t.Fatalf("LogFailedSubmission failed: %v", err)
 	}
 
+	docsDir := applicationDir("Private Corp", "https://example.com/jobs/1")
 	paths := map[string]os.FileMode{
-		"applications.db": 0600,
-		"applications":    0700,
-		filepath.Join("applications", "Private_Corp"):                      0700,
-		filepath.Join("applications", "Private_Corp", "resume.md"):         0600,
-		filepath.Join("applications", "Private_Corp", "coverletter.txt"):   0600,
-		filepath.Join("applications", "Private_Corp", "interview_prep.md"): 0600,
-		filepath.Join("applications", "Private_Corp", "metadata.json"):     0600,
-		filepath.Join("applications", "manual_submissions.md"):             0600,
+		"applications.db":                                      0600,
+		"applications":                                         0700,
+		filepath.Dir(docsDir):                                  0700,
+		docsDir:                                                0700,
+		filepath.Join(docsDir, "resume.md"):                    0600,
+		filepath.Join(docsDir, "coverletter.txt"):              0600,
+		filepath.Join(docsDir, "interview_prep.md"):            0600,
+		filepath.Join(docsDir, "metadata.json"):                0600,
+		filepath.Join("applications", "manual_submissions.md"): 0600,
 	}
 	for path, want := range paths {
 		info, err := os.Stat(path)
@@ -538,8 +587,7 @@ func TestMoveToManualApply(t *testing.T) {
 	defer os.RemoveAll(filepath.Join("applications", "needs_manual_apply"))
 	defer os.RemoveAll(src)
 
-	// "en-US" must sanitize to the same "en_US" folder SaveApplication writes
-	dst, err := MoveToManualApply("en-US")
+	dst, err := MoveToManualApply(src)
 	if err != nil {
 		t.Fatalf("MoveToManualApply failed: %v", err)
 	}
@@ -557,7 +605,7 @@ func TestMoveToManualApply(t *testing.T) {
 	// Collision: a second job with the same company label must not overwrite
 	os.MkdirAll(src, 0755)
 	os.WriteFile(filepath.Join(src, "resume.md"), []byte("resume2"), 0644)
-	dst2, err := MoveToManualApply("en-US")
+	dst2, err := MoveToManualApply(src)
 	if err != nil {
 		t.Fatalf("second MoveToManualApply failed: %v", err)
 	}
@@ -566,7 +614,7 @@ func TestMoveToManualApply(t *testing.T) {
 	}
 
 	// Missing source is not an error — docs may have failed to save
-	dst3, err := MoveToManualApply("NeverSavedCorp")
+	dst3, err := MoveToManualApply(filepath.Join("applications", "NeverSavedCorp"))
 	if err != nil || dst3 != "" {
 		t.Errorf("missing source: got (%q, %v), want (\"\", nil)", dst3, err)
 	}
@@ -1250,15 +1298,16 @@ func TestClearApplicationRecordsByURLPattern(t *testing.T) {
 func TestCoverLetterPath(t *testing.T) {
 	tests := []struct {
 		company string
+		url     string
 		want    string
 	}{
-		{"Reddit", filepath.Join("applications", "Reddit", "coverletter.txt")},
-		{"Backend Software Engineer", filepath.Join("applications", "Backend_Software_Engineer", "coverletter.txt")},
-		{"Acme, Inc.", filepath.Join("applications", "Acme__Inc_", "coverletter.txt")},
+		{"Reddit", "https://example.com/jobs/1", filepath.Join(applicationDir("Reddit", "https://example.com/jobs/1"), "coverletter.txt")},
+		{"Backend Software Engineer", "https://example.com/jobs/1", filepath.Join(applicationDir("Backend Software Engineer", "https://example.com/jobs/1"), "coverletter.txt")},
+		{"Acme, Inc.", "https://example.com/jobs/1", filepath.Join(applicationDir("Acme, Inc.", "https://example.com/jobs/1"), "coverletter.txt")},
 	}
 	for _, tt := range tests {
-		if got := CoverLetterPath(tt.company); got != tt.want {
-			t.Errorf("CoverLetterPath(%q) = %q, want %q", tt.company, got, tt.want)
+		if got := CoverLetterPath(tt.company, tt.url); got != tt.want {
+			t.Errorf("CoverLetterPath(%q, %q) = %q, want %q", tt.company, tt.url, got, tt.want)
 		}
 	}
 }
@@ -1278,11 +1327,12 @@ func TestCoverLetterPathMatchesSaveApplication(t *testing.T) {
 
 	InitDB()
 	const company = "Backend Software Engineer"
-	if err := SaveApplication(company, "SRE", "Remote", "https://example.com/j/1", "resume", "the letter", "prep"); err != nil {
+	const postingURL = "https://example.com/j/1"
+	if _, err := SaveApplication(company, "SRE", "Remote", postingURL, "resume", "the letter", "prep"); err != nil {
 		t.Fatalf("SaveApplication failed: %v", err)
 	}
 
-	got, err := os.ReadFile(CoverLetterPath(company))
+	got, err := os.ReadFile(CoverLetterPath(company, postingURL))
 	if err != nil {
 		t.Fatalf("CoverLetterPath does not point at the file SaveApplication wrote: %v", err)
 	}
