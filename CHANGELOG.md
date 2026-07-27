@@ -5,7 +5,7 @@
 * **Security:** Maintained commands now start under an owner-only umask and fail closed with a clear warning if existing private paths cannot be secured.
 * **Hardening:** Credentials, SQLite files, logs, source resumes and letters, generated documents, and their directories now use `0600` and `0700` modes. Permission repair opens changed paths without following symbolic links.
 * **Operations:** Added the idempotent `go run ./cmd/securefiles` maintenance command and applied it to the live workspace.
-* **Tests:** Added coverage for process defaults, recursive repair, repeat runs, symbolic-link refusal, warning propagation, private database creation, and generated artifact modes.
+* **Tests:** Added coverage for process defaults, recursive repair, repeat runs, symbolic-link refusal, warning propagation, private database creation, and generated artifact modes. The full build, vet, test, and focused race gates pass.
 
 ## 2026-07-27 — Post-dashboard backlog grooming
 

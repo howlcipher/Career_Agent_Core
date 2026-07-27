@@ -5,14 +5,14 @@
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
 - **Status:** Paused behind the Usability Gate. No agent or monitor process is running as of the 2026-07-27 groom.
 - **Started:** 2026-07-25.
-- **Durable history:** resolved implementation details live in `bugs.md` #70-#126 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
+- **Durable history:** resolved implementation details live in `bugs.md` #70-#127 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
 
 ## Current authoritative state
 
-- Bug #126 is resolved in signed implementation commit `b717e53`: the dashboard now defaults to loopback, warns on explicit remote binds, and uses defensive server timeouts.
-- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #126. The focused dashboard race suite also passes.
-- The post-#126 groom re-verified and re-scored every remaining backlog row. No score or rank changed; #127 remains the next autonomous item.
-- The Usability Gate remains **UNMET** because 8 Major/Blocker bugs are open. `bugs.md` is authoritative; #127 is the next autonomous item.
+- Bug #127 is resolved in signed implementation commit `e4e48e1`: maintained commands enforce owner-only creation and repair existing private workspace paths without following symlinks.
+- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #127. The focused security, storage, tracker, agent, and dashboard race suite also passes.
+- The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
+- The Usability Gate remains **UNMET** because 7 Major/Blocker bugs are open. `bugs.md` is authoritative; #123 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -69,4 +69,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #127, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved file-permission, fetch, quarantine, and SSRF defects.
+Run `/work_next_item` for bug #123, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved fetch, quarantine, and SSRF defects.
