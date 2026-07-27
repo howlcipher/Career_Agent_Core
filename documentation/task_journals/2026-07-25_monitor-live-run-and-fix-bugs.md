@@ -3,9 +3,17 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** Paused behind the Usability Gate. No agent or monitor process is running as of the 2026-07-27 groom.
+- **Status:** In progress on bug #121. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
+- **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the bounded security implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
+
+## Bug #121 pre-flight
+
+- **Usability Gate:** UNMET; #121 is the highest-ranked open gate bug.
+- **Model choice:** OpenAI `gpt-5.6-sol` at high reasoning. The change spans the worker, quarantine boundary, browser submission paths, durable status handling, and spy-based regressions, while the user reports that Claude and Gemini are session-limited.
+- **Skills routed:** `hallucination_guardrails`, `systems_logic`, `cyber_security`, `software_development`, `quality_assurance`, and `test_and_verify`.
+- **Code re-verified:** `cmd/agent/main.go` still calls `GetEmbedding` and `ScoreJob` on fetched posting text before any posting quarantine. `AttemptSubmit` scans only the generic learner DOM, after dedicated Greenhouse and Lever handling has already bypassed that boundary. The item remains current as filed.
 
 ## Current authoritative state
 
@@ -15,6 +23,7 @@
 - Bug #123 is resolved in signed implementation commit `13c5a35`: failed, non-2xx, and weak job-page fetches can no longer reach embedding or fit scoring; response bodies close per attempt and transient failures use bounded retries before returning to `DISCOVERED`.
 - Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
 - The post-#129 groom re-verified and re-scored all 13 Pending rows across the three backlogs. Scores and ranks are unchanged; #121 remains the next autonomous item.
+- Bug #121 is selected and re-verified. Implementation must centralize pre-model quarantine, persist a terminal quarantine outcome, preserve the CSV audit log, and prove with spies that flagged posting text reaches no embedding, scoring, mapping, or judging model path.
 - The Usability Gate remains **UNMET** because 5 Major/Blocker bugs are open. `bugs.md` is authoritative; #121 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
@@ -72,4 +81,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #121, the highest-ranked remaining gate bug. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.
+Implement bug #121 test-first, then review the complete diff and run the focused race tests plus the repository build, vet, and full test suite.
