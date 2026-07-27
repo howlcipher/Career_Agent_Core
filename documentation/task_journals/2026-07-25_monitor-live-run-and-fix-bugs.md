@@ -5,16 +5,16 @@
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
 - **Status:** Paused behind the Usability Gate. No agent or monitor process is running as of the 2026-07-27 groom.
 - **Started:** 2026-07-25.
-- **Durable history:** resolved implementation details live in `bugs.md` #70-#127 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
+- **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
 
 ## Current authoritative state
 
 - Bug #127 is resolved in signed implementation commit `e4e48e1`: maintained commands enforce owner-only creation and repair existing private workspace paths without following symlinks.
-- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #127. The focused security, storage, tracker, agent, and dashboard race suite also passes.
+- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #129. The focused agent and shared-configuration race suite also passes.
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
 - Bug #123 is resolved in signed implementation commit `13c5a35`: failed, non-2xx, and weak job-page fetches can no longer reach embedding or fit scoring; response bodies close per attempt and transient failures use bounded retries before returning to `DISCOVERED`.
-- The post-#123 groom re-verified and re-scored every remaining row. Scores and ranks are unchanged; #129 is the next autonomous item.
-- The Usability Gate remains **UNMET** because 6 Major/Blocker bugs are open. `bugs.md` is authoritative; #129 is the next autonomous item.
+- Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
+- The Usability Gate remains **UNMET** because 5 Major/Blocker bugs are open. `bugs.md` is authoritative; #121 is the next autonomous item before the pending groom.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -71,4 +71,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #129, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.
+Run `/groom_backlogs`, then `/work_next_item` for the highest-ranked remaining gate bug. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.
