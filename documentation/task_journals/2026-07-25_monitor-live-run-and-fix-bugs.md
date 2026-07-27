@@ -17,7 +17,7 @@
 - Agent PID `3755906` (`/tmp/career_agent_bin_verify82j`, built at HEAD `81792b0`) — alive, started 12:04.
   **Note it predates `2972797` (#69) and `4134b3d` (#26)** — it does not carry the real-title fix or ATS feed discovery.
 - 82-cohort breakdown: `DISCOVERED=69 FAILED_SUBMIT=6 PROCESSING=1 SKIPPED=6` → moved to `FAILED_SUBMIT=7 DISCOVERED=68` at ~12:32.
-- **Still 0 of 82 confirmed `APPLIED`.** That remains the open question of the parent journal (`2026-07-21_verify-bug4-iframe-fill-live-batch.md`).
+- **Still 0 of 82 confirmed `APPLIED` at this historical checkpoint.** That was the open question of the earlier verification journal, since superseded by the confirmed application and consolidated into this journal.
 
 ## Monitors armed in THIS session (previous session's were orphaned and killed)
 
@@ -551,22 +551,38 @@ Enumerated every control Greenhouse marks required, by reading `aria-required`/`
 
 `gdpr_demographic_data_consent_given_1` is already pre-checked by the page.
 
+## Application sweep update (2026-07-26 22:28 EDT)
+
+Reviewed this journal first, then swept the current agent, discovery, submission, tracker, storage, dashboard and security boundaries. The durable results are in `bugs.md` #118-#129, reopened #112, and `improvements.md` #34-#36.
+
+- `go build ./...`: clean.
+- `go vet ./...`: clean.
+- `go test ./...`: six `pkg/submitter` failures against the pre-existing uncommitted #118 resume-selector work. The audit preserved that work and did not edit `pkg/submitter/browser.go`.
+- Usability Gate: **UNMET** again until #118 is green and the new Blocker/Major queue is cleared.
+- The earlier `2026-07-21_verify-bug4-iframe-fill-live-batch.md` journal was removed as superseded: the first genuinely confirmed application answered its core question, and all remaining live-run context is consolidated here and in the backlog.
+- Live model discovery confirmed `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gemini-3.6-flash-high`, `gemini-3.1-pro-high`, `gpt-oss-120b-medium`, and local `qwen3:30b-instruct`. New backlog recommendations use the current Claude/Gemini names while preserving the existing table schema.
+
 ## Next Step
 
 **Standing instruction: monitor the live run, fix what surfaces, log it in `bugs.md`, groom the backlog, keep this journal.** The user set this as a `/goal`; it does not complete until they say so. Standing authority: *"If a choice arises, do what you recommend, don't feel you need to ask, do not do anything that adds a monetary cost."*
 
-### Live state (accurate as of 2026-07-26 08:55)
+### Live state (accurate as of 2026-07-26 22:28)
 
-- **NOTHING IS RUNNING.** The targeted 2-job run (PID `5294`) finished at 08:50 — `Batch execution complete!`. No agent process is alive.
-- **Working tree clean, `main` in sync with `origin/main`.** HEAD carries **#94-#117** (29 fixes this session).
+- **NOTHING IS RUNNING.** No agent process or monitor is alive.
+- **Working tree is intentionally not clean.** `pkg/submitter/browser.go` contains the user's in-progress #118 resume-upload change; this sweep changed only backlog, changelog and journal documentation around it. `main` was in sync with `origin/main` before these documentation edits.
 - **1 confirmed `APPLIED`: Akuity** — the first in the database's history (was 0 across 3,884 rows at session start). See the *FIRST CONFIRMED APPLICATION* section above for the evidence.
 - **82-cohort:** `DISCOVERED=52 FAILED_SUBMIT=11 BLOCKED_CAPTCHA=9 SKIPPED=6 MANUAL_REQUIRED=4`. Note this tally reads the `http://` rows and is unreliable for ~11 of 82 jobs — see **#112**.
-- **Backlog:** 105 bug rows, **0 open**. `improvements.md` has 3 Pending (all ⚠️ below the 0.5 ROI floor), `improvements_paywall.md` 1.
+- **Backlog:** 13 open bug rows (12 new #118-#129 plus reopened #112). `improvements.md` has 6 Pending (3 above the ROI floor, 3 ⚠️ below it); `improvements_paywall.md` still has 1.
+- **Verification:** build/vet clean; full tests red in six `pkg/submitter` cases under #118.
 - **Monitors: none armed.** They do not survive a session boundary. On resume, `pgrep -af watch_82.sh` and `pgrep -af 'tail -F.*career_agent.log'`, kill any orphans, arm fresh ones.
 
 ### RECOMMENDED NEXT ACTIONS, in order
 
-#### 1. Restart the full 82-job cohort on current HEAD
+#### 1. Finish #118 and restore the test contract
+
+Do not start another live cohort with a red submitter suite. Preserve the new mapped-selector/fallback behavior, but make resume attachment optional when the form/mapping has no resume control. Restore all six failing orchestration tests and add focused mapped/fallback/absent/unreadable resume cases. Then run the full build → vet → test loop.
+
+#### 2. Restart the full 82-job cohort on the resulting green HEAD
 
 Every previous cohort run used a much earlier binary; **no full run has ever executed with #94-#117**. This is the highest-value action and needs no user decision.
 
@@ -629,7 +645,7 @@ Submission confirmed|Submit verdict after|Auto-Submit failed|Proceeding with app
 
 **Expect mostly `BLOCKED_CAPTCHA`.** Measured: **6 of 7** completed fills were blocked. That is accurate reporting, not a regression.
 
-#### 2. Merge #112's duplicate funnel rows — needs a decision first
+#### 3. Merge #112's duplicate funnel rows — needs a decision first
 
 20 scheme-duplicate pairs (`http://x` and `https://x` for one posting), **11 holding different statuses**. The dedup half is fixed; the funnel half is not, because merging requires deciding which status wins when two disagree (`BLOCKED_CAPTCHA` vs `DISCOVERED` vs `FAILED_SUBMIT` are not obviously orderable). Picking wrong either strands a workable job or re-attempts a blocked one. **Ask the user before merging.** Inspect with:
 
@@ -639,7 +655,7 @@ SELECT b.status AS http_status, a.status AS https_status, COUNT(*) FROM job_funn
  AND a.url LIKE 'https://%' AND b.url LIKE 'http://%' GROUP BY 1,2 ORDER BY 3 DESC;
 ```
 
-#### 3. The bot-protection decision — the user's, and now the dominant constraint
+#### 4. The bot-protection decision — the user's, and now the dominant constraint
 
 **6 of 7 completed fills were blocked**, across both platforms: `reddit`, `orkes`, `alphasense`, `sportygroup`, `pointwild` (reCAPTCHA) and `dexcarehealth`, `zimperium`, `brightedge`, `syw` (hCaptcha on Lever — **4 of 4 Lever jobs attempted were blocked**, and Lever is 39 of 82). The fill path is solved; this is what stops applications. The only remedy is `improvements_paywall.md` **#17** (2captcha/capsolver), which is **paid and explicitly out of scope** under the no-monetary-cost constraint. **Do not act on this without the user.**
 
