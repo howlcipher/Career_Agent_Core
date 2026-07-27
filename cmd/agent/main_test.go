@@ -1,9 +1,356 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
+
+type httpDoerFunc func(*http.Request) (*http.Response, error)
+
+func (f httpDoerFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type trackedReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackedReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
+type failingReadCloser struct {
+	closed bool
+}
+
+func (r *failingReadCloser) Read([]byte) (int, error) {
+	return 0, errors.New("injected body read failure")
+}
+
+func (r *failingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
+func usableJobPageHTML() string {
+	return "<html><body><main><h1>Senior Site Reliability Engineer</h1><p>" +
+		strings.Repeat("Build reliable distributed systems and improve production operations. ", 6) +
+		"</p></main></body></html>"
+}
+
+func noJobFetchWait(context.Context, time.Duration) error {
+	return errors.New("unexpected job fetch retry wait")
+}
+
+func TestFetchJobPageAcceptsUsable2xxFromInjectedServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, usableJobPageHTML())
+	}))
+	defer server.Close()
+
+	result, err := fetchJobPage(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		func(context.Context, time.Duration) error {
+			t.Fatal("successful fetch must not wait for a retry")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("fetchJobPage returned an error: %v", err)
+	}
+	if result.disposition != jobPageReady {
+		t.Fatalf("disposition = %v, want ready", result.disposition)
+	}
+	if result.statusCode != http.StatusOK {
+		t.Errorf("statusCode = %d, want %d", result.statusCode, http.StatusOK)
+	}
+	if !strings.Contains(result.description, "Senior Site Reliability Engineer") {
+		t.Errorf("description did not contain the posting text: %q", result.description)
+	}
+}
+
+func TestFetchJobPageRejectsWeak2xxContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "<html><body>Apply</body></html>")
+	}))
+	defer server.Close()
+
+	result, err := fetchJobPage(context.Background(), server.Client(), server.URL, noJobFetchWait)
+	if err == nil {
+		t.Fatal("weak content must return an error")
+	}
+	if result.disposition != jobPageRetryable {
+		t.Errorf("disposition = %v, want retryable", result.disposition)
+	}
+	if !errors.Is(err, errJobPageWeakContent) {
+		t.Errorf("error = %v, want errJobPageWeakContent", err)
+	}
+}
+
+func TestFetchJobPageClassifiesTerminalStatuses(t *testing.T) {
+	for _, statusCode := range []int{http.StatusNotFound, http.StatusGone} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "posting unavailable", statusCode)
+			}))
+			defer server.Close()
+
+			result, err := fetchJobPage(context.Background(), server.Client(), server.URL, noJobFetchWait)
+			if err == nil {
+				t.Fatal("terminal response must return an error")
+			}
+			if result.disposition != jobPageTerminal {
+				t.Errorf("disposition = %v, want terminal", result.disposition)
+			}
+			if result.statusCode != statusCode {
+				t.Errorf("statusCode = %d, want %d", result.statusCode, statusCode)
+			}
+		})
+	}
+}
+
+func TestFetchJobPageRetriesTransientStatusesWithBoundedBackoff(t *testing.T) {
+	bodies := []*trackedReadCloser{
+		{Reader: strings.NewReader("rate limited")},
+		{Reader: strings.NewReader("server error")},
+		{Reader: strings.NewReader(usableJobPageHTML())},
+	}
+	statuses := []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusOK}
+	attempt := 0
+	doer := httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		index := attempt
+		attempt++
+		return &http.Response{
+			StatusCode: statuses[index],
+			Body:       bodies[index],
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	var waits []time.Duration
+	wait := func(_ context.Context, delay time.Duration) error {
+		if !bodies[len(waits)].closed {
+			t.Fatal("response body was not closed before retry wait")
+		}
+		waits = append(waits, delay)
+		return nil
+	}
+
+	result, err := fetchJobPage(context.Background(), doer, "https://example.com/job", wait)
+	if err != nil {
+		t.Fatalf("fetchJobPage returned an error after recovery: %v", err)
+	}
+	if result.disposition != jobPageReady {
+		t.Errorf("disposition = %v, want ready", result.disposition)
+	}
+	if attempt != 3 {
+		t.Errorf("attempts = %d, want 3", attempt)
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second}; !reflect.DeepEqual(waits, want) {
+		t.Errorf("waits = %v, want %v", waits, want)
+	}
+	for i, body := range bodies {
+		if !body.closed {
+			t.Errorf("response body %d was not closed", i)
+		}
+	}
+}
+
+func TestFetchJobPageExhaustsTransportRetries(t *testing.T) {
+	attempts := 0
+	doer := httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		attempts++
+		return nil, errors.New("injected transport failure")
+	})
+	var waits []time.Duration
+
+	result, err := fetchJobPage(
+		context.Background(),
+		doer,
+		"https://example.com/job",
+		func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatal("exhausted transport failures must return an error")
+	}
+	if result.disposition != jobPageRetryable {
+		t.Errorf("disposition = %v, want retryable", result.disposition)
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second}; !reflect.DeepEqual(waits, want) {
+		t.Errorf("waits = %v, want %v", waits, want)
+	}
+}
+
+func TestFetchJobPageReadFailuresCloseBodiesAndRemainRetryable(t *testing.T) {
+	var bodies []*failingReadCloser
+	doer := httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		body := &failingReadCloser{}
+		bodies = append(bodies, body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	result, err := fetchJobPage(
+		context.Background(),
+		doer,
+		"https://example.com/job",
+		func(_ context.Context, _ time.Duration) error {
+			if !bodies[len(bodies)-1].closed {
+				t.Fatal("failed response body was not closed before retry")
+			}
+			return nil
+		},
+	)
+	if err == nil {
+		t.Fatal("exhausted body read failures must return an error")
+	}
+	if result.disposition != jobPageRetryable {
+		t.Errorf("disposition = %v, want retryable", result.disposition)
+	}
+	if len(bodies) != 3 {
+		t.Errorf("attempts = %d, want 3", len(bodies))
+	}
+	for i, body := range bodies {
+		if !body.closed {
+			t.Errorf("response body %d was not closed", i)
+		}
+	}
+}
+
+func TestFetchJobPageCancellationStopsBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	doer := httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Body:       io.NopCloser(strings.NewReader("unavailable")),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	result, err := fetchJobPage(
+		ctx,
+		doer,
+		"https://example.com/job",
+		func(ctx context.Context, _ time.Duration) error {
+			cancel()
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if result.disposition != jobPageRetryable {
+		t.Errorf("disposition = %v, want retryable", result.disposition)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestFetchJobPageOther4xxRemainsRetryableWithoutHotLoop(t *testing.T) {
+	attempts := 0
+	doer := httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(strings.NewReader("forbidden")),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	result, err := fetchJobPage(
+		context.Background(),
+		doer,
+		"https://example.com/job",
+		func(context.Context, time.Duration) error {
+			return fmt.Errorf("unexpected retry wait")
+		},
+	)
+	if err == nil {
+		t.Fatal("non-2xx response must return an error")
+	}
+	if result.disposition != jobPageRetryable {
+		t.Errorf("disposition = %v, want retryable", result.disposition)
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestIsRawJobPageCaptchaBlocked(t *testing.T) {
+	longPosting := strings.Repeat("real job description ", 20)
+	tests := []struct {
+		name        string
+		rawURL      string
+		html        string
+		visibleText string
+		want        bool
+	}{
+		{
+			name:        "explicit Cloudflare challenge",
+			rawURL:      "https://example.com/job",
+			html:        "<html><body>Cloudflare: verify you are human</body></html>",
+			visibleText: longPosting,
+			want:        true,
+		},
+		{
+			name:        "widget plus weak non-SPA page",
+			rawURL:      "https://example.com/job",
+			html:        "<html><body><div class=\"g-recaptcha\"></div></body></html>",
+			visibleText: "verify",
+			want:        true,
+		},
+		{
+			name:        "widget on a real posting",
+			rawURL:      "https://example.com/job",
+			html:        "<html><body><div class=\"g-recaptcha\"></div></body></html>",
+			visibleText: longPosting,
+			want:        false,
+		},
+		{
+			name:        "client-rendered SPA shell",
+			rawURL:      "https://jobs.ashbyhq.com/acme/role",
+			html:        "<html><body><script>recaptcha</script></body></html>",
+			visibleText: "",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRawJobPageCaptchaBlocked(tt.rawURL, tt.html, tt.visibleText); got != tt.want {
+				t.Errorf("isRawJobPageCaptchaBlocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestIsClientRenderedSPAHost(t *testing.T) {
 	tests := []struct {

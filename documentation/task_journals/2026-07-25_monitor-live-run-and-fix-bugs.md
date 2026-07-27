@@ -13,7 +13,8 @@
 - `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #127. The focused security, storage, tracker, agent, and dashboard race suite also passes.
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
 - The post-#127 groom re-verified and re-scored every remaining row. Scores and ranks are unchanged; #14 moved to the paywalled backlog because a useful experiment requires paid compute on this hardware.
-- The Usability Gate remains **UNMET** because 7 Major/Blocker bugs are open. `bugs.md` is authoritative; #123 is the next autonomous item.
+- Bug #123 is resolved: failed, non-2xx, and weak job-page fetches can no longer reach embedding or fit scoring; response bodies close per attempt and transient failures use bounded retries before returning to `DISCOVERED`.
+- The Usability Gate remains **UNMET** because 6 Major/Blocker bugs are open. `bugs.md` is authoritative; #129 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -70,4 +71,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #123, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved fetch, quarantine, and SSRF defects.
+Run `/work_next_item` for bug #129, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.

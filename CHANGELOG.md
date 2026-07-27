@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Safe pre-score job fetching
+
+* **Fixed:** Jobs with missing descriptions no longer reach embedding or fit scoring after transport failures, non-success HTTP responses, or pages with too little visible posting content.
+* **Retry policy:** Transport errors, response-read failures, HTTP 429, and HTTP 5xx responses receive at most three attempts with one-second and two-second context-cancellable waits. Exhausted failures return to `DISCOVERED`.
+* **Terminal policy:** HTTP 404 and 410 responses move to `INVALID_URL`; other non-success responses remain retryable rather than being mistaken for job text.
+* **Resource safety:** Every response body closes in its own fetch attempt before retrying or returning. All affected funnel-status writes now report failures.
+* **Tests:** Added injected server and HTTP-client coverage for usable and weak 2xx content, terminal and retryable statuses, transport and body-read failures, response closure, bounded waits, cancellation, and CAPTCHA classification. The focused race test and full build, vet, and test loop pass.
+
 ## 2026-07-27 — Post-permission backlog grooming
 
 * **Backlog:** Re-verified and re-scored all 8 remaining bugs, all 5 free improvements, and both paywalled improvements against current code and live metadata; no score or rank changed.

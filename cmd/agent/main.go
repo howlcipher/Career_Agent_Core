@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 )
 
 const (
@@ -41,7 +42,160 @@ const (
 	// left unset. Gitignored alongside master_resume.pdf, as any real letter
 	// carries contact details.
 	defaultMasterCoverLetterPath = "master_cover_letter.txt"
+	maxJobFetchAttempts          = 3
+	minJobDescriptionRunes       = 200
+	jobFetchBaseBackoff          = time.Second
+	jobFetchMaxBackoff           = 4 * time.Second
 )
+
+var errJobPageWeakContent = errors.New("job page has too little visible text")
+
+type jobPageDisposition uint8
+
+const (
+	jobPageRetryable jobPageDisposition = iota
+	jobPageReady
+	jobPageTerminal
+)
+
+type jobPageFetchResult struct {
+	html        string
+	description string
+	statusCode  int
+	disposition jobPageDisposition
+}
+
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type jobFetchWaitFunc func(context.Context, time.Duration) error
+
+func waitForJobFetchRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func jobFetchRetryDelay(attempt int) time.Duration {
+	delay := jobFetchBaseBackoff << (attempt - 1)
+	if delay > jobFetchMaxBackoff {
+		return jobFetchMaxBackoff
+	}
+	return delay
+}
+
+func closeJobPageResponse(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return errors.New("job page response has no body")
+	}
+	_, copyErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	closeErr := resp.Body.Close()
+	return errors.Join(copyErr, closeErr)
+}
+
+func readJobPageResponse(resp *http.Response) (htmlText, description string, err error) {
+	if resp == nil || resp.Body == nil {
+		return "", "", errors.New("job page response has no body")
+	}
+	defer func() {
+		err = errors.Join(err, resp.Body.Close())
+	}()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return "", "", err
+	}
+	htmlText = string(body)
+	description, err = parser.PruneDOMToText(htmlText)
+	return htmlText, description, err
+}
+
+func fetchJobPage(
+	ctx context.Context,
+	client httpDoer,
+	rawURL string,
+	wait jobFetchWaitFunc,
+) (jobPageFetchResult, error) {
+	result := jobPageFetchResult{disposition: jobPageRetryable}
+	if client == nil {
+		return result, errors.New("job page HTTP client is nil")
+	}
+	if wait == nil {
+		wait = waitForJobFetchRetry
+	}
+
+	for attempt := 1; attempt <= maxJobFetchAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			result.disposition = jobPageTerminal
+			return result, fmt.Errorf("create job page request: %w", err)
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+		resp, err := client.Do(req)
+		if err == nil && resp == nil {
+			err = errors.New("job page HTTP client returned a nil response")
+		}
+		if err == nil {
+			result.statusCode = resp.StatusCode
+			switch {
+			case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+				closeErr := closeJobPageResponse(resp)
+				result.disposition = jobPageTerminal
+				return result, errors.Join(
+					fmt.Errorf("job page returned terminal HTTP status %d", resp.StatusCode),
+					closeErr,
+				)
+			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError:
+				closeErr := closeJobPageResponse(resp)
+				err = errors.Join(
+					fmt.Errorf("job page returned retryable HTTP status %d", resp.StatusCode),
+					closeErr,
+				)
+			case resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices:
+				closeErr := closeJobPageResponse(resp)
+				return result, errors.Join(
+					fmt.Errorf("job page returned non-success HTTP status %d", resp.StatusCode),
+					closeErr,
+				)
+			default:
+				result.html, result.description, err = readJobPageResponse(resp)
+				if err == nil {
+					visibleText := strings.TrimSpace(result.description)
+					if utf8.RuneCountInString(visibleText) < minJobDescriptionRunes {
+						return result, fmt.Errorf(
+							"%w: got %d visible runes, need at least %d",
+							errJobPageWeakContent,
+							utf8.RuneCountInString(visibleText),
+							minJobDescriptionRunes,
+						)
+					}
+					result.disposition = jobPageReady
+					return result, nil
+				}
+				err = fmt.Errorf("read job page response: %w", err)
+			}
+		} else {
+			err = fmt.Errorf("fetch job page: %w", err)
+		}
+
+		if attempt == maxJobFetchAttempts {
+			return result, err
+		}
+		if waitErr := wait(ctx, jobFetchRetryDelay(attempt)); waitErr != nil {
+			return result, fmt.Errorf("wait to retry job page fetch: %w", waitErr)
+		}
+	}
+
+	return result, errors.New("job page fetch exhausted without a result")
+}
 
 // parseTargetJobURLs splits TARGET_JOB_URL's comma-separated value into a
 // membership set. Returns nil (not an empty map) for an empty/unset input,
@@ -84,6 +238,19 @@ func isClientRenderedSPAHost(rawURL string) bool {
 		}
 	}
 	return false
+}
+
+func isRawJobPageCaptchaBlocked(rawURL, htmlText, visibleText string) bool {
+	lowerHTML := strings.ToLower(htmlText)
+	genuineBlockPhrasing := strings.Contains(lowerHTML, "cloudflare") &&
+		(strings.Contains(lowerHTML, "verify you are human") ||
+			strings.Contains(lowerHTML, "attention required"))
+	widgetOnlyPhrasing := !isClientRenderedSPAHost(rawURL) &&
+		(strings.Contains(lowerHTML, "recaptcha") ||
+			strings.Contains(lowerHTML, "cf-turnstile"))
+	hasLittleVisibleText := utf8.RuneCountInString(strings.TrimSpace(visibleText)) <
+		minJobDescriptionRunes
+	return genuineBlockPhrasing || (widgetOnlyPhrasing && hasLittleVisibleText)
 }
 
 func main() {
@@ -314,10 +481,15 @@ func main() {
 				// scoring/tailoring/Vision cycles on every restart.
 				if scraper.IsKnownJunkJobURL(job.URL) {
 					log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
-					storage.UpdateFunnelStatus(job.URL, "INVALID_URL")
+					if err := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); err != nil {
+						log.Printf("[Worker-%d] Failed to mark known-junk URL invalid: %v", workerID, err)
+					}
 					continue
 				}
-				storage.UpdateFunnelStatus(job.URL, "PROCESSING")
+				if err := storage.UpdateFunnelStatus(job.URL, "PROCESSING"); err != nil {
+					log.Printf("[Worker-%d] Failed to claim %s for processing: %v", workerID, job.CompanyName, err)
+					continue
+				}
 				// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
 				// We only need to enforce the hard blocklist here.
 				nameLower := strings.ToLower(job.CompanyName)
@@ -330,7 +502,9 @@ func main() {
 					}
 				}
 				if excluded {
-					storage.UpdateFunnelStatus(job.URL, "SKIPPED")
+					if err := storage.UpdateFunnelStatus(job.URL, "SKIPPED"); err != nil {
+						log.Printf("[Worker-%d] Failed to record blocklist skip for %s: %v", workerID, job.CompanyName, err)
+					}
 					continue
 				}
 
@@ -342,7 +516,9 @@ func main() {
 						log.Printf("[Worker-%d] Invalid or unsafe URL blocked: %s", workerID, job.URL)
 						// bugs.md #85: give the row a terminal status. A bare continue
 						// left it PROCESSING forever, invisible to GetDiscoveredJobs.
-						storage.UpdateFunnelStatus(job.URL, "INVALID_URL")
+						if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+							log.Printf("[Worker-%d] Failed to mark unsafe URL invalid: %v", workerID, statusErr)
+						}
 						continue
 					}
 
@@ -358,70 +534,69 @@ func main() {
 							return nil
 						},
 					}
-					req, err := http.NewRequest("GET", job.URL, nil)
-					if err != nil {
-						log.Printf("[Worker-%d] Failed to create request for %s: %v", workerID, job.CompanyName, err)
-						// bugs.md #85: transient — undo the PROCESSING claim so a later
-						// run can pick it up, rather than stranding it.
-						storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
+					fetchResult, fetchErr := fetchJobPage(ctx, httpClient, job.URL, nil)
+					if errors.Is(fetchErr, errJobPageWeakContent) &&
+						isRawJobPageCaptchaBlocked(
+							job.URL,
+							fetchResult.html,
+							fetchResult.description,
+						) {
+						log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
+						if statusErr := storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA"); statusErr != nil {
+							log.Printf("[Worker-%d] Failed to record CAPTCHA block for %s: %v", workerID, job.CompanyName, statusErr)
+						}
 						continue
 					}
-					req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-					resp, err := httpClient.Do(req)
-					if err == nil {
-						defer resp.Body.Close()
-						b, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-						if err != nil {
-							log.Printf("[Worker-%d] Failed to read response body for %s: %v", workerID, job.CompanyName, err)
-							// bugs.md #85: transient — undo the PROCESSING claim.
-							storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
-							continue
+					if fetchErr != nil {
+						switch fetchResult.disposition {
+						case jobPageTerminal:
+							log.Printf("[Worker-%d] Job posting is no longer available for %s: %v", workerID, job.CompanyName, fetchErr)
+							if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+								log.Printf("[Worker-%d] Failed to mark unavailable job invalid: %v", workerID, statusErr)
+							}
+						default:
+							log.Printf("[Worker-%d] Job page fetch is retryable for %s: %v", workerID, job.CompanyName, fetchErr)
+							if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+								log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+							}
 						}
-						htmlStr := string(b)
-
-						pruned, err := parser.PruneDOMToText(htmlStr)
-						if err != nil {
-							log.Printf("[Worker-%d] Failed to prune DOM for %s: %v", workerID, job.CompanyName, err)
-						}
-
-						// Captcha / Bot protection check. A bare "recaptcha"/
-						// "cf-turnstile" substring match is not reliable proof of an
-						// actual block on its own (bug #46, same class as bug #45's
-						// fix to pkg/submitter/browser.go's isCaptchaBlocked): these
-						// anti-spam widgets are standard on legitimate Greenhouse/
-						// Lever/Ashby/Workable job pages, and this check was killing
-						// the large majority of real postings on those platforms
-						// before they ever reached fit-scoring. A genuine
-						// interstitial instead replaces the real page content,
-						// leaving little real text behind once pruned to plain text
-						// — require that corroborating signal for the widget-only
-						// phrases too, same as the explicit Cloudflare phrasing.
-						lowerHTML := strings.ToLower(htmlStr)
-						genuineBlockPhrasing := strings.Contains(lowerHTML, "cloudflare") && (strings.Contains(lowerHTML, "verify you are human") || strings.Contains(lowerHTML, "attention required"))
-						// Bug: the "little real text behind" corroborating signal
-						// assumes a legitimate page has server-rendered visible text
-						// in a bare (non-JS-executing) fetch. Confirmed live
-						// 2026-07-24 on two real, unblocked, currently-open Ashby
-						// postings: raw HTML ~42KB, 0 chars of visible text after
-						// pruning, "recaptcha" present in its script bundle — Ashby
-						// renders everything client-side, so this exact shape is
-						// what *every* Ashby posting looks like to a non-JS fetch,
-						// genuinely blocked or not. This check cannot tell the two
-						// apart without executing JavaScript, so for known
-						// client-rendered platforms, only the explicit block
-						// phrasing above is trusted — same reasoning as
-						// authGatedATSHosts in pkg/submitter/browser.go.
-						widgetOnlyPhrasing := !isClientRenderedSPAHost(job.URL) && (strings.Contains(lowerHTML, "recaptcha") || strings.Contains(lowerHTML, "cf-turnstile"))
-						if genuineBlockPhrasing || (widgetOnlyPhrasing && len(strings.TrimSpace(pruned)) < 200) {
-							log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
-							storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
-							continue
-						}
-
-						job.Description = pruned
-					} else {
-						log.Printf("[Worker-%d] Failed to fetch job description for %s: %v", workerID, job.CompanyName, err)
+						continue
 					}
+
+					// Captcha / Bot protection check. A bare "recaptcha"/
+					// "cf-turnstile" substring match is not reliable proof of an
+					// actual block on its own (bug #46, same class as bug #45's
+					// fix to pkg/submitter/browser.go's isCaptchaBlocked): these
+					// anti-spam widgets are standard on legitimate Greenhouse/
+					// Lever/Ashby/Workable job pages, and this check was killing
+					// the large majority of real postings on those platforms
+					// before they ever reached fit-scoring. A genuine
+					// interstitial instead replaces the real page content,
+					// leaving little real text behind once pruned to plain text
+					// — require that corroborating signal for the widget-only
+					// phrases too, same as the explicit Cloudflare phrasing.
+					// Bug: the "little real text behind" corroborating signal
+					// assumes a legitimate page has server-rendered visible text
+					// in a bare (non-JS-executing) fetch. Confirmed live
+					// 2026-07-24 on two real, unblocked, currently-open Ashby
+					// postings: raw HTML ~42KB, 0 chars of visible text after
+					// pruning, "recaptcha" present in its script bundle — Ashby
+					// renders everything client-side, so this exact shape is
+					// what *every* Ashby posting looks like to a non-JS fetch,
+					// genuinely blocked or not. This check cannot tell the two
+					// apart without executing JavaScript, so for known
+					// client-rendered platforms, only the explicit block
+					// phrasing in isRawJobPageCaptchaBlocked is trusted — same reasoning as
+					// authGatedATSHosts in pkg/submitter/browser.go.
+					if isRawJobPageCaptchaBlocked(job.URL, fetchResult.html, fetchResult.description) {
+						log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
+						if statusErr := storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA"); statusErr != nil {
+							log.Printf("[Worker-%d] Failed to record CAPTCHA block for %s: %v", workerID, job.CompanyName, statusErr)
+						}
+						continue
+					}
+
+					job.Description = fetchResult.description
 				}
 
 				if storage.HasApplied(job.URL) {
