@@ -3287,6 +3287,139 @@ func fillCoverLetterIfPresent(target fillTarget, coverPath, selector, labelText 
 	log.Printf("[Auto-Submit] Cover letter filled")
 }
 
+// resumeFileInputSelectors are searched, in order, for a resume upload control
+// when the mapped selector isn't one. The hazard is the mirror image of the one
+// documented on coverLetterFileInputSelectors: every entry is scoped to an
+// attribute naming the field a resume, deliberately, because SetInputFiles
+// replaces a file input's contents outright — a loose selector that happened to
+// match the *cover letter* input would overwrite the letter with the resume and
+// send the employer no cover letter at all.
+var resumeFileInputSelectors = []string{
+	// Greenhouse's own naming, and the most common convention generally.
+	"input[type='file'][name='resume']",
+	// Case-insensitive substring matches cover the rest: resumeFile,
+	// resume-upload, candidate.resume, id="resume_upload"...
+	"input[type='file'][name*='resume' i]",
+	"input[type='file'][id*='resume' i]",
+	"input[type='file'][aria-label*='resume' i]",
+	"input[type='file'][data-qa*='resume' i]",
+	// "CV" is the common non-US naming for the same document.
+	"input[type='file'][name*='cv' i]",
+	"input[type='file'][id*='cv' i]",
+}
+
+// soleFileInputSelector matches file inputs that are not the cover-letter
+// control. When exactly one such input exists, it is the resume input by
+// elimination — the last resort after every resume-named selector has missed,
+// for forms whose upload control carries no resume-ish attribute at all (React
+// ATSs commonly render input[type='file'] with nothing but a generated id).
+const soleFileInputSelector = "input[type='file']" +
+	":not([name*='cover' i]):not([id*='cover' i])" +
+	":not([name*='letter' i]):not([id*='letter' i])" +
+	":not([aria-label*='cover' i]):not([aria-label*='letter' i])" +
+	":not([data-qa*='cover' i]):not([data-qa*='letter' i])"
+
+// resumeUploadLocator resolves selector only when it names a real file input.
+// A non-file match (or no match) is not an error here — it just means this
+// candidate wasn't the upload control, and the caller should keep looking.
+func resumeUploadLocator(target fillTarget, selector string) (playwright.Locator, bool) {
+	loc := target.Loc(selector)
+	if loc == nil {
+		return nil, false
+	}
+	count, cErr := loc.Count()
+	if cErr != nil || count == 0 {
+		return nil, false
+	}
+	candidate := firstVisibleLocator(loc, count)
+	if candidate == nil {
+		return nil, false
+	}
+	isFile, evalErr := candidate.Evaluate("el => el.tagName === 'INPUT' && el.type === 'file'", nil)
+	if evalErr != nil {
+		return nil, false
+	}
+	isFileInput, ok := isFile.(bool)
+	if !ok || !isFileInput {
+		return nil, false
+	}
+	return candidate, true
+}
+
+// findResumeUpload searches without reading the resume first. That ordering is
+// important for optional-resume forms: if no upload control exists, a missing
+// resume path is irrelevant and must not abort an otherwise valid submission.
+func findResumeUpload(target fillTarget, mappedSelector string) (playwright.Locator, string, bool) {
+	if mappedSelector != "" {
+		if loc, ok := resumeUploadLocator(target, mappedSelector); ok {
+			return loc, mappedSelector, true
+		}
+	}
+	for _, fallbackSel := range resumeFileInputSelectors {
+		if loc, ok := resumeUploadLocator(target, fallbackSel); ok {
+			return loc, fallbackSel, true
+		}
+	}
+	if soleInput := target.Loc(soleFileInputSelector); soleInput != nil {
+		if count, cErr := soleInput.Count(); cErr == nil && count == 1 {
+			if loc, ok := resumeUploadLocator(target, soleFileInputSelector); ok {
+				return loc, soleFileInputSelector, true
+			}
+		}
+	}
+	return nil, "", false
+}
+
+// attachResume places the resume on the form, trying the mapped selector first,
+// then resume-named file inputs, then — only when the form exposes exactly one
+// file input that is not the cover-letter control — that input.
+//
+// required distinguishes the two callers' contracts. When the mapper produced a
+// resume selector the form is known to want a resume, so exhausting every path
+// is a genuine failure and aborts the submission. When it produced none, the
+// form may legitimately have no upload control, so the search is best effort and
+// a miss must not throw away an otherwise complete application.
+//
+// bugs.md #118: the mapped selector used to be the only thing tried, and a miss
+// aborted outright. Both mapping paths emit selectors the page need not actually
+// contain — the Learner Module infers them from pruned DOM, the Vision module
+// from a screenshot where the real input is usually invisible behind a styled
+// button — so one wrong guess discarded a fillable application. Measured live
+// 2026-07-26 on sunking.pinpointhq.com: Learner and Vision each mapped the form,
+// each emitted a resume selector matching nothing, and the job burned an hour
+// before failing.
+func attachResume(target fillTarget, mappedSelector, resumePath string, required bool) error {
+	fileInput, resolvedSelector, found := findResumeUpload(target, mappedSelector)
+	if !found {
+		if !required {
+			log.Printf("[Auto-Submit] No resume upload control found on this form, continuing without one")
+			return nil
+		}
+		return fmt.Errorf("resume input selector not found: mapped %q, %d resume-named fallbacks, and the sole-file-input rule all missed",
+			mappedSelector, len(resumeFileInputSelectors))
+	}
+
+	// Once the form exposes an upload control, an unreadable resume is a hard
+	// failure. The old code silently skipped the upload when os.ReadFile
+	// failed, then reported success even though no resume was attached.
+	content, err := os.ReadFile(resumePath)
+	if err != nil {
+		return fmt.Errorf("resume unreadable at %s: %w", resumePath, err)
+	}
+	if len(content) == 0 {
+		return fmt.Errorf("resume at %s is empty", resumePath)
+	}
+
+	if err := fileInput.SetInputFiles([]playwright.InputFile{{
+		Name:   "resume.pdf",
+		Buffer: content,
+	}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
+		return fmt.Errorf("failed to upload resume via %q: %w", resolvedSelector, err)
+	}
+	log.Printf("[Auto-Submit] Resume uploaded via %q", resolvedSelector)
+	return nil
+}
+
 func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
 	var mapping FormMapping
@@ -3313,22 +3446,9 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 		}
 	}
 
-	if sel, ok := mapping.Fields["resume"]; ok && sel != "" {
-		fileInput := target.Loc(sel)
-		if count, _ := fileInput.Count(); count > 0 {
-			fileBytes, err := os.ReadFile(resumePath)
-			if err == nil {
-				err = fileInput.First().SetInputFiles([]playwright.InputFile{{
-					Name:   "resume.pdf",
-					Buffer: fileBytes,
-				}}, playwright.LocatorSetInputFilesOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
-				if err != nil {
-					return fmt.Errorf("failed to upload resume: %w", err)
-				}
-			}
-		} else {
-			return fmt.Errorf("resume input selector not found")
-		}
+	mappedResume := mapping.Fields["resume"]
+	if err := attachResume(target, mappedResume, resumePath, mappedResume != ""); err != nil {
+		return err
 	}
 
 	fillCoverLetterIfPresent(target, coverPath, mapping.Fields["cover_letter"], mapping.Labels["cover_letter"])

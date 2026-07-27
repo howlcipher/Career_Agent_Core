@@ -1548,6 +1548,130 @@ func TestCoverLetterFileInputSelectorsNeverMatchBareResumeInput(t *testing.T) {
 	}
 }
 
+func TestAttachResume_OptionalMissingControlDoesNotReadMissingPath(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	err := attachResume(
+		pageTarget{page: mockPage},
+		"",
+		filepath.Join(t.TempDir(), "missing-resume.pdf"),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("an optional resume with no upload control must be ignored, got: %v", err)
+	}
+}
+
+func TestAttachResume_MappedMissUsesNamedFallback(t *testing.T) {
+	const resume = "test resume bytes"
+	resumePath := filepath.Join(t.TempDir(), "resume.pdf")
+	if err := os.WriteFile(resumePath, []byte(resume), 0600); err != nil {
+		t.Fatalf("write resume fixture: %v", err)
+	}
+
+	fileInput := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return true, nil
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == resumeFileInputSelectors[0] {
+				return fileInput
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	if err := attachResume(pageTarget{page: mockPage}, "#wrong-resume", resumePath, true); err != nil {
+		t.Fatalf("expected the named fallback to attach the resume, got: %v", err)
+	}
+	if len(fileInput.uploadedFiles) != 1 {
+		t.Fatalf("expected one resume upload, got %d", len(fileInput.uploadedFiles))
+	}
+	if got := string(fileInput.uploadedFiles[0].Buffer); got != resume {
+		t.Fatalf("uploaded resume = %q, want %q", got, resume)
+	}
+}
+
+func TestAttachResume_FoundControlRejectsUnreadableResume(t *testing.T) {
+	fileInput := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return true, nil
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == "#resume" {
+				return fileInput
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	err := attachResume(
+		pageTarget{page: mockPage},
+		"#resume",
+		filepath.Join(t.TempDir(), "missing-resume.pdf"),
+		true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "resume unreadable") {
+		t.Fatalf("expected a readable hard failure for the missing required resume, got: %v", err)
+	}
+}
+
+func TestAttachResume_UsesSoleNonCoverLetterFileInput(t *testing.T) {
+	resumePath := filepath.Join(t.TempDir(), "resume.pdf")
+	if err := os.WriteFile(resumePath, []byte("resume"), 0600); err != nil {
+		t.Fatalf("write resume fixture: %v", err)
+	}
+
+	fileInput := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return true, nil
+		},
+	}
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == soleFileInputSelector {
+				return fileInput
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	if err := attachResume(pageTarget{page: mockPage}, "", resumePath, false); err != nil {
+		t.Fatalf("expected the sole non-cover-letter file input fallback to work, got: %v", err)
+	}
+	if len(fileInput.uploadedFiles) != 1 {
+		t.Fatalf("expected one resume upload, got %d", len(fileInput.uploadedFiles))
+	}
+}
+
+func TestSoleResumeSelectorExcludesCoverLetterAttributes(t *testing.T) {
+	for _, fragment := range []string{
+		"name*='cover'",
+		"id*='cover'",
+		"name*='letter'",
+		"id*='letter'",
+		"aria-label*='cover'",
+		"aria-label*='letter'",
+		"data-qa*='cover'",
+		"data-qa*='letter'",
+	} {
+		if !strings.Contains(soleFileInputSelector, fragment) {
+			t.Errorf("sole resume selector does not exclude cover-letter signal %q", fragment)
+		}
+	}
+}
+
 // With no upload control anywhere, pasting is still the correct fallback.
 func TestFillCoverLetter_FallsBackToPasteWhenNoFileInputExists(t *testing.T) {
 	const letter = "Dear Hiring Manager,\n\nI build automation.\n"

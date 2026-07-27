@@ -562,27 +562,25 @@ Reviewed this journal first, then swept the current agent, discovery, submission
 - The earlier `2026-07-21_verify-bug4-iframe-fill-live-batch.md` journal was removed as superseded: the first genuinely confirmed application answered its core question, and all remaining live-run context is consolidated here and in the backlog.
 - Live model discovery confirmed `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gemini-3.6-flash-high`, `gemini-3.1-pro-high`, `gpt-oss-120b-medium`, and local `qwen3:30b-instruct`. New backlog recommendations use the current Claude/Gemini names while preserving the existing table schema.
 
+**Follow-up 2026-07-26 23:10 EDT:** #118 is resolved. Resume attachment now searches for a real upload control before reading the file, preserving optional no-control forms while failing clearly when a present control cannot receive a valid resume. The six regressed scenarios and five new focused tests pass; `go build ./...`, `go vet ./...`, and `go test ./...` are all green.
+
 ## Next Step
 
 **Standing instruction: monitor the live run, fix what surfaces, log it in `bugs.md`, groom the backlog, keep this journal.** The user set this as a `/goal`; it does not complete until they say so. Standing authority: *"If a choice arises, do what you recommend, don't feel you need to ask, do not do anything that adds a monetary cost."*
 
-### Live state (accurate as of 2026-07-26 22:28)
+### Live state (accurate as of 2026-07-26 23:10)
 
 - **NOTHING IS RUNNING.** No agent process or monitor is alive.
-- **Working tree is intentionally not clean.** `pkg/submitter/browser.go` contains the user's in-progress #118 resume-upload change; this sweep changed only backlog, changelog and journal documentation around it. `main` was in sync with `origin/main` before these documentation edits.
+- **#118 is fixed and ready to commit.** The implementation, focused tests, backlog, changelog and this resume plan are the only current changes.
 - **1 confirmed `APPLIED`: Akuity** — the first in the database's history (was 0 across 3,884 rows at session start). See the *FIRST CONFIRMED APPLICATION* section above for the evidence.
 - **82-cohort:** `DISCOVERED=52 FAILED_SUBMIT=11 BLOCKED_CAPTCHA=9 SKIPPED=6 MANUAL_REQUIRED=4`. Note this tally reads the `http://` rows and is unreliable for ~11 of 82 jobs — see **#112**.
-- **Backlog:** 13 open bug rows (12 new #118-#129 plus reopened #112). `improvements.md` has 6 Pending (3 above the ROI floor, 3 ⚠️ below it); `improvements_paywall.md` still has 1.
-- **Verification:** build/vet clean; full tests red in six `pkg/submitter` cases under #118.
+- **Backlog:** 12 open bug rows (#119-#129 plus reopened #112); #118 is Resolved. `improvements.md` has 6 Pending (3 above the ROI floor, 3 ⚠️ below it); `improvements_paywall.md` still has 1.
+- **Verification:** build, vet and the full test suite are clean.
 - **Monitors: none armed.** They do not survive a session boundary. On resume, `pgrep -af watch_82.sh` and `pgrep -af 'tail -F.*career_agent.log'`, kill any orphans, arm fresh ones.
 
 ### RECOMMENDED NEXT ACTIONS, in order
 
-#### 1. Finish #118 and restore the test contract
-
-Do not start another live cohort with a red submitter suite. Preserve the new mapped-selector/fallback behavior, but make resume attachment optional when the form/mapping has no resume control. Restore all six failing orchestration tests and add focused mapped/fallback/absent/unreadable resume cases. Then run the full build → vet → test loop.
-
-#### 2. Restart the full 82-job cohort on the resulting green HEAD
+#### 1. Restart the full 82-job cohort on the resulting green HEAD
 
 Every previous cohort run used a much earlier binary; **no full run has ever executed with #94-#117**. This is the highest-value action and needs no user decision.
 
@@ -645,7 +643,7 @@ Submission confirmed|Submit verdict after|Auto-Submit failed|Proceeding with app
 
 **Expect mostly `BLOCKED_CAPTCHA`.** Measured: **6 of 7** completed fills were blocked. That is accurate reporting, not a regression.
 
-#### 3. Merge #112's duplicate funnel rows — needs a decision first
+#### 2. Merge #112's duplicate funnel rows — needs a decision first
 
 20 scheme-duplicate pairs (`http://x` and `https://x` for one posting), **11 holding different statuses**. The dedup half is fixed; the funnel half is not, because merging requires deciding which status wins when two disagree (`BLOCKED_CAPTCHA` vs `DISCOVERED` vs `FAILED_SUBMIT` are not obviously orderable). Picking wrong either strands a workable job or re-attempts a blocked one. **Ask the user before merging.** Inspect with:
 
@@ -655,7 +653,7 @@ SELECT b.status AS http_status, a.status AS https_status, COUNT(*) FROM job_funn
  AND a.url LIKE 'https://%' AND b.url LIKE 'http://%' GROUP BY 1,2 ORDER BY 3 DESC;
 ```
 
-#### 4. The bot-protection decision — the user's, and now the dominant constraint
+#### 3. The bot-protection decision — the user's, and now the dominant constraint
 
 **6 of 7 completed fills were blocked**, across both platforms: `reddit`, `orkes`, `alphasense`, `sportygroup`, `pointwild` (reCAPTCHA) and `dexcarehealth`, `zimperium`, `brightedge`, `syw` (hCaptcha on Lever — **4 of 4 Lever jobs attempted were blocked**, and Lever is 39 of 82). The fill path is solved; this is what stops applications. The only remedy is `improvements_paywall.md` **#17** (2captcha/capsolver), which is **paid and explicitly out of scope** under the no-monetary-cost constraint. **Do not act on this without the user.**
 
