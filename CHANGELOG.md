@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Resolver-bound outbound network security
+
+* **Security:** Centralized HTTP and HTTPS target validation rejects malformed targets and any DNS answer set containing loopback, private, link-local, multicast, carrier-grade NAT, documentation, benchmarking, transition, or other special-use addresses.
+* **Rebinding defense:** Go transports pass validated IP literals to an injectable final dialer. Initial requests, redirects, job-page fetches, RemoteOK, Hacker News, SerpApi, Yahoo, and public ATS feeds all use the guarded transport.
+* **Browser boundary:** Every Playwright context uses an ephemeral authenticated loopback proxy backed by the same resolver-bound dialer. The route interceptor independently revalidates requests, and Chromium's implicit loopback bypass is disabled.
+* **Tests:** Added isolated IPv4 and IPv6 policy, mixed-answer, redirect, rebinding, proxy authentication, HTTP forwarding, CONNECT tunneling, and browser-context tests. The opt-in Chromium integration passes inside the documented distrobox, proving public proxy traversal and loopback denial.
+* **Verification:** `go build ./...`, `go vet ./...`, `go test ./...`, and focused race suites for security, scraper, submitter, and agent packages pass.
+
 ## 2026-07-27 — Post-daemon backlog grooming
 
 * **Backlog:** Re-verified and recomputed all 4 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #120.

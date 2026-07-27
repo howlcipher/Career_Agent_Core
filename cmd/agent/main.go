@@ -822,6 +822,7 @@ func main() {
 	}
 
 	filter := security.NewQuarantineLayer()
+	networkGuard := security.NewNetworkGuard()
 
 	// TARGET_JOB_URL restricts this run to a specific set of already-
 	// DISCOVERED jobs and skips fresh FunnelEngine discovery, for verifying
@@ -873,6 +874,31 @@ func main() {
 						}
 						continue
 					}
+					if err := networkGuard.ValidateURL(cycleCtx, job.URL); err != nil {
+						if errors.Is(err, security.ErrUnsafeNetworkTarget) {
+							log.Printf(
+								"[Worker-%d] Unsafe job URL blocked.",
+								workerID,
+							)
+							if statusErr := storage.UpdateFunnelStatus(
+								job.URL,
+								"INVALID_URL",
+							); statusErr != nil {
+								log.Printf(
+									"[Worker-%d] Failed to mark unsafe URL invalid: %v",
+									workerID,
+									statusErr,
+								)
+							}
+						} else {
+							log.Printf(
+								"[Worker-%d] Job URL could not be resolved safely; leaving it retryable: %v",
+								workerID,
+								err,
+							)
+						}
+						continue
+					}
 					if err := storage.UpdateFunnelStatus(job.URL, "PROCESSING"); err != nil {
 						log.Printf("[Worker-%d] Failed to claim %s for processing: %v", workerID, job.CompanyName, err)
 						continue
@@ -899,29 +925,7 @@ func main() {
 					// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
 					if job.Description == "" {
 						log.Printf("[Worker-%d] Fetching job description for %s...", workerID, job.CompanyName)
-						u, err := url.Parse(job.URL)
-						if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
-							log.Printf("[Worker-%d] Invalid or unsafe URL blocked: %s", workerID, job.URL)
-							// bugs.md #85: give the row a terminal status. A bare continue
-							// left it PROCESSING forever, invisible to GetDiscoveredJobs.
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
-								log.Printf("[Worker-%d] Failed to mark unsafe URL invalid: %v", workerID, statusErr)
-							}
-							continue
-						}
-
-						httpClient := &http.Client{
-							Timeout: 10 * time.Second,
-							CheckRedirect: func(req *http.Request, via []*http.Request) error {
-								if req.URL.Hostname() == "localhost" || req.URL.Hostname() == "127.0.0.1" || req.URL.Hostname() == "169.254.169.254" {
-									return fmt.Errorf("redirect to internal IP blocked")
-								}
-								if len(via) >= 10 {
-									return fmt.Errorf("stopped after 10 redirects")
-								}
-								return nil
-							},
-						}
+						httpClient := networkGuard.HTTPClient(10 * time.Second)
 						fetchResult, fetchErr := fetchJobPage(
 							cycleCtx,
 							httpClient,

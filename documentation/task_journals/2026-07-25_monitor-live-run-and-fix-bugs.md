@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** In progress on bug #122. No live application agent or monitor process is running.
+- **Status:** Bug #122 is complete; the requested backlog grooming pass is next. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
 - **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the security and networking implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
@@ -33,14 +33,16 @@
 
 ## Bug #122 plan
 
-- [ ] Write failing unit and integration tests for address classification, DNS resolution, connection-bound dialing, redirects, mixed answers, and the browser proxy.
-- [ ] Implement the centralized network boundary and route every external HTTP and Playwright path through it.
-- [ ] Update the security documentation, bug closure, changelog, and journal with durable evidence.
-- [ ] Run focused race checks plus the full build, vet, and test loop.
+- [x] Write failing unit and integration tests for address classification, DNS resolution, connection-bound dialing, redirects, mixed answers, and the browser proxy.
+- [x] Implement the centralized network boundary and route every external HTTP and Playwright path through it.
+- [x] Update the security documentation, bug closure, changelog, and journal with durable evidence.
+- [x] Run focused race checks plus the full build, vet, and test loop.
 - [ ] Commit and push the verified implementation, then advance this journal to the next open gate bug.
 
 ## Current authoritative state
 
+- Bug #122 is resolved: one injectable public-address policy protects the agent worker and every free discovery HTTP client, and authenticated loopback proxies bind both Playwright entry points to the same resolver-bound dialer.
+- The default and focused race suites pass. A host-built submitter test binary also passed the opt-in real-Chromium proxy integration inside the `career-agent` distrobox, including positive public traversal and negative loopback reachability.
 - Bug #127 is resolved in signed implementation commit `e4e48e1`: maintained commands enforce owner-only creation and repair existing private workspace paths without following symlinks.
 - `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #129. The focused agent and shared-configuration race suite also passes.
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
@@ -107,4 +109,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Write the failing bug #122 security-boundary tests before implementing the resolver-bound HTTP transport and Playwright proxy.
+Commit the verified bug #122 implementation, then run `/groom_backlogs` before advancing the resume point to bug #128.

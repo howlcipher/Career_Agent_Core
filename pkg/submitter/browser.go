@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1060,38 +1059,25 @@ func resolveFillTarget(page playwright.Page) fillTarget {
 func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
-	bCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"),
-	})
+	session, err := newSecureBrowserSession(
+		browser,
+		playwright.BrowserNewContextOptions{
+			UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0"),
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("could not create context: %w", err)
 	}
-	defer bCtx.Close()
+	defer session.Close()
 
-	page, err := bCtx.NewPage()
+	page, err := session.context.NewPage()
 	if err != nil {
 		return fmt.Errorf("could not create page: %w", err)
 	}
 	defer page.Close()
 
-	// Anti-SSRF Route Filter
-	err = page.Route("**/*", func(route playwright.Route) {
-		reqURL, _ := url.Parse(route.Request().URL())
-		if reqURL != nil {
-			ip := net.ParseIP(reqURL.Hostname())
-			if ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
-				route.Abort("accessdenied")
-				return
-			}
-			if reqURL.Hostname() == "localhost" {
-				route.Abort("accessdenied")
-				return
-			}
-		}
-		route.Continue()
-	})
-	if err != nil {
-		return fmt.Errorf("failed to setup SSRF route blocking: %w", err)
+	if err := installSafeBrowserRoutes(page, session.guard); err != nil {
+		return err
 	}
 
 	// Set a strict 45-second global timeout for all page operations (navigation, clicks, fills).

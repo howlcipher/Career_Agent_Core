@@ -130,7 +130,7 @@ func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, jo
 }
 
 func fetchATSFeed(endpoint string) ([]byte, error) {
-	client := &http.Client{Timeout: atsFeedHTTPTimeout}
+	client := newHTTPClient(atsFeedHTTPTimeout)
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err

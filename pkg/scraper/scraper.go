@@ -5,17 +5,20 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-	"math/rand"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 )
 
 var remoteOKBaseURL = "https://remoteok.com/api"
 
 var SleepFunc = time.Sleep
 
+var newHTTPClient = security.NewSafeHTTPClient
 
 type Job struct {
 	CompanyName string
@@ -82,21 +85,21 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 			log.Printf("[Scraper] Failed to create request for %s: %v", role, err)
 			continue
 		}
-	
-	// Humanize the headers to bypass basic bot protection
+
+		// Humanize the headers to bypass basic bot protection
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 		req.Header.Set("Connection", "keep-alive")
 		req.Header.Set("Upgrade-Insecure-Requests", "1")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := newHTTPClient(30 * time.Second)
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[Scraper] Failed to execute request for %s: %v", role, err)
 			continue
 		}
-		
+
 		if resp.StatusCode != http.StatusOK {
 			log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
 			SleepFunc(5 * time.Second)
@@ -158,7 +161,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 			})
 		}
 	}
-	
+
 	// Architectural Stubs for Data collection engine targeting fully remote listings only
 	log.Println("[Scraper] Scraping We Work Remotely (Implementation pending)")
 	log.Println("[Scraper] Scraping Wellfound (Implementation pending)")

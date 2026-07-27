@@ -176,7 +176,7 @@ func fetchHNJSON(reqURL string, out interface{}) error {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

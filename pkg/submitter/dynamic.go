@@ -242,17 +242,24 @@ func (p *Pipeline) Execute(ctx context.Context, jobID, url string) error {
 	}
 
 	// 1. Launch Playwright
-	bCtx, err := p.Browser.NewContext()
+	session, err := newSecureBrowserSession(
+		p.Browser,
+		playwright.BrowserNewContextOptions{},
+	)
 	if err != nil {
 		return err
 	}
-	defer bCtx.Close()
+	defer session.Close()
 
-	page, err := bCtx.NewPage()
+	page, err := session.context.NewPage()
 	if err != nil {
 		return err
 	}
 	defer page.Close()
+
+	if err := installSafeBrowserRoutes(page, session.guard); err != nil {
+		return err
+	}
 
 	// 2. Two-Step Verification
 	dom, err := p.TwoStepVerification(page, url)

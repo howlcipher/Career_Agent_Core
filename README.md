@@ -11,6 +11,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
 - **Strict Rule Enforcement**: Dynamically discards jobs that don't meet your salary floor or remote requirements defined in `profile.yaml`.
 - **Security Quarantine**: Routes fetched posting text and browser DOM through one deterministic `promptsec` boundary before any embedding, scoring, form-mapping, validation-solving, or visual model call. Detections are audited locally and receive a durable terminal funnel status without sending the flagged text to another model for review.
+- **Resolver-Bound Outbound Networking**: Resolves every job-discovery, posting, and browser HTTP or HTTPS target, rejects the complete answer set when any IPv4 or IPv6 address is non-public, and dials the validated IP rather than resolving the hostname again. Discovery, redirects, posting fetches, and Playwright subresources share this policy; Chromium connects through an authenticated loopback proxy so DNS rebinding cannot bypass the browser boundary.
 - **Private Filesystem Defaults**: Maintained commands apply an owner-only process umask, repair existing private paths without following symbolic links, and keep credentials, databases, logs, resumes, letters, and generated application documents at `0600` inside `0700` directories.
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
@@ -31,7 +32,8 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 ### 🏛️ System Architecture
 ```mermaid
 graph TD
-    A[RemoteOK / Google API] -->|Job Feeds| B(pkg/scraper: Funnel Engine)
+    A[RemoteOK / Google API] -->|Feed URL| N[pkg/security: Resolver-Bound Network Guard]
+    N -->|Validated Fetch| B(pkg/scraper: Funnel Engine)
     B -->|Raw URL| C{cmd/agent: Main Loop}
     
     C -->|Untrusted Posting Text| F[pkg/security: Deterministic Quarantine]
@@ -39,6 +41,9 @@ graph TD
     D -->|Fit Score > 50| C
 
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
+    C -->|Posting Fetch| N
+    E -->|Authenticated Loopback Proxy| N
+    N -->|Public IP-Bound Dial| J[Public Job Sites]
     E -->|DOM HTML| F
     F -->|Verified Form DOM| D
     D -->|ATS Mapping| E

@@ -73,7 +73,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 
 			reqURL := fmt.Sprintf("%s?q=%s&api_key=%s&num=100", serpAPIBaseURL, url.QueryEscape(query), apiKey)
 
-			client := &http.Client{Timeout: 30 * time.Second}
+			client := newHTTPClient(30 * time.Second)
 			resp, err := client.Get(reqURL)
 			if err != nil {
 				safeErr := strings.ReplaceAll(err.Error(), apiKey, "REDACTED")
@@ -178,7 +178,7 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- Job) {
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newHTTPClient(10 * time.Second)
 	searchURL := fmt.Sprintf("%s?p=%s", yahooBaseURL, url.QueryEscape(query))
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
@@ -483,7 +483,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := newHTTPClient(30 * time.Second)
 		resp, err := client.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			if err != nil {
