@@ -14,7 +14,8 @@
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
 - Bug #123 is resolved in signed implementation commit `13c5a35`: failed, non-2xx, and weak job-page fetches can no longer reach embedding or fit scoring; response bodies close per attempt and transient failures use bounded retries before returning to `DISCOVERED`.
 - Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
-- The Usability Gate remains **UNMET** because 5 Major/Blocker bugs are open. `bugs.md` is authoritative; #121 is the next autonomous item before the pending groom.
+- The post-#129 groom re-verified and re-scored all 13 Pending rows across the three backlogs. Scores and ranks are unchanged; #121 remains the next autonomous item.
+- The Usability Gate remains **UNMET** because 5 Major/Blocker bugs are open. `bugs.md` is authoritative; #121 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -51,7 +52,7 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 ## Unresolved decisions
 
 1. **ClickHouse manual completion or requeue:** a prior submit was accepted and reached an email-code gate, but the old run did not complete it. Any old code is session-bound; the user should choose a fresh manual completion or a deliberate requeue.
-2. **Bug #112 merge policy:** 20 `http`/`https` duplicate pairs were measured, 11 with different statuses. Outward application dedup is fixed, but funnel insertion, updates, queueing, and reporting remain split. The merge must preserve strong evidence and must not silently promote an ambiguous row to `APPLIED`.
+2. **Bug #112 merge policy:** 20 `http`/`https` duplicate pairs were re-measured on 2026-07-27, 15 with different statuses. Outward application dedup is fixed, but funnel insertion, updates, queueing, and reporting remain split. The merge must preserve strong evidence and must not silently promote an ambiguous row to `APPLIED`.
 3. **Historical dedup rows:** older `applied_jobs` entries predate confirmation-only recording. Do not bulk-clear them: a false row suppresses a valid retry, but clearing a true row can file a duplicate.
 4. **Paid CAPTCHA solving:** improvement #17 is worthwhile on evidence but remains out of scope without the user's provider choice and paid key.
 5. **Low-ROI improvements:** #14 is now a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should close because its two motivating attestations are now configured.
@@ -71,4 +72,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/groom_backlogs`, then `/work_next_item` for the highest-ranked remaining gate bug. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.
+Run `/work_next_item` for bug #121, the highest-ranked remaining gate bug. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved quarantine and SSRF defects.

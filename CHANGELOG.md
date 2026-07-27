@@ -1,5 +1,14 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-profile backlog grooming
+
+* **Backlog:** Re-verified and re-scored all 6 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #129; no score or rank changed.
+* **Live correction:** A read-only database recount still finds 20 HTTP/HTTPS duplicate funnel pairs, but 15 now have divergent statuses rather than the stale documented count of 11. Bug #112 and the monitoring journal now use the live count.
+* **Priority:** Five Major or Blocker bugs still hold the Usability Gate open. Pre-model quarantine bug #121 is the next autonomous item.
+* **Recommendations:** Close free improvements #27 and #30 absent new evidence, defer paid-compute #14 until preference labels exist, and keep CAPTCHA solving gated on a user-selected paid provider and key.
+* **Live checks:** Required Ollama models remain installed. Both dashboard routes return HTTP 200 on `127.0.0.1:8080`, and no Career Agent batch process is running.
+* **Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` pass.
+
 ## 2026-07-27 — Portable, fail-closed career context
 
 * **Fixed:** Removed the developer-specific career-profile path from `cmd/agent` and `cmd/reingest`. Both commands now share flag, environment, repository-local, and sibling-library resolution.
