@@ -18,7 +18,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests, updating your funnels automatically.
 - **Live Web Dashboard**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) showing funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
-- **Playwright Fallback Scraper**: Bypasses SerpApi limits by deploying an undetectable headless DuckDuckGo scraper with `navigator.webdriver` evasion when API credits run out.
+- **Key-Optional Search Fallback**: Always runs the free RemoteOK, Hacker News, and public Greenhouse/Lever feed sources. Role/ATS searches use SerpApi when configured and Yahoo HTML search when no key is present or SerpApi reports an error.
 - **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with the LLM, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
 - **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it clicks through any "Apply"-gated form, sends the rendered DOM to your configured LLM to map the input selectors, and caches the learned blueprint in SQLite. If a mapped CSS selector turns out to be wrong, it falls back to the field's accessible label (`<label>`/`aria-label`) before finally falling back to a screenshot-based visual mapping (Visual Reasoning) — three independent strategies for the same field before giving up.
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
@@ -136,6 +136,8 @@ GEMINI_MODEL="gemini-flash-latest"        # optional, this is the default
 
 Mail tracking and scraping credentials:
 ```bash
+# Optional: enables SerpApi role/ATS searches. Without it, the free sources
+# still run and role/ATS queries use Yahoo HTML search.
 SERPAPI_API_KEY="your_serpapi_key"
 IMAP_SERVER="imap.gmail.com:993"
 IMAP_USER="your_email@gmail.com"

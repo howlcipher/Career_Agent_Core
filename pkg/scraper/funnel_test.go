@@ -80,7 +80,7 @@ func TestDiscoverJobs(t *testing.T) {
 	engine.TargetATS = []string{"lever.co"}
 
 	jobChan := make(chan Job, 10)
-	
+
 	err = engine.DiscoverJobs(jobChan)
 	if err != nil {
 		t.Fatalf("DiscoverJobs failed: %v", err)
@@ -98,16 +98,102 @@ func TestDiscoverJobs(t *testing.T) {
 	}
 }
 
+func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
+	oldSleep := SleepFunc
+	SleepFunc = func(time.Duration) {}
+	defer func() { SleepFunc = oldSleep }()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer storage.CloseDB()
+
+	serpRequests := 0
+	serpTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serpRequests++
+		http.Error(w, "SerpApi must not be called without a key", http.StatusInternalServerError)
+	}))
+	defer serpTs.Close()
+
+	remoteOKTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]interface{}{
+			map[string]interface{}{"legal": "notice"},
+			RemoteOkJob{
+				Company:  "FreeSourceCorp",
+				Position: "Backend Engineer",
+				Location: "Remote",
+				URL:      "https://remoteok.com/job/free-source-1",
+			},
+		})
+	}))
+	defer remoteOKTs.Close()
+
+	hnTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(hnStorySearchResponse{})
+	}))
+	defer hnTs.Close()
+
+	yahooRequests := 0
+	yahooTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		yahooRequests++
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body></body></html>"))
+	}))
+	defer yahooTs.Close()
+
+	t.Setenv("SERPAPI_API_KEY", "")
+
+	origSerp := serpAPIBaseURL
+	origRemoteOK := remoteOKBaseURL
+	origHN := hnAlgoliaBaseURL
+	origYahoo := yahooBaseURL
+	serpAPIBaseURL = serpTs.URL
+	remoteOKBaseURL = remoteOKTs.URL
+	hnAlgoliaBaseURL = hnTs.URL
+	yahooBaseURL = yahooTs.URL
+	defer func() {
+		serpAPIBaseURL = origSerp
+		remoteOKBaseURL = origRemoteOK
+		hnAlgoliaBaseURL = origHN
+		yahooBaseURL = origYahoo
+	}()
+
+	engine := NewFunnelEngine([]string{"backend"})
+	engine.TargetATS = []string{"lever.co"}
+
+	jobChan := make(chan Job, 10)
+	if err := engine.DiscoverJobs(jobChan); err != nil {
+		t.Fatalf("DiscoverJobs without SerpApi key failed: %v", err)
+	}
+	close(jobChan)
+
+	var jobs []Job
+	for job := range jobChan {
+		jobs = append(jobs, job)
+	}
+
+	if serpRequests != 0 {
+		t.Fatalf("SerpApi received %d request(s) without a key", serpRequests)
+	}
+	if yahooRequests != 1 {
+		t.Fatalf("expected one Yahoo fallback request without a SerpApi key, got %d", yahooRequests)
+	}
+	if len(jobs) != 1 || jobs[0].CompanyName != "FreeSourceCorp" {
+		t.Fatalf("expected the RemoteOK free-source job, got %#v", jobs)
+	}
+}
+
 func TestExtractCompanyFromTitle(t *testing.T) {
-	tests := []struct{
+	tests := []struct {
 		title    string
 		expected string
 	}{
 		{"Senior Backend Engineer at Stripe - Lever", "Stripe"},
 		{"Software Engineer - Google", "Software Engineer"}, // fallback behavior
-		{"No format title", "Unknown Company"}, // fallback
+		{"No format title", "Unknown Company"},              // fallback
 	}
-	
+
 	for _, tt := range tests {
 		got := extractCompanyFromTitle(tt.title)
 		if got != tt.expected {

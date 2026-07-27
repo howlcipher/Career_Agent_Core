@@ -42,21 +42,23 @@ type SerpApiResponse struct {
 	} `json:"organic_results"`
 }
 
-// DiscoverJobs queries Google using SerpApi to find live job pages and sends them directly to a consumer channel.
+// DiscoverJobs runs every free discovery source, then augments those results
+// with SerpApi when configured or Yahoo HTML search when it is not.
 func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
-	apiKey := os.Getenv("SERPAPI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("SERPAPI_API_KEY environment variable is missing. Job discovery requires this API key.")
-	}
+	apiKey := strings.TrimSpace(os.Getenv("SERPAPI_API_KEY"))
 
-	log.Println("[FunnelEngine] Starting live job discovery via SerpApi...")
-	
+	log.Println("[FunnelEngine] Starting free job discovery sources...")
+
 	f.discoverWithRemoteOK(jobChan)
 	f.discoverWithHackerNews(jobChan)
 	f.discoverWithATSFeeds(jobChan)
 
-	useFallback := false
-
+	useFallback := apiKey == ""
+	if useFallback {
+		log.Println("[FunnelEngine] SERPAPI_API_KEY is not configured; using Yahoo HTML search for role/ATS queries.")
+	} else {
+		log.Println("[FunnelEngine] Augmenting free sources with SerpApi role/ATS queries...")
+	}
 
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
@@ -70,7 +72,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 			}
 
 			reqURL := fmt.Sprintf("%s?q=%s&api_key=%s&num=100", serpAPIBaseURL, url.QueryEscape(query), apiKey)
-			
+
 			client := &http.Client{Timeout: 30 * time.Second}
 			resp, err := client.Get(reqURL)
 			if err != nil {
@@ -78,7 +80,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				log.Printf("[FunnelEngine] API request failed: %v", safeErr)
 				continue
 			}
-			
+
 			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
@@ -108,7 +110,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 				// Some basic sanitization to extract company name from Title
 				company := extractCompanyFromTitle(result.Title)
 				log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
-				
+
 				jobTitle := extractJobTitleFromResult(result.Title, role)
 				isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED")
 				if err != nil {
@@ -121,12 +123,12 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 					}
 				}
 			}
-			
+
 			// Sleep to respect rate limits if on free tier
 			SleepFunc(1 * time.Second)
 		}
 	}
-	
+
 	log.Println("[FunnelEngine] Job discovery complete. Backlog updated in applications.db")
 	return nil
 }
@@ -175,7 +177,7 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 
 func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- Job) {
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
-	
+
 	client := &http.Client{Timeout: 10 * time.Second}
 	searchURL := fmt.Sprintf("%s?p=%s", yahooBaseURL, url.QueryEscape(query))
 	req, err := http.NewRequest("GET", searchURL, nil)
@@ -184,25 +186,25 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 		return
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[FunnelEngine] Yahoo fallback failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[FunnelEngine] Failed to read response body for Yahoo: %v", err)
 		return
 	}
 	html := string(b)
-	
+
 	// Extract RU parameter from r.search.yahoo.com links
 	re := regexp.MustCompile(`RU=(https?%3a%2f%2f[^/]+%2f[^/]+(?:%2f[^/"&<]*)?)/RK=`)
 	matches := re.FindAllStringSubmatch(html, -1)
-	
+
 	found := make(map[string]bool)
 	for _, m := range matches {
 		decoded, err := url.QueryUnescape(m[1])
@@ -212,7 +214,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 		}
 		if !found[decoded] && isValidATSUrl(decoded) {
 			found[decoded] = true
-			
+
 			// Bug #19: derive the company from the tenant subdomain or the
 			// first non-locale, non-generic path segment — the old
 			// first-path-segment grab recorded locale codes ("en-US") and
@@ -221,7 +223,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- 
 			if company == "" {
 				company = "Unknown Company"
 			}
-			
+
 			// Unlike the SerpAPI path above, this fallback parses raw anchor
 			// hrefs and has no result headline to read a real title from, so
 			// the searched role is genuinely the only label available here
@@ -444,25 +446,25 @@ func isValidATSUrl(link string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	if IsKnownJunkJobURL(link) {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	
+
 	atsDomains := []string{
 		"greenhouse.io", "lever.co", "ashbyhq.com",
 		"bamboohr.com", "workable.com", "smartrecruiters.com",
 		"recruitee.com", "jobvite.com", "applytojob.com", "myworkdayjobs.com",
 		"pinpointhq.com", "homerun.co",
 	}
-	
+
 	for _, domain := range atsDomains {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -471,16 +473,16 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 
 	for _, role := range f.Roles {
 		tag := strings.ReplaceAll(strings.ToLower(role), " ", "-")
-		
+
 		url := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to create request for %s: %v", tag, err)
 			continue
 		}
-		
+
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		
+
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil || resp.StatusCode != http.StatusOK {
