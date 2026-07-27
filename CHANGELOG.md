@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-transaction backlog grooming
+
+* **Changed:** Re-verified and re-scored every Pending row across the bug, free-improvement, and paywalled-improvement backlogs against current code and live environment evidence.
+* **Changed:** Re-scoped bug #125 from a Major bulk-update corruption risk to a Minor durable-manual-correlation gap after bug #124's multi-row rollback safeguard, reducing its score from 1.75 to 0.75.
+* **Documentation:** Refreshed the Usability Gate, current monitoring journal, paywalled-grooming scope, and next autonomous item. Nine open Major or Blocker bugs remain; bug #126 is next.
+* **Verification:** Re-ran `go build ./...`, `go vet ./...`, and `go test ./...`; all pass.
+
 ## 2026-07-27 — Durable email tracker outcomes
 
 * **Fixed:** Rejection and interview emails are acknowledged only when their funnel update commits successfully in the same SQLite transaction.

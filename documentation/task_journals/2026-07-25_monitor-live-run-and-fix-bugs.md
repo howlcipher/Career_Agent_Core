@@ -3,17 +3,17 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** Paused behind the Usability Gate. No agent or monitor process is running as of the 2026-07-26 groom.
+- **Status:** Paused behind the Usability Gate. No agent or monitor process is running as of the 2026-07-27 groom.
 - **Started:** 2026-07-25.
-- **Durable history:** resolved implementation details live in `bugs.md` #70-#119 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
+- **Durable history:** resolved implementation details live in `bugs.md` #70-#124 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
 
 ## Current authoritative state
 
-- Bug #119 is resolved and pushed in `17aab07`: free RemoteOK, Hacker News, and public ATS-feed discovery now runs without SerpApi; missing configuration uses Yahoo for role/ATS queries.
-- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #119.
-- The Usability Gate remains **UNMET** because 11 Major/Blocker bugs are open. `bugs.md` is authoritative; #124 is the next autonomous item.
+- Bug #124 is resolved and pushed in `e553070`: tracker outcome writes and Message-ID acknowledgements now commit atomically, with database failures and ambiguous multi-row matches left retryable.
+- `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #124. The focused tracker race suite also passes.
+- The Usability Gate remains **UNMET** because 9 Major/Blocker bugs are open. `bugs.md` is authoritative; #126 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
-- No live agent, cohort watcher, or log-tail monitor survived into this resume point.
+- No live agent, cohort watcher, or log-tail monitor survived into this resume point. The dashboard is running and returned HTTP 200 on both the root and metrics routes during the 2026-07-27 groom; its `*:8080` listener reconfirmed bug #126.
 
 ## Confirmed live conclusions
 
@@ -68,4 +68,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Run `/work_next_item` for bug #124, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved durability, privacy, fetch, quarantine, and SSRF defects.
+Run `/work_next_item` for bug #126, the top-ranked open gate item. Continue down the bug backlog until the Usability Gate is met. Only then restart a clean monitored cohort from the latest green build; do not launch the historical cohort ahead of unresolved privacy, fetch, quarantine, and SSRF defects.
