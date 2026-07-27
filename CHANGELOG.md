@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-permission backlog grooming
+
+* **Backlog:** Re-verified and re-scored all 8 remaining bugs, all 5 free improvements, and both paywalled improvements against current code and live metadata; no score or rank changed.
+* **Classification:** Moved the below-floor LoRA experiment from the free backlog to the paywalled backlog because this host still has only an integrated GPU and useful training requires paid cloud compute.
+* **Priority:** Seven Major or Blocker defects still hold the Usability Gate open. Bug #123 is the next autonomous item.
+* **Recommendations:** Close free improvements #27 and #30 absent new evidence; defer paid-compute #14 until preference labels exist; CAPTCHA solving remains gated on a user-selected paid provider and key.
+* **Verification:** `go build ./...`, `go vet ./...`, and `go test ./...` pass. Both dashboard routes return HTTP 200 on loopback, and the required Ollama models remain installed.
+
 ## 2026-07-27 — Owner-only private workspace
 
 * **Security:** Maintained commands now start under an owner-only umask and fail closed with a clear warning if existing private paths cannot be secured.

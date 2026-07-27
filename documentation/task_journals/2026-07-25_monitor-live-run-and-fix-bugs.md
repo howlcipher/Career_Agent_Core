@@ -12,6 +12,7 @@
 - Bug #127 is resolved in signed implementation commit `e4e48e1`: maintained commands enforce owner-only creation and repair existing private workspace paths without following symlinks.
 - `go build ./...`, `go vet ./...`, and `go test ./...` all pass after #127. The focused security, storage, tracker, agent, and dashboard race suite also passes.
 - The live permission repair completed. Named private root files and generated files are `0600`, generated directories are `0700`, and the application tree has no symlinks.
+- The post-#127 groom re-verified and re-scored every remaining row. Scores and ranks are unchanged; #14 moved to the paywalled backlog because a useful experiment requires paid compute on this hardware.
 - The Usability Gate remains **UNMET** because 7 Major/Blocker bugs are open. `bugs.md` is authoritative; #123 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
@@ -52,7 +53,7 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 2. **Bug #112 merge policy:** 20 `http`/`https` duplicate pairs were measured, 11 with different statuses. Outward application dedup is fixed, but funnel insertion, updates, queueing, and reporting remain split. The merge must preserve strong evidence and must not silently promote an ambiguous row to `APPLIED`.
 3. **Historical dedup rows:** older `applied_jobs` entries predate confirmation-only recording. Do not bulk-clear them: a false row suppresses a valid retry, but clearing a true row can file a duplicate.
 4. **Paid CAPTCHA solving:** improvement #17 is worthwhile on evidence but remains out of scope without the user's provider choice and paid key.
-5. **Low-ROI improvements:** #14 should stay deferred or move to a separately approved paid-compute experiment; #27 should close unless a real external MCP client is named; #30 should close because its two motivating attestations are now configured.
+5. **Low-ROI improvements:** #14 is now a deferred paywalled experiment; #27 should close unless a real external MCP client is named; #30 should close because its two motivating attestations are now configured.
 
 ## Operating procedure and hazards
 
