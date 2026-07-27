@@ -6,6 +6,8 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 ## Ranked Backlog (best ROI first)
 
+**2026-07-27 post-#123 groom-pass note:** both paywalled Pending rows were re-verified and recomputed. #17 remains 7×1.0÷4 = 1.75: code still detects and routes bot-protection failures but has no solver client, dependency, or solve-and-continue path, and metadata-only environment checks find no configured 2captcha or Capsolver key. #14 remains 3×1.0÷7 = 0.43 and below floor: the host still exposes only an integrated Radeon Vega GPU, and repository checks still find no fine-tuning pipeline or human preference-label source. Defer #14 until labels exist; #17 still requires an explicit provider choice and paid key.
+
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- |
 | 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |

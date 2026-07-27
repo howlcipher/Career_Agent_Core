@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-fetch backlog grooming
+
+* **Backlog:** Re-verified and re-scored all seven remaining bugs, five free improvements, and two paywalled improvements after bug #123; no score or rank changed.
+* **Priority:** Six Major or Blocker bugs still hold the Usability Gate open. Bug #129, portable career-profile path resolution, is the next autonomous item.
+* **Recommendations:** Close free improvements #27 and #30 absent new evidence, defer paid-compute #14 until preference labels exist, and keep CAPTCHA solving gated on a user-selected paid provider and key.
+* **Live checks:** Required Ollama models remain installed. Both dashboard routes return HTTP 200 on `127.0.0.1:8080`, the non-loopback connection is refused, and no Career Agent batch process is running.
+* **Verification:** `go build ./...`, `go vet ./...`, `go test ./...`, an uncached full test run, and the focused agent race suite pass.
+
 ## 2026-07-27 — Safe pre-score job fetching
 
 * **Fixed:** Jobs with missing descriptions no longer reach embedding or fit scoring after transport failures, non-success HTTP responses, or pages with too little visible posting content.
