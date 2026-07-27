@@ -9,10 +9,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -190,6 +192,10 @@ func newDashboardServer(address string, handler http.Handler) *http.Server {
 }
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	requestedAddress := flag.String(
 		"addr",
 		defaultDashboardAddress,

@@ -30,10 +30,15 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	limit := flag.Int("limit", 200, "max rows to backfill this run (0 = unlimited); kept modest by default since embedding calls share the local Ollama instance a live cmd/agent run may also be using")
 	flag.Parse()
 

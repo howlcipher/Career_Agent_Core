@@ -6,16 +6,21 @@ import (
 	"os"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/tracker"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	fmt.Println("==========================================================")
 	fmt.Println("📧 CAREER AGENT: EMAIL TRACKER (DAEMON)")
 	fmt.Println("==========================================================")
-	
+
 	godotenv.Load()
 
 	// Bug #20: without this, storage.GetDB() is nil and every tracker

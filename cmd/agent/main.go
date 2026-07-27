@@ -87,6 +87,10 @@ func isClientRenderedSPAHost(rawURL string) bool {
 }
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
 	flag.Parse()
 

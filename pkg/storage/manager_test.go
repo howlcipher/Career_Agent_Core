@@ -381,6 +381,59 @@ func TestLogFailedSubmission(t *testing.T) {
 	}
 }
 
+func TestPrivateArtifactsUseRestrictiveModes(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if err := InitDBWithPath("applications.db"); err != nil {
+		t.Fatalf("InitDBWithPath failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := CloseDB(); err != nil {
+			t.Errorf("CloseDB failed: %v", err)
+		}
+		db = nil
+	})
+
+	if err := SaveApplication(
+		"Private Corp",
+		"Engineer",
+		"Remote",
+		"https://example.com/jobs/1",
+		"resume",
+		"cover letter",
+		"interview prep",
+	); err != nil {
+		t.Fatalf("SaveApplication failed: %v", err)
+	}
+	if err := LogFailedSubmission(
+		"Private Corp",
+		"Engineer",
+		"https://example.com/jobs/1",
+	); err != nil {
+		t.Fatalf("LogFailedSubmission failed: %v", err)
+	}
+
+	paths := map[string]os.FileMode{
+		"applications.db": 0600,
+		"applications":    0700,
+		filepath.Join("applications", "Private_Corp"):                      0700,
+		filepath.Join("applications", "Private_Corp", "resume.md"):         0600,
+		filepath.Join("applications", "Private_Corp", "coverletter.txt"):   0600,
+		filepath.Join("applications", "Private_Corp", "interview_prep.md"): 0600,
+		filepath.Join("applications", "Private_Corp", "metadata.json"):     0600,
+		filepath.Join("applications", "manual_submissions.md"):             0600,
+	}
+	for path, want := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", path, got, want)
+		}
+	}
+}
+
 func TestLogManualRequired(t *testing.T) {
 	reportPath := filepath.Join("applications", "needs_manual_apply", "manual_queue.md")
 	defer os.Remove(reportPath)

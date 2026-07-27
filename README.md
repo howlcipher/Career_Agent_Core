@@ -11,6 +11,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
 - **Strict Rule Enforcement**: Dynamically discards jobs that don't meet your salary floor or remote requirements defined in `profile.yaml`.
 - **Security Quarantine**: Implements a prompt injection quarantine layer via `promptsec` and comprehensive SSRF vulnerability protections to prevent hostile job postings from manipulating the AI or infrastructure.
+- **Private Filesystem Defaults**: Maintained commands apply an owner-only process umask, repair existing private paths without following symbolic links, and keep credentials, databases, logs, resumes, letters, and generated application documents at `0600` inside `0700` directories.
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
@@ -172,6 +173,14 @@ To enable auto-tracking of employer rejections and interview requests, launch th
 ```bash
 go run cmd/tracker/main.go
 ```
+
+Every maintained command verifies private workspace permissions before it opens the database or writes logs. Startup fails with a clear warning if a path cannot be secured. To repair an existing checkout explicitly, or after copying files in from another account or container, run:
+
+```bash
+go run ./cmd/securefiles
+```
+
+The repair is idempotent and limited to known private files plus the `applications/` tree. It refuses symbolic links rather than changing their targets.
 
 ## Managing Submissions
 If `auto_submit_click: true` is enabled in `profile.yaml` but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to the Dynamic Learner Module, or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.

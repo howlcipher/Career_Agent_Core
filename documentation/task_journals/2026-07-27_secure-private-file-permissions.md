@@ -16,16 +16,18 @@
 
 ## Plan
 
-- [ ] Add failing tests for restrictive creation, idempotent repair, symlink refusal, and warning propagation.
-- [ ] Implement a restrictive process policy and a reusable, narrowly scoped permission repair.
-- [ ] Wire repair into application entry points and an explicit maintenance command.
+- [x] Add failing tests for restrictive creation, idempotent repair, symlink refusal, and warning propagation.
+- [x] Implement a restrictive process policy and a reusable, narrowly scoped permission repair.
+- [x] Wire repair into application entry points and an explicit maintenance command.
 - [ ] Update README, changelog, backlog evidence, and verify the complete Go suite.
 - [ ] Remove this journal in the final commit after the item is complete.
 
 ## Progress Log
 
 - 2026-07-27 — Re-verified bug #127 against code and metadata, checked live model availability, routed the required skills, and selected startup plus explicit-command repair after evaluating the operational tradeoffs.
+- 2026-07-27 — Added failing permission regressions, then implemented owner-only creation modes, restrictive process startup, symlink-safe recursive repair, maintained-command wiring, and `cmd/securefiles`. Focused package tests pass.
+- 2026-07-27 — Ran the repair against the live workspace. One legacy container-owned log required an exact-path chmod through the existing container; the repeat repair then passed. Metadata checks show all generated directories at `0700`, all generated files at `0600`, and no application-tree symlinks.
 
 ## Next Step
 
-Inspect all runtime entry points and private-path writers, then add the failing permission tests before implementation.
+Review the implementation diff, run race and full project verification, then close bug #127 with durable evidence.

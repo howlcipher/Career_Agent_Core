@@ -24,10 +24,15 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	profilePath := flag.String("profile", "/var/home/howlcipher/dev/ai_knowledge_library/USER_PROFILE.md", "path to USER_PROFILE.md")
 	flag.Parse()
 

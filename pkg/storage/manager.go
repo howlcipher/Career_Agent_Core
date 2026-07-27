@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -23,6 +25,15 @@ func InitDB() error {
 }
 
 func InitDBWithPath(path string) error {
+	security.SetPrivateUmask()
+	databasePath, _, _ := strings.Cut(path, "?")
+	if databasePath == ":memory:" {
+		databasePath = ""
+	}
+	if err := secureSQLiteFiles(databasePath); err != nil {
+		return fmt.Errorf("secure database files before opening: %w", err)
+	}
+
 	var err error
 	dsn := path
 	if !strings.Contains(path, "?") {
@@ -105,7 +116,24 @@ func InitDBWithPath(path string) error {
 	if err := migrateJobFunnelFitSimilarity(); err != nil {
 		return err
 	}
-	return migrateJobFunnelToneVariant()
+	if err := migrateJobFunnelToneVariant(); err != nil {
+		return err
+	}
+	if err := secureSQLiteFiles(databasePath); err != nil {
+		return fmt.Errorf("secure database files after initialization: %w", err)
+	}
+	return nil
+}
+
+func secureSQLiteFiles(databasePath string) error {
+	if databasePath == "" {
+		return nil
+	}
+	return errors.Join(
+		security.SecurePrivateFile(databasePath),
+		security.SecurePrivateFile(databasePath+"-wal"),
+		security.SecurePrivateFile(databasePath+"-shm"),
+	)
 }
 
 func migrateJobFunnelLastUpdated() error {
@@ -347,22 +375,22 @@ func CoverLetterPath(companyName string) string {
 
 func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverLetterContent, interviewPrepContent string) error {
 	companyDir := filepath.Join("applications", safeCompanyDirName(companyName))
-	if err := os.MkdirAll(companyDir, 0755); err != nil {
+	if err := os.MkdirAll(companyDir, security.PrivateDirMode); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	resumePath := filepath.Join(companyDir, "resume.md")
-	if err := os.WriteFile(resumePath, []byte(resumeContent), 0644); err != nil {
+	if err := writePrivateFile(resumePath, []byte(resumeContent)); err != nil {
 		return fmt.Errorf("failed to write resume: %w", err)
 	}
 
 	coverLetterPath := filepath.Join(companyDir, "coverletter.txt")
-	if err := os.WriteFile(coverLetterPath, []byte(coverLetterContent), 0644); err != nil {
+	if err := writePrivateFile(coverLetterPath, []byte(coverLetterContent)); err != nil {
 		return fmt.Errorf("failed to write cover letter: %w", err)
 	}
 
 	interviewPrepPath := filepath.Join(companyDir, "interview_prep.md")
-	if err := os.WriteFile(interviewPrepPath, []byte(interviewPrepContent), 0644); err != nil {
+	if err := writePrivateFile(interviewPrepPath, []byte(interviewPrepContent)); err != nil {
 		return fmt.Errorf("failed to write interview prep: %w", err)
 	}
 
@@ -380,7 +408,7 @@ func SaveApplication(companyName, jobTitle, location, url, resumeContent, coverL
 	}
 
 	metadataPath := filepath.Join(companyDir, "metadata.json")
-	if err := os.WriteFile(metadataPath, metadataBytes, 0644); err != nil {
+	if err := writePrivateFile(metadataPath, metadataBytes); err != nil {
 		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
@@ -399,16 +427,23 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
+	if err := os.MkdirAll("applications", security.PrivateDirMode); err != nil {
+		return fmt.Errorf("failed to create applications directory: %w", err)
+	}
 	reportPath := filepath.Join("applications", "manual_submissions.md")
 
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
 		header := "# Manual Submission Backlog\n\nThe auto-submitter failed to process the following applications. Please submit them manually:\n\n"
-		os.WriteFile(reportPath, []byte(header), 0644)
+		if err := writePrivateFile(reportPath, []byte(header)); err != nil {
+			return fmt.Errorf("failed to initialize manual submission report: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect manual submission report: %w", err)
 	}
 
 	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s)\n", companyName, jobTitle, applyURL)
 
-	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := openPrivateAppendFile(reportPath)
 	if err != nil {
 		return fmt.Errorf("failed to open manual submission report: %w", err)
 	}
@@ -438,7 +473,7 @@ func MoveToManualApply(companyName string) (string, error) {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return "", nil
 	}
-	if err := os.MkdirAll(manualApplyBase, 0755); err != nil {
+	if err := os.MkdirAll(manualApplyBase, security.PrivateDirMode); err != nil {
 		return "", fmt.Errorf("failed to create manual-apply dir: %w", err)
 	}
 	dst := filepath.Join(manualApplyBase, safeCompany)
@@ -463,14 +498,18 @@ func LogManualRequired(companyName, jobTitle, applyURL, docsDir string) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
-	if err := os.MkdirAll(manualApplyBase, 0755); err != nil {
+	if err := os.MkdirAll(manualApplyBase, security.PrivateDirMode); err != nil {
 		return fmt.Errorf("failed to create manual-apply dir: %w", err)
 	}
 	reportPath := filepath.Join(manualApplyBase, "manual_queue.md")
 
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
 		header := "# Manual Apply Queue\n\nThese jobs sit behind an ATS account sign-in, so automation hands them off by design. Tailored documents are already saved in each company's folder alongside this file — create the account, upload, submit, check the box.\n\n"
-		os.WriteFile(reportPath, []byte(header), 0644)
+		if err := writePrivateFile(reportPath, []byte(header)); err != nil {
+			return fmt.Errorf("failed to initialize manual queue: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect manual queue: %w", err)
 	}
 
 	docsNote := "docs not found"
@@ -479,7 +518,7 @@ func LogManualRequired(companyName, jobTitle, applyURL, docsDir string) error {
 	}
 	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s) — %s\n", companyName, jobTitle, applyURL, docsNote)
 
-	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := openPrivateAppendFile(reportPath)
 	if err != nil {
 		return fmt.Errorf("failed to open manual queue: %w", err)
 	}
@@ -519,7 +558,7 @@ func LogPromptInjectionDetections(url, companyName string, threats []PromptInjec
 	injectionLogMutex.Lock()
 	defer injectionLogMutex.Unlock()
 
-	if err := os.MkdirAll("applications", 0755); err != nil {
+	if err := os.MkdirAll("applications", security.PrivateDirMode); err != nil {
 		return fmt.Errorf("failed to create applications directory: %w", err)
 	}
 
@@ -529,7 +568,7 @@ func LogPromptInjectionDetections(url, companyName string, threats []PromptInjec
 		writeHeader = true
 	}
 
-	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := openPrivateAppendFile(reportPath)
 	if err != nil {
 		return fmt.Errorf("failed to open prompt injection report: %w", err)
 	}
@@ -562,6 +601,42 @@ func LogPromptInjectionDetections(url, companyName string, threats []PromptInjec
 	}
 	w.Flush()
 	return w.Error()
+}
+
+func writePrivateFile(path string, data []byte) error {
+	f, err := os.OpenFile(
+		path,
+		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		security.PrivateFileMode,
+	)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(security.PrivateFileMode); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func openPrivateAppendFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(
+		path,
+		os.O_APPEND|os.O_WRONLY|os.O_CREATE,
+		security.PrivateFileMode,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(security.PrivateFileMode); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func CloseDB() error {

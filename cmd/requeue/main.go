@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
@@ -54,6 +55,10 @@ var sourcePatterns = map[string]string{
 }
 
 func main() {
+	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
+	}
+
 	statsOnly := flag.Bool("stats", false, "report per-source outcome counts and exit without changing anything")
 	sourceList := flag.String("source", "", "comma-separated source names to target (see -list-sources); required unless combined with -stats and omitted (then all known sources are reported)")
 	pattern := flag.String("pattern", "", "raw SQL LIKE pattern to target instead of a named -source (e.g. '%example.com%')")

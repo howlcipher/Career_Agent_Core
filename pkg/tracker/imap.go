@@ -10,6 +10,7 @@ import (
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message/mail"
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"os"
 	"path/filepath"
@@ -287,17 +288,38 @@ func updateDBWithTrackerResult(
 func logRejectionFeedback(company, subject, reason string) {
 	reportPath := filepath.Join("applications", "rejection_feedback.md")
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		os.MkdirAll("applications", 0755)
+		if err := os.MkdirAll("applications", security.PrivateDirMode); err != nil {
+			log.Printf("[Tracker] WARNING: could not create private feedback directory: %v", err)
+			return
+		}
 		header := "# 📉 Rejection Analytics\n\nThis file tracks the exact reasons why companies are rejecting your applications so you can improve your resume.\n\n"
-		os.WriteFile(reportPath, []byte(header), 0644)
+		if err := os.WriteFile(reportPath, []byte(header), security.PrivateFileMode); err != nil {
+			log.Printf("[Tracker] WARNING: could not initialize private feedback report: %v", err)
+			return
+		}
+	} else if err != nil {
+		log.Printf("[Tracker] WARNING: could not inspect private feedback report: %v", err)
+		return
 	}
 
 	entry := fmt.Sprintf("### 🏢 %s\n- **Email Subject:** %s\n- **HR Feedback:** %s\n\n", company, subject, reason)
 
-	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-	if err == nil {
-		f.WriteString(entry)
-		f.Close()
+	f, err := os.OpenFile(
+		reportPath,
+		os.O_APPEND|os.O_WRONLY|os.O_CREATE,
+		security.PrivateFileMode,
+	)
+	if err != nil {
+		log.Printf("[Tracker] WARNING: could not open private feedback report: %v", err)
+		return
+	}
+	defer f.Close()
+	if err := f.Chmod(security.PrivateFileMode); err != nil {
+		log.Printf("[Tracker] WARNING: could not secure feedback report: %v", err)
+		return
+	}
+	if _, err := f.WriteString(entry); err != nil {
+		log.Printf("[Tracker] WARNING: could not write private feedback report: %v", err)
 	}
 }
 
