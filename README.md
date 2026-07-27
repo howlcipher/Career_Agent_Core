@@ -15,7 +15,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
 - **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers for Greenhouse and Lever, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
-- **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests, updating your funnels automatically.
+- **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry.
 - **Live Web Dashboard**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) showing funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
 - **Key-Optional Search Fallback**: Always runs the free RemoteOK, Hacker News, and public Greenhouse/Lever feed sources. Role/ATS searches use SerpApi when configured and Yahoo HTML search when no key is present or SerpApi reports an error.

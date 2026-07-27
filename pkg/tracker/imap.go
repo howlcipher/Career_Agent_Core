@@ -58,7 +58,7 @@ func StartTracker(cfg IMAPConfig) error {
 
 	messages := make(chan *imap.Message, 10)
 	done := make(chan error, 1)
-	
+
 	// Fetch ENVELOPE (subject, sender) and BODY
 	section := &imap.BodySectionName{}
 	go func() {
@@ -89,12 +89,28 @@ func StartTracker(cfg IMAPConfig) error {
 		status := classifyEmail(subject, strings.ToLower(bodyText))
 		if status != "" {
 			company := matchTrackedCompany(trackedCompanies, senderDomain, subject)
-			if company == "" {
-				log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
-			} else {
-				log.Printf("[Tracker] Detected %s for tracked company %q from %s (%s). Updating database.", status, company, senderDomain, subject)
-				updateDBWithTrackerResult(company, status)
+			result, err := updateDBWithTrackerResult(
+				msg.Envelope.MessageId,
+				company,
+				status,
+			)
+			if err != nil {
+				log.Printf(
+					"[Tracker] Failed to persist %s outcome for %q: %v. Email left unprocessed for retry.",
+					status,
+					company,
+					err,
+				)
+				continue
+			}
 
+			switch result {
+			case trackerUpdateUnmatched:
+				log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
+			case trackerUpdateNoop:
+				log.Printf("[Tracker] Detected %s for tracked company %q, but no APPLIED row required an update.", status, company)
+			case trackerUpdateUpdated:
+				log.Printf("[Tracker] Persisted %s for exactly one application at tracked company %q.", status, company)
 				if status == "REJECTED" {
 					llmClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 					reason, err := llmClient.ExtractRejectionReason(bodyText)
@@ -104,6 +120,7 @@ func StartTracker(cfg IMAPConfig) error {
 					logRejectionFeedback(company, subject, reason)
 				}
 			}
+			continue
 		}
 		if err := storage.MarkEmailProcessed(msg.Envelope.MessageId); err != nil {
 			log.Printf("[Tracker] Failed to mark email processed: %v", err)
@@ -192,15 +209,79 @@ func matchTrackedCompany(companies []string, senderDomain, subjectLower string) 
 	return ""
 }
 
-func updateDBWithTrackerResult(companyExact, status string) {
+type trackerUpdateResult string
+
+const (
+	trackerUpdateUnmatched trackerUpdateResult = "unmatched"
+	trackerUpdateNoop      trackerUpdateResult = "no_op"
+	trackerUpdateUpdated   trackerUpdateResult = "updated"
+)
+
+func updateDBWithTrackerResult(
+	messageID,
+	companyExact,
+	status string,
+) (trackerUpdateResult, error) {
+	if status != "REJECTED" && status != "INTERVIEW_REQUESTED" {
+		return "", fmt.Errorf("unsupported tracker status %q", status)
+	}
+
 	db := storage.GetDB()
 	if db == nil {
-		return
+		return "", fmt.Errorf("database not initialized")
 	}
-	// Exact company match only, and only forward from APPLIED — never
-	// touch rows the email cannot legitimately be about.
-	query := "UPDATE job_funnel SET status = ? WHERE company_name = ? AND status = 'APPLIED'"
-	db.Exec(query, status, companyExact)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("begin tracker update: %w", err)
+	}
+	defer tx.Rollback()
+
+	result := trackerUpdateUnmatched
+	if companyExact != "" {
+		updateResult, err := tx.Exec(
+			`UPDATE job_funnel
+			 SET status = ?
+			 WHERE company_name = ? AND status = 'APPLIED'`,
+			status,
+			companyExact,
+		)
+		if err != nil {
+			return "", fmt.Errorf("update tracker outcome: %w", err)
+		}
+
+		rows, err := updateResult.RowsAffected()
+		if err != nil {
+			return "", fmt.Errorf("count updated applications: %w", err)
+		}
+		switch rows {
+		case 0:
+			result = trackerUpdateNoop
+		case 1:
+			result = trackerUpdateUpdated
+		default:
+			return "", fmt.Errorf(
+				"tracker outcome matched %d applications; expected at most one",
+				rows,
+			)
+		}
+	}
+
+	if messageID != "" {
+		if _, err := tx.Exec(
+			`INSERT INTO processed_emails (message_id, processed_at)
+			 VALUES (?, CURRENT_TIMESTAMP)
+			 ON CONFLICT(message_id) DO NOTHING`,
+			messageID,
+		); err != nil {
+			return "", fmt.Errorf("acknowledge tracker email: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit tracker outcome: %w", err)
+	}
+	return result, nil
 }
 
 func logRejectionFeedback(company, subject, reason string) {
@@ -212,7 +293,7 @@ func logRejectionFeedback(company, subject, reason string) {
 	}
 
 	entry := fmt.Sprintf("### 🏢 %s\n- **Email Subject:** %s\n- **HR Feedback:** %s\n\n", company, subject, reason)
-	
+
 	f, err := os.OpenFile(reportPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err == nil {
 		f.WriteString(entry)
@@ -225,12 +306,12 @@ func extractBody(msg *imap.Message, section *imap.BodySectionName) string {
 	if r == nil {
 		return ""
 	}
-	
+
 	mr, err := mail.CreateReader(r)
 	if err != nil {
 		return ""
 	}
-	
+
 	var textBody strings.Builder
 	for {
 		p, err := mr.NextPart()
@@ -239,7 +320,7 @@ func extractBody(msg *imap.Message, section *imap.BodySectionName) string {
 		} else if err != nil {
 			break
 		}
-		
+
 		switch p.Header.(type) {
 		case *mail.InlineHeader:
 			b, _ := io.ReadAll(p.Body)

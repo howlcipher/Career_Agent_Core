@@ -16,15 +16,17 @@
 
 ## Plan
 
-- [ ] Add failing transaction tests for a successful update, a no-op, an ambiguous multi-row match, and a locked database followed by a successful retry.
-- [ ] Persist the outcome update and processed-message acknowledgement in one transaction, with explicit update-state reporting and row-count validation.
-- [ ] Run focused tests and the full build, vet, and test sequence.
+- [x] Add failing transaction tests for a successful update, a no-op, an ambiguous multi-row match, and a locked database followed by a successful retry.
+- [x] Persist the outcome update and processed-message acknowledgement in one transaction, with explicit update-state reporting and row-count validation.
+- [x] Run focused tests and the full build, vet, and test sequence.
 - [ ] Update README, changelog, and bug 124 with durable verification evidence; remove this journal; commit and push.
 
 ## Progress Log
 
 - 2026-07-27 00:26 EDT: Re-verified the backlog claim against `pkg/tracker/imap.go` and `pkg/storage/manager.go`. Chose an atomic transaction over sequential writes because it closes the crash window and preserves retryability.
+- 2026-07-27 00:42 EDT: Added transaction tests first and observed the expected compile failure. Implemented atomic outcome persistence, explicit result states, allowed-status validation, and rollback for multi-row matches. Focused tracker tests pass, including database-lock and acknowledgement-failure retries.
+- 2026-07-27 00:47 EDT: `go build ./...`, `go vet ./...`, `go test ./...`, and `go test -race ./pkg/tracker -count=1` all pass.
 
 ## Next Step
 
-Add focused failing tests in `pkg/tracker/imap_test.go` before changing production code.
+Review the complete diff, scan the staged files for secrets and PII, then create a signed implementation milestone commit.

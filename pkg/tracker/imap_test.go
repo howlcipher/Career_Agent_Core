@@ -1,6 +1,12 @@
 package tracker
 
-import "testing"
+import (
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+)
 
 func TestClassifyEmail(t *testing.T) {
 	tests := []struct {
@@ -108,5 +114,224 @@ func TestSubjectAnnouncesCode(t *testing.T) {
 	}
 	if subjectAnnouncesCode("Your application to Acme was received") {
 		t.Error("an ordinary acknowledgement is not a code notification")
+	}
+}
+
+func TestUpdateDBWithTrackerResultStates(t *testing.T) {
+	tests := []struct {
+		name       string
+		company    string
+		start      string
+		want       trackerUpdateResult
+		wantStatus string
+	}{
+		{
+			name:       "updated",
+			company:    "Updated Corp",
+			start:      "APPLIED",
+			want:       trackerUpdateUpdated,
+			wantStatus: "REJECTED",
+		},
+		{
+			name:       "no op after an earlier outcome write",
+			company:    "Noop Corp",
+			start:      "REJECTED",
+			want:       trackerUpdateNoop,
+			wantStatus: "REJECTED",
+		},
+		{
+			name:       "unmatched",
+			company:    "",
+			start:      "",
+			want:       trackerUpdateUnmatched,
+			wantStatus: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+			if tt.company != "" {
+				insertTrackerTestJob(t, db, tt.company, tt.start, "https://example.com/"+tt.name)
+			}
+
+			messageID := "<" + tt.name + "@example.com>"
+			got, err := updateDBWithTrackerResult(messageID, tt.company, "REJECTED")
+			if err != nil {
+				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("update result = %q, want %q", got, tt.want)
+			}
+			if !storage.WasEmailProcessed(messageID) {
+				t.Fatal("successfully handled email was not acknowledged")
+			}
+			if tt.company != "" {
+				assertTrackerTestStatus(t, db, tt.company, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestUpdateDBWithTrackerResultRejectsAmbiguousCompany(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Double Corp", "APPLIED", "https://example.com/one")
+	insertTrackerTestJob(t, db, "Double Corp", "APPLIED", "https://example.com/two")
+
+	messageID := "<ambiguous@example.com>"
+	if _, err := updateDBWithTrackerResult(messageID, "Double Corp", "REJECTED"); err == nil {
+		t.Fatal("multiple matching applications must fail")
+	}
+	if storage.WasEmailProcessed(messageID) {
+		t.Fatal("ambiguous email must remain retryable")
+	}
+
+	var applied int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM job_funnel WHERE company_name = ? AND status = 'APPLIED'",
+		"Double Corp",
+	).Scan(&applied); err != nil {
+		t.Fatalf("count APPLIED rows: %v", err)
+	}
+	if applied != 2 {
+		t.Fatalf("transaction changed ambiguous rows: got %d APPLIED, want 2", applied)
+	}
+}
+
+func TestUpdateDBWithTrackerResultRejectsInvalidStatus(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Status Corp", "APPLIED", "https://example.com/status")
+
+	messageID := "<invalid-status@example.com>"
+	if _, err := updateDBWithTrackerResult(messageID, "Status Corp", "APPLIED"); err == nil {
+		t.Fatal("unsupported tracker status must fail")
+	}
+	if storage.WasEmailProcessed(messageID) {
+		t.Fatal("email with an invalid status must remain retryable")
+	}
+	assertTrackerTestStatus(t, db, "Status Corp", "APPLIED")
+}
+
+func TestUpdateDBWithTrackerResultRetriesAfterDatabaseLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tracker.db")
+	dsn := path + "?_busy_timeout=0&_journal_mode=DELETE"
+	db := setupTrackerTestDB(t, dsn)
+	insertTrackerTestJob(t, db, "Locked Corp", "APPLIED", "https://example.com/locked")
+
+	locker, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open locking connection: %v", err)
+	}
+	t.Cleanup(func() {
+		locker.Close()
+	})
+	lockTx, err := locker.Begin()
+	if err != nil {
+		t.Fatalf("begin locking transaction: %v", err)
+	}
+	if _, err := lockTx.Exec(
+		"UPDATE job_funnel SET job_title = ? WHERE company_name = ?",
+		"Lock held",
+		"Locked Corp",
+	); err != nil {
+		t.Fatalf("acquire database write lock: %v", err)
+	}
+
+	messageID := "<locked@example.com>"
+	if _, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED"); err == nil {
+		t.Fatal("locked database must return an error")
+	}
+	if storage.WasEmailProcessed(messageID) {
+		t.Fatal("email was acknowledged despite the database lock")
+	}
+	assertTrackerTestStatus(t, db, "Locked Corp", "APPLIED")
+
+	if err := lockTx.Rollback(); err != nil {
+		t.Fatalf("release database write lock: %v", err)
+	}
+
+	got, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED")
+	if err != nil {
+		t.Fatalf("retry after releasing lock failed: %v", err)
+	}
+	if got != trackerUpdateUpdated {
+		t.Fatalf("retry result = %q, want %q", got, trackerUpdateUpdated)
+	}
+	if !storage.WasEmailProcessed(messageID) {
+		t.Fatal("successful retry was not acknowledged")
+	}
+	assertTrackerTestStatus(t, db, "Locked Corp", "REJECTED")
+}
+
+func TestUpdateDBWithTrackerResultRetriesAfterAcknowledgementError(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Retry Corp", "APPLIED", "https://example.com/retry")
+	if _, err := db.Exec("DROP TABLE processed_emails"); err != nil {
+		t.Fatalf("remove processed email table: %v", err)
+	}
+
+	messageID := "<retry@example.com>"
+	if _, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED"); err == nil {
+		t.Fatal("acknowledgement failure must return an error")
+	}
+	assertTrackerTestStatus(t, db, "Retry Corp", "APPLIED")
+
+	if _, err := db.Exec(`CREATE TABLE processed_emails (
+		message_id TEXT PRIMARY KEY,
+		processed_at DATETIME
+	)`); err != nil {
+		t.Fatalf("restore processed email table: %v", err)
+	}
+
+	got, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED")
+	if err != nil {
+		t.Fatalf("retry after restoring acknowledgement table failed: %v", err)
+	}
+	if got != trackerUpdateUpdated {
+		t.Fatalf("retry result = %q, want %q", got, trackerUpdateUpdated)
+	}
+	if !storage.WasEmailProcessed(messageID) {
+		t.Fatal("successful retry was not acknowledged")
+	}
+	assertTrackerTestStatus(t, db, "Retry Corp", "REJECTED")
+}
+
+func setupTrackerTestDB(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	if err := storage.InitDBWithPath(dsn); err != nil {
+		t.Fatalf("initialize tracker test database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := storage.CloseDB(); err != nil {
+			t.Errorf("close tracker test database: %v", err)
+		}
+	})
+	return storage.GetDB()
+}
+
+func insertTrackerTestJob(t *testing.T, db *sql.DB, company, status, url string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO job_funnel (company_name, job_title, url, status)
+		 VALUES (?, 'Engineer', ?, ?)`,
+		company,
+		url,
+		status,
+	); err != nil {
+		t.Fatalf("insert tracker test job: %v", err)
+	}
+}
+
+func assertTrackerTestStatus(t *testing.T, db *sql.DB, company, want string) {
+	t.Helper()
+	var got string
+	if err := db.QueryRow(
+		"SELECT status FROM job_funnel WHERE company_name = ?",
+		company,
+	).Scan(&got); err != nil {
+		t.Fatalf("read tracker test status: %v", err)
+	}
+	if got != want {
+		t.Fatalf("status = %q, want %q", got, want)
 	}
 }
