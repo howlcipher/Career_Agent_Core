@@ -18,7 +18,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers for Greenhouse and Lever, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry.
 - **Live Web Dashboard**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) showing funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
-- **Cron-Driven Daemon Mode**: Avoids ATS IP bans by continuously dripping 10-15 applications out every 6 hours in the background.
+- **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
 - **Key-Optional Search Fallback**: Always runs the free RemoteOK, Hacker News, and public Greenhouse/Lever feed sources. Role/ATS searches use SerpApi when configured and Yahoo HTML search when no key is present or SerpApi reports an error.
 - **Pre-Score Fetch Validation**: Missing job descriptions reach embedding and fit scoring only after a meaningful successful page fetch. Closed postings become terminal, while rate limits, server failures, and transport errors use bounded retries and return to the discovery queue if they remain unavailable.
 - **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with the LLM, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
@@ -168,9 +168,18 @@ The Core Agent can be run in batch or daemon mode:
 # Run one massive batch and exit
 go run cmd/agent/main.go
 
-# Run continuously as a background service (drip mode)
+# Run continuously with fresh discovery and at most 15 jobs every 6 hours
 go run cmd/agent/main.go --daemon
+
+# Override the per-cycle job cap
+go run cmd/agent/main.go --daemon -cycle-limit 10
 ```
+
+Batch mode reads the queue and discovery sources once, processes the complete
+result, and exits. Daemon mode repeats that same fresh cycle every six hours.
+`-cycle-limit` must be greater than zero in daemon mode and defaults to 15;
+it is ignored in batch mode. `SIGINT` and `SIGTERM` stop the daemon instead of
+leaving it asleep until the next cycle.
 
 *Note: On its very first run, Playwright will automatically download the necessary Chromium browser binaries.*
 

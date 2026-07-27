@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
@@ -55,6 +56,246 @@ func usableJobPageHTML() string {
 
 func noJobFetchWait(context.Context, time.Duration) error {
 	return errors.New("unexpected job fetch retry wait")
+}
+
+func TestRunAgentScheduleBatchRunsOneUnlimitedCycle(t *testing.T) {
+	var limits []int
+	waitCalls := 0
+
+	err := runAgentSchedule(
+		context.Background(),
+		false,
+		defaultDaemonCycleLimit,
+		defaultDaemonCycleInterval,
+		func(_ context.Context, limit int) error {
+			limits = append(limits, limit)
+			return nil
+		},
+		func(context.Context, time.Duration) error {
+			waitCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("runAgentSchedule returned an error: %v", err)
+	}
+	if want := []int{0}; !reflect.DeepEqual(limits, want) {
+		t.Errorf("cycle limits = %v, want %v", limits, want)
+	}
+	if waitCalls != 0 {
+		t.Errorf("wait calls = %d, want 0", waitCalls)
+	}
+}
+
+func TestRunAgentScheduleDaemonRepeatsWithCycleCap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var limits []int
+	var waits []time.Duration
+	err := runAgentSchedule(
+		ctx,
+		true,
+		7,
+		defaultDaemonCycleInterval,
+		func(_ context.Context, limit int) error {
+			limits = append(limits, limit)
+			return nil
+		},
+		func(ctx context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			if len(waits) == 2 {
+				cancel()
+				return ctx.Err()
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("daemon cancellation returned an error: %v", err)
+	}
+	if want := []int{7, 7}; !reflect.DeepEqual(limits, want) {
+		t.Errorf("cycle limits = %v, want %v", limits, want)
+	}
+	if want := []time.Duration{
+		defaultDaemonCycleInterval,
+		defaultDaemonCycleInterval,
+	}; !reflect.DeepEqual(waits, want) {
+		t.Errorf("waits = %v, want %v", waits, want)
+	}
+}
+
+func TestRunAgentScheduleDaemonCancellationInterruptsWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cycleCalls := 0
+	waitReturned := false
+
+	err := runAgentSchedule(
+		ctx,
+		true,
+		defaultDaemonCycleLimit,
+		defaultDaemonCycleInterval,
+		func(context.Context, int) error {
+			cycleCalls++
+			return nil
+		},
+		func(ctx context.Context, _ time.Duration) error {
+			cancel()
+			<-ctx.Done()
+			waitReturned = true
+			return ctx.Err()
+		},
+	)
+	if err != nil {
+		t.Fatalf("daemon cancellation returned an error: %v", err)
+	}
+	if cycleCalls != 1 {
+		t.Errorf("cycle calls = %d, want 1", cycleCalls)
+	}
+	if !waitReturned {
+		t.Fatal("the injected wait did not observe context cancellation")
+	}
+}
+
+func TestWaitForNextAgentCycleReturnsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitForNextAgentCycle(ctx, defaultDaemonCycleInterval)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunAgentScheduleRejectsInvalidDaemonConfiguration(t *testing.T) {
+	runCycle := func(context.Context, int) error {
+		t.Fatal("cycle ran with invalid daemon configuration")
+		return nil
+	}
+	wait := func(context.Context, time.Duration) error {
+		t.Fatal("wait ran with invalid daemon configuration")
+		return nil
+	}
+
+	tests := []struct {
+		name     string
+		limit    int
+		interval time.Duration
+	}{
+		{name: "zero cycle cap", limit: 0, interval: time.Hour},
+		{name: "negative cycle cap", limit: -1, interval: time.Hour},
+		{name: "zero interval", limit: 1, interval: 0},
+		{name: "negative interval", limit: 1, interval: -time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runAgentSchedule(
+				context.Background(),
+				true,
+				tt.limit,
+				tt.interval,
+				runCycle,
+				wait,
+			)
+			if err == nil {
+				t.Fatal("invalid daemon configuration returned no error")
+			}
+		})
+	}
+}
+
+func TestRunAgentCycleRefreshesBacklogAndDiscovery(t *testing.T) {
+	loadCalls := 0
+	discoveryCalls := 0
+	var batches [][]string
+
+	deps := agentCycleDependencies{
+		loadDiscovered: func() ([]storage.FunnelJob, error) {
+			loadCalls++
+			return []storage.FunnelJob{{
+				CompanyName: "Backlog",
+				JobTitle:    fmt.Sprintf("Cycle %d", loadCalls),
+				URL:         fmt.Sprintf("https://example.com/backlog/%d", loadCalls),
+			}}, nil
+		},
+		discoverJobs: func(jobChan chan<- scraper.Job) error {
+			discoveryCalls++
+			jobChan <- scraper.Job{
+				CompanyName: "Discovery",
+				Title:       fmt.Sprintf("Cycle %d", discoveryCalls),
+				URL:         fmt.Sprintf("https://example.com/discovery/%d", discoveryCalls),
+			}
+			return nil
+		},
+		processJobs: func(_ context.Context, jobs <-chan scraper.Job) {
+			var urls []string
+			for job := range jobs {
+				urls = append(urls, job.URL)
+			}
+			batches = append(batches, urls)
+		},
+		targetCompensation: 100000,
+	}
+
+	for cycle := 0; cycle < 2; cycle++ {
+		if err := runAgentCycle(context.Background(), 0, deps); err != nil {
+			t.Fatalf("cycle %d returned an error: %v", cycle+1, err)
+		}
+	}
+
+	if loadCalls != 2 {
+		t.Errorf("load calls = %d, want 2", loadCalls)
+	}
+	if discoveryCalls != 2 {
+		t.Errorf("discovery calls = %d, want 2", discoveryCalls)
+	}
+	if len(batches) != 2 {
+		t.Fatalf("batches = %d, want 2", len(batches))
+	}
+	for i, batch := range batches {
+		if len(batch) != 2 {
+			t.Errorf("batch %d jobs = %v, want one backlog and one discovery job", i+1, batch)
+		}
+	}
+}
+
+func TestRunAgentCycleEnforcesPerCycleCap(t *testing.T) {
+	processed := 0
+	deps := agentCycleDependencies{
+		loadDiscovered: func() ([]storage.FunnelJob, error) {
+			var jobs []storage.FunnelJob
+			for i := 0; i < 4; i++ {
+				jobs = append(jobs, storage.FunnelJob{
+					CompanyName: "Backlog",
+					JobTitle:    fmt.Sprintf("Backlog %d", i),
+					URL:         fmt.Sprintf("https://example.com/backlog/%d", i),
+				})
+			}
+			return jobs, nil
+		},
+		discoverJobs: func(jobChan chan<- scraper.Job) error {
+			for i := 0; i < 3; i++ {
+				jobChan <- scraper.Job{
+					CompanyName: "Discovery",
+					Title:       fmt.Sprintf("Discovery %d", i),
+					URL:         fmt.Sprintf("https://example.com/discovery/%d", i),
+				}
+			}
+			return nil
+		},
+		processJobs: func(_ context.Context, jobs <-chan scraper.Job) {
+			for range jobs {
+				processed++
+			}
+		},
+	}
+
+	if err := runAgentCycle(context.Background(), 3, deps); err != nil {
+		t.Fatalf("runAgentCycle returned an error: %v", err)
+	}
+	if processed != 3 {
+		t.Errorf("processed jobs = %d, want cap of 3", processed)
+	}
 }
 
 func TestFetchJobPageAcceptsUsable2xxFromInjectedServer(t *testing.T) {

@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Capped recurring daemon cycles
+
+* **Fixed:** `cmd/agent --daemon` now runs a fresh database-backlog and discovery cycle every six hours instead of exiting after one batch.
+* **Control:** Each daemon cycle processes at most 15 jobs by default. `-cycle-limit` accepts a different positive cap, while ordinary batch mode remains unlimited and exits after one cycle.
+* **Shutdown:** The inter-cycle clock listens to the existing signal context, so `SIGINT` and `SIGTERM` stop a waiting daemon promptly.
+* **Tests:** Added deterministic injected-cycle and injected-clock coverage for one-shot batches, repeated daemon cycles, per-cycle refresh and caps, invalid configuration, and cancellation.
+
 ## 2026-07-27 — Post-quarantine backlog grooming
 
 * **Backlog:** Re-verified and recomputed all 5 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #121.

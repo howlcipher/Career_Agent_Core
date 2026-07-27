@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** In progress on bug #120. No live application agent or monitor process is running.
+- **Status:** Bug #120 is complete; the requested backlog groom is next. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
 - **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the bounded security implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
@@ -17,10 +17,10 @@
 
 ## Bug #120 plan
 
-- [ ] Add failing deterministic tests for batch, repeated daemon cycles, queue refresh, per-cycle caps, and cancellation.
-- [ ] Extract the queue/discovery work into one injected cycle and add a context-cancellable daemon coordinator.
-- [ ] Document the daemon flags and lifecycle in `README.md` and `CHANGELOG.md`.
-- [ ] Run focused and full verification, close #120, groom all three backlogs, delete this journal, commit, and push.
+- [x] Add failing deterministic tests for batch, repeated daemon cycles, queue refresh, per-cycle caps, and cancellation.
+- [x] Extract the queue/discovery work into one injected cycle and add a context-cancellable daemon coordinator.
+- [x] Document the daemon flags and lifecycle in `README.md` and `CHANGELOG.md`.
+- [ ] Groom all three backlogs, refresh the journal resume point, commit, and push.
 
 ## Current authoritative state
 
@@ -31,7 +31,8 @@
 - Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
 - The post-#121 groom re-verified and re-scored all 12 Pending rows across the three backlogs. Bug ranks are unchanged and #120 remains next. Free improvement #30 rose from 0.20 to 0.40 after live boolean-only inspection showed its motivating answers are blank again; it remains below floor.
 - Bug #121 is resolved: one typed deterministic boundary protects posting embedding/scoring and every model-facing browser path; detections keep the CSV audit, receive a terminal funnel status, and never reach an LLM judge. The full build, vet, test, and focused race gates pass.
-- The Usability Gate remains **UNMET** because 4 Major/Blocker bugs are open. `bugs.md` is authoritative; #120 is in progress.
+- Bug #120 is resolved: batch mode runs one unlimited cycle, while daemon mode refreshes database and discovery work every six hours, admits at most 15 jobs by default, and cancels its inter-cycle wait through the signal context. The configurable cap and deterministic lifecycle are covered by injected-cycle and injected-clock tests.
+- The Usability Gate remains **UNMET** because 3 Major/Blocker bugs are open. `bugs.md` is authoritative; #122 is the next autonomous item before grooming.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -88,4 +89,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Write the deterministic bug #120 tests first, then implement the injected cycle coordinator and daemon loop. Only after all Major and Blocker rows close should a clean monitored cohort restart from the latest green build.
+Run the requested `/groom_backlogs` pass across all three backlogs, then commit and push. Only after all Major and Blocker rows close should a clean monitored cohort restart from the latest green build.
