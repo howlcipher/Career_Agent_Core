@@ -1,5 +1,14 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Post-daemon backlog grooming
+
+* **Backlog:** Re-verified and recomputed all 4 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #120.
+* **Priority:** Three Major or Blocker bugs still hold the Usability Gate open. Resolver-bound SSRF protection, bug #122, is next.
+* **Scoring:** Raised outcome-aware queue ranking from 1.0 to 1.2 because capped daemon cycles make queue order more consequential. Correct live schema-key checks show the motivating work attestations configured, so early attestation detection returns from 0.40 to 0.20.
+* **Recommendations:** Close free improvements #27 and #30 absent new evidence, defer paid-compute #14 until preference labels exist, and keep CAPTCHA solving gated on a user-selected paid provider and key.
+* **Live checks:** Required Ollama models remain installed, both dashboard routes return HTTP 200 on loopback, and no Career Agent batch process is running.
+* **Verification:** The uncached build, vet, full test suite, and focused agent race suite pass.
+
 ## 2026-07-27 — Capped recurring daemon cycles
 
 * **Fixed:** `cmd/agent --daemon` now runs a fresh database-backlog and discovery cycle every six hours instead of exiting after one batch.
