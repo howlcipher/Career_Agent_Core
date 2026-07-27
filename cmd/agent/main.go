@@ -51,6 +51,8 @@ const (
 
 var errJobPageWeakContent = errors.New("job page has too little visible text")
 
+const promptInjectionQuarantineStatus = "QUARANTINED_PROMPT_INJECTION"
+
 type jobPageDisposition uint8
 
 const (
@@ -81,6 +83,109 @@ type careerRAGDependencies struct {
 type careerRAGInitialization struct {
 	chunkCount int
 	reingested bool
+}
+
+type postingPayload struct {
+	url         string
+	companyName string
+	title       string
+	description string
+	rawHTML     string
+}
+
+type postingQuarantineDependencies struct {
+	filter        *security.QuarantineLayer
+	logDetections func(
+		string,
+		string,
+		[]storage.PromptInjectionThreat,
+	) error
+	updateStatus func(string, string) error
+}
+
+func storedPromptInjectionThreats(
+	detection *security.PromptInjectionError,
+) []storage.PromptInjectionThreat {
+	if detection == nil {
+		return nil
+	}
+	threats := make(
+		[]storage.PromptInjectionThreat,
+		0,
+		len(detection.Threats),
+	)
+	for _, threat := range detection.Threats {
+		threats = append(threats, storage.PromptInjectionThreat{
+			Type:     string(threat.Type),
+			Severity: threat.Severity,
+			Message:  threat.Message,
+			Guard:    threat.Guard,
+			Match:    threat.Match,
+			Start:    threat.Start,
+			End:      threat.End,
+		})
+	}
+	return threats
+}
+
+// runQuarantinedPostingModelStage is the worker's only gateway to
+// posting-dependent model work. It scans the complete available posting
+// payload, records detections, durably terminalizes the funnel row, and invokes
+// modelStage only for content that passed the deterministic boundary.
+func runQuarantinedPostingModelStage(
+	posting postingPayload,
+	deps postingQuarantineDependencies,
+	modelStage func(),
+) error {
+	payload := strings.Join(
+		[]string{posting.title, posting.description, posting.rawHTML},
+		"\n",
+	)
+	if err := deps.filter.QuarantinePayload(payload); err != nil {
+		var detection *security.PromptInjectionError
+		if !errors.As(err, &detection) {
+			return fmt.Errorf("quarantine posting payload: %w", err)
+		}
+
+		resultErrs := []error{err}
+		if deps.logDetections == nil {
+			resultErrs = append(
+				resultErrs,
+				errors.New("prompt-injection audit logger is unavailable"),
+			)
+		} else if auditErr := deps.logDetections(
+			posting.url,
+			posting.companyName,
+			storedPromptInjectionThreats(detection),
+		); auditErr != nil {
+			resultErrs = append(
+				resultErrs,
+				fmt.Errorf("log prompt-injection detection: %w", auditErr),
+			)
+		}
+
+		if deps.updateStatus == nil {
+			resultErrs = append(
+				resultErrs,
+				errors.New("prompt-injection status writer is unavailable"),
+			)
+		} else if statusErr := deps.updateStatus(
+			posting.url,
+			promptInjectionQuarantineStatus,
+		); statusErr != nil {
+			resultErrs = append(
+				resultErrs,
+				fmt.Errorf("persist prompt-injection quarantine status: %w", statusErr),
+			)
+		}
+		return errors.Join(resultErrs...)
+	}
+
+	if modelStage == nil {
+		return errors.New("posting model stage is nil")
+	}
+	modelStage()
+	return nil
 }
 
 func resolveAgentCareerProfile(
@@ -608,6 +713,7 @@ func main() {
 					continue
 				}
 
+				var rawJobHTML string
 				// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
 				if job.Description == "" {
 					log.Printf("[Worker-%d] Fetching job description for %s...", workerID, job.CompanyName)
@@ -696,6 +802,7 @@ func main() {
 						continue
 					}
 
+					rawJobHTML = fetchResult.html
 					job.Description = fetchResult.description
 				}
 
@@ -719,109 +826,168 @@ func main() {
 				}
 
 				var tailoredContext string
-				if ragEnabled {
-					// RAG Retrieval: Dynamically build tailored context.
-					jobDescText := job.Title + "\n" + job.Description
+				var toneVariantLabel string
+				var hasToneVariant bool
+				var profileConstraints map[string]interface{}
+				var score int
+				skipJob := false
+				stopWorker := false
+				quarantineErr := runQuarantinedPostingModelStage(
+					postingPayload{
+						url:         job.URL,
+						companyName: job.CompanyName,
+						title:       job.Title,
+						description: job.Description,
+						rawHTML:     rawJobHTML,
+					},
+					postingQuarantineDependencies{
+						filter:        filter,
+						logDetections: storage.LogPromptInjectionDetections,
+						updateStatus:  storage.UpdateFunnelStatus,
+					},
+					func() {
+						if ragEnabled {
+							// RAG Retrieval: Dynamically build tailored context.
+							jobDescText := job.Title + "\n" + job.Description
 
-					var jobEmb []float32
-					var embErr error
-					for attempt := 1; attempt <= 3; attempt++ {
-						jobEmb, embErr = client.GetEmbedding(jobDescText)
-						if embErr == nil {
-							break
-						}
-						if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
-							time.Sleep(60 * time.Second)
-						} else {
-							break
-						}
-					}
+							var jobEmb []float32
+							var embErr error
+							for attempt := 1; attempt <= 3; attempt++ {
+								jobEmb, embErr = client.GetEmbedding(jobDescText)
+								if embErr == nil {
+									break
+								}
+								if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+									log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
+									time.Sleep(60 * time.Second)
+								} else {
+									break
+								}
+							}
 
-					if embErr == nil {
-						topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
-						if retrieveErr != nil {
-							log.Printf(
-								"[Worker-%d] Failed to retrieve grounded career context: %v",
-								workerID,
-								retrieveErr,
-							)
+							if embErr == nil {
+								topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
+								if retrieveErr != nil {
+									log.Printf(
+										"[Worker-%d] Failed to retrieve grounded career context: %v",
+										workerID,
+										retrieveErr,
+									)
+									if statusErr := storage.UpdateFunnelStatus(
+										job.URL,
+										"DISCOVERED",
+									); statusErr != nil {
+										log.Printf(
+											"[Worker-%d] Failed to return job after RAG retrieval error: %v",
+											workerID,
+											statusErr,
+										)
+									}
+									skipJob = true
+									return
+								}
+								var sb strings.Builder
+								sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
+								for _, tc := range topChunks {
+									sb.WriteString(tc.Text + "\n\n")
+								}
+								tailoredContext = sb.String()
+							} else {
+								log.Printf("[RAG] Embedding failed after retries: %v", embErr)
+								if statusErr := storage.UpdateFunnelStatus(
+									job.URL,
+									"DISCOVERED",
+								); statusErr != nil {
+									log.Printf(
+										"[Worker-%d] Failed to return job after RAG embedding error: %v",
+										workerID,
+										statusErr,
+									)
+								}
+								skipJob = true
+								return
+							}
+						}
+
+						if err := filter.CheckPayload(tailoredContext); err != nil {
+							log.Printf("[Worker-%d] Security quarantine triggered on trusted RAG output: %v", workerID, err)
 							if statusErr := storage.UpdateFunnelStatus(
 								job.URL,
-								"DISCOVERED",
+								"QUARANTINED_RAG_CONTEXT",
 							); statusErr != nil {
 								log.Printf(
-									"[Worker-%d] Failed to return job after RAG retrieval error: %v",
+									"[Worker-%d] Failed to record trusted RAG quarantine for %s: %v",
 									workerID,
+									job.CompanyName,
 									statusErr,
 								)
 							}
-							continue
+							skipJob = true
+							return
 						}
-						var sb strings.Builder
-						sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
-						for _, tc := range topChunks {
-							sb.WriteString(tc.Text + "\n\n")
-						}
-						tailoredContext = sb.String()
-					} else {
-						log.Printf("[RAG] Embedding failed after retries: %v", embErr)
-						if statusErr := storage.UpdateFunnelStatus(
-							job.URL,
-							"DISCOVERED",
-						); statusErr != nil {
-							log.Printf(
-								"[Worker-%d] Failed to return job after RAG embedding error: %v",
-								workerID,
-								statusErr,
-							)
-						}
-						continue
-					}
-				}
 
-				if err := filter.CheckPayload(tailoredContext); err != nil {
-					log.Printf("[Worker-%d] Security quarantine triggered on RAG output: %v", workerID, err)
+						var selectedTone string
+						toneVariantLabel, selectedTone, hasToneVariant = config.SelectToneVariant(prof.CoverLetterTones)
+						coverLetterTone := prof.CoverLetterTone
+						if hasToneVariant {
+							coverLetterTone = selectedTone
+						}
+
+						profileConstraints = map[string]interface{}{
+							"salary_floor":        prof.SalaryFloor,
+							"target_compensation": prof.TargetComp,
+							"remote_only":         prof.RemoteOnly,
+							"cover_letter_tone":   coverLetterTone,
+							"location":            piiData.Address,
+						}
+
+						var scoreErr error
+						for attempt := 1; attempt <= 3; attempt++ {
+							score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
+							if scoreErr == nil {
+								break
+							}
+							if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
+								log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
+								cancel()
+								stopWorker = true
+								return
+							} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
+								log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
+								time.Sleep(60 * time.Second)
+							} else {
+								break
+							}
+						}
+
+						if scoreErr != nil {
+							log.Printf("[Worker-%d] Failed to score job for %s after retries: %v", workerID, job.CompanyName, scoreErr)
+							if statusErr := storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE"); statusErr != nil {
+								log.Printf(
+									"[Worker-%d] Failed to record score failure for %s: %v",
+									workerID,
+									job.CompanyName,
+									statusErr,
+								)
+							}
+							time.Sleep(1 * time.Second)
+							skipJob = true
+						}
+					},
+				)
+				if quarantineErr != nil {
+					log.Printf(
+						"[Worker-%d] Posting quarantined before model use for %s: %v",
+						workerID,
+						job.CompanyName,
+						quarantineErr,
+					)
 					continue
 				}
-
-				toneVariantLabel, selectedTone, hasToneVariant := config.SelectToneVariant(prof.CoverLetterTones)
-				coverLetterTone := prof.CoverLetterTone
-				if hasToneVariant {
-					coverLetterTone = selectedTone
+				if stopWorker {
+					return
 				}
-
-				profileConstraints := map[string]interface{}{
-					"salary_floor":        prof.SalaryFloor,
-					"target_compensation": prof.TargetComp,
-					"remote_only":         prof.RemoteOnly,
-					"cover_letter_tone":   coverLetterTone,
-					"location":            piiData.Address,
-				}
-
-				var score int
-				var scoreErr error
-				for attempt := 1; attempt <= 3; attempt++ {
-					score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
-					if scoreErr == nil {
-						break
-					}
-					if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-						log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
-						cancel()
-						return
-					} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-						log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-						time.Sleep(60 * time.Second)
-					} else {
-						break
-					}
-				}
-
-				if scoreErr != nil {
-					log.Printf("[Worker-%d] Failed to score job for %s after retries: %v", workerID, job.CompanyName, scoreErr)
-					storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE")
-					time.Sleep(1 * time.Second)
+				if skipJob {
 					continue
 				}
 
@@ -946,7 +1112,37 @@ func main() {
 						return masterResumePath, storage.CoverLetterPath(job.CompanyName), nil
 					}
 
-					if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, submitter.ErrAuthWall) {
+					if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, security.ErrPromptInjectionDetected) {
+						log.Printf(
+							"[Worker-%d] %s's browser DOM was quarantined before model use: %v",
+							workerID,
+							job.CompanyName,
+							err,
+						)
+						if checkpointErr := pipeline.SaveCheckpoint(
+							job.CompanyName,
+							job.URL,
+							promptInjectionQuarantineStatus,
+						); checkpointErr != nil {
+							log.Printf(
+								"[Worker-%d] Failed to checkpoint browser quarantine for %s: %v",
+								workerID,
+								job.CompanyName,
+								checkpointErr,
+							)
+						}
+						if statusErr := storage.UpdateFunnelStatus(
+							job.URL,
+							promptInjectionQuarantineStatus,
+						); statusErr != nil {
+							log.Printf(
+								"[Worker-%d] Failed to record browser quarantine for %s: %v",
+								workerID,
+								job.CompanyName,
+								statusErr,
+							)
+						}
+					} else if errors.Is(err, submitter.ErrAuthWall) {
 						// Bug #18: not an automation failure — the ATS gates its form
 						// behind an account. Tailored docs are already saved; queue
 						// the job for a manual application instead.

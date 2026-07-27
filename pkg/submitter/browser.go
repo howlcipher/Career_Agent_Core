@@ -51,6 +51,58 @@ func toStoredThreats(threats []promptsec.Threat) []storage.PromptInjectionThreat
 	return out
 }
 
+func quarantineCareerPageDOM(
+	filter *security.QuarantineLayer,
+	applyURL string,
+	companyName string,
+	domHTML string,
+) error {
+	if err := filter.QuarantinePayload(domHTML); err != nil {
+		var detection *security.PromptInjectionError
+		if !errors.As(err, &detection) {
+			return fmt.Errorf("quarantine career page DOM: %w", err)
+		}
+		auditErr := storage.LogPromptInjectionDetections(
+			applyURL,
+			companyName,
+			toStoredThreats(detection.Threats),
+		)
+		if auditErr != nil {
+			log.Printf(
+				"[Auto-Submit] Failed to log prompt injection detection: %v",
+				auditErr,
+			)
+			return errors.Join(
+				err,
+				fmt.Errorf("log prompt-injection detection: %w", auditErr),
+			)
+		}
+		return err
+	}
+	return nil
+}
+
+func quarantineFillTargetDOM(
+	filter *security.QuarantineLayer,
+	applyURL string,
+	companyName string,
+	target fillTarget,
+) error {
+	if target == nil {
+		return errors.New("cannot quarantine a nil form target")
+	}
+	domHTML, err := target.HTML()
+	if err != nil {
+		return fmt.Errorf("read form DOM for quarantine: %w", err)
+	}
+	return quarantineCareerPageDOM(
+		filter,
+		applyURL,
+		companyName,
+		domHTML,
+	)
+}
+
 // fillTarget abstracts over playwright.Page and playwright.Frame so form-fill
 // logic can transparently target whichever one actually holds the form.
 // Many ATS platforms (SmartRecruiters, Workday, and others) embed the real
@@ -1083,6 +1135,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	if isCaptchaBlocked(page, content) {
 		return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 	}
+	if err := quarantineCareerPageDOM(
+		filter,
+		applyURL,
+		companyName,
+		content,
+	); err != nil {
+		return fmt.Errorf("career page rejected before model use: %w", err)
+	}
 
 	// At this point, the page is live. NOW we generate the costly resume and cover letter!
 	log.Printf("[Auto-Submit] Verified page is live. Generating tailored documents...")
@@ -1122,6 +1182,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	if err == nil && mappingJSON != "" {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
 		cachedTarget := resolveFillTarget(page)
+		if err := quarantineFillTargetDOM(
+			filter,
+			applyURL,
+			companyName,
+			cachedTarget,
+		); err != nil {
+			return fmt.Errorf("cached form rejected before model use: %w", err)
+		}
 		urlBeforeClick := page.URL()
 		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, autoSubmitClick)
 		if dynErr != nil {
@@ -1129,7 +1197,18 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			storage.DeleteFormMapping(domain)
 			if mapper != nil {
 				log.Printf("[Auto-Submit] Falling back to Vision module after cached-mapping fill failure...")
-				return AttemptVisionSubmit(page, cachedTarget, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
+				return attemptQuarantinedVisionSubmit(
+					page,
+					cachedTarget,
+					filter,
+					companyName,
+					applyURL,
+					resumePath,
+					coverPath,
+					pii,
+					mapper,
+					autoSubmitClick,
+				)
 			}
 			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
 		}
@@ -1177,7 +1256,16 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
 				urlBeforeSubmitClick = page.URL()
-				execErr = handleGreenhouse(resolveFillTarget(page), resumePath, coverPath, pii, autoSubmitClick)
+				target := resolveFillTarget(page)
+				if err := quarantineFillTargetDOM(
+					filter,
+					applyURL,
+					companyName,
+					target,
+				); err != nil {
+					return fmt.Errorf("Greenhouse form rejected before use: %w", err)
+				}
+				execErr = handleGreenhouse(target, resumePath, coverPath, pii, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
 				// Bug #47, same reasoning as the Greenhouse branch above.
 				clickApplyIfPresent(page)
@@ -1185,7 +1273,16 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
 				}
 				urlBeforeSubmitClick = page.URL()
-				execErr = handleLever(resolveFillTarget(page), resumePath, coverPath, pii, autoSubmitClick)
+				target := resolveFillTarget(page)
+				if err := quarantineFillTargetDOM(
+					filter,
+					applyURL,
+					companyName,
+					target,
+				); err != nil {
+					return fmt.Errorf("Lever form rejected before use: %w", err)
+				}
+				execErr = handleLever(target, resumePath, coverPath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
@@ -1217,29 +1314,17 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 
 				target := resolveFillTarget(page)
 				domHTML, _ := target.HTML()
+				if err := quarantineCareerPageDOM(
+					filter,
+					applyURL,
+					companyName,
+					domHTML,
+				); err != nil {
+					return fmt.Errorf("generic form rejected before model use: %w", err)
+				}
 				prunedHTML, err := parser.PruneDOMToText(domHTML)
 				if err != nil {
 					prunedHTML = domHTML
-				}
-
-				if filter != nil {
-					if safe, threats, err := filter.CheckPayloadDetailed(prunedHTML); !safe {
-						if judge != nil {
-							if isSafe, verifyErr := judge.VerifySafeJobDescription(prunedHTML); verifyErr == nil && isSafe {
-								log.Printf("[Auto-Submit] Security filter flagged job description, but LLM verified it as SAFE.")
-							} else {
-								if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
-									log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
-								}
-								return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
-							}
-						} else {
-							if logErr := storage.LogPromptInjectionDetections(applyURL, companyName, toStoredThreats(threats)); logErr != nil {
-								log.Printf("[Auto-Submit] Failed to log prompt injection detection: %v", logErr)
-							}
-							return fmt.Errorf("malicious prompt injection detected on career page: %w", err)
-						}
-					}
 				}
 
 				fullProfileContext := pii.ApplicationFacts() + "\n" + pii.EEO.Summary() + "\n\n" + profileContext
@@ -1266,12 +1351,34 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						// internally (bug #52 follow-up) -- return its result
 						// directly rather than letting it re-enter this loop's
 						// own confirmation check against a now-stale baseline.
-						return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
+						return attemptQuarantinedVisionSubmit(
+							page,
+							target,
+							filter,
+							companyName,
+							applyURL,
+							resumePath,
+							coverPath,
+							pii,
+							mapper,
+							autoSubmitClick,
+						)
 					}
 				} else {
 					log.Printf("[Learner Module] Failed to map form: %v", err)
 					log.Printf("[Auto-Submit] DOM Learner Module failed. Falling back to Vision module...")
-					return AttemptVisionSubmit(page, target, companyName, applyURL, resumePath, coverPath, pii, mapper, autoSubmitClick)
+					return attemptQuarantinedVisionSubmit(
+						page,
+						target,
+						filter,
+						companyName,
+						applyURL,
+						resumePath,
+						coverPath,
+						pii,
+						mapper,
+						autoSubmitClick,
+					)
 				}
 			} else {
 				execErr = fmt.Errorf("unsupported Applicant Tracking System at %s", applyURL)
@@ -1296,6 +1403,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			log.Printf("[Auto-Submit] Attempt %d: Solving validation errors...", attempt)
 			target := resolveFillTarget(page)
 			domHTML, _ := target.HTML()
+			if err := quarantineCareerPageDOM(
+				filter,
+				applyURL,
+				companyName,
+				domHTML,
+			); err != nil {
+				return fmt.Errorf("validation DOM rejected before model use: %w", err)
+			}
 			prunedHTML, err := parser.PruneDOMToForm(domHTML)
 			if err != nil {
 				prunedHTML = domHTML

@@ -5,15 +5,49 @@ import (
 	"log"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/mxschmitt/playwright-go"
 )
 
-// AttemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen
+func attemptQuarantinedVisionSubmit(
+	page playwright.Page,
+	target fillTarget,
+	filter *security.QuarantineLayer,
+	companyName string,
+	applyURL string,
+	resumePath string,
+	coverPath string,
+	pii *config.PII,
+	mapper FormMapper,
+	autoSubmitClick bool,
+) error {
+	if err := quarantineFillTargetDOM(
+		filter,
+		applyURL,
+		companyName,
+		target,
+	); err != nil {
+		return fmt.Errorf("form rejected before vision model use: %w", err)
+	}
+	return attemptVisionSubmit(
+		page,
+		target,
+		companyName,
+		applyURL,
+		resumePath,
+		coverPath,
+		pii,
+		mapper,
+		autoSubmitClick,
+	)
+}
+
+// attemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen
 // and map coordinates/selectors if standard HTML DOM pruning fails or is heavily obfuscated.
-func AttemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath, coverPath string, pii *config.PII, mapper FormMapper, autoSubmitClick bool) error {
+func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath, coverPath string, pii *config.PII, mapper FormMapper, autoSubmitClick bool) error {
 	log.Printf("[Vision-Submit] Taking a full-page screenshot of %s for Visual Reasoning...", applyURL)
-	
+
 	// Take full page screenshot
 	screenshotBytes, err := page.Screenshot(playwright.PageScreenshotOptions{
 		FullPage: playwright.Bool(true),
@@ -24,7 +58,7 @@ func AttemptVisionSubmit(page playwright.Page, target fillTarget, companyName, a
 	}
 
 	log.Println("[Vision-Submit] Transmitting screenshot to Gemini-1.5-Pro for visual mapping...")
-	
+
 	// Pass image byte array to Gemini
 	mappingJSON, err := mapper.ExtractFormMappingVision(screenshotBytes)
 	if err != nil {
@@ -32,7 +66,7 @@ func AttemptVisionSubmit(page playwright.Page, target fillTarget, companyName, a
 	}
 
 	log.Println("[Vision-Submit] Gemini successfully mapped the visual DOM structure!")
-	
+
 	domain := ExtractDomain(applyURL)
 	// Save it to SQLite so we don't have to use API credits for this specific ATS again!
 	if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {

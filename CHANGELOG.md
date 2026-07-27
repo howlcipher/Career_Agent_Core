@@ -1,5 +1,13 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Deterministic pre-model quarantine
+
+* **Security:** Fetched posting text and relevant browser DOM now cross one deterministic quarantine boundary before embedding, scoring, form mapping, validation solving, or visual mapping.
+* **Fail closed:** Prompt-injection detections never reach an LLM safety judge. Their error text omits matched attacker content, while structured findings continue to append to the private CSV audit.
+* **Durability:** Blocked jobs move from `PROCESSING` to the terminal `QUARANTINED_PROMPT_INJECTION` status. Browser-time detections receive the same checked checkpoint and funnel update.
+* **Coverage:** Spy regressions prove malicious posting payloads cause zero embedding or scoring calls, and malicious initial or dynamically revealed generic, Greenhouse, and Lever DOM causes zero mapper, Vision, solver, or judge calls. Initial detections also occur before document generation.
+* **Verification:** The focused race suite and the full build, vet, and test loop pass.
+
 ## 2026-07-27 — Post-profile backlog grooming
 
 * **Backlog:** Re-verified and re-scored all 6 Pending bugs, 5 free improvements, and 2 paywalled improvements after bug #129; no score or rank changed.

@@ -26,7 +26,6 @@ type LLMJudge interface {
 	VerifySafeJobDescription(text string) (bool, error)
 }
 
-
 // Pipeline represents the dynamic script-generation pipeline for ATS submissions.
 type Pipeline struct {
 	Filter    *security.QuarantineLayer
@@ -62,7 +61,7 @@ type ExecutionState struct {
 // TwoStepVerification safely visits the URL, validates security/prompt injection, and extracts the DOM
 func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string, error) {
 	log.Printf("[Pipeline] Step 1: Navigating to %s for security verification...", url)
-	
+
 	// Step 1: Secure Connection & Load
 	resp, err := page.Goto(url, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
@@ -70,7 +69,7 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 	if err != nil {
 		return "", fmt.Errorf("failed to navigate: %w", err)
 	}
-	
+
 	if resp == nil || !resp.Ok() {
 		return "", fmt.Errorf("invalid response from target URL")
 	}
@@ -81,16 +80,8 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 	}
 
 	pruned, _ := parser.PruneDOMToText(domHTML)
-	if err := p.Filter.CheckPayload(pruned); err != nil {
-		if p.Judge != nil {
-			if isSafe, verifyErr := p.Judge.VerifySafeJobDescription(pruned); verifyErr == nil && isSafe {
-				log.Println("[Pipeline] Promptsec flagged payload, but LLM verified it as SAFE.")
-			} else {
-				return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
-			}
-		} else {
-			return "", fmt.Errorf("malicious prompt injection detected on career page: %w", err)
-		}
+	if err := p.Filter.QuarantinePayload(pruned); err != nil {
+		return "", fmt.Errorf("career page rejected before model use: %w", err)
 	}
 
 	log.Println("[Pipeline] Step 2: Site verified secure. Extracting structural DOM...")
@@ -107,7 +98,7 @@ func ExtractDomain(rawURL string) string {
 	if err != nil {
 		return rawURL
 	}
-	
+
 	pathSegments := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(pathSegments) > 0 && pathSegments[0] != "" {
 		return u.Hostname() + "/" + pathSegments[0]
@@ -118,10 +109,10 @@ func ExtractDomain(rawURL string) string {
 // TemplateMatchingLoop attempts to identify ATS structures in the DOM and maps them to a script
 func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) {
 	log.Println("[Pipeline] Analyzing DOM for ATS structural footprints...")
-	
+
 	domain := ExtractDomain(jobURL)
 	log.Printf("[Learner Module] Checking DB for known mappings for domain: %s", domain)
-	
+
 	// 1. Check Cache (Zero Token Path)
 	cachedMapping, err := storage.GetFormMapping(domain)
 	if err == nil && cachedMapping != "" {
@@ -131,12 +122,12 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 
 	// 2. Cache Miss (High Token Path)
 	log.Printf("[Learner Module] Cache Miss. Domain %s is unknown. Engaging LLM to learn DOM structure...", domain)
-	
+
 	domLower := strings.ToLower(domHTML)
 	for footprint, templateName := range p.Templates {
 		if strings.Contains(domLower, footprint) {
 			log.Printf("[Pipeline] Match found! ATS identified as %s. Loading %s...", footprint, templateName)
-			
+
 			// Save the learning back to DB for next time
 			mockMappingJSON := fmt.Sprintf(`{"ats_type": "%s", "fields": {"first_name": "input#first_name"}}`, footprint)
 			if err := storage.SaveFormMapping(domain, mockMappingJSON); err != nil {
@@ -147,8 +138,16 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 	}
 
 	log.Println("[Pipeline] No standard ATS match found. Engaging LLM to map DOM...")
-	
+
 	if p.Mapper != nil {
+		if err := quarantineCareerPageDOM(
+			p.Filter,
+			jobURL,
+			"",
+			domHTML,
+		); err != nil {
+			return "", fmt.Errorf("form rejected before mapper use: %w", err)
+		}
 		prunedDOM, pruneErr := parser.PruneDOM(domHTML)
 		if pruneErr != nil {
 			log.Printf("[Submitter] DOM pruning failed, using raw HTML: %v", pruneErr)
@@ -167,7 +166,7 @@ func (p *Pipeline) TemplateMatchingLoop(jobURL, domHTML string) (string, error) 
 		log.Printf("[Learner Module] Successfully learned and cached new form mapping for %s", domain)
 		return "CachedScript_" + domain, nil
 	}
-	
+
 	return "DynamicGeneratedScript", nil
 }
 
@@ -191,7 +190,7 @@ func (p *Pipeline) ProcessDomain(domain string) (string, error) {
 
 	time.Sleep(2 * time.Second)
 	mockMappingJSON := `{"fields": {"first_name": "#first_name_input"}}`
-	
+
 	err = storage.SaveFormMapping(domain, mockMappingJSON)
 	if err != nil {
 		log.Printf("[Storage] Failed to cache form mapping: %v", err)
@@ -201,6 +200,14 @@ func (p *Pipeline) ProcessDomain(domain string) (string, error) {
 }
 
 func (p *Pipeline) AnalyzeAndMapForm(htmlContent, domain string) (string, error) {
+	if err := quarantineCareerPageDOM(
+		p.Filter,
+		domain,
+		"",
+		htmlContent,
+	); err != nil {
+		return "", fmt.Errorf("form rejected before mapper use: %w", err)
+	}
 	mappingJSON, err := p.Mapper.ExtractFormMapping(htmlContent, "")
 	if err != nil {
 		return "", fmt.Errorf("LLM failed to map form: %w", err)

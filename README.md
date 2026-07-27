@@ -10,7 +10,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Interview Cheat Sheet**: Automatically generates an `interview_prep.md` alongside your resume containing likely interview questions and tailored talking points.
 - **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
 - **Strict Rule Enforcement**: Dynamically discards jobs that don't meet your salary floor or remote requirements defined in `profile.yaml`.
-- **Security Quarantine**: Implements a prompt injection quarantine layer via `promptsec` and comprehensive SSRF vulnerability protections to prevent hostile job postings from manipulating the AI or infrastructure.
+- **Security Quarantine**: Routes fetched posting text and browser DOM through one deterministic `promptsec` boundary before any embedding, scoring, form-mapping, validation-solving, or visual model call. Detections are audited locally and receive a durable terminal funnel status without sending the flagged text to another model for review.
 - **Private Filesystem Defaults**: Maintained commands apply an owner-only process umask, repair existing private paths without following symbolic links, and keep credentials, databases, logs, resumes, letters, and generated application documents at `0600` inside `0700` directories.
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
@@ -34,12 +34,13 @@ graph TD
     A[RemoteOK / Google API] -->|Job Feeds| B(pkg/scraper: Funnel Engine)
     B -->|Raw URL| C{cmd/agent: Main Loop}
     
-    C -->|Parse Description| D[pkg/mcp: LLM Client - Ollama/Claude/Gemini]
+    C -->|Untrusted Posting Text| F[pkg/security: Deterministic Quarantine]
+    F -->|Verified Payload| D[pkg/mcp: LLM Client - Ollama/Claude/Gemini]
     D -->|Fit Score > 50| C
-    
+
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
-    E -->|DOM HTML| F[pkg/security: Quarantine & SSRF Protection]
-    F -->|Clean HTML| D
+    E -->|DOM HTML| F
+    F -->|Verified Form DOM| D
     D -->|ATS Mapping| E
     
     E -->|Write Status| G[(pkg/storage: SQLite DB w/ WAL & Pooling)]

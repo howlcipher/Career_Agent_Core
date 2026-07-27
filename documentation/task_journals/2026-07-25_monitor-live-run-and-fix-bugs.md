@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** Monitor live application runs, fix defects as they surface, record durable findings in the backlogs, and avoid any action that adds monetary cost.
-- **Status:** In progress on bug #121. No live application agent or monitor process is running.
+- **Status:** Paused behind the Usability Gate after bug #121. No live application agent or monitor process is running.
 - **Started:** 2026-07-25.
 - **Agent and model:** Codex orchestration with OpenAI `gpt-5.6-sol` at high reasoning for the bounded security implementation.
 - **Durable history:** resolved implementation details live in `bugs.md` #70-#129 and `improvements.md` #28-#33. This journal intentionally keeps only live-run conclusions, unresolved decisions, operating hazards, and the resume point.
@@ -24,7 +24,8 @@
 - Bug #129 is resolved in signed implementation commit `653f320`: both ingestion commands share portable path resolution, startup fails closed before stale chunks can be used, and `-no-rag` is an explicit retrieval bypass.
 - The post-#129 groom re-verified and re-scored all 13 Pending rows across the three backlogs. Scores and ranks are unchanged; #121 remains the next autonomous item.
 - Bug #121 is selected and re-verified. Implementation must centralize pre-model quarantine, persist a terminal quarantine outcome, preserve the CSV audit log, and prove with spies that flagged posting text reaches no embedding, scoring, mapping, or judging model path.
-- The Usability Gate remains **UNMET** because 5 Major/Blocker bugs are open. `bugs.md` is authoritative; #121 is the next autonomous item.
+- Bug #121 is resolved: one typed deterministic boundary protects posting embedding/scoring and every model-facing browser path; detections keep the CSV audit, receive a terminal funnel status, and never reach an LLM judge. The full build, vet, test, and focused race gates pass.
+- The Usability Gate remains **UNMET** because 4 Major/Blocker bugs are open. `bugs.md` is authoritative; #120 is the next autonomous item.
 - The old 82-job cohort tally is approximate because bug #112 leaves scheme-duplicate funnel rows independently mutable. Do not use it as exact status evidence until those rows are merged.
 - No live agent, cohort watcher, or log-tail monitor survived into this resume point. The rebuilt container dashboard is running, both routes return HTTP 200, `ss` reports `127.0.0.1:8080`, and the host's non-loopback address cannot connect.
 
@@ -81,4 +82,4 @@ Across the live investigation, the browser DOM repeatedly lagged the real outcom
 
 ## Next Step
 
-Implement bug #121 test-first, then review the complete diff and run the focused race tests plus the repository build, vet, and full test suite.
+Run `/work_next_item` for bug #120, the highest-ranked remaining gate bug. Only after all Major and Blocker rows close should a clean monitored cohort restart from the latest green build.
