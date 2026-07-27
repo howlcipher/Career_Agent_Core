@@ -53,7 +53,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- |
-| 36 | [Reconcile setup and feature documentation with executable behavior](#36-reconcile-setup-and-feature-documentation-with-executable-behavior) | Pending | 5.0 = 5×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | README setup still names a nonexistent `pii.yaml.template`, and its timeout, prompt-size and local-speed claims disagree with code or measured behavior. The changelog retains historically inaccurate daemon and security claims. A bounded documentation pass prevents broken onboarding and false operational expectations |
+| 36 | [Reconcile setup and feature documentation with executable behavior](#36-reconcile-setup-and-feature-documentation-with-executable-behavior) | Done (2026-07-27) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | Added a safe fake-data-only `pii.yaml.template`, corrected README payload, timeout, and CPU-performance claims, documented the timeout setting, corrected stale historical changelog wording, and added tests that parse the template and check required README entrypoints |
 | 37 | [Revalidate posting freshness before expensive document generation](#37-revalidate-posting-freshness-before-expensive-document-generation) | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | The live log recorded five jobs that scored 80–90 and then redirected to an expired/error page when submission began several minutes later. A bounded post-score freshness check can avoid document generation and failed-submit noise without changing the pre-score fetch validation or security boundaries |
 | 34 | [Make the local dashboard accessible and self-contained](#34-make-the-local-dashboard-accessible-and-self-contained) | Pending | 2.0 = 4×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | The dashboard lacks a main landmark, live-region announcements, table captions/header scope, and reduced-motion handling despite three continuous animations. It also contacts Google Fonts from a private local dashboard. Small frontend work improves keyboard/screen-reader use and removes an unnecessary external request |
 | 35 | [Rank the queue from observed outcomes while preserving exploration](#35-rank-the-queue-from-observed-outcomes-while-preserving-exploration) | Pending | 1.2 = 6×1.0÷5 | claude-opus-4-6-thinking | gemini-3.1-pro-high | The hard-coded source tiers now help determine which backlog jobs enter each capped six-hour daemon cycle, yet they predate the strongest live evidence: 6 of 7 fully filled forms were CAPTCHA-blocked and all 4 attempted Lever forms blocked. An exploration-preserving success/cost score can reduce wasted local inference without recreating the dangerous widget-presence pre-skip ruled out by live evidence |
@@ -106,7 +106,7 @@ These assignments cover current Pending improvements only. They are task-fit sta
 
 ### 36. Reconcile setup and feature documentation with executable behavior
 
-The current README cannot be followed from a clean checkout: it instructs `cp pii.yaml.template pii.yaml`, but no template exists. Several feature claims have also drifted from the executable:
+At filing time, the README could not be followed from a clean checkout: it instructed `cp pii.yaml.template pii.yaml`, but no template existed. Several feature claims had also drifted from the executable:
 
 - it promises ~1,500-character model payloads and strict 60-second LLM timeouts, while current scoring/form limits and the local-provider timeout are deliberately much larger;
 - it describes `qwen3:30b-instruct` scoring in about five seconds on CPU, while this project's own measurements record minutes.
@@ -116,7 +116,9 @@ The current README cannot be followed from a clean checkout: it instructs `cp pi
 
 **Re-scored 2026-07-26 after bug #119:** the SerpApi/Yahoo fallback documentation now matches executable behavior and was removed from this item's scope. The missing PII template plus five remaining operational/security claim groups still make this a high-value, one-pass documentation correction, so Value 5, Decay 1.0, Effort 1, and score 5.0 remain unchanged.
 
-**Re-verified after bug #120 on 2026-07-27:** current daemon behavior and launch guidance now agree, so that README defect is removed from scope. Broken clean-checkout setup, payload-size and timeout claims, measured-performance drift, and inaccurate historical/security changelog claims remain. Value 5, Decay 1.0, Effort 1, and score **5.0** remain unchanged because onboarding is still not executable and the bounded correction is still minutes of work.
+**Re-verified after bug #120 on 2026-07-27:** current daemon behavior and launch guidance agreed, so that README defect was removed from scope. The remaining setup, payload-size, timeout, measured-performance, and historical/security wording defects were corrected below.
+
+**Completed 2026-07-27:** `pii.yaml.template` now provides fake placeholders without personal data, and `TestPIITemplateParsesWithoutPersonalData` prevents schema drift. README now points to the template, documents the 50k/75k payload breakers and provider-specific timeouts, and labels local CPU timing as workload-dependent rather than promising five-second scoring. `TestREADMENamesCurrentSetupEntrypoints` checks the template link, profile path, timeout setting, dashboard URL, and daemon command. Historical changelog notes now identify superseded daemon and `net.ParseIP` wording instead of presenting it as current behavior.
 
 ### 34. Make the local dashboard accessible and self-contained
 

@@ -1,0 +1,49 @@
+# Safe example only. Copy this file to pii.yaml and replace every value.
+# pii.yaml is ignored by Git and must contain your own data, not this example.
+
+first_name: "Your first name"
+last_name: "Your last name"
+email: "you@example.com"
+phone: "555-555-5555"
+dob: "YYYY-MM-DD"
+address: "Street, City, ST ZIP"
+street: "123 Example Street"
+city: "Example City"
+state: "ST"
+full_state: "Example State"
+zip: "00000"
+country: "USA"
+full_country: "United States of America"
+
+# Leave legal attestations blank until you explicitly provide each answer.
+work:
+  authorized_to_work_us: ""
+  requires_sponsorship: ""
+  visa_status: ""
+  security_clearance: ""
+  criminal_history: ""
+  over_18: ""
+  current_employer: ""
+  current_title: ""
+  years_experience: ""
+  desired_salary: ""
+  remote_preference: ""
+  certifications: ""
+
+links:
+  linkedin: ""
+  github: ""
+  portfolio: ""
+  website: ""
+  twitter: ""
+
+eeo:
+  gender: ""
+  race_ethnicity: ""
+  veteran_status: ""
+  disability_status: ""
+  sexual_orientation: ""
+
+# Add education and experience entries only when you have verified facts.
+education: []
+experience: []

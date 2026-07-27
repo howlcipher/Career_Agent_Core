@@ -22,10 +22,10 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
 - **Key-Optional Search Fallback**: Always runs the free RemoteOK, Hacker News, and public Greenhouse/Lever feed sources. Role/ATS searches use SerpApi when configured and Yahoo HTML search when no key is present or SerpApi reports an error.
 - **Pre-Score Fetch Validation**: Missing job descriptions reach embedding and fit scoring only after a meaningful successful page fetch. Closed postings become terminal, while rate limits, server failures, and transport errors use bounded retries and return to the discovery queue if they remain unavailable.
-- **Cost & Token Optimization**: Drastically prunes DOM footprints (removing CSS, SVGs, scripts) before interacting with the LLM, ensuring payloads remain under ~1,500 characters. Additionally implements Lazy Document Generation to ensure expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
+- **Cost & Token Optimization**: Prunes DOM footprints (removing CSS, SVGs, scripts, and other non-structural content) before interacting with the LLM, then enforces per-call payload circuit breakers of 50,000 characters by default and 75,000 for scoped validation forms. Lazy Document Generation ensures expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
 - **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it clicks through any "Apply"-gated form, sends the rendered DOM to your configured LLM to map the input selectors, and caches the learned blueprint in SQLite. If a mapped CSS selector turns out to be wrong, it falls back to the field's accessible label (`<label>`/`aria-label`) before finally falling back to a screenshot-based visual mapping (Visual Reasoning) — three independent strategies for the same field before giving up.
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
-- **Resilient Networking**: All LLM API calls are wrapped in strict 60-second context timeouts to prevent workers from hanging indefinitely during network blips or silent connection drops.
+- **Resilient Networking**: LLM calls use provider-specific timeouts: Ollama defaults to 45 minutes for slow local generation, Claude to 5 minutes, and Gemini to 60 seconds. These bounds prevent workers from hanging indefinitely while allowing CPU-only local inference to finish.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
 - **Extensible Handlers:** Decoupled `parser`, `scraper`, and `submitter` logic for effortless ATS expansion.
 
@@ -159,7 +159,7 @@ Use the instructions for your Linux distribution inside WSL. The bundled Ollama 
 Follow these steps after the platform setup.
 
 ### 1. Set Up Your Personal Identifiable Information (PII)
-Create a local `pii.yaml` for contact and application facts. It is ignored by Git; do not commit it. A minimal starting file is:
+Create a local `pii.yaml` for contact and application facts. It is ignored by Git; do not commit it. Start from the safe fake-data-only [`pii.yaml.template`](pii.yaml.template), or create a minimal file:
 
 ```yaml
 first_name: "Your first name"
@@ -202,7 +202,7 @@ go run cmd/agent/main.go -no-rag
 ### 4. Choose an LLM Provider & Authenticate APIs
 The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git — copy `.env.example` as a starting point). The default is **Ollama** (local, free, no API key required).
 
-**Model recommendation:** the installer's defaults (`llama3.1` + `llava`) fit modest hardware. If you have ~32 GB RAM, use `OLLAMA_MODEL="qwen3:30b-instruct"` and `OLLAMA_VISION_MODEL="qwen2.5vl:7b"` instead — a 30B mixture-of-experts model that scores jobs in ~5 seconds on CPU with noticeably better writing. Avoid the `qwen3:30b-a3b` (thinking) variant: its hidden reasoning makes CPU scoring take minutes.
+**Model recommendation:** the installer's defaults (`llama3.1` + `llava`) fit modest hardware. If you have ~32 GB RAM, `qwen3:30b-instruct` and `qwen2.5vl:7b` can improve writing and visual mapping, but local CPU performance is workload- and hardware-dependent. Measure a representative run before changing models; this project's recorded CPU measurements are in minutes for long generations, not seconds. Avoid thinking variants when throughput matters because hidden reasoning can make CPU scoring much slower.
 
 **Ollama (default)** — run the bundled installer, which detects your OS (Debian, Ubuntu, Fedora, Arch, macOS, and immutable distros like Bazzite/Silverblue via a no-root user-space install), installs Ollama, starts the server, and pulls the required models:
 ```bash
@@ -216,6 +216,8 @@ OLLAMA_HOST="http://localhost:11434"      # optional
 OLLAMA_MODEL="llama3.1"                   # optional
 OLLAMA_VISION_MODEL="llava"               # optional
 OLLAMA_EMBED_MODEL="nomic-embed-text"     # optional
+# Optional per-call timeout in minutes; defaults to 45 for local CPU inference.
+OLLAMA_TIMEOUT_MINUTES="45"
 ```
 
 **Claude (Anthropic)**:

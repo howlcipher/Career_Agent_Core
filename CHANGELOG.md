@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-27 — Documentation drift correction
+
+* **Setup:** Added a fake-data-only `pii.yaml.template` and a parser test so clean-checkout setup remains safe and schema-valid.
+* **README:** Corrected payload limits, provider-specific LLM timeouts, and CPU performance guidance; documented `OLLAMA_TIMEOUT_MINUTES` and the template link.
+* **History:** Marked superseded daemon and `net.ParseIP` security wording as historical instead of describing it as current behavior.
+* **Checks:** Added lightweight tests for the template and required README setup entrypoints.
+
 ## 2026-07-27 — OS-specific run documentation
 
 * **Documentation:** Replaced the Linux-only setup path with concrete run instructions for Windows, macOS, mainstream Linux distributions, immutable Linux, and WSL 2.
@@ -164,12 +171,12 @@
 * **Architecture: Encapsulated SQLite Operations:** Removed leaky abstraction layers by refactoring the orchestration pipeline to use strict Repository Pattern methods from `pkg/storage` rather than executing raw SQL queries (`db.Exec`).
 * **SRE: Circuit Breaker for Rate Limits:** Integrated global graceful context cancellation (`context.CancelFunc`) so that if the Gemini API encounters a `429 Quota Exceeded` error, all workers are gracefully paused and safely spun down, instead of halting system resources with infinite sleep loops.
 * **SRE: Concurrency Control:** Implemented strict connection pooling for SQLite (`SetMaxOpenConns(10)`, `_busy_timeout=5000`) utilizing WAL journal mode, significantly improving database throughput and mitigating `database is locked` panics under parallel scraping loads.
-* **SRE: Daemon Mode Memory Fix:** Rewrote the daemon loop architecture to eliminate a dangerous recursive call to `main()` which had been resulting in severe memory leaks and abandoned `defer` statements. Contexts are now properly propagated through OS interrupts.
+* **Historical note:** This entry described an earlier daemon implementation and is retained for release history. The current daemon lifecycle is documented and tested in the 2026-07-27 capped-cycle entry above.
 
 ## Iteration 2 Audit Fixes (2026-07-16)
 * **UI/UX & Accessibility:** Rewrote the terminal dashboard (`cmd/dashboard/main.go`). It no longer uses destructive ANSI clear-screen loops (which broke screen readers) and now hosts a clean, modern HTML web interface via standard library `net/http`.
 * **Security (Path Traversal):** Hardened `SaveApplication` in `pkg/storage/manager.go` to aggressively strip malicious characters and path separators from `companyName` before allocating file paths.
-* **Security (SSRF Upgrade):** Replaced simplistic string-matching anti-SSRF filters in Playwright with true IP resolution via `net.ParseIP`, blocking advanced edge cases like IPv6 `::1`, `0177.0.0.1`, and RFC1918 subnets.
+* **Historical note:** This entry described an earlier string and `net.ParseIP` check. The current resolver-bound, DNS-rebinding-resistant policy is documented in the 2026-07-27 resolver-bound networking entry above.
 * **Resilience (Race Condition):** Added a `sync.Mutex` lock to `LogFailedSubmission` to prevent interleaved or corrupted data when 10 goroutines write to `manual_submissions.md` concurrently.
 * **Resilience (File Deletion):** Fixed an accidental destructive cleanup bug in `AttemptSubmit` where workers would delete the master resume/cover letter from disk instead of generating a copy.
 * **Documentation:** Authored comprehensive Architecture Decision Records (`ADR-001`, `ADR-002`, `ADR-003`) detailing our Playwright pool, Prompt Injection, and SQLite logic. Added a `CONTRIBUTING.md` and Mermaid architecture diagram.
