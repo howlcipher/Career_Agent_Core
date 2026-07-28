@@ -109,6 +109,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 **2026-07-28 groom-pass note:** all 4 remaining Pending bugs were re-verified against current code, and every score was recomputed. #130 remains 6×1.0÷3 = 2.0 because `discoverWithYahooHTML` still drops discovery on EOF. #131 remains 5×1.0÷3 = 1.67 because ATS feeds discard JSON without retry. #112 remains 6×1.0÷4 = 1.5 because only outward `HasApplied` dedup normalizes schemes. #125 remains 3×1.0÷4 = 0.75 because ambiguous tracker matches retry without durable manual review. No bug is below the 0.5 floor. The static gate is green (build, vet, uncached tests pass); required Ollama models remain installed. Two Major rows keep the Usability Gate open, and #130 is the next autonomous item.
 
+**2026-07-28 groom-pass note (session 2):** all remaining Pending bugs were re-verified. Scores and severity remain unchanged. The static gate passes (build, vet, test) and models are installed. The Usability Gate remains open due to remaining Major bugs. The next autonomous item is #394.
+
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
 | 393 | [Playwright Host missing dependencies to run browsers](#393-playwright-host-missing-dependencies-to-run-browsers) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Missing OS packages are easily fixed in the container or host. | Cleared ms-playwright cache and reinstalled dependencies inside the ubuntu:22.04 distrobox so it downloads the correct binaries for that OS version. |

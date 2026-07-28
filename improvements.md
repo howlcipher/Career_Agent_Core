@@ -55,6 +55,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 **2026-07-28 groom-pass note:** all seven free Pending rows were re-verified against current code and recomputed with no rank change. #38 (2.5), #37 (2.5), #39 (2.0), #34 (2.0), and #35 (1.2) are above the 0.5 floor. #27 (0.33) and #30 (0.20) remain below floor; they stay open as user decisions.
 
+**2026-07-28 groom-pass note (session 2):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions.
+
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
 | 96 | [Filter out dead or expired job postings early](#96-filter-out-dead-or-expired-job-postings-early) | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Pre-flight check is bounded implementation work. | Over 230 jobs redirected to an error page during submission. Checking URL validity and caching dead links early will save inference and bandwidth. |
