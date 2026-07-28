@@ -64,6 +64,7 @@ func main() {
 	pattern := flag.String("pattern", "", "raw SQL LIKE pattern to target instead of a named -source (e.g. '%example.com%')")
 	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED)")
 	confirm := flag.Bool("confirm", false, "actually apply the requeue; without this, only a dry-run count is printed")
+	planMode := flag.Bool("plan", false, "print a detailed dry-run queue plan for each candidate row")
 	clearDedup := flag.Bool("clear-dedup", false, "also delete matching applied_jobs rows (needed for FAILED_SUBMIT requeues, not BLOCKED_CAPTCHA)")
 	listSources := flag.Bool("list-sources", false, "print known -source names and their patterns, then exit")
 	flag.Parse()
@@ -100,19 +101,41 @@ func main() {
 	}
 
 	for name, p := range patterns {
-		stat, err := storage.SourceOutcomeBreakdown(p)
-		if err != nil {
-			log.Printf("[%s] stats query failed: %v", name, err)
-			continue
-		}
-		current, err := countForStatus(stat, *fromStatus)
-		if err != nil {
-			log.Fatalf("%v", err)
-		}
 
-		if !*confirm {
-			fmt.Printf("[%s] DRY RUN: would requeue %d row(s) from %s to DISCOVERED (pattern %s). Re-run with -confirm to apply.\n", name, current, *fromStatus, p)
-			continue
+		if *planMode || !*confirm {
+			plan, err := storage.GetQueuePlan(p, *fromStatus, *clearDedup)
+			if err != nil {
+				log.Printf("[%s] plan query failed: %v", name, err)
+				continue
+			}
+			
+			fmt.Printf("\n=== Queue Plan for %s (pattern: %s, from: %s) ===\n", name, p, *fromStatus)
+			fmt.Printf("Total Candidates: %d\n", plan.TotalCandidates)
+			fmt.Printf("Total with Dedup Row: %d\n", plan.TotalWithDedup)
+			fmt.Printf("Total with Scheme Duplicate: %d\n\n", plan.TotalWithSchemeDup)
+			
+			if plan.TotalCandidates > 0 {
+				fmt.Printf("%-50s | %-15s | %-10s | %-5s | %-7s | %-15s | %-12s | %s\n", "Normalized URL", "Source", "Status", "Age", "Fit", "Prior Outcome", "SchemeDup?", "Action")
+				fmt.Println(strings.Repeat("-", 140))
+				for _, c := range plan.Candidates {
+					dupStr := ""
+					if c.HasSchemeDup {
+						dupStr = "YES"
+					}
+					// Truncate URL if too long
+					urlPrint := c.NormalizedURL
+					if len(urlPrint) > 47 {
+						urlPrint = urlPrint[:44] + "..."
+					}
+					fmt.Printf("%-50s | %-15s | %-10s | %-5d | %-7.2f | %-15s | %-12s | %s\n", urlPrint, c.Source, c.CurrentStatus, c.AgeDays, c.FitSimilarity, c.PriorOutcome, dupStr, c.ProposedAction)
+				}
+			}
+			fmt.Printf("\nNOTE: This is a dry run. Re-run with -confirm to apply these changes.\n")
+			fmt.Printf("NOTE: A running agent needs a restart before a changed queue can be observed.\n\n")
+			
+			if !*confirm {
+				continue
+			}
 		}
 
 		n, err := storage.RequeueByURLPattern(p, *fromStatus)
