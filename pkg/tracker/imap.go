@@ -86,14 +86,17 @@ func StartTracker(cfg IMAPConfig) error {
 		}
 
 		bodyText := extractBody(msg, section)
+		bodyLower := strings.ToLower(bodyText)
 
-		status := classifyEmail(subject, strings.ToLower(bodyText))
+		status := classifyEmail(subject, bodyLower)
 		if status != "" {
 			company := matchTrackedCompany(trackedCompanies, senderDomain, subject)
 			result, err := updateDBWithTrackerResult(
 				msg.Envelope.MessageId,
 				company,
 				status,
+				subject,
+				bodyLower,
 			)
 			if err != nil {
 				log.Printf(
@@ -110,6 +113,8 @@ func StartTracker(cfg IMAPConfig) error {
 				log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
 			case trackerUpdateNoop:
 				log.Printf("[Tracker] Detected %s for tracked company %q, but no APPLIED row required an update.", status, company)
+			case trackerUpdateAmbiguous:
+				log.Printf("[Tracker] Found %s for %q, but multiple APPLIED roles matched. Logged for manual review.", status, company)
 			case trackerUpdateUpdated:
 				log.Printf("[Tracker] Persisted %s for exactly one application at tracked company %q.", status, company)
 				if status == "REJECTED" {
@@ -216,12 +221,74 @@ const (
 	trackerUpdateUnmatched trackerUpdateResult = "unmatched"
 	trackerUpdateNoop      trackerUpdateResult = "no_op"
 	trackerUpdateUpdated   trackerUpdateResult = "updated"
+	trackerUpdateAmbiguous trackerUpdateResult = "ambiguous"
 )
+
+type trackCandidate struct {
+	id    int
+	title string
+	url   string
+}
+
+func filterCandidates(candidates []trackCandidate, subjectLower, bodyLower string) []trackCandidate {
+	combined := subjectLower + " " + bodyLower
+
+	var idMatched []trackCandidate
+	for _, c := range candidates {
+		id := extractATSID(c.url)
+		if id != "" && strings.Contains(combined, id) {
+			idMatched = append(idMatched, c)
+		}
+	}
+	if len(idMatched) > 0 {
+		return idMatched
+	}
+
+	var titleMatched []trackCandidate
+	for _, c := range candidates {
+		if titleInSubject(c.title, subjectLower) {
+			titleMatched = append(titleMatched, c)
+		}
+	}
+	if len(titleMatched) > 0 {
+		return titleMatched
+	}
+
+	return candidates
+}
+
+func extractATSID(u string) string {
+	parts := strings.Split(u, "?")[0]
+	parts = strings.TrimRight(parts, "/")
+	segs := strings.Split(parts, "/")
+	if len(segs) > 0 {
+		last := segs[len(segs)-1]
+		if strings.ContainsAny(last, "0123456789") || len(last) > 10 {
+			return strings.ToLower(last)
+		}
+	}
+	return ""
+}
+
+func titleInSubject(title, subjectLower string) bool {
+	f := func(r rune) bool {
+		return r < 'a' || r > 'z'
+	}
+	words := strings.FieldsFunc(strings.ToLower(title), f)
+	for _, w := range words {
+		if len(w) >= 4 && strings.Contains(subjectLower, w) {
+			return true
+		}
+	}
+	return false
+}
 
 func updateDBWithTrackerResult(
 	messageID,
 	companyExact,
-	status string,
+	status,
+	subjectLower,
+	bodyLower string,
 ) (trackerUpdateResult, error) {
 	if status != "REJECTED" && status != "INTERVIEW_REQUESTED" {
 		return "", fmt.Errorf("unsupported tracker status %q", status)
@@ -240,31 +307,43 @@ func updateDBWithTrackerResult(
 
 	result := trackerUpdateUnmatched
 	if companyExact != "" {
-		updateResult, err := tx.Exec(
-			`UPDATE job_funnel
-			 SET status = ?
-			 WHERE company_name = ? AND status = 'APPLIED'`,
-			status,
+		rows, err := tx.Query(
+			`SELECT id, job_title, url FROM job_funnel WHERE company_name = ? AND status = 'APPLIED'`,
 			companyExact,
 		)
 		if err != nil {
-			return "", fmt.Errorf("update tracker outcome: %w", err)
+			return "", fmt.Errorf("query applied applications: %w", err)
 		}
 
-		rows, err := updateResult.RowsAffected()
-		if err != nil {
-			return "", fmt.Errorf("count updated applications: %w", err)
+		var candidates []trackCandidate
+		for rows.Next() {
+			var c trackCandidate
+			if err := rows.Scan(&c.id, &c.title, &c.url); err == nil {
+				candidates = append(candidates, c)
+			}
 		}
-		switch rows {
-		case 0:
+		rows.Close()
+
+		if len(candidates) == 0 {
 			result = trackerUpdateNoop
-		case 1:
+		} else if len(candidates) == 1 {
+			if _, err := tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, status, candidates[0].id); err != nil {
+				return "", fmt.Errorf("update tracker outcome: %w", err)
+			}
 			result = trackerUpdateUpdated
-		default:
-			return "", fmt.Errorf(
-				"tracker outcome matched %d applications; expected at most one",
-				rows,
-			)
+		} else {
+			filtered := filterCandidates(candidates, subjectLower, bodyLower)
+			if len(filtered) == 1 {
+				if _, err := tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, status, filtered[0].id); err != nil {
+					return "", fmt.Errorf("update tracker outcome: %w", err)
+				}
+				result = trackerUpdateUpdated
+			} else {
+				if err := storage.LogManualRequired(companyExact, "Ambiguous "+status, "Multiple APPLIED roles match this outcome email", ""); err != nil {
+					log.Printf("[Tracker] WARNING: failed to log manual review for ambiguous email: %v", err)
+				}
+				result = trackerUpdateAmbiguous
+			}
 		}
 	}
 
