@@ -85,16 +85,39 @@ type feedJob struct {
 	URL   string
 }
 
+var retryBackoffBase = time.Second
+
 func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, jobChan chan<- Job) int {
-	body, err := fetchATSFeed(endpoint)
-	if err != nil {
-		// A single dead or renamed board is entirely expected across hundreds
-		// of companies and must never abort the pass.
-		return 0
+	var jobs []feedJob
+	var err error
+
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		var body []byte
+		body, err = fetchATSFeed(endpoint)
+		if err != nil {
+			// A single dead or renamed board is entirely expected (HTTP 4xx).
+			// Do not retry 4xx errors except 429 Too Many Requests.
+			if strings.Contains(err.Error(), "HTTP 4") && !strings.Contains(err.Error(), "HTTP 429") {
+				return 0
+			}
+			// Other fetch errors (network, 5xx, 429) -> retry
+		} else {
+			jobs, err = parse(body)
+			if err == nil {
+				break
+			}
+			// Parse error (e.g. unexpected end of JSON input) -> retry
+		}
+
+		if attempt < maxRetries {
+			// Exponential backoff
+			time.Sleep(time.Duration(1<<attempt) * retryBackoffBase)
+		}
 	}
-	jobs, err := parse(body)
+
 	if err != nil {
-		log.Printf("[FunnelEngine] Could not parse board feed for %s: %v", company, err)
+		log.Printf("[FunnelEngine] Could not process board feed for %s after %d attempts: %v", company, maxRetries, err)
 		return 0
 	}
 

@@ -1,8 +1,11 @@
 package scraper
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // improvements.md #26: board feeds return a company's complete current posting
@@ -54,6 +57,54 @@ func TestParseBoards_RejectMalformedPayloads(t *testing.T) {
 	}
 	if _, err := parseLeverBoard([]byte(`{"not":"an array"}`)); err == nil {
 		t.Error("expected an error for a non-array Lever payload")
+	}
+}
+
+func TestPollBoard_RetriesOnTransientAndParseErrors(t *testing.T) {
+	// Speed up tests
+	origBackoff := retryBackoffBase
+	retryBackoffBase = time.Millisecond
+	defer func() { retryBackoffBase = origBackoff }()
+
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if attempts == 2 {
+			w.WriteHeader(http.StatusOK)
+			// Malformed JSON simulating truncation
+			w.Write([]byte(`{"jobs": [{"title": "Truncated"`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"jobs": []}`)) // Successful empty response
+	}))
+	defer ts.Close()
+
+	f := &FunnelEngine{}
+	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, nil)
+
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestPollBoard_NoRetryOn404(t *testing.T) {
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	f := &FunnelEngine{}
+	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, nil)
+	
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt for a 404, got %d", attempts)
 	}
 }
 
