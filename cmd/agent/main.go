@@ -315,6 +315,40 @@ func readJobPageResponse(resp *http.Response) (htmlText, description string, err
 	return htmlText, description, err
 }
 
+// errDeadRedirect is returned when a URL redirects to a known dead-end.
+var errDeadRedirect = errors.New("dead redirect")
+
+func checkJobAlive(ctx context.Context, jobURL string) error {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if reason := submitter.DeadRedirectReason(jobURL, req.URL.String()); reason != "" {
+				return fmt.Errorf("%w: %s", errDeadRedirect, reason)
+			}
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jobURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return fmt.Errorf("%w: HTTP %d", errDeadRedirect, resp.StatusCode)
+	}
+	return nil
+}
+
 func fetchJobPage(
 	ctx context.Context,
 	client httpDoer,
@@ -903,6 +937,24 @@ func main() {
 						log.Printf("[Worker-%d] Failed to claim %s for processing: %v", workerID, job.CompanyName, err)
 						continue
 					}
+
+					// Pre-flight check: #96 Filter out dead or expired job postings early
+					// Checking URL validity early saves inference and bandwidth.
+					if checkErr := checkJobAlive(cycleCtx, job.URL); checkErr != nil {
+						if errors.Is(checkErr, errDeadRedirect) {
+							log.Printf("[Worker-%d] Pre-flight check failed: Job posting is no longer available for %s: %v", workerID, job.CompanyName, checkErr)
+							if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+								log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
+							}
+						} else {
+							log.Printf("[Worker-%d] Pre-flight check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
+							if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+								log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+							}
+						}
+						continue
+					}
+
 					// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
 					// We only need to enforce the hard blocklist here.
 					nameLower := strings.ToLower(job.CompanyName)

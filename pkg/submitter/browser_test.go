@@ -634,9 +634,9 @@ func TestDeadRedirectReason(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		reason := deadRedirectReason(tt.applyURL, tt.finalURL)
+		reason := DeadRedirectReason(tt.applyURL, tt.finalURL)
 		if gotDead := reason != ""; gotDead != tt.wantDead {
-			t.Errorf("%s: deadRedirectReason(%q, %q) = %q, wantDead=%v", tt.name, tt.applyURL, tt.finalURL, reason, tt.wantDead)
+			t.Errorf("%s: DeadRedirectReason(%q, %q) = %q, wantDead=%v", tt.name, tt.applyURL, tt.finalURL, reason, tt.wantDead)
 		}
 	}
 }

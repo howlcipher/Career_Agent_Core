@@ -212,7 +212,7 @@ func registrableDomain(host string) string {
 	return strings.Join(parts[len(parts)-2:], ".")
 }
 
-// deadRedirectReason reports why the post-navigation URL indicates the
+// DeadRedirectReason reports why the post-navigation URL indicates the
 // posting is gone (bugs.md #15): ATS expired-posting redirects append an
 // error query parameter (Greenhouse `?error=true`, Jobvite `?error=404`),
 // and companies that migrate their board off the ATS redirect to their own
@@ -221,7 +221,7 @@ func registrableDomain(host string) string {
 // "" when the final URL still plausibly hosts the posting — same-domain
 // redirects (boards.greenhouse.io -> job-boards.greenhouse.io) are allowed
 // through, since board migrations within the ATS can preserve the posting.
-func deadRedirectReason(applyURL, finalURL string) string {
+func DeadRedirectReason(applyURL, finalURL string) string {
 	from, errFrom := url.Parse(applyURL)
 	to, errTo := url.Parse(finalURL)
 	if errFrom != nil || errTo != nil || to.Host == "" {
@@ -1106,10 +1106,8 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	dismissCookieBanner(page)
 
 	// Check for obvious dead ends. Expired postings frequently redirect
-	// instead of rendering a "job closed" message (bugs.md #15), so check
-	// where navigation actually landed before checking page phrasing —
-	// both run before the costly document generation below.
-	if reason := deadRedirectReason(applyURL, page.URL()); reason != "" {
+	// to a company's main careers page or an error URL.
+	if reason := DeadRedirectReason(applyURL, page.URL()); reason != "" {
 		return fmt.Errorf("job posting is dead or expired: %s", reason)
 	}
 	content, _ := page.Content()
