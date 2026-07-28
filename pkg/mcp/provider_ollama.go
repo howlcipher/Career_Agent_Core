@@ -52,8 +52,9 @@ type ollamaProvider struct {
 // discrete "context shift" event), so a full response can take 25-35+
 // minutes. The old hardcoded 10-minute timeout killed these requests
 // mid-generation with "context deadline exceeded" long before Ollama itself
-// hung or errored (bugs.md #6).
-const defaultOllamaTimeoutMinutes = 45
+// hung or errored (bugs.md #6). For the validation phase, DOM contexts can be
+// massive (up to 75,000 chars), taking even longer to decode, requiring at least 120m.
+const defaultOllamaTimeoutMinutes = 120
 
 func ollamaTimeoutFromEnv() time.Duration {
 	raw := envOr("OLLAMA_TIMEOUT_MINUTES", "")
