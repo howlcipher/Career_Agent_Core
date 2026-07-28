@@ -18,10 +18,10 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 **2026-07-28 groom-pass note:** both paywalled Pending rows were re-verified and recomputed with no score change. #17 (1.75) still needs a paid key. #14 (0.43) remains below floor and needs paid compute.
 
-| # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
-| --- | --- | --- | --- | --- | --- | --- |
-| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |
-| 14 | [Paid-compute LoRA fine-tuning experiment](#14-paid-compute-lora-fine-tuning-experiment) | Pending ⚠️ below floor — needs paid compute | 0.43 = 3×1.0÷7 | claude-opus-4-6-thinking | gemini-3.1-pro-high | This host has only an integrated Radeon Vega GPU, so a useful fine-tuning experiment requires paid cloud compute. One confirmed application still provides no preference-labeled training or evaluation set. Recommend deferring until labels exist |
+| # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | — | — | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |
+| 14 | [Paid-compute LoRA fine-tuning experiment](#14-paid-compute-lora-fine-tuning-experiment) | Pending ⚠️ below floor — needs paid compute | 0.43 = 3×1.0÷7 | claude-opus-4-6-thinking | gemini-3.1-pro-high | — | — | This host has only an integrated Radeon Vega GPU, so a useful fine-tuning experiment requires paid cloud compute. One confirmed application still provides no preference-labeled training or evaluation set. Recommend deferring until labels exist |
 
 ## Details
 
