@@ -5,8 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Career Agent Dashboard</title>
     <link rel="icon" type="image/png" href="/favicon.png">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Outfit:wght@600;700&display=swap" rel="stylesheet">
-    <style>
+        <style>
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+        }
         :root {
             --bg-color: #050510;
             --card-bg: rgba(255, 255, 255, 0.03);
@@ -25,7 +33,7 @@
         }
 
         body { 
-            font-family: 'Inter', sans-serif; 
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
             background-color: var(--bg-color); 
             background-image: 
                 radial-gradient(circle at 15% 50%, rgba(112, 0, 255, 0.15), transparent 25%),
@@ -40,7 +48,7 @@
         }
 
         h1 {
-            font-family: 'Outfit', sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
             font-size: 2.5rem;
             margin-bottom: 40px;
             text-align: center;
@@ -126,7 +134,7 @@
         .card.interview:hover::before { box-shadow: 0 0 15px var(--neon-cyan); }
 
         .card h2 { 
-            font-family: 'Outfit', sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
             font-size: 3rem; 
             margin: 0; 
             font-weight: 700;
@@ -166,9 +174,12 @@
             padding: 24px 28px;
         }
 
-        .source-breakdown h3 {
-            font-family: 'Outfit', sans-serif;
+        .source-breakdown caption {
+            caption-side: top;
+            text-align: left;
+            font-family: system-ui, -apple-system, sans-serif;
             margin: 0 0 16px 0;
+            font-weight: 700;
             font-size: 1.1rem;
             color: var(--neon-cyan);
         }
@@ -430,7 +441,7 @@
         }
 
         .last-applied .company {
-            font-family: 'Outfit', sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
             font-size: 1.5rem;
             font-weight: 700;
             color: #fff;
@@ -481,9 +492,10 @@
     </style>
 </head>
 <body>
+    <main>
     <h1>🚀 Career Agent Live Metrics</h1>
 
-    <div class="status-bar">
+    <div class="status-bar" aria-live="polite">
         <span class="status-dot offline" id="status-dot"></span>
         <span class="status-label" id="status-label">Connecting…</span>
         <span class="status-updated" id="status-updated"></span>
@@ -575,16 +587,16 @@
         </div>
 
         <div class="source-breakdown" id="source-breakdown-section" style="display:none;">
-            <h3>Conversion by Platform</h3>
             <table id="source-breakdown-table">
+                <caption>Conversion by Platform</caption>
                 <thead>
                     <tr>
-                        <th>Platform</th>
-                        <th>Applied</th>
-                        <th>Interviews</th>
-                        <th>Rejections</th>
-                        <th>Pending</th>
-                        <th>Rate</th>
+                        <th scope="col">Platform</th>
+                        <th scope="col">Applied</th>
+                        <th scope="col">Interviews</th>
+                        <th scope="col">Rejections</th>
+                        <th scope="col">Pending</th>
+                        <th scope="col">Rate</th>
                     </tr>
                 </thead>
                 <tbody id="source-breakdown-body"></tbody>
@@ -592,22 +604,23 @@
         </div>
 
         <div class="source-breakdown" id="variant-breakdown-section" style="display:none;">
-            <h3>Conversion by Cover-Letter Tone Variant</h3>
             <table id="variant-breakdown-table">
+                <caption>Conversion by Cover-Letter Tone Variant</caption>
                 <thead>
                     <tr>
-                        <th>Variant</th>
-                        <th>Applied</th>
-                        <th>Interviews</th>
-                        <th>Rejections</th>
-                        <th>Pending</th>
-                        <th>Rate</th>
+                        <th scope="col">Variant</th>
+                        <th scope="col">Applied</th>
+                        <th scope="col">Interviews</th>
+                        <th scope="col">Rejections</th>
+                        <th scope="col">Pending</th>
+                        <th scope="col">Rate</th>
                     </tr>
                 </thead>
                 <tbody id="variant-breakdown-body"></tbody>
             </table>
         </div>
     </div>
+    </main>
     <script>
         const statusDot = document.getElementById('status-dot');
         const statusLabel = document.getElementById('status-label');

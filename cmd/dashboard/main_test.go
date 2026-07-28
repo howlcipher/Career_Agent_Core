@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -410,5 +411,42 @@ func TestNewDashboardServerUsesAddressHandlerAndTimeouts(t *testing.T) {
 	}
 	if server.IdleTimeout != 60*time.Second {
 		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
+	}
+}
+
+func TestDashboardAccessibilitySemantics(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	serveDashboard(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+
+	checks := []struct {
+		name     string
+		want     string
+		mustHave bool
+	}{
+		{"Main Landmark", "<main>", true},
+		{"Status Bar Aria Live", `class="status-bar" aria-live="polite"`, true},
+		{"Table Caption", `<caption>Conversion by Platform</caption>`, true},
+		{"Table Col Scope", `<th scope="col">Platform</th>`, true},
+		{"Reduced Motion Media Query", `@media (prefers-reduced-motion: reduce)`, true},
+		{"No Google Fonts", `fonts.googleapis.com`, false},
+	}
+
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			has := strings.Contains(body, tc.want)
+			if tc.mustHave && !has {
+				t.Errorf("expected HTML to contain %q, but it did not", tc.want)
+			}
+			if !tc.mustHave && has {
+				t.Errorf("expected HTML to NOT contain %q, but it did", tc.want)
+			}
+		})
 	}
 }
