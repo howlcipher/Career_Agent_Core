@@ -63,6 +63,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 **2026-07-28 groom-pass note (session 5):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #37 (score 2.5), which will be worked next using a Gemini model.
 
+**2026-07-28 groom-pass note (session 6):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #39 (score 2.0), which will be worked next using a Gemini model.
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
 | 96 | [Filter out dead or expired job postings early](#96-filter-out-dead-or-expired-job-postings-early) | Done (2026-07-28) | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Pre-flight check is bounded implementation work. | Over 230 jobs redirected to an error page during submission. Checking URL validity and caching dead links early will save inference and bandwidth. |
