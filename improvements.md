@@ -53,6 +53,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 **2026-07-27 queue-policy note:** the live `cmd/requeue -stats` report provides enough evidence to split the queue-policy work into three testable layers. Current terminal outcomes are Greenhouse 1/118 confirmed applications, Lever 0/72 with 34 CAPTCHA blocks, Workday 0/26 with 19 manual-required outcomes, Breezy 0/48 failures, and Applytojob 0/24. These are outcome facts, not permission to rewrite statuses: old failures include stale postings and already-fixed defects, and the running agent takes a startup snapshot. #38 is the read-only planning layer, #39 is the recent source-health measurement layer, and #35 consumes those signals for ranking. Bug #112's HTTP/HTTPS duplicate merge remains a prerequisite for trustworthy counts.
 
+**2026-07-28 groom-pass note:** all seven free Pending rows were re-verified against current code and recomputed with no rank change. #38 (2.5), #37 (2.5), #39 (2.0), #34 (2.0), and #35 (1.2) are above the 0.5 floor. #27 (0.33) and #30 (0.20) remain below floor; they stay open as user decisions.
+
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- |
 | 36 | [Reconcile setup and feature documentation with executable behavior](#36-reconcile-setup-and-feature-documentation-with-executable-behavior) | Done (2026-07-27) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | Added a safe fake-data-only `pii.yaml.template`, corrected README payload, timeout, and CPU-performance claims, documented the timeout setting, corrected stale historical changelog wording, and added tests that parse the template and check required README entrypoints |
