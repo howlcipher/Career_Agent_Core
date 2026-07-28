@@ -1253,6 +1253,27 @@ func main() {
 					}
 
 					if prof.AutoSubmit {
+						// Improvements #37: Revalidate posting freshness before expensive document generation.
+						// Scoring can take up to 10 minutes on local CPU; jobs can expire while being scored.
+						log.Printf("[Worker-%d] Revalidating posting freshness for %s before document generation...", workerID, job.CompanyName)
+						freshnessStart := time.Now()
+						if checkErr := checkJobAlive(cycleCtx, job.URL); checkErr != nil {
+							log.Printf("[Worker-%d] Post-score freshness check took %s", workerID, time.Since(freshnessStart))
+							if errors.Is(checkErr, errDeadRedirect) {
+								log.Printf("[Worker-%d] Post-score check failed: Job posting expired during scoring for %s: %v", workerID, job.CompanyName, checkErr)
+								if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+									log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
+								}
+							} else {
+								log.Printf("[Worker-%d] Post-score check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
+								if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+									log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+								}
+							}
+							continue
+						}
+						log.Printf("[Worker-%d] Post-score freshness check passed for %s in %s", workerID, job.CompanyName, time.Since(freshnessStart))
+
 						if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
 							log.Printf("[Worker-%d] Failed to checkpoint: %v", workerID, err)
 						}
