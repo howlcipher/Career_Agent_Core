@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func TestDiscoverJobs(t *testing.T) {
 
 	jobChan := make(chan Job, 10)
 
-	err = engine.DiscoverJobs(jobChan)
+	err = engine.DiscoverJobs(context.Background(), jobChan)
 	if err != nil {
 		t.Fatalf("DiscoverJobs failed: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 	engine.TargetATS = []string{"lever.co"}
 
 	jobChan := make(chan Job, 10)
-	if err := engine.DiscoverJobs(jobChan); err != nil {
+	if err := engine.DiscoverJobs(context.Background(), jobChan); err != nil {
 		t.Fatalf("DiscoverJobs without SerpApi key failed: %v", err)
 	}
 	close(jobChan)
@@ -264,7 +265,7 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	engine.TargetATS = []string{"lever.co"}
 
 	jobChan := make(chan Job, 10)
-	err = engine.DiscoverJobs(jobChan)
+	err = engine.DiscoverJobs(context.Background(), jobChan)
 	if err != nil {
 		t.Fatalf("DiscoverJobs failed: %v", err)
 	}

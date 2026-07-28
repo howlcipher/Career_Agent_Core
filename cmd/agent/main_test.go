@@ -218,7 +218,7 @@ func TestRunAgentCycleRefreshesBacklogAndDiscovery(t *testing.T) {
 				URL:         fmt.Sprintf("https://example.com/backlog/%d", loadCalls),
 			}}, nil
 		},
-		discoverJobs: func(jobChan chan<- scraper.Job) error {
+		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
 			discoveryCalls++
 			jobChan <- scraper.Job{
 				CompanyName: "Discovery",
@@ -273,7 +273,7 @@ func TestRunAgentCycleEnforcesPerCycleCap(t *testing.T) {
 			}
 			return jobs, nil
 		},
-		discoverJobs: func(jobChan chan<- scraper.Job) error {
+		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
 			for i := 0; i < 3; i++ {
 				jobChan <- scraper.Job{
 					CompanyName: "Discovery",

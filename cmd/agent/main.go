@@ -89,7 +89,7 @@ type careerRAGInitialization struct {
 
 type agentCycleDependencies struct {
 	loadDiscovered     func() ([]storage.FunnelJob, error)
-	discoverJobs       func(chan<- scraper.Job) error
+	discoverJobs       func(context.Context, chan<- scraper.Job) error
 	processJobs        func(context.Context, <-chan scraper.Job)
 	targetJobURLs      map[string]bool
 	targetCompensation int
@@ -605,7 +605,7 @@ func runAgentCycle(
 			discoveryErr <- nil
 			return
 		}
-		discoveryErr <- deps.discoverJobs(candidates)
+		discoveryErr <- deps.discoverJobs(ctx, candidates)
 	}()
 
 	go func() {
@@ -1444,8 +1444,8 @@ func main() {
 
 	cycleDeps := agentCycleDependencies{
 		loadDiscovered: storage.GetDiscoveredJobs,
-		discoverJobs: func(jobChan chan<- scraper.Job) error {
-			return scraper.NewFunnelEngine(prof.Roles).DiscoverJobs(jobChan)
+		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
+			return scraper.NewFunnelEngine(prof.Roles).DiscoverJobs(ctx, jobChan)
 		},
 		processJobs:        processJobs,
 		targetJobURLs:      targetJobURLs,

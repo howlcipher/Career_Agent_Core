@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ type SerpApiResponse struct {
 
 // DiscoverJobs runs every free discovery source, then augments those results
 // with SerpApi when configured or Yahoo HTML search when it is not.
-func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
+func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) error {
 	apiKey := strings.TrimSpace(os.Getenv("SERPAPI_API_KEY"))
 
 	log.Println("[FunnelEngine] Starting free job discovery sources...")
@@ -62,11 +63,18 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
+			select {
+			case <-ctx.Done():
+				log.Println("[FunnelEngine] Job discovery cancelled")
+				return ctx.Err()
+			default:
+			}
+
 			query := fmt.Sprintf(`Remote %s site:%s`, role, ats)
 			log.Printf("[FunnelEngine] Searching Google for: %s", query)
 
 			if useFallback {
-				f.discoverWithYahooHTML(query, role, jobChan)
+				f.discoverWithYahooHTML(ctx, query, role, jobChan)
 				SleepFunc(3 * time.Second)
 				continue
 			}
@@ -97,7 +105,7 @@ func (f *FunnelEngine) DiscoverJobs(jobChan chan<- Job) error {
 			if serpResult.Error != "" {
 				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Yahoo Fallback...", serpResult.Error)
 				useFallback = true
-				f.discoverWithYahooHTML(query, role, jobChan)
+				f.discoverWithYahooHTML(ctx, query, role, jobChan)
 				SleepFunc(3 * time.Second)
 				continue
 			}
@@ -175,31 +183,59 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 	return fallbackRole
 }
 
-func (f *FunnelEngine) discoverWithYahooHTML(query, role string, jobChan chan<- Job) {
+func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role string, jobChan chan<- Job) {
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 
 	client := newHTTPClient(10 * time.Second)
 	searchURL := fmt.Sprintf("%s?p=%s", yahooBaseURL, url.QueryEscape(query))
-	req, err := http.NewRequest("GET", searchURL, nil)
-	if err != nil {
-		log.Printf("[FunnelEngine] Failed to create request for Yahoo: %v", err)
-		return
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[FunnelEngine] Yahoo fallback failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
+	var html string
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+		if err != nil {
+			log.Printf("[FunnelEngine] Failed to create request for Yahoo: %v", err)
+			return
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[FunnelEngine] Failed to read response body for Yahoo: %v", err)
-		return
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < maxRetries && ctx.Err() == nil {
+				log.Printf("[FunnelEngine] Yahoo fallback transport error for query %q (attempt %d): %v, retrying...", query, attempt, err)
+				SleepFunc(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Printf("[FunnelEngine] Yahoo fallback final failure for query %q: %v", query, err)
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			if attempt < maxRetries && ctx.Err() == nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+				log.Printf("[FunnelEngine] Yahoo fallback retryable status %d for query %q (attempt %d), retrying...", resp.StatusCode, query, attempt)
+				SleepFunc(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Printf("[FunnelEngine] Yahoo fallback final failure with status %d for query %q", resp.StatusCode, query)
+			return
+		}
+
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			if attempt < maxRetries && ctx.Err() == nil {
+				log.Printf("[FunnelEngine] Yahoo fallback read error for query %q (attempt %d): %v, retrying...", query, attempt, err)
+				SleepFunc(time.Duration(attempt) * time.Second)
+				continue
+			}
+			log.Printf("[FunnelEngine] Yahoo fallback final read failure for query %q: %v", query, err)
+			return
+		}
+
+		html = string(b)
+		break
 	}
-	html := string(b)
 
 	// Extract RU parameter from r.search.yahoo.com links
 	re := regexp.MustCompile(`RU=(https?%3a%2f%2f[^/]+%2f[^/]+(?:%2f[^/"&<]*)?)/RK=`)
