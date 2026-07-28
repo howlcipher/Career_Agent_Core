@@ -955,34 +955,27 @@ func LogExecution(jobID, url, status string, tokens int) error {
 }
 
 type FunnelJob struct {
-	CompanyName string
-	JobTitle    string
-	URL         string
+	CompanyName   string
+	JobTitle      string
+	URL           string
+	FitSimilarity float64
+	DiscoveredAt  time.Time
+	RankingScore  float64
+	RankingReason string
+	IsExploration bool
 }
 
-// sourcePriorityCASE ranks jobs by how likely their platform is to actually
-// reach APPLIED, based on live outcome data rather than guesswork (bugs.md
-// #45-#50, 2026-07-23 session). Tier 0: Greenhouse/Lever, dedicated handlers
-// confirmed working end-to-end (a real Lever posting reached APPLIED the
-// same session #47 shipped). Tier 1: other platforms with dedicated or
-// Learner-Module handling and a real on-page form once #45/#46's CAPTCHA
-// false-positives stopped killing them early (Ashby, Pinpoint, Homerun) —
-// not yet individually proven to reach APPLIED, but not known to have a
-// structural blocker either. Tier 2 (default): everything else, including
-// platforms with a known extra friction point that isn't fully solved
-// (SmartRecruiters' persistent DataDome CAPTCHA even post-click, Jobvite's
-// consent gate, applytojob.com's repeated resume-selector failures). Tier 3:
-// myworkdayjobs.com and workable.com — both confirmed account-gated (bug
-// #18, bug #50), can only ever reach MANUAL_REQUIRED regardless of fill
-// logic. This ordering will go stale as more bugs are fixed or new ones
-// found; re-derive it from fresh cmd/requeue -stats output rather than
-// trusting this comment indefinitely.
-const sourcePriorityCASE = `CASE
-		WHEN url LIKE '%myworkdayjobs.com%' OR url LIKE '%workable%' THEN 3
-		WHEN url LIKE '%greenhouse%' OR url LIKE '%lever.co%' THEN 0
-		WHEN url LIKE '%ashbyhq%' OR url LIKE '%pinpointhq%' OR url LIKE '%homerun.co%' THEN 1
-		ELSE 2
-	END`
+func (j *FunnelJob) GetURL() string { return j.URL }
+func (j *FunnelJob) GetFitSimilarity() float64 { return j.FitSimilarity }
+func (j *FunnelJob) GetDiscoveredAt() time.Time { return j.DiscoveredAt }
+func (j *FunnelJob) SetRankData(score float64, reason string, isExploration bool) {
+	j.RankingScore = score
+	j.RankingReason = reason
+	j.IsExploration = isExploration
+}
+
+// The fixed sourcePriorityCASE ordering has been replaced by Bayesian smoothed
+// outcome ranking (improvements.md #35). See GetDiscoveredJobs and ranking.go.
 
 // ReapStaleProcessingJobs resets every job_funnel row stuck in PROCESSING
 // back to DISCOVERED. Confirmed live 2026-07-24: 235 rows accumulated
@@ -1007,24 +1000,16 @@ func ReapStaleProcessingJobs() (int64, error) {
 	return result.RowsAffected()
 }
 
-// GetDiscoveredJobs orders the queue by sourcePriorityCASE first (platform
-// reachability — a topically perfect job is still worthless if its ATS can
-// only ever reach MANUAL_REQUIRED or worse), then by fit_similarity DESC as
-// a tie-break within each tier (improvements.md #22: an embedding-similarity
-// score between the job's title/company and the resume, backfilled
-// out-of-band by cmd/rankjobs since computing it inline here would mean an
-// embedding call per query). COALESCE(fit_similarity, -1) means a
-// not-yet-backfilled row (NULL) sorts after every scored row in its tier,
-// falling back to the pre-#22 id-only order — so this change is additive,
-// never a regression, for rows cmd/rankjobs hasn't reached yet.
+// GetDiscoveredJobs fetches all discovered jobs and orders the queue using
+// Bayesian smoothed application outcomes, fit similarity, and freshness
+// (improvements.md #35).
 func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	// breezy.hr excluded entirely (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source).
-	rows, err := db.Query(`SELECT company_name, job_title, url FROM job_funnel
-		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
-		ORDER BY ` + sourcePriorityCASE + `, COALESCE(fit_similarity, -1) DESC, id`)
+	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at FROM job_funnel
+		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'`)
 	if err != nil {
 		return nil, err
 	}
@@ -1033,13 +1018,38 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	var jobs []FunnelJob
 	for rows.Next() {
 		var j FunnelJob
-		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL); err != nil {
+		var discoveredAt sql.NullTime
+		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL, &j.FitSimilarity, &discoveredAt); err != nil {
 			log.Printf("[Storage] Error scanning discovered job row: %v", err)
 			continue
 		}
+		if discoveredAt.Valid {
+			j.DiscoveredAt = discoveredAt.Time
+		} else {
+			j.DiscoveredAt = time.Now()
+		}
 		jobs = append(jobs, j)
 	}
-	return jobs, nil
+	
+	summaries, err := GetSourceHealthSummaries(30)
+	if err != nil {
+		log.Printf("[Storage] Error getting source health: %v", err)
+	}
+
+	var ptrs []*FunnelJob
+	for i := range jobs {
+		ptrs = append(ptrs, &jobs[i])
+	}
+	
+	// Apply ranking with 20% exploration share
+	ptrs = RankJobs(ptrs, summaries, 0.20)
+	
+	var result []FunnelJob
+	for _, p := range ptrs {
+		result = append(result, *p)
+	}
+
+	return result, nil
 }
 
 // GetJobsMissingFitSimilarity returns DISCOVERED job_funnel rows whose

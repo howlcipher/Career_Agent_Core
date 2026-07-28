@@ -115,8 +115,8 @@ func main() {
 			fmt.Printf("Total with Scheme Duplicate: %d\n\n", plan.TotalWithSchemeDup)
 			
 			if plan.TotalCandidates > 0 {
-				fmt.Printf("%-50s | %-15s | %-10s | %-5s | %-7s | %-15s | %-12s | %s\n", "Normalized URL", "Source", "Status", "Age", "Fit", "Prior Outcome", "SchemeDup?", "Action")
-				fmt.Println(strings.Repeat("-", 140))
+				fmt.Printf("%-50s | %-15s | %-10s | %-5s | %-7s | %-7s | %-35s | %-15s | %-12s | %s\n", "Normalized URL", "Source", "Status", "Age", "Fit", "Score", "Reason", "Prior Outcome", "SchemeDup?", "Action")
+				fmt.Println(strings.Repeat("-", 180))
 				for _, c := range plan.Candidates {
 					dupStr := ""
 					if c.HasSchemeDup {
@@ -127,7 +127,11 @@ func main() {
 					if len(urlPrint) > 47 {
 						urlPrint = urlPrint[:44] + "..."
 					}
-					fmt.Printf("%-50s | %-15s | %-10s | %-5d | %-7.2f | %-15s | %-12s | %s\n", urlPrint, c.Source, c.CurrentStatus, c.AgeDays, c.FitSimilarity, c.PriorOutcome, dupStr, c.ProposedAction)
+					reasonPrint := c.RankingReason
+					if len(reasonPrint) > 32 {
+						reasonPrint = reasonPrint[:29] + "..."
+					}
+					fmt.Printf("%-50s | %-15s | %-10s | %-5d | %-7.2f | %-7.4f | %-35s | %-15s | %-12s | %s\n", urlPrint, c.Source, c.CurrentStatus, c.AgeDays, c.FitSimilarity, c.RankingScore, reasonPrint, c.PriorOutcome, dupStr, c.ProposedAction)
 				}
 			}
 			fmt.Printf("\nNOTE: This is a dry run. Re-run with -confirm to apply these changes.\n")

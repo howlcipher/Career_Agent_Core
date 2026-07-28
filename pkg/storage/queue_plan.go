@@ -19,6 +19,21 @@ type QueuePlanCandidate struct {
 	HasDedupRow    bool
 	HasSchemeDup   bool
 	ProposedAction string
+
+	// Ranking fields
+	DiscoveredAt  time.Time
+	RankingScore  float64
+	RankingReason string
+	IsExploration bool
+}
+
+func (c *QueuePlanCandidate) GetURL() string { return c.OriginalURL }
+func (c *QueuePlanCandidate) GetFitSimilarity() float64 { return c.FitSimilarity }
+func (c *QueuePlanCandidate) GetDiscoveredAt() time.Time { return c.DiscoveredAt }
+func (c *QueuePlanCandidate) SetRankData(score float64, reason string, isExploration bool) {
+	c.RankingScore = score
+	c.RankingReason = reason
+	c.IsExploration = isExploration
 }
 
 type QueuePlan struct {
@@ -56,6 +71,7 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		cand.NormalizedURL = NormalizeURL(cand.OriginalURL)
 		cand.AgeDays = int(time.Since(discoveredAt).Hours() / 24)
 		cand.PriorOutcome = cand.CurrentStatus
+		cand.DiscoveredAt = discoveredAt
 		
 		// Determine source from domain
 		if u, err := url.Parse(cand.OriginalURL); err == nil {
@@ -108,6 +124,21 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		
 		plan.Candidates = append(plan.Candidates, cand)
 	}
+
+	summaries, err := GetSourceHealthSummaries(30)
+	if err == nil {
+		var ptrs []*QueuePlanCandidate
+		for i := range plan.Candidates {
+			ptrs = append(ptrs, &plan.Candidates[i])
+		}
+		ptrs = RankJobs(ptrs, summaries, 0.20)
+		var ranked []QueuePlanCandidate
+		for _, p := range ptrs {
+			ranked = append(ranked, *p)
+		}
+		plan.Candidates = ranked
+	}
+
 	plan.TotalCandidates = len(plan.Candidates)
 	return &plan, nil
 }
