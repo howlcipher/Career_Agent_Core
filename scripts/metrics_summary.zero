@@ -1,0 +1,31 @@
+(cli_app
+  (struct Metrics 
+    (Discovered int)
+    (Processing int)
+    (Applied int)
+    (Failed int)
+    (Invalid_url int)
+    (Blocked_captcha int)
+  )
+
+  (print "Fetching metrics from local dashboard...")
+  (try_let (res (fetch "http://127.0.0.1:8080/api/metrics" "GET"))
+    (catch err
+      (print "Error fetching metrics:" err))
+    (do
+      (try_let (m (parse_json Metrics res))
+        (catch err
+          (print "Error parsing JSON:" err))
+        (do
+          (print "--- Career Agent Metrics ---")
+          (print "Discovered:" m.Discovered)
+          (print "Processing:" m.Processing)
+          (print "Applied:" m.Applied)
+          (print "Failed:" m.Failed)
+          (print "Blocked CAPTCHA:" m.Blocked_captcha)
+          (print "Invalid URL:" m.Invalid_url)
+        )
+      )
+    )
+  )
+)

@@ -126,6 +126,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 **2026-07-28 groom-pass note (session 9):** bug #131 was verified as completed. The only remaining Pending bug (#125) was re-verified against current code, and its score was recomputed. No bug falls below the 0.5 floor. The static gate is green (build, vet, uncached tests pass). The Usability Gate is MET. The agent will proceed to work on bug #125 using a Gemini model.
 
 **2026-07-28 groom-pass note (session 10):** bug #125 was verified as completed. There are no remaining Pending bugs. The static gate is green (build, vet, uncached tests pass). The Usability Gate is MET. The agent will proceed to `improvements.md`.
+
+**2026-07-28 groom-pass note (session 11):** Backlogs groomed. Requeued blocked jobs and fixed a parsing bug in the zero transpiler (`/home/howlcipher/dev/zero/`). All bugs remain Resolved. The static gate is green (build, vet, tests pass). The Usability Gate is MET. There are no pending bugs.
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
 | 393 | [Playwright Host missing dependencies to run browsers](#393-playwright-host-missing-dependencies-to-run-browsers) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Missing OS packages are easily fixed in the container or host. | Cleared ms-playwright cache and reinstalled dependencies inside the ubuntu:22.04 distrobox so it downloads the correct binaries for that OS version. |
