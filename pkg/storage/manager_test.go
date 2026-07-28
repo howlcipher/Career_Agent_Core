@@ -29,7 +29,7 @@ func TestJobFunnelCRUD(t *testing.T) {
 	defer teardownTestDB()
 
 	// 1. Create a job in funnel
-	isNew, err := AddToFunnel("TestCorp", "Software Engineer", "http://testcorp.com/job1", "DISCOVERED")
+	isNew, err := AddToFunnel("TestCorp", "Software Engineer", "https://testcorp.com/job1", "DISCOVERED")
 	if err != nil {
 		t.Fatalf("Failed to add to funnel: %v", err)
 	}
@@ -45,12 +45,12 @@ func TestJobFunnelCRUD(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("Expected 1 discovered job, got %d", len(jobs))
 	}
-	if jobs[0].CompanyName != "TestCorp" || jobs[0].URL != "http://testcorp.com/job1" {
+	if jobs[0].CompanyName != "TestCorp" || jobs[0].URL != "https://testcorp.com/job1" {
 		t.Errorf("Job details mismatch: %+v", jobs[0])
 	}
 
 	// 3. Update status
-	err = UpdateFunnelStatus("http://testcorp.com/job1", "APPLIED")
+	err = UpdateFunnelStatus("https://testcorp.com/job1", "APPLIED")
 	if err != nil {
 		t.Fatalf("Failed to update funnel status: %v", err)
 	}
@@ -62,13 +62,13 @@ func TestJobFunnelCRUD(t *testing.T) {
 	}
 
 	// 4. Update with score
-	err = UpdateFunnelStatusWithScore("http://testcorp.com/job1", "INTERVIEW", 95)
+	err = UpdateFunnelStatusWithScore("https://testcorp.com/job1", "INTERVIEW", 95)
 	if err != nil {
 		t.Fatalf("Failed to update funnel status with score: %v", err)
 	}
 
 	var score int
-	err = db.QueryRow("SELECT fit_score FROM job_funnel WHERE url = ?", "http://testcorp.com/job1").Scan(&score)
+	err = db.QueryRow("SELECT fit_score FROM job_funnel WHERE url = ?", "https://testcorp.com/job1").Scan(&score)
 	if err != nil {
 		t.Fatalf("Failed to query score: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestJobFunnelCRUD(t *testing.T) {
 	// live 2026-07-21 as the root cause of the same job being reprocessed
 	// multiple times and eventually hitting the applied_jobs UNIQUE
 	// constraint - see bugs.md #12.
-	isNewAgain, err := AddToFunnel("TestCorp", "Software Engineer", "http://testcorp.com/job1", "DISCOVERED")
+	isNewAgain, err := AddToFunnel("TestCorp", "Software Engineer", "https://testcorp.com/job1", "DISCOVERED")
 	if err != nil {
 		t.Fatalf("Failed to re-add existing URL to funnel: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestJobFunnelCRUD(t *testing.T) {
 	}
 
 	var statusAfterRediscovery string
-	if err := db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://testcorp.com/job1").Scan(&statusAfterRediscovery); err != nil {
+	if err := db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "https://testcorp.com/job1").Scan(&statusAfterRediscovery); err != nil {
 		t.Fatalf("Failed to query status: %v", err)
 	}
 	if statusAfterRediscovery != "INTERVIEW" {
@@ -103,7 +103,7 @@ func TestApplicationsAndDuplicates(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	url := "http://example.com/apply"
+	url := "https://example.com/apply"
 
 	// Initially, should not have applied
 	if HasApplied(url) {
@@ -192,7 +192,7 @@ func TestExecutionLogs(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	err := LogExecution("job123", "http://job123.com", "SUCCESS", 1500)
+	err := LogExecution("job123", "https://job123.com", "SUCCESS", 1500)
 	if err != nil {
 		t.Fatalf("Failed to log execution: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestSaveApplication(t *testing.T) {
 		companyName,
 		"Test Role",
 		"Remote",
-		"http://test.com",
+		"https://test.com",
 		"# Resume",
 		"Dear hiring manager",
 		"Prep notes",
@@ -295,7 +295,7 @@ func TestSaveApplication(t *testing.T) {
 	// whose submit then failed left a dedup row behind, so the job was skipped
 	// on every later run and could never be retried. Generating documents is
 	// not applying; only cmd/agent's confirmed-submission branch records that.
-	if HasApplied("http://test.com") {
+	if HasApplied("https://test.com") {
 		t.Errorf("SaveApplication must not write the dedup row: generating documents is not a confirmed submission")
 	}
 }
@@ -357,7 +357,7 @@ func TestSaveApplicationLeavesJobRetryableUntilConfirmed(t *testing.T) {
 
 	companyName := "Test_Retryable_Company"
 	defer os.RemoveAll(filepath.Join("applications", companyName))
-	url := "http://example.com/jobs/retryable"
+	url := "https://example.com/jobs/retryable"
 
 	// Attempt 1: documents generated, submission then fails.
 	if _, err := SaveApplication(companyName, "SRE", "Remote", url, "r", "c", "p"); err != nil {
@@ -386,7 +386,7 @@ func TestRecordApplicationInDBIsIdempotent(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	url := "http://example.com/jobs/twice"
+	url := "https://example.com/jobs/twice"
 	if err := RecordApplicationInDB("Acme", "SRE", url); err != nil {
 		t.Fatalf("first record failed: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestLogFailedSubmission(t *testing.T) {
 	os.MkdirAll("applications", 0755)
 	defer os.Remove(reportPath)
 
-	err := LogFailedSubmission("FailCorp", "Engineer", "http://fail.com")
+	err := LogFailedSubmission("FailCorp", "Engineer", "https://fail.com")
 	if err != nil {
 		t.Fatalf("Failed to log failed submission: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestLogFailedSubmission(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "FailCorp") || !strings.Contains(content, "http://fail.com") {
+	if !strings.Contains(content, "FailCorp") || !strings.Contains(content, "https://fail.com") {
 		t.Errorf("Report content mismatch: %s", content)
 	}
 	if !strings.Contains(content, "# Manual Submission Backlog") {
@@ -487,11 +487,11 @@ func TestLogManualRequired(t *testing.T) {
 	reportPath := filepath.Join("applications", "needs_manual_apply", "manual_queue.md")
 	defer os.Remove(reportPath)
 
-	err := LogManualRequired("GatedCorp", "SRE", "http://gated.example.com/job/1", "applications/needs_manual_apply/GatedCorp")
+	err := LogManualRequired("GatedCorp", "SRE", "https://gated.example.com/job/1", "applications/needs_manual_apply/GatedCorp")
 	if err != nil {
 		t.Fatalf("Failed to log manual-required entry: %v", err)
 	}
-	if err := LogManualRequired("NoDocsCorp", "SRE", "http://gated.example.com/job/2", ""); err != nil {
+	if err := LogManualRequired("NoDocsCorp", "SRE", "https://gated.example.com/job/2", ""); err != nil {
 		t.Fatalf("Failed to log docs-less entry: %v", err)
 	}
 
@@ -501,7 +501,7 @@ func TestLogManualRequired(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "GatedCorp") || !strings.Contains(content, "http://gated.example.com/job/1") {
+	if !strings.Contains(content, "GatedCorp") || !strings.Contains(content, "https://gated.example.com/job/1") {
 		t.Errorf("Manual queue content mismatch: %s", content)
 	}
 	if !strings.Contains(content, "# Manual Apply Queue") {
@@ -561,11 +561,11 @@ func TestGetTrackedCompanies(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("AppliedCorp", "SRE", "http://a.example.com/1", "DISCOVERED")
-	UpdateFunnelStatus("http://a.example.com/1", "APPLIED")
-	AddToFunnel("GatedCorp", "SRE", "http://b.example.com/1", "DISCOVERED")
-	UpdateFunnelStatus("http://b.example.com/1", "MANUAL_REQUIRED")
-	AddToFunnel("DiscoveredCorp", "SRE", "http://c.example.com/1", "DISCOVERED")
+	AddToFunnel("AppliedCorp", "SRE", "https://a.example.com/1", "DISCOVERED")
+	UpdateFunnelStatus("https://a.example.com/1", "APPLIED")
+	AddToFunnel("GatedCorp", "SRE", "https://b.example.com/1", "DISCOVERED")
+	UpdateFunnelStatus("https://b.example.com/1", "MANUAL_REQUIRED")
+	AddToFunnel("DiscoveredCorp", "SRE", "https://c.example.com/1", "DISCOVERED")
 
 	companies, err := GetTrackedCompanies()
 	if err != nil {
@@ -689,7 +689,7 @@ func TestUpdateFunnelStatus_SetsLastUpdated(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	url := "http://testcorp.com/last-updated-job"
+	url := "https://testcorp.com/last-updated-job"
 	if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
 		t.Fatalf("Failed to add to funnel: %v", err)
 	}
@@ -738,7 +738,7 @@ func TestUpdateFunnelStatus_StoresLastUpdatedAsCanonicalUTC(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	url := "http://testcorp.com/utc-format-check"
+	url := "https://testcorp.com/utc-format-check"
 	if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
 		t.Fatalf("Failed to add to funnel: %v", err)
 	}
@@ -883,11 +883,11 @@ func TestGetJobsMissingFitSimilarity(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("A", "Job A", "http://a.com/1", "DISCOVERED")
-	AddToFunnel("B", "Job B", "http://b.com/1", "DISCOVERED")
-	AddToFunnel("C", "Job C", "http://c.com/1", "DISCOVERED")
+	AddToFunnel("A", "Job A", "https://a.com/1", "DISCOVERED")
+	AddToFunnel("B", "Job B", "https://b.com/1", "DISCOVERED")
+	AddToFunnel("C", "Job C", "https://c.com/1", "DISCOVERED")
 
-	if err := UpdateFitSimilarity("http://b.com/1", 0.9); err != nil {
+	if err := UpdateFitSimilarity("https://b.com/1", 0.9); err != nil {
 		t.Fatalf("UpdateFitSimilarity failed: %v", err)
 	}
 
@@ -899,7 +899,7 @@ func TestGetJobsMissingFitSimilarity(t *testing.T) {
 		t.Fatalf("expected 2 jobs missing fit_similarity, got %d: %+v", len(missing), missing)
 	}
 	for _, j := range missing {
-		if j.URL == "http://b.com/1" {
+		if j.URL == "https://b.com/1" {
 			t.Errorf("job already scored via UpdateFitSimilarity should not appear in missing list: %+v", j)
 		}
 	}
@@ -923,14 +923,14 @@ func TestGetDiscoveredJobsOrdersByFitSimilarityWithinTier(t *testing.T) {
 
 	// All three on the same greenhouse.io host, so they share a
 	// sourcePriorityCASE tier (0) and the tie-break is purely fit_similarity.
-	AddToFunnel("Low", "Job Low", "http://greenhouse.io/low", "DISCOVERED")
-	AddToFunnel("High", "Job High", "http://greenhouse.io/high", "DISCOVERED")
-	AddToFunnel("Unscored", "Job Unscored", "http://greenhouse.io/unscored", "DISCOVERED")
+	AddToFunnel("Low", "Job Low", "https://greenhouse.io/low", "DISCOVERED")
+	AddToFunnel("High", "Job High", "https://greenhouse.io/high", "DISCOVERED")
+	AddToFunnel("Unscored", "Job Unscored", "https://greenhouse.io/unscored", "DISCOVERED")
 
-	if err := UpdateFitSimilarity("http://greenhouse.io/low", 0.2); err != nil {
+	if err := UpdateFitSimilarity("https://greenhouse.io/low", 0.2); err != nil {
 		t.Fatalf("UpdateFitSimilarity failed: %v", err)
 	}
-	if err := UpdateFitSimilarity("http://greenhouse.io/high", 0.8); err != nil {
+	if err := UpdateFitSimilarity("https://greenhouse.io/high", 0.8); err != nil {
 		t.Fatalf("UpdateFitSimilarity failed: %v", err)
 	}
 
@@ -942,7 +942,7 @@ func TestGetDiscoveredJobsOrdersByFitSimilarityWithinTier(t *testing.T) {
 		t.Fatalf("expected 3 discovered jobs, got %d", len(jobs))
 	}
 	got := []string{jobs[0].URL, jobs[1].URL, jobs[2].URL}
-	want := []string{"http://greenhouse.io/high", "http://greenhouse.io/low", "http://greenhouse.io/unscored"}
+	want := []string{"https://greenhouse.io/high", "https://greenhouse.io/low", "https://greenhouse.io/unscored"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("expected order %v, got %v", want, got)
@@ -955,14 +955,14 @@ func TestSourceOutcomeBreakdown(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
-	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/b", "BLOCKED_CAPTCHA")
-	AddToFunnel("C", "T", "http://jobs.lever.co/c", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/c", "FAILED_SUBMIT")
-	AddToFunnel("D", "T", "http://boards.greenhouse.io/d", "DISCOVERED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/d", "APPLIED")
+	AddToFunnel("A", "T", "https://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "APPLIED")
+	AddToFunnel("B", "T", "https://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/b", "BLOCKED_CAPTCHA")
+	AddToFunnel("C", "T", "https://jobs.lever.co/c", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/c", "FAILED_SUBMIT")
+	AddToFunnel("D", "T", "https://boards.greenhouse.io/d", "DISCOVERED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/d", "APPLIED")
 
 	stat, err := SourceOutcomeBreakdown("%lever.co%")
 	if err != nil {
@@ -993,16 +993,16 @@ func TestGetConversionStats(t *testing.T) {
 		t.Errorf("expected all-zero stats on an empty DB, got %+v", empty)
 	}
 
-	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "INTERVIEW_REQUESTED")
-	AddToFunnel("B", "T", "http://boards.greenhouse.io/b", "DISCOVERED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/b", "APPLIED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/b", "REJECTED")
-	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/c", "APPLIED")
-	AddToFunnel("D", "T", "http://jobs.lever.co/d", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/d", "SKIPPED")
+	AddToFunnel("A", "T", "https://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "APPLIED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "INTERVIEW_REQUESTED")
+	AddToFunnel("B", "T", "https://boards.greenhouse.io/b", "DISCOVERED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/b", "APPLIED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/b", "REJECTED")
+	AddToFunnel("C", "T", "https://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/c", "APPLIED")
+	AddToFunnel("D", "T", "https://jobs.lever.co/d", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/d", "SKIPPED")
 
 	stats, err := GetConversionStats()
 	if err != nil {
@@ -1028,16 +1028,16 @@ func TestGetConversionStatsBySource(t *testing.T) {
 		t.Errorf("expected no rows on an empty DB, got %+v", empty)
 	}
 
-	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "APPLIED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "INTERVIEW_REQUESTED")
-	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/b", "APPLIED")
-	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/c", "APPLIED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/c", "REJECTED")
+	AddToFunnel("A", "T", "https://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "APPLIED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "INTERVIEW_REQUESTED")
+	AddToFunnel("B", "T", "https://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/b", "APPLIED")
+	AddToFunnel("C", "T", "https://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/c", "APPLIED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/c", "REJECTED")
 	// Discovered but never applied - must not count toward any source.
-	AddToFunnel("D", "T", "http://myworkdayjobs.com/d", "DISCOVERED")
+	AddToFunnel("D", "T", "https://myworkdayjobs.com/d", "DISCOVERED")
 
 	bySource, err := GetConversionStatsBySource()
 	if err != nil {
@@ -1120,13 +1120,13 @@ func TestUpdateToneVariant(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("A", "T", "http://a.com/1", "DISCOVERED")
-	if err := UpdateToneVariant("http://a.com/1", "variant_1"); err != nil {
+	AddToFunnel("A", "T", "https://a.com/1", "DISCOVERED")
+	if err := UpdateToneVariant("https://a.com/1", "variant_1"); err != nil {
 		t.Fatalf("UpdateToneVariant failed: %v", err)
 	}
 
 	var variant string
-	if err := db.QueryRow("SELECT tone_variant FROM job_funnel WHERE url = ?", "http://a.com/1").Scan(&variant); err != nil {
+	if err := db.QueryRow("SELECT tone_variant FROM job_funnel WHERE url = ?", "https://a.com/1").Scan(&variant); err != nil {
 		t.Fatalf("failed to read back tone_variant: %v", err)
 	}
 	if variant != "variant_1" {
@@ -1146,27 +1146,27 @@ func TestGetConversionStatsByVariant(t *testing.T) {
 		t.Errorf("expected no rows on an empty DB, got %+v", empty)
 	}
 
-	AddToFunnel("A", "T", "http://a.com/1", "DISCOVERED")
-	UpdateToneVariant("http://a.com/1", "variant_0")
-	UpdateFunnelStatus("http://a.com/1", "APPLIED")
-	UpdateFunnelStatus("http://a.com/1", "INTERVIEW_REQUESTED")
+	AddToFunnel("A", "T", "https://a.com/1", "DISCOVERED")
+	UpdateToneVariant("https://a.com/1", "variant_0")
+	UpdateFunnelStatus("https://a.com/1", "APPLIED")
+	UpdateFunnelStatus("https://a.com/1", "INTERVIEW_REQUESTED")
 
-	AddToFunnel("B", "T", "http://b.com/1", "DISCOVERED")
-	UpdateToneVariant("http://b.com/1", "variant_0")
-	UpdateFunnelStatus("http://b.com/1", "APPLIED")
+	AddToFunnel("B", "T", "https://b.com/1", "DISCOVERED")
+	UpdateToneVariant("https://b.com/1", "variant_0")
+	UpdateFunnelStatus("https://b.com/1", "APPLIED")
 
-	AddToFunnel("C", "T", "http://c.com/1", "DISCOVERED")
-	UpdateToneVariant("http://c.com/1", "variant_1")
-	UpdateFunnelStatus("http://c.com/1", "APPLIED")
-	UpdateFunnelStatus("http://c.com/1", "REJECTED")
+	AddToFunnel("C", "T", "https://c.com/1", "DISCOVERED")
+	UpdateToneVariant("https://c.com/1", "variant_1")
+	UpdateFunnelStatus("https://c.com/1", "APPLIED")
+	UpdateFunnelStatus("https://c.com/1", "REJECTED")
 
 	// Never tagged with a variant (e.g. applied before this feature existed)
 	// — must be grouped under "unspecified", not silently dropped.
-	AddToFunnel("D", "T", "http://d.com/1", "DISCOVERED")
-	UpdateFunnelStatus("http://d.com/1", "APPLIED")
+	AddToFunnel("D", "T", "https://d.com/1", "DISCOVERED")
+	UpdateFunnelStatus("https://d.com/1", "APPLIED")
 
 	// Discovered but never applied — must not count toward any variant.
-	AddToFunnel("E", "T", "http://e.com/1", "DISCOVERED")
+	AddToFunnel("E", "T", "https://e.com/1", "DISCOVERED")
 
 	stats, err := GetConversionStatsByVariant()
 	if err != nil {
@@ -1195,12 +1195,12 @@ func TestRequeueByURLPattern(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "BLOCKED_CAPTCHA")
-	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/b", "FAILED_SUBMIT")
-	AddToFunnel("C", "T", "http://boards.greenhouse.io/c", "DISCOVERED")
-	UpdateFunnelStatus("http://boards.greenhouse.io/c", "BLOCKED_CAPTCHA")
+	AddToFunnel("A", "T", "https://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "BLOCKED_CAPTCHA")
+	AddToFunnel("B", "T", "https://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/b", "FAILED_SUBMIT")
+	AddToFunnel("C", "T", "https://boards.greenhouse.io/c", "DISCOVERED")
+	UpdateFunnelStatus("https://boards.greenhouse.io/c", "BLOCKED_CAPTCHA")
 
 	n, err := RequeueByURLPattern("%lever.co%", "BLOCKED_CAPTCHA")
 	if err != nil {
@@ -1211,18 +1211,18 @@ func TestRequeueByURLPattern(t *testing.T) {
 	}
 
 	jobs, _ := GetDiscoveredJobs()
-	if len(jobs) != 1 || jobs[0].URL != "http://jobs.lever.co/a" {
+	if len(jobs) != 1 || jobs[0].URL != "https://jobs.lever.co/a" {
 		t.Errorf("expected only the requeued lever BLOCKED_CAPTCHA row back in DISCOVERED, got %+v", jobs)
 	}
 
 	var greenhouseStatus string
-	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://boards.greenhouse.io/c").Scan(&greenhouseStatus)
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "https://boards.greenhouse.io/c").Scan(&greenhouseStatus)
 	if greenhouseStatus != "BLOCKED_CAPTCHA" {
 		t.Errorf("a matching status but non-matching URL pattern must not be requeued, got status %q", greenhouseStatus)
 	}
 
 	var leverFailedStatus string
-	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://jobs.lever.co/b").Scan(&leverFailedStatus)
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "https://jobs.lever.co/b").Scan(&leverFailedStatus)
 	if leverFailedStatus != "FAILED_SUBMIT" {
 		t.Errorf("a matching URL pattern but non-matching status must not be requeued, got status %q", leverFailedStatus)
 	}
@@ -1236,12 +1236,12 @@ func TestReapStaleProcessingJobs(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	AddToFunnel("A", "T", "http://jobs.lever.co/a", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/a", "PROCESSING")
-	AddToFunnel("B", "T", "http://jobs.lever.co/b", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/b", "PROCESSING")
-	AddToFunnel("C", "T", "http://jobs.lever.co/c", "DISCOVERED")
-	UpdateFunnelStatus("http://jobs.lever.co/c", "APPLIED")
+	AddToFunnel("A", "T", "https://jobs.lever.co/a", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/a", "PROCESSING")
+	AddToFunnel("B", "T", "https://jobs.lever.co/b", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/b", "PROCESSING")
+	AddToFunnel("C", "T", "https://jobs.lever.co/c", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/c", "APPLIED")
 
 	n, err := ReapStaleProcessingJobs()
 	if err != nil {
@@ -1257,7 +1257,7 @@ func TestReapStaleProcessingJobs(t *testing.T) {
 	}
 
 	var appliedStatus string
-	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "http://jobs.lever.co/c").Scan(&appliedStatus)
+	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "https://jobs.lever.co/c").Scan(&appliedStatus)
 	if appliedStatus != "APPLIED" {
 		t.Errorf("a genuinely APPLIED row must not be touched, got status %q", appliedStatus)
 	}
@@ -1267,10 +1267,10 @@ func TestClearApplicationRecordsByURLPattern(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	RecordApplicationInDB("A", "T", "http://jobs.lever.co/a")
-	RecordApplicationInDB("B", "T", "http://boards.greenhouse.io/b")
+	RecordApplicationInDB("A", "T", "https://jobs.lever.co/a")
+	RecordApplicationInDB("B", "T", "https://boards.greenhouse.io/b")
 
-	if !HasApplied("http://jobs.lever.co/a") {
+	if !HasApplied("https://jobs.lever.co/a") {
 		t.Fatal("expected HasApplied to be true before clearing")
 	}
 
@@ -1282,10 +1282,10 @@ func TestClearApplicationRecordsByURLPattern(t *testing.T) {
 		t.Errorf("expected exactly 1 row cleared, got %d", n)
 	}
 
-	if HasApplied("http://jobs.lever.co/a") {
+	if HasApplied("https://jobs.lever.co/a") {
 		t.Error("expected HasApplied to be false after clearing its dedup record")
 	}
-	if !HasApplied("http://boards.greenhouse.io/b") {
+	if !HasApplied("https://boards.greenhouse.io/b") {
 		t.Error("a non-matching URL's dedup record must not be cleared")
 	}
 }
@@ -1475,5 +1475,71 @@ func TestHasApplied_DoesNotOvermatchDifferentPostings(t *testing.T) {
 		if HasApplied(other) {
 			t.Errorf("%q is a different posting and must not be deduped", other)
 		}
+	}
+}
+
+func TestMigrateURLSchemes(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	// 1. Setup raw http and https rows manually via SQL
+	_, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status) VALUES 
+		('A', 'T', 'http://a.com', 'FAILED_SUBMIT'),
+		('A', 'T', 'https://a.com', 'APPLIED'),
+		('B', 'T', 'http://b.com', 'BLOCKED_CAPTCHA'),
+		('C', 'T', 'http://c.com', 'DISCOVERED')`)
+	if err != nil {
+		t.Fatalf("Failed to insert mock data: %v", err)
+	}
+
+	_, err = db.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at) VALUES 
+		('A', 'T', 'http://a.com', CURRENT_TIMESTAMP),
+		('A', 'T', 'https://a.com', CURRENT_TIMESTAMP)`)
+	if err != nil {
+		t.Fatalf("Failed to insert mock applied_jobs data: %v", err)
+	}
+
+	// 2. Run migration
+	if err := migrateURLSchemes(); err != nil {
+		t.Fatalf("Migration failed: %v", err)
+	}
+
+	// 3. Verify job_funnel
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM job_funnel`).Scan(&count)
+	if count != 3 {
+		t.Errorf("Expected 3 rows in job_funnel, got %d", count)
+	}
+
+	var statusA, statusB, statusC string
+	db.QueryRow(`SELECT status FROM job_funnel WHERE url = 'https://a.com'`).Scan(&statusA)
+	if statusA != "MANUAL_REQUIRED" {
+		t.Errorf("Expected https://a.com to resolve ambiguous FAILED_SUBMIT vs APPLIED to MANUAL_REQUIRED, got %s", statusA)
+	}
+
+	db.QueryRow(`SELECT status FROM job_funnel WHERE url = 'https://b.com'`).Scan(&statusB)
+	if statusB != "BLOCKED_CAPTCHA" {
+		t.Errorf("Expected https://b.com to migrate to BLOCKED_CAPTCHA, got %s", statusB)
+	}
+
+	db.QueryRow(`SELECT status FROM job_funnel WHERE url = 'https://c.com'`).Scan(&statusC)
+	if statusC != "DISCOVERED" {
+		t.Errorf("Expected https://c.com to migrate to DISCOVERED, got %s", statusC)
+	}
+
+	// 4. Verify applied_jobs
+	db.QueryRow(`SELECT COUNT(*) FROM applied_jobs`).Scan(&count)
+	if count != 1 {
+		t.Errorf("Expected 1 row in applied_jobs, got %d", count)
+	}
+	var urlApp string
+	db.QueryRow(`SELECT url FROM applied_jobs`).Scan(&urlApp)
+	if urlApp != "https://a.com" {
+		t.Errorf("Expected https://a.com in applied_jobs, got %s", urlApp)
+	}
+
+	// 5. Test idempotency
+	if err := migrateURLSchemes(); err != nil {
+		t.Fatalf("Second migration failed: %v", err)
 	}
 }

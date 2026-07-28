@@ -121,6 +121,9 @@ func InitDBWithPath(path string) error {
 	if err := migrateJobFunnelToneVariant(); err != nil {
 		return err
 	}
+	if err := migrateURLSchemes(); err != nil {
+		return err
+	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
 		return fmt.Errorf("secure database files after initialization: %w", err)
 	}
@@ -237,6 +240,144 @@ func migrateJobFunnelToneVariant() error {
 	return err
 }
 
+func mergeStatuses(s1, s2 string) string {
+	if s1 == s2 {
+		return s1
+	}
+	rank := func(s string) int {
+		switch s {
+		case "DISCOVERED": return 1
+		case "PROCESSING": return 2
+		case "SKIPPED": return 3
+		case "BLOCKED_CAPTCHA": return 4
+		case "FAILED_SUBMIT": return 5
+		case "MANUAL_REQUIRED": return 6
+		case "APPLIED": return 7
+		case "REJECTED": return 8
+		case "INTERVIEW_REQUESTED": return 9
+		default: return 0
+		}
+	}
+
+	r1, r2 := rank(s1), rank(s2)
+
+	isSuccess1 := s1 == "APPLIED" || s1 == "REJECTED" || s1 == "INTERVIEW_REQUESTED"
+	isSuccess2 := s2 == "APPLIED" || s2 == "REJECTED" || s2 == "INTERVIEW_REQUESTED"
+	isFailure1 := s1 == "FAILED_SUBMIT" || s1 == "BLOCKED_CAPTCHA" || s1 == "MANUAL_REQUIRED"
+	isFailure2 := s2 == "FAILED_SUBMIT" || s2 == "BLOCKED_CAPTCHA" || s2 == "MANUAL_REQUIRED"
+
+	if (isSuccess1 && isFailure2) || (isSuccess2 && isFailure1) {
+		return "MANUAL_REQUIRED"
+	}
+	if r1 > r2 {
+		return s1
+	}
+	return s2
+}
+
+func migrateURLSchemes() error {
+	rows, err := db.Query(`SELECT id, url, status FROM job_funnel WHERE url LIKE 'http://%'`)
+	if err != nil {
+		return fmt.Errorf("failed to query http urls in job_funnel: %w", err)
+	}
+	defer rows.Close()
+
+	type httpRow struct {
+		id     int
+		url    string
+		status string
+	}
+	var toProcess []httpRow
+	for rows.Next() {
+		var r httpRow
+		if err := rows.Scan(&r.id, &r.url, &r.status); err != nil {
+			return err
+		}
+		toProcess = append(toProcess, r)
+	}
+	rows.Close()
+
+	for _, r := range toProcess {
+		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
+		var httpsID int
+		var httpsStatus string
+		err := db.QueryRow(`SELECT id, status FROM job_funnel WHERE url = ?`, httpsURL).Scan(&httpsID, &httpsStatus)
+		if err == sql.ErrNoRows {
+			_, err = db.Exec(`UPDATE job_funnel SET url = ? WHERE id = ?`, httpsURL, r.id)
+			if err != nil {
+				return fmt.Errorf("failed to update job_funnel url to https: %w", err)
+			}
+			continue
+		} else if err != nil {
+			return fmt.Errorf("failed to check https url in job_funnel: %w", err)
+		}
+
+		newStatus := mergeStatuses(r.status, httpsStatus)
+		
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		
+		_, err = tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, newStatus, httpsID)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		
+		_, err = tx.Exec(`DELETE FROM job_funnel WHERE id = ?`, r.id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	
+	rowsApp, err := db.Query(`SELECT id, url FROM applied_jobs WHERE url LIKE 'http://%'`)
+	if err != nil {
+		return fmt.Errorf("failed to query http urls in applied_jobs: %w", err)
+	}
+	defer rowsApp.Close()
+	
+	type appRow struct {
+		id  int
+		url string
+	}
+	var appToProcess []appRow
+	for rowsApp.Next() {
+		var r appRow
+		if err := rowsApp.Scan(&r.id, &r.url); err != nil {
+			return err
+		}
+		appToProcess = append(appToProcess, r)
+	}
+	rowsApp.Close()
+	
+	for _, r := range appToProcess {
+		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
+		var httpsID int
+		err := db.QueryRow(`SELECT id FROM applied_jobs WHERE url = ?`, httpsURL).Scan(&httpsID)
+		if err == sql.ErrNoRows {
+			_, err = db.Exec(`UPDATE applied_jobs SET url = ? WHERE id = ?`, httpsURL, r.id)
+			if err != nil {
+				return fmt.Errorf("failed to update applied_jobs url to https: %w", err)
+			}
+		} else if err == nil {
+			_, err = db.Exec(`DELETE FROM applied_jobs WHERE id = ?`, r.id)
+			if err != nil {
+				return fmt.Errorf("failed to delete duplicate http url from applied_jobs: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to check https url in applied_jobs: %w", err)
+		}
+	}
+	
+	return nil
+}
+
 func GetDB() *sql.DB {
 	return db
 }
@@ -297,26 +438,24 @@ func MarkEmailProcessed(messageID string) error {
 // recorded as applied under one scheme is not deduped under the other, so it
 // can be applied to twice.
 //
+// NormalizeURL normalises the scheme of a URL to https:// if it starts with http://.
+// This prevents the same job from being tracked twice under different schemes.
 // Only the scheme is normalised. Nothing else about the URL is touched, because
 // query strings and trailing paths genuinely distinguish postings on Lever.
-func canonicalURLKey(rawURL string) string {
-	if strings.HasPrefix(rawURL, "https://") {
-		return strings.TrimPrefix(rawURL, "https://")
+func NormalizeURL(rawURL string) string {
+	if strings.HasPrefix(rawURL, "http://") {
+		return "https://" + strings.TrimPrefix(rawURL, "http://")
 	}
-	return strings.TrimPrefix(rawURL, "http://")
+	return rawURL
 }
 
 func HasApplied(url string) bool {
 	if db == nil {
 		return false
 	}
-	// bugs.md #112: compare on the scheme-normalised key so an application
-	// recorded under http is still seen when the same posting arrives as https.
+	url = NormalizeURL(url)
 	var id int
-	err := db.QueryRow(`SELECT id FROM applied_jobs
-		WHERE url = ?
-		   OR replace(replace(url, 'https://', ''), 'http://', '') = ?`,
-		url, canonicalURLKey(url)).Scan(&id)
+	err := db.QueryRow(`SELECT id FROM applied_jobs WHERE url = ?`, url).Scan(&id)
 	return err == nil
 }
 
@@ -338,6 +477,7 @@ func RecordApplicationInDB(companyName, jobTitle, url string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	_, err := db.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, companyName, jobTitle, url, time.Now())
 	return err
@@ -464,6 +604,7 @@ func LogFailedSubmission(companyName, jobTitle, applyURL string) error {
 		return fmt.Errorf("failed to inspect manual submission report: %w", err)
 	}
 
+	applyURL = NormalizeURL(applyURL)
 	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s)\n", companyName, jobTitle, applyURL)
 
 	f, err := openPrivateAppendFile(reportPath)
@@ -534,6 +675,7 @@ func LogManualRequired(companyName, jobTitle, applyURL, docsDir string) error {
 		return fmt.Errorf("failed to inspect manual queue: %w", err)
 	}
 
+	applyURL = NormalizeURL(applyURL)
 	docsNote := "docs not found"
 	if docsDir != "" {
 		docsNote = fmt.Sprintf("docs in `%s/`", docsDir)
@@ -707,6 +849,7 @@ func AddToFunnel(company, title, url, status string) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at)
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(url) DO NOTHING`, company, title, url, status)
@@ -724,6 +867,7 @@ func UpdateFunnelStatus(url, status string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	// Store as canonical UTC (.UTC()), not a local-offset time.Time. This
 	// column is compared with a plain SQL ORDER BY, which does a TEXT
 	// comparison, not a real chronological one - confirmed live 2026-07-21:
@@ -745,6 +889,7 @@ func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now().UTC(), url)
 	return err
 }
@@ -794,6 +939,7 @@ func LogExecution(jobID, url, status string, tokens int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	_, err := db.Exec("INSERT INTO execution_logs (job_id, url, tokens_used, status, logged_at) VALUES (?, ?, ?, ?, ?)", jobID, url, tokens, status, time.Now())
 	return err
 }
@@ -929,6 +1075,7 @@ func UpdateFitSimilarity(url string, score float32) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	_, err := db.Exec(`UPDATE job_funnel SET fit_similarity = ? WHERE url = ?`, score, url)
 	return err
 }
@@ -1070,6 +1217,7 @@ func UpdateToneVariant(url, variant string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	url = NormalizeURL(url)
 	_, err := db.Exec(`UPDATE job_funnel SET tone_variant = ? WHERE url = ?`, variant, url)
 	return err
 }
