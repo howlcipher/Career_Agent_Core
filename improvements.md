@@ -70,6 +70,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 **2026-07-28 groom-pass note (session 8):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, so the agent will return to `bugs.md` to work on bug #131 using a Gemini model.
 
 **2026-07-28 groom-pass note (session 9):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, so the agent will return to `bugs.md` to work on bug #125 using a Gemini model.
+
+**2026-07-28 groom-pass note (session 10):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, and there are no pending bugs.
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
 | 39 | [Track recent source health and application-attempt cost](#39-track-recent-source-health-and-application-attempt-cost) | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | — | — | Added application_attempts table and tracked terminal outcomes with model inference ms and elapsed time. |
