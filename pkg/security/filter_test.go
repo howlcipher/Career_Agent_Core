@@ -17,6 +17,18 @@ func TestQuarantinePayloadAllowsBenignCareerContent(t *testing.T) {
 	}
 }
 
+func TestQuarantinePayloadAllowsATSInstructions(t *testing.T) {
+	layer := NewQuarantineLayer()
+
+	err := layer.QuarantinePayload(
+		"Please ignore the main application form if you require accommodations and follow these instructions to email us directly.",
+	)
+
+	if err != nil {
+		t.Fatalf("ATS instruction content was quarantined: %v", err)
+	}
+}
+
 func TestQuarantinePayloadReturnsTypedDetection(t *testing.T) {
 	layer := NewQuarantineLayer()
 

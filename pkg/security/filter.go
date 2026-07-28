@@ -31,7 +31,7 @@ type QuarantineLayer struct {
 
 func NewQuarantineLayer() *QuarantineLayer {
 	return &QuarantineLayer{
-		Protector: promptsec.Strict(),
+		Protector: promptsec.Moderate(),
 	}
 }
 
