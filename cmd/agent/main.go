@@ -318,6 +318,18 @@ func readJobPageResponse(resp *http.Response) (htmlText, description string, err
 // errDeadRedirect is returned when a URL redirects to a known dead-end.
 var errDeadRedirect = errors.New("dead redirect")
 
+func getATSProvider(jobURL string) string {
+	u, err := url.Parse(jobURL)
+	if err != nil {
+		return "unknown"
+	}
+	host := u.Host
+	if strings.HasPrefix(host, "www.") {
+		host = strings.TrimPrefix(host, "www.")
+	}
+	return host
+}
+
 func checkJobAlive(ctx context.Context, jobURL string) error {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -1264,6 +1276,14 @@ func main() {
 								if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
 									log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
 								}
+								_ = storage.RecordAttempt(storage.ApplicationAttempt{
+									Source:        getATSProvider(job.URL),
+									URL:           job.URL,
+									TerminalClass: storage.AttemptDeadPosting,
+									StartedAt:     freshnessStart,
+									EndedAt:       time.Now(),
+									InferenceMs:   int(time.Since(freshnessStart).Milliseconds()),
+								})
 							} else {
 								log.Printf("[Worker-%d] Post-score check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
 								if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
@@ -1380,7 +1400,33 @@ func main() {
 							return masterResumePath, storage.CoverLetterPath(job.CompanyName, job.URL), nil
 						}
 
-						if err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick); errors.Is(err, security.ErrPromptInjectionDetected) {
+						attemptStart := time.Now()
+						err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick)
+						inferenceMs := int(time.Since(attemptStart).Milliseconds())
+						
+						var terminalClass storage.TerminalClass
+						if err == nil {
+							terminalClass = storage.AttemptApplied
+						} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
+							terminalClass = storage.AttemptPostSubmitCaptcha
+						} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || submitter.IsManualReviewError(err) {
+							terminalClass = storage.AttemptManualAccountGate
+						} else if errors.Is(err, submitter.ErrUncommittableField) {
+							terminalClass = storage.AttemptValidationFailure
+						} else {
+							terminalClass = storage.AttemptOtherFailure
+						}
+
+						_ = storage.RecordAttempt(storage.ApplicationAttempt{
+							Source:        getATSProvider(job.URL),
+							URL:           job.URL,
+							TerminalClass: terminalClass,
+							StartedAt:     attemptStart,
+							EndedAt:       time.Now(),
+							InferenceMs:   inferenceMs,
+						})
+
+						if errors.Is(err, security.ErrPromptInjectionDetected) {
 							log.Printf(
 								"[Worker-%d] %s's browser DOM was quarantined before model use: %v",
 								workerID,

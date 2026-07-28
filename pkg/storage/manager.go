@@ -104,6 +104,16 @@ func InitDBWithPath(path string) error {
 	CREATE TABLE IF NOT EXISTS processed_emails (
 		message_id TEXT PRIMARY KEY,
 		processed_at DATETIME
+	);
+	CREATE TABLE IF NOT EXISTS application_attempts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source TEXT,
+		url TEXT,
+		terminal_class TEXT,
+		started_at DATETIME,
+		ended_at DATETIME,
+		model_call_count INTEGER,
+		inference_ms INTEGER
 	);`
 	if _, err = db.Exec(createTableQuery); err != nil {
 		return err
