@@ -111,6 +111,9 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
+| 393 | [Playwright Host missing dependencies to run browsers](#393-playwright-host-missing-dependencies-to-run-browsers) | Blocker | Pending | 8.0 = 8×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Missing OS packages are easily fixed in the container or host. | Over 1000 errors across logs show headless browsers fail to start because libicudata.so.74, libavif.so.16 etc. are missing. |
+| 394 | [QUARANTINED_PROMPT_INJECTION has massive false positive rate on legitimate jobs](#394-quarantined_prompt_injection-has-massive-false-positive-rate-on-legitimate-jobs) | Major | Pending | 4.0 = 8×1.0÷2 | claude-opus-4-6-thinking | gemini-3.1-pro-high | gpt-5.6-sol | Security heuristics require careful tuning. | Over 400 legitimate jobs (Lever, Greenhouse) were quarantined. The detection heuristic is too aggressive. |
+| 395 | [Validation loop times out waiting for Ollama context deadline](#395-validation-loop-times-out-waiting-for-ollama-context-deadline) | Major | Pending | 2.6 = 4×1.0÷1.5 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Timeouts are a configuration issue. | 480 validation attempts failed with 'context deadline exceeded' indicating the timeout to Ollama during form validation is too short. |
 | 127 | [Sensitive credentials application data and generated documents are world-readable](#127-sensitive-credentials-application-data-and-generated-documents-are-world-readable) | Major | Resolved (2026-07-27) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Maintained commands enforce an owner-only umask and fail closed if startup repair cannot secure known private paths. Storage creates private artifacts at `0600` under `0700`; the idempotent repair refuses symlinks. Tests and live metadata verification pass |
 | 123 | [Failed and non-2xx job-page fetches still proceed to expensive fit scoring](#123-failed-and-non-2xx-job-page-fetches-still-proceed-to-expensive-fit-scoring) | Major | Resolved (2026-07-27) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Missing descriptions now require meaningful 2xx page content before model work. Closed postings become `INVALID_URL`; transient failures receive bounded retries and return to `DISCOVERED`; every response closes within its attempt and affected status writes are checked |
 | 129 | [The agent hard-codes one developer-specific career-profile path](#129-the-agent-hard-codes-one-developer-specific-career-profile-path) | Major | Resolved (2026-07-27) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Shared resolution now supports `-profile`, `CAREER_PROFILE_PATH`, and repository-local or sibling-library defaults. Startup validates the source before cached chunks, fails closed on missing or unverifiable context, and provides explicit `-no-rag` mode |
@@ -2390,3 +2393,18 @@ Two related leak paths observed live 2026-07-22: (1) the 2,001-row DISCOVERED ba
 **Root cause:** `pkg/scraper/atsfeeds.go::fetchATSFeed` reads one response and `pollBoard` calls the parser once. A partial or rate-limited response is logged and converted to zero discovered jobs; there is no retry, response-size/content validation, or board-level cooldown to prevent repeated noisy failures on the next continuous pass.
 
 **Acceptance criteria:** retry truncated or otherwise retryable feed responses with a bounded, injectable backoff; validate status, content type and non-empty body before parsing; keep malformed payloads isolated to one board; add tests for transient truncation recovery, persistent malformed JSON, empty bodies and cancellation; retain the existing title and junk-URL gates.
+
+## 393 Playwright Host missing dependencies to run browsers
+**Symptom:** Over 1000 `Host system is missing dependencies to run browsers` warnings in `career_agent.log`.
+**Impact:** Headless browser actions fail, preventing form submission.
+**Fix:** Run `npx playwright install-deps` or add missing libraries (`libicudata.so.74`, etc.) to the environment setup.
+
+## 394 QUARANTINED_PROMPT_INJECTION has massive false positive rate on legitimate jobs
+**Symptom:** Over 400 jobs are stuck in `QUARANTINED_PROMPT_INJECTION` status in `job_funnel`.
+**Impact:** legitimate jobs (e.g., Senior Backend Engineer at Instrumentl via Lever) are never applied to.
+**Fix:** Refine the prompt injection heuristic to distinguish between actual injections and normal ATS text.
+
+## 395 Validation loop times out waiting for Ollama context deadline
+**Symptom:** 480 errors in `career_agent.log` with `failed to solve validation errors: ... context deadline exceeded`.
+**Impact:** Validation loop fails to resolve form errors because the API call to Ollama times out.
+**Fix:** Increase the HTTP client timeout for Ollama calls, especially during the validation phase which may pass large DOM contexts.
