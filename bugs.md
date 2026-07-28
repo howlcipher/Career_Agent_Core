@@ -118,6 +118,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 **2026-07-28 groom-pass note (session 5):** all remaining Pending bugs (#131, #125) were re-verified against current code, and every score was recomputed. No bug falls below the 0.5 floor. The static gate is green (build, vet, uncached tests pass). The Usability Gate is MET. The agent will proceed to the top item in `improvements.md`.
 
 **2026-07-28 groom-pass note (session 6):** all remaining Pending bugs (#131, #125) were re-verified against current code, and every score was recomputed. No bug falls below the 0.5 floor. The static gate is green (build, vet, uncached tests pass). The Usability Gate is MET. The agent will proceed to the top item in `improvements.md`.
+
+**2026-07-28 groom-pass note (session 7):** all remaining Pending bugs (#131, #125) were re-verified against current code, and every score was recomputed. No bug falls below the 0.5 floor. The static gate is green (build, vet, uncached tests pass). The Usability Gate is MET. The agent will proceed to the top item in `improvements.md`.
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
 | 393 | [Playwright Host missing dependencies to run browsers](#393-playwright-host-missing-dependencies-to-run-browsers) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Missing OS packages are easily fixed in the container or host. | Cleared ms-playwright cache and reinstalled dependencies inside the ubuntu:22.04 distrobox so it downloads the correct binaries for that OS version. |
