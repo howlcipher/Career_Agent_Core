@@ -1,0 +1,44 @@
+:root {
+  --bg-color: #050510;
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --text-main: #f0f0f0;
+  --text-muted: #a0a0b0;
+  --neon-blue: #00f0ff;
+  --neon-purple: #7000ff;
+  --neon-green: #00ff88;
+  --neon-red: #ff3366;
+  --neon-yellow: #ffcc00;
+  --neon-orange: #ff8800;
+  --neon-pink: #ff2ee6;
+  --neon-teal: #00e0c0;
+  --neon-cyan: #00ffee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-color);
+  background-image: 
+      radial-gradient(circle at 15% 50%, rgba(112, 0, 255, 0.15), transparent 25%),
+      radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.15), transparent 25%);
+  color: var(--text-main);
+  margin: 0;
+  padding: 40px 20px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+  }
+}

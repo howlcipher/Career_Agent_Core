@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -137,11 +138,8 @@ func statusReason(status string) string {
 	}
 }
 
-//go:embed index.html
-var indexHTML embed.FS
-
-//go:embed favicon.png
-var faviconPNG embed.FS
+//go:embed ui/dist
+var uiDistFS embed.FS
 
 var db *sql.DB
 
@@ -218,12 +216,19 @@ func main() {
 	db.SetMaxOpenConns(10)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", serveDashboard)
+	
+	// Serve static files from the embedded React/Vite app
+	subFS, err := fs.Sub(uiDistFS, "ui/dist")
+	if err != nil {
+		log.Fatalf("Failed to sub ui/dist: %v", err)
+	}
+	fileServer := http.FileServer(http.FS(subFS))
+	mux.Handle("/", fileServer)
+
 	mux.HandleFunc("/api/metrics", serveMetrics)
 	mux.HandleFunc("/api/agent/start", serveAgentStart)
 	mux.HandleFunc("/api/agent/stop", serveAgentStop)
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
-	mux.HandleFunc("/favicon.png", serveFavicon)
 
 	if warning := dashboardExposureWarning(address); warning != "" {
 		log.Print(warning)
@@ -459,25 +464,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(m)
 }
 
-func serveDashboard(w http.ResponseWriter, r *http.Request) {
-	content, err := indexHTML.ReadFile("index.html")
-	if err != nil {
-		http.Error(w, "Could not load dashboard", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(content)
-}
-
-func serveFavicon(w http.ResponseWriter, r *http.Request) {
-	content, err := faviconPNG.ReadFile("favicon.png")
-	if err != nil {
-		http.Error(w, "Could not load favicon", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Write(content)
-}
+// Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
 
 func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
