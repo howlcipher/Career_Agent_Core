@@ -55,8 +55,16 @@ type Metrics struct {
 
 	LastManualCompany        string `json:"last_manual_company,omitempty"`
 	LastManualTitle          string `json:"last_manual_title,omitempty"`
+	LastManualReason         string `json:"last_manual_reason,omitempty"`
 	LastManualAt             string `json:"last_manual_at,omitempty"`
 	LastManualProcessingTime string `json:"last_manual_processing_time,omitempty"`
+
+	// StatusLegend explains every status the dashboard puts a tile or card on
+	// screen for, keyed by the raw status code. The counted-only statuses
+	// (BLOCKED_CAPTCHA, INVALID_URL) have no "last job" card to carry a reason
+	// of their own, so without this they were numbers with no explanation -
+	// see bug #435.
+	StatusLegend map[string]string `json:"status_legend,omitempty"`
 
 	TotalApplied     int                     `json:"total_applied_tracked"`
 	Interviews       int                     `json:"interviews"`
@@ -140,6 +148,32 @@ func statusReason(status string) string {
 	}
 }
 
+// explainedStatuses is every status the dashboard surfaces to the user, and so
+// every status statusReason must have a real arm for. Bug #435: statusReason
+// grew arms for MANUAL_REQUIRED, AWAITING_REVIEW, BLOCKED_CAPTCHA and
+// INVALID_URL that nothing ever called, because the only two call sites were
+// the SKIPPED and FAILED_* queries. Driving the legend off this list is what
+// keeps the two counted-only statuses reachable; TestStatusLegend_CoversEvery
+// ExplainedStatus fails if a status here has no arm.
+var explainedStatuses = []string{
+	"SKIPPED",
+	"BLOCKED_CAPTCHA",
+	"INVALID_URL",
+	"FAILED_SCORE",
+	"FAILED_SUBMIT",
+	"MANUAL_REQUIRED",
+	"AWAITING_REVIEW",
+}
+
+// statusLegend renders explainedStatuses into the map the UI reads.
+func statusLegend() map[string]string {
+	legend := make(map[string]string, len(explainedStatuses))
+	for _, status := range explainedStatuses {
+		legend[status] = statusReason(status)
+	}
+	return legend
+}
+
 //go:embed ui/dist
 var uiDistFS embed.FS
 
@@ -218,7 +252,7 @@ func main() {
 	db.SetMaxOpenConns(10)
 
 	mux := http.NewServeMux()
-	
+
 	// Serve static files from the embedded React/Vite app
 	subFS, err := fs.Sub(uiDistFS, "ui/dist")
 	if err != nil {
@@ -347,16 +381,23 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		var manualCompany, manualTitle sql.NullString
+		var manualCompany, manualTitle, manualStatus sql.NullString
 		var manualAt, manualDiscoveredAt sql.NullTime
-		err := db.QueryRow(`SELECT company_name, job_title, last_updated, discovered_at FROM job_funnel
+		// status is selected purely so the reason can be rendered: a
+		// Copilot-filled job awaiting a click and an account-gated job the
+		// agent can never submit both land in this queue and are entirely
+		// different asks of the user (bug #435).
+		err := db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
 			WHERE status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') ORDER BY last_updated DESC LIMIT 1`).
-			Scan(&manualCompany, &manualTitle, &manualAt, &manualDiscoveredAt)
+			Scan(&manualCompany, &manualTitle, &manualStatus, &manualAt, &manualDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
 			log.Printf("Failed to query last manual-required job: %v", err)
 		}
 		m.LastManualCompany = manualCompany.String
 		m.LastManualTitle = manualTitle.String
+		if manualStatus.Valid {
+			m.LastManualReason = statusReason(manualStatus.String)
+		}
 		if manualAt.Valid {
 			m.LastManualAt = manualAt.Time.Local().Format("Jan 2, 3:04 PM")
 		}
@@ -462,6 +503,8 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 	_ = g.Wait()
 
+	m.StatusLegend = statusLegend()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(m)
 }
@@ -473,7 +516,7 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
 	if err == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -486,7 +529,7 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to start agent: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status": "started"}`))
 }
@@ -507,4 +550,3 @@ func serveAgentStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"running": running})
 }
-

@@ -8,7 +8,12 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist/ is deliberately NOT ignored, despite being build output. cmd/dashboard
+# embeds it with `//go:embed ui/dist`, so a checkout without it fails
+# `go build ./...` outright -- before Node is even involved (bug #436).
+# Rebuild and commit it with `npm run build` in this directory whenever src/
+# changes; TestUIDistEmbed_ContainsBuiltAssets guards against committing a
+# hollowed-out one.
 dist-ssr
 *.local
 

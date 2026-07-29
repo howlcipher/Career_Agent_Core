@@ -155,3 +155,76 @@ h1 {
   letter-spacing: 1px;
   text-transform: uppercase;
 }
+
+/* The per-status explanation under each counted tile. Bug #435: the two
+   counted-only statuses (Blocked, Not A Posting) had numbers and no way to
+   learn what they meant, and the reasons the API already computed for the
+   skipped/failed/manual rows were never rendered at all. */
+.card-reason {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  opacity: 0.75;
+}
+
+.card.blocked::before { background: var(--neon-pink); }
+.card.blocked:hover { border-color: rgba(255, 46, 230, 0.4); box-shadow: 0 10px 30px rgba(255, 46, 230, 0.15); }
+.card.blocked:hover::before { box-shadow: 0 0 15px var(--neon-pink); }
+.card.blocked:hover h2 { color: var(--neon-pink); }
+
+.card.invalid::before { background: var(--neon-teal); }
+.card.invalid:hover { border-color: rgba(0, 224, 192, 0.4); box-shadow: 0 10px 30px rgba(0, 224, 192, 0.15); }
+.card.invalid:hover::before { box-shadow: 0 0 15px var(--neon-teal); }
+.card.invalid:hover h2 { color: var(--neon-teal); }
+
+/* "Last <event>" detail cards. These carry the reason strings the API serves
+   for the most recent row in each terminal state; the counts above cannot
+   convey which specific job is waiting on the user, or why. */
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 25px;
+  margin-top: 25px;
+}
+
+.detail {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 22px;
+}
+
+.detail h3 {
+  margin: 0 0 12px 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--neon-blue);
+}
+
+.detail-job {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.detail-reason {
+  margin: 8px 0 0 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text-main);
+  opacity: 0.85;
+}
+
+.detail-meta {
+  margin: 8px 0 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
