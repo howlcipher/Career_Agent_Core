@@ -681,6 +681,18 @@ func main() {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
 	}
 
+	lockFile, err := os.OpenFile("applications/career_agent.lock", os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		log.Fatalf("Failed to open lock file: %v", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		log.Fatalf("Another instance of the agent is already running (failed to acquire applications/career_agent.lock). Exiting.")
+	}
+	defer func() {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+	}()
+
 	daemonMode := flag.Bool("daemon", false, "Run in persistent background drip mode")
 	daemonCycleLimit := flag.Int(
 		"cycle-limit",
