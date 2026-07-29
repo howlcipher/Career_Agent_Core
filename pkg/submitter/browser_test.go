@@ -35,7 +35,7 @@ func TestAttemptSubmit_NewContextFails(t *testing.T) {
 		},
 	}
 
-	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false, false)
 
 	if err == nil {
 		t.Errorf("Expected error when NewContext fails, got nil")
@@ -81,7 +81,7 @@ func TestAttemptSubmit_NewPageFails(t *testing.T) {
 		},
 	}
 
-	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false)
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "TestCompany", "https://example.com/apply", nil, nil, "", false, false, false)
 
 	if err == nil {
 		t.Errorf("Expected error when NewPage fails, got nil")
@@ -466,6 +466,7 @@ func TestAttemptSubmitQuarantinesMaliciousDOMBeforeGenericOrDedicatedModels(t *t
 				"",
 				true,
 				false,
+				false,
 			)
 
 			if !errors.Is(err, security.ErrPromptInjectionDetected) {
@@ -591,6 +592,7 @@ func TestAttemptSubmitQuarantinesDynamicallyRevealedDOMBeforeModels(t *testing.T
 				&config.PII{},
 				"",
 				true,
+				false,
 				false,
 			)
 
@@ -1115,7 +1117,7 @@ func TestHandleGreenhouse_SubmitFallsBackWhenLegacySelectorMissing(t *testing.T)
 	}
 	target := pageTarget{mockPage}
 
-	if err := handleGreenhouse(target, "", "", nil, true); err != nil {
+	if err := handleGreenhouse(target, "", "", nil, false, true); err != nil {
 		t.Fatalf("expected no error when the fallback submit selector matches, got: %v", err)
 	}
 	if fallbackLocator.clickCalls != 1 {
@@ -1146,7 +1148,7 @@ func TestHandleGreenhouse_SubmitUsesLegacySelectorWhenPresent(t *testing.T) {
 	}
 	target := pageTarget{mockPage}
 
-	if err := handleGreenhouse(target, "", "", nil, true); err != nil {
+	if err := handleGreenhouse(target, "", "", nil, false, true); err != nil {
 		t.Fatalf("expected no error when the legacy submit selector matches, got: %v", err)
 	}
 	if legacyLocator.clickCalls != 1 {
@@ -1216,10 +1218,116 @@ func TestIsSubmissionConfirmed(t *testing.T) {
 	}
 }
 
-func TestConfirmOrError_SkipsCheckWhenNotAutoSubmitting(t *testing.T) {
+func TestSubmitGate(t *testing.T) {
+	tests := []struct {
+		name            string
+		copilotMode     bool
+		autoSubmitClick bool
+		wantErr         error
+	}{
+		{
+			name:            "copilotMode off, autoSubmitClick off",
+			copilotMode:     false,
+			autoSubmitClick: false,
+			wantErr:         ErrSubmitClickDisabled,
+		},
+		{
+			name:            "copilotMode off, autoSubmitClick on",
+			copilotMode:     false,
+			autoSubmitClick: true,
+			wantErr:         nil,
+		},
+		{
+			name:            "copilotMode on, autoSubmitClick off",
+			copilotMode:     true,
+			autoSubmitClick: false,
+			wantErr:         ErrAwaitingHumanReview,
+		},
+		{
+			name:            "copilotMode on, autoSubmitClick on",
+			copilotMode:     true,
+			autoSubmitClick: true,
+			wantErr:         ErrAwaitingHumanReview,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := submitGate(tt.copilotMode, tt.autoSubmitClick)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Errorf("submitGate(%v, %v) = %v, want nil", tt.copilotMode, tt.autoSubmitClick, err)
+				}
+			} else {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("submitGate(%v, %v) = %v, want %v", tt.copilotMode, tt.autoSubmitClick, err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
+
+// TestIsSubmitGated guards the short-circuit that keeps a deliberate
+// pre-click stop from being processed as a fill failure.
+//
+// Without it, copilot mode is actively destructive rather than merely
+// incomplete: handleDynamic returns the sentinel, the cached-mapping and
+// Learner Module paths read any non-nil error as "the mapping is stale",
+// delete the learned blueprint for that domain, and fall back to a Vision
+// call — so every board the agent had already learned gets un-learned and
+// re-inferred. The retry loop is worse still: it formats the error with %v
+// while wrapping ErrCaptchaBlocked, which drops the sentinel's identity and
+// files a perfectly healthy board as bot-blocked.
+//
+// Both handlers and the gate must therefore agree on exactly one predicate.
+func TestIsSubmitGated(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"copilot sentinel", ErrAwaitingHumanReview, true},
+		{"click-disabled sentinel", ErrSubmitClickDisabled, true},
+		{"wrapped copilot sentinel", fmt.Errorf("handleGreenhouse: %w", ErrAwaitingHumanReview), true},
+		{"wrapped click-disabled sentinel", fmt.Errorf("handleLever: %w", ErrSubmitClickDisabled), true},
+		{"nil", nil, false},
+		{"ordinary fill failure", errors.New("failed to click submit: timeout"), false},
+		{"captcha block", ErrCaptchaBlocked, false},
+		{"auth wall", ErrAuthWall, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSubmitGated(tc.err); got != tc.want {
+				t.Errorf("isSubmitGated(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSubmitGateResultsAreGated pins the two predicates together: every error
+// submitGate can produce must be recognised by isSubmitGated. A future gate
+// reason added to one and not the other would silently reintroduce the
+// mapping-deletion and captcha-misfiling behaviour above.
+func TestSubmitGateResultsAreGated(t *testing.T) {
+	for _, copilot := range []bool{true, false} {
+		for _, autoClick := range []bool{true, false} {
+			err := submitGate(copilot, autoClick)
+			if err == nil {
+				continue
+			}
+			if !isSubmitGated(err) {
+				t.Errorf("submitGate(%v, %v) returned %v, which isSubmitGated does not recognise", copilot, autoClick, err)
+			}
+		}
+	}
+}
+
+func TestConfirmOrError_ReturnsSentinelWhenDisabled(t *testing.T) {
 	page := &MockPage{urlValue: "https://jobs.lever.co/acme/abc-123", contentValue: "<html><body>Apply for this job</body></html>"}
-	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123", false); err != nil {
-		t.Errorf("expected no error when autoSubmitClick is false, got: %v", err)
+	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123", false, false); !errors.Is(err, ErrSubmitClickDisabled) {
+		t.Errorf("expected ErrSubmitClickDisabled when autoSubmitClick is false, got: %v", err)
+	}
+	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123", true, true); !errors.Is(err, ErrAwaitingHumanReview) {
+		t.Errorf("expected ErrAwaitingHumanReview when copilotMode is true, got: %v", err)
 	}
 }
 
@@ -1228,7 +1336,7 @@ func TestConfirmOrError_ConfirmsOnStrongEvidence(t *testing.T) {
 		urlValue:     "https://jobs.lever.co/acme/abc-123/apply",
 		contentValue: "<html><body>Thank you for applying!</body></html>",
 	}
-	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", true); err != nil {
+	if err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", false, true); err != nil {
 		t.Errorf("expected no error on confirmation phrase, got: %v", err)
 	}
 }
@@ -1253,7 +1361,7 @@ func TestConfirmOrError_CatchesNativeValidationBlock(t *testing.T) {
 	// bugs.md #95: with no evidence either way this now legitimately waits out
 	// the settle budget before ruling. Shorten it rather than sit through 15s.
 	defer withShortSubmitOutcomeTiming()()
-	err := confirmOrError(page, "Acme", urlBeforeClick, true)
+	err := confirmOrError(page, "Acme", urlBeforeClick, false, true)
 	if err == nil {
 		t.Fatal("expected an error when the URL never changed from the pre-click baseline, got nil")
 	}
@@ -1293,7 +1401,7 @@ func TestHandleDynamic_FillsCustomQuestionAnswers(t *testing.T) {
 		"answers": {"custom_q_1": "I've followed the team's infrastructure work for years and want to contribute directly."}
 	}`
 
-	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false, true); err != nil {
 		t.Fatalf("handleDynamic returned an unexpected error: %v", err)
 	}
 	if filledWith != "I've followed the team's infrastructure work for years and want to contribute directly." {
@@ -1321,7 +1429,7 @@ func TestHandleDynamic_CustomQuestionFillFailureDoesNotAbort(t *testing.T) {
 		"answers": {"custom_q_1": "Some generated answer."}
 	}`
 
-	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "", nil, mappingJSON, false, true); err != nil {
 		t.Errorf("expected a failed custom-question fill to not abort the submission, got error: %v", err)
 	}
 }
@@ -1331,7 +1439,7 @@ func TestConfirmOrError_ErrorsOnValidationErrorText(t *testing.T) {
 		urlValue:     "https://jobs.lever.co/acme/abc-123/apply?step=review",
 		contentValue: "<html><body>This field is required: Last Name</body></html>",
 	}
-	err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", true)
+	err := confirmOrError(page, "Acme", "https://jobs.lever.co/acme/abc-123/apply", false, true)
 	if err == nil {
 		t.Fatal("expected an error on validation-error page content, got nil")
 	}
@@ -1462,7 +1570,7 @@ func TestAttemptSubmit_ClickToRevealPlusLabelFallback_EndToEndSuccess(t *testing
 	resumePath := t.TempDir() + "/resume.pdf"
 	generateDocs := func() (string, string, error) { return resumePath, resumePath, nil }
 
-	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Jway Group", applyURL, generateDocs, pii, "profile context", true, true)
+	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Jway Group", applyURL, generateDocs, pii, "profile context", true, false, true)
 
 	if err != nil {
 		t.Fatalf("expected a confirmed successful submission, got error: %v", err)
@@ -1549,7 +1657,7 @@ func TestAttemptSubmit_VisionFallback_EndToEndSuccess(t *testing.T) {
 	pii := &config.PII{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com", Phone: "555-0100"}
 	generateDocs := func() (string, string, error) { return resumePath, resumePath, nil }
 
-	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Acme", applyURL, generateDocs, pii, "profile context", true, true)
+	err := AttemptSubmit(mockBrowser, nil, mapper, nil, "Acme", applyURL, generateDocs, pii, "profile context", true, false, true)
 
 	if err != nil {
 		t.Fatalf("expected the Vision fallback to carry the submission to a confirmed success, got error: %v", err)
@@ -1640,7 +1748,7 @@ func TestFillCoverLetter_FailureDoesNotAbortSubmission(t *testing.T) {
 	}
 
 	mappingJSON := `{"fields": {"cover_letter": "#cover"}, "labels": {"cover_letter": "Cover Letter"}}`
-	if err := handleDynamic(pageTarget{page: mockPage}, "", path, nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", path, nil, mappingJSON, false, true); err != nil {
 		t.Errorf("a failed cover-letter fill must not abort the submission, got: %v", err)
 	}
 }
@@ -1654,7 +1762,7 @@ func TestFillCoverLetter_MissingFileIsTolerated(t *testing.T) {
 		},
 	}
 	mappingJSON := `{"fields": {"cover_letter": "#cover"}, "labels": {"cover_letter": "Cover Letter"}}`
-	if err := handleDynamic(pageTarget{page: mockPage}, "", "/nonexistent/master_cover_letter.txt", nil, mappingJSON, false); err != nil {
+	if err := handleDynamic(pageTarget{page: mockPage}, "", "/nonexistent/master_cover_letter.txt", nil, mappingJSON, false, true); err != nil {
 		t.Errorf("a missing cover letter file must not abort the submission, got: %v", err)
 	}
 }

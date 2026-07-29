@@ -20,6 +20,7 @@ func attemptQuarantinedVisionSubmit(
 	coverPath string,
 	pii *config.PII,
 	mapper FormMapper,
+	copilotMode bool,
 	autoSubmitClick bool,
 ) error {
 	if err := quarantineFillTargetDOM(
@@ -39,13 +40,14 @@ func attemptQuarantinedVisionSubmit(
 		coverPath,
 		pii,
 		mapper,
+		copilotMode,
 		autoSubmitClick,
 	)
 }
 
 // attemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen
 // and map coordinates/selectors if standard HTML DOM pruning fails or is heavily obfuscated.
-func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath, coverPath string, pii *config.PII, mapper FormMapper, autoSubmitClick bool) error {
+func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath, coverPath string, pii *config.PII, mapper FormMapper, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Vision-Submit] Taking a full-page screenshot of %s for Visual Reasoning...", applyURL)
 
 	// Take full page screenshot
@@ -75,12 +77,12 @@ func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, a
 
 	// Now execute the standard dynamic handler using the newly generated visual mapping
 	urlBeforeClick := page.URL()
-	if err := handleDynamic(target, resumePath, coverPath, pii, mappingJSON, autoSubmitClick); err != nil {
+	if err := handleDynamic(target, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick); err != nil {
 		return err
 	}
 
 	// Bug #52 follow-up: this path used to return success straight from
 	// handleDynamic's bare error value, with no confirmation evidence at
 	// all -- confirm it the same way every other ATS path now does.
-	return confirmOrError(page, companyName, urlBeforeClick, autoSubmitClick)
+	return confirmOrError(page, companyName, urlBeforeClick, copilotMode, autoSubmitClick)
 }

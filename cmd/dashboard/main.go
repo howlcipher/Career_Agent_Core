@@ -131,6 +131,8 @@ func statusReason(status string) string {
 		return "Reached the application form but failed to submit"
 	case "MANUAL_REQUIRED":
 		return "ATS requires an account — apply manually with the saved tailored docs"
+	case "AWAITING_REVIEW":
+		return "Filled by Copilot — awaiting your review and submit"
 	case "INVALID_URL":
 		return "Not a real posting (board index, marketing page, or expired-redirect URL)"
 	default:
@@ -248,7 +250,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status IN ('APPLIED', 'PROCESSED_MANUAL') THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status IN ('FAILED_SCORE', 'FAILED_SUBMIT') THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' THEN 1 ELSE 0 END), 0)
 		FROM job_funnel`).Scan(
@@ -348,7 +350,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		var manualCompany, manualTitle sql.NullString
 		var manualAt, manualDiscoveredAt sql.NullTime
 		err := db.QueryRow(`SELECT company_name, job_title, last_updated, discovered_at FROM job_funnel
-			WHERE status = 'MANUAL_REQUIRED' ORDER BY last_updated DESC LIMIT 1`).
+			WHERE status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&manualCompany, &manualTitle, &manualAt, &manualDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
 			log.Printf("Failed to query last manual-required job: %v", err)

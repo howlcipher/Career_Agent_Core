@@ -137,6 +137,8 @@ exclude_companies:
   - "Trendset Communications"
 auto_submit: true
 auto_submit_click: true
+# copilot_mode: when true, fill application forms completely but stop before clicking submit.
+copilot_mode: false
 headless_browser: true
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."
 use_master_cover_letter: true

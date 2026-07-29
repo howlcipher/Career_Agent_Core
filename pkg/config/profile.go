@@ -19,6 +19,7 @@ type Profile struct {
 	ExcludeCompanies []string `yaml:"exclude_companies"`
 	AutoSubmit       bool     `yaml:"auto_submit"`
 	AutoSubmitClick  bool     `yaml:"auto_submit_click"`
+	CopilotMode      bool     `yaml:"copilot_mode"`
 	HeadlessBrowser  bool     `yaml:"headless_browser"`
 	CoverLetterTone  string   `yaml:"cover_letter_tone"`
 	// CoverLetterTones is an optional list of tone variants to A/B test

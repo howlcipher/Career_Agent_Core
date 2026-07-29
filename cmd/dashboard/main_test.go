@@ -271,6 +271,8 @@ func TestStatusReason_KnownAndUnknownCodes(t *testing.T) {
 		"BLOCKED_CAPTCHA": true,
 		"FAILED_SCORE":    true,
 		"FAILED_SUBMIT":   true,
+		"MANUAL_REQUIRED": true,
+		"AWAITING_REVIEW": true,
 		"INVALID_URL":     true,
 	}
 	for status, expectMapped := range tests {

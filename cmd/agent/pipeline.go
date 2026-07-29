@@ -439,12 +439,14 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		}
 
 		attemptStart := time.Now()
-		err := submitter.AttemptSubmit(deps.Submitter.Browser, deps.Filter, deps.Client, deps.Client, job.CompanyName, job.URL, generateDocsFunc, deps.PIIData, state.TailoredContext, deps.Profile.HeadlessBrowser, deps.Profile.AutoSubmitClick)
+		err := submitter.AttemptSubmit(deps.Submitter.Browser, deps.Filter, deps.Client, deps.Client, job.CompanyName, job.URL, generateDocsFunc, deps.PIIData, state.TailoredContext, deps.Profile.HeadlessBrowser, deps.Profile.CopilotMode, deps.Profile.AutoSubmitClick)
 		inferenceMs := int(time.Since(attemptStart).Milliseconds())
 
 		var terminalClass storage.TerminalClass
 		if err == nil {
 			terminalClass = storage.AttemptApplied
+		} else if errors.Is(err, submitter.ErrAwaitingHumanReview) || errors.Is(err, submitter.ErrSubmitClickDisabled) {
+			terminalClass = storage.AttemptAwaitingReview
 		} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
 			terminalClass = storage.AttemptPostSubmitCaptcha
 		} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || submitter.IsManualReviewError(err) {
@@ -472,6 +474,12 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			if statusErr := storage.UpdateFunnelStatus(job.URL, promptInjectionQuarantineStatus); statusErr != nil {
 				log.Printf("[Worker-%d] Failed to record browser quarantine for %s: %v", workerID, job.CompanyName, statusErr)
 			}
+		} else if errors.Is(err, submitter.ErrAwaitingHumanReview) || errors.Is(err, submitter.ErrSubmitClickDisabled) {
+			log.Printf("[Worker-%d] %s form filled — awaiting human review: %v", workerID, job.CompanyName, err)
+			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "AWAITING_REVIEW")
+			storage.UpdateFunnelStatus(job.URL, "AWAITING_REVIEW")
+			state.DocsDir, _ = storage.MoveToManualApply(state.DocsDir)
+			_ = storage.LogCopilotReview(job.CompanyName, job.Title, job.URL, state.DocsDir)
 		} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || errors.Is(err, submitter.ErrFormTooLargeForModel) || submitter.IsManualReviewError(err) {
 			log.Printf("[Worker-%d] %s queued for manual submission: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")

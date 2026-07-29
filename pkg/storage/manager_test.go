@@ -515,6 +515,60 @@ func TestLogManualRequired(t *testing.T) {
 	}
 }
 
+func TestLogCopilotReview(t *testing.T) {
+	reportPath := filepath.Join("applications", "needs_manual_apply", "copilot_queue.md")
+	defer os.Remove(reportPath)
+
+	err := LogCopilotReview("CopilotCorp", "Go Dev", "https://copilot.example.com/job/1", "applications/needs_manual_apply/CopilotCorp")
+	if err != nil {
+		t.Fatalf("Failed to log copilot review entry: %v", err)
+	}
+	if err := LogCopilotReview("CopilotNoDocsCorp", "Go Dev", "https://copilot.example.com/job/2", ""); err != nil {
+		t.Fatalf("Failed to log docs-less copilot entry: %v", err)
+	}
+
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("Failed to read copilot queue file: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "CopilotCorp") || !strings.Contains(content, "https://copilot.example.com/job/1") {
+		t.Errorf("Copilot queue content mismatch: %s", content)
+	}
+	if !strings.Contains(content, "# Copilot Review Queue") {
+		t.Errorf("Missing markdown header in copilot queue")
+	}
+	if !strings.Contains(content, "applications/needs_manual_apply/CopilotCorp/") {
+		t.Errorf("Entry should link to the saved docs directory: %s", content)
+	}
+	if !strings.Contains(content, "docs not found") {
+		t.Errorf("Docs-less entry should say docs not found: %s", content)
+	}
+}
+
+func TestMergeStatuses_AwaitingReview(t *testing.T) {
+	for _, status := range []string{"DISCOVERED", "PROCESSING", "SKIPPED"} {
+		if got := mergeStatuses("AWAITING_REVIEW", status); got != "AWAITING_REVIEW" {
+			t.Errorf("mergeStatuses(AWAITING_REVIEW, %s) = %s, want AWAITING_REVIEW", status, got)
+		}
+		if got := mergeStatuses(status, "AWAITING_REVIEW"); got != "AWAITING_REVIEW" {
+			t.Errorf("mergeStatuses(%s, AWAITING_REVIEW) = %s, want AWAITING_REVIEW", status, got)
+		}
+	}
+
+	if got := mergeStatuses("UNKNOWN_STATUS", "AWAITING_REVIEW"); got != "AWAITING_REVIEW" {
+		t.Errorf("mergeStatuses(UNKNOWN_STATUS, AWAITING_REVIEW) = %s, want AWAITING_REVIEW", got)
+	}
+
+	if got := mergeStatuses("APPLIED", "AWAITING_REVIEW"); got != "MANUAL_REQUIRED" {
+		t.Errorf("mergeStatuses(APPLIED, AWAITING_REVIEW) = %s, want MANUAL_REQUIRED", got)
+	}
+	if got := mergeStatuses("AWAITING_REVIEW", "APPLIED"); got != "MANUAL_REQUIRED" {
+		t.Errorf("mergeStatuses(AWAITING_REVIEW, APPLIED) = %s, want MANUAL_REQUIRED", got)
+	}
+}
+
 func TestSaveFormMappingRejectsNonJSON(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

@@ -271,7 +271,7 @@ func mergeStatuses(s1, s2 string) string {
 			return 4
 		case "FAILED_SUBMIT":
 			return 5
-		case "MANUAL_REQUIRED":
+		case "MANUAL_REQUIRED", "AWAITING_REVIEW":
 			return 6
 		case "APPLIED":
 			return 7
@@ -288,8 +288,8 @@ func mergeStatuses(s1, s2 string) string {
 
 	isSuccess1 := s1 == "APPLIED" || s1 == "REJECTED" || s1 == "INTERVIEW_REQUESTED"
 	isSuccess2 := s2 == "APPLIED" || s2 == "REJECTED" || s2 == "INTERVIEW_REQUESTED"
-	isFailure1 := s1 == "FAILED_SUBMIT" || s1 == "BLOCKED_CAPTCHA" || s1 == "MANUAL_REQUIRED"
-	isFailure2 := s2 == "FAILED_SUBMIT" || s2 == "BLOCKED_CAPTCHA" || s2 == "MANUAL_REQUIRED"
+	isFailure1 := s1 == "FAILED_SUBMIT" || s1 == "BLOCKED_CAPTCHA" || s1 == "MANUAL_REQUIRED" || s1 == "AWAITING_REVIEW"
+	isFailure2 := s2 == "FAILED_SUBMIT" || s2 == "BLOCKED_CAPTCHA" || s2 == "MANUAL_REQUIRED" || s2 == "AWAITING_REVIEW"
 
 	if (isSuccess1 && isFailure2) || (isSuccess2 && isFailure1) {
 		return "MANUAL_REQUIRED"
@@ -723,6 +723,47 @@ func LogManualRequired(companyName, jobTitle, applyURL, docsDir string) error {
 
 	if _, err = f.WriteString(entry); err != nil {
 		return fmt.Errorf("failed to write to manual queue: %w", err)
+	}
+
+	return nil
+}
+
+// LogCopilotReview appends a Copilot-mode job to the copilot review queue
+// (applications/needs_manual_apply/copilot_queue.md). The form was filled
+// completely by the agent and stopped before final submit.
+func LogCopilotReview(companyName, jobTitle, applyURL, docsDir string) error {
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	if err := os.MkdirAll(manualApplyBase, security.PrivateDirMode); err != nil {
+		return fmt.Errorf("failed to create manual-apply dir: %w", err)
+	}
+	reportPath := filepath.Join(manualApplyBase, "copilot_queue.md")
+
+	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
+		header := "# Copilot Review Queue\n\nThese job applications were filled completely in Copilot mode. Open each URL in your browser to review the pre-filled form and click submit.\n\n"
+		if err := writePrivateFile(reportPath, []byte(header)); err != nil {
+			return fmt.Errorf("failed to initialize copilot queue: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect copilot queue: %w", err)
+	}
+
+	applyURL = NormalizeURL(applyURL)
+	docsNote := "docs not found"
+	if docsDir != "" {
+		docsNote = fmt.Sprintf("docs in `%s/`", docsDir)
+	}
+	entry := fmt.Sprintf("- [ ] **%s** - %s: [Apply Here](%s) — %s\n", companyName, jobTitle, applyURL, docsNote)
+
+	f, err := openPrivateAppendFile(reportPath)
+	if err != nil {
+		return fmt.Errorf("failed to open copilot queue: %w", err)
+	}
+	defer f.Close()
+
+	if _, err = f.WriteString(entry); err != nil {
+		return fmt.Errorf("failed to write to copilot queue: %w", err)
 	}
 
 	return nil

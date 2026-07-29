@@ -517,9 +517,9 @@ func isSubmissionConfirmed(applyURL, currentURL, pageContent string) (bool, subm
 // confirmation evidence at all — the same unverified-success pattern bug
 // #51 fixed, just never extended past three of the many ATS paths. Every
 // path that can result in APPLIED now goes through this same check.
-func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, autoSubmitClick bool) error {
-	if !autoSubmitClick {
-		return nil
+func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, copilotMode, autoSubmitClick bool) error {
+	if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+		return err
 	}
 	// bugs.md #95: wait for evidence of an outcome instead of reading the DOM
 	// the instant the click returns.
@@ -529,6 +529,51 @@ func confirmOrError(page playwright.Page, companyName, urlBeforeClick string, au
 		return nil
 	}
 	return fmt.Errorf("submission not confirmed for %s: %s (at %s)", companyName, reason, currentURL)
+}
+
+// ErrAwaitingHumanReview marks a form filled in copilot mode, where the agent
+// stops before the final submit click so a human can review and finish it.
+var ErrAwaitingHumanReview = errors.New("copilot mode: form filled, awaiting human review before submit")
+
+// ErrSubmitClickDisabled marks a form filled when auto_submit_click is false,
+// where auto-clicking the final submit button is disabled.
+//
+// Before improvement #423 this case returned a bare nil, which pipeline.go
+// read as success and recorded as APPLIED with a permanent dedup row, for a
+// form that was never submitted (bug #432).
+var ErrSubmitClickDisabled = errors.New("auto submit click disabled: form filled but not submitted")
+
+// submitGate reports the sentinel error that must be returned instead of
+// clicking a form's final submit control, or nil when clicking is allowed.
+// Every submit path must consult this rather than testing autoSubmitClick
+// directly, so a new gate can never be wired into one ATS handler and
+// missed in another — the single most repeated structural defect in this
+// project's history (#65/#66 → #67, #74 → #75, #28 → #31).
+func submitGate(copilotMode, autoSubmitClick bool) error {
+	if copilotMode {
+		return ErrAwaitingHumanReview
+	}
+	if !autoSubmitClick {
+		return ErrSubmitClickDisabled
+	}
+	return nil
+}
+
+// isSubmitGated reports whether err is one of submitGate's sentinels, meaning
+// the form was filled successfully and the run stopped deliberately at the
+// final click.
+//
+// Every recovery path must short-circuit on this before doing anything else.
+// A gated return is *not* a fill failure, but it travels through the same
+// error values that fill failures do, so without this check the recovery
+// machinery reacts to an outcome that never happened: the cached-mapping and
+// Learner Module paths delete the learned form mapping and fall back to an
+// expensive Vision call, and the retry loop re-reads the page for bot
+// protection and can rewrap the sentinel as ErrCaptchaBlocked — losing the
+// sentinel's identity and filing the job as BLOCKED_CAPTCHA. Copilot mode
+// would otherwise wipe every learned ATS blueprint it touched.
+func isSubmitGated(err error) bool {
+	return errors.Is(err, ErrAwaitingHumanReview) || errors.Is(err, ErrSubmitClickDisabled)
 }
 
 // ErrAuthWall marks an application flow gated behind account creation or
@@ -1056,7 +1101,7 @@ func resolveFillTarget(page playwright.Page) fillTarget {
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, autoSubmitClick bool) error {
+func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
 	session, err := newSecureBrowserSession(
@@ -1180,7 +1225,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			return fmt.Errorf("cached form rejected before model use: %w", err)
 		}
 		urlBeforeClick := page.URL()
-		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, autoSubmitClick)
+		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
+		if isSubmitGated(dynErr) {
+			// The cached mapping filled the form correctly; only the click was
+			// withheld. Invalidating it here would discard a working blueprint.
+			return dynErr
+		}
 		if dynErr != nil {
 			log.Printf("[Auto-Submit] Dynamic Playwright mapping failed for %s. Invalidating cache. Error: %v", domain, dynErr)
 			storage.DeleteFormMapping(domain)
@@ -1196,12 +1246,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					coverPath,
 					pii,
 					mapper,
+					copilotMode,
 					autoSubmitClick,
 				)
 			}
 			return fmt.Errorf("dynamic execution failed, cache cleared: %w", dynErr)
 		}
-		return confirmOrError(page, companyName, urlBeforeClick, autoSubmitClick)
+		return confirmOrError(page, companyName, urlBeforeClick, copilotMode, autoSubmitClick)
 	}
 	urlLower := strings.ToLower(applyURL)
 	var execErr error
@@ -1230,7 +1281,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
 				urlBeforeSubmitClick = page.URL()
-				execErr = handleLinkedIn(page, resumePath, pii, autoSubmitClick)
+				execErr = handleLinkedIn(page, resumePath, pii, copilotMode, autoSubmitClick)
 			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
 				// Bug #47: the dedicated handlers were never wired to
 				// bug #8's click-to-reveal step, unlike the Learner Module
@@ -1254,7 +1305,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				); err != nil {
 					return fmt.Errorf("Greenhouse form rejected before use: %w", err)
 				}
-				execErr = handleGreenhouse(target, resumePath, coverPath, pii, autoSubmitClick)
+				execErr = handleGreenhouse(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
 			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
 				// Bug #47, same reasoning as the Greenhouse branch above.
 				clickApplyIfPresent(page)
@@ -1271,7 +1322,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				); err != nil {
 					return fmt.Errorf("Lever form rejected before use: %w", err)
 				}
-				execErr = handleLever(target, resumePath, coverPath, pii, autoSubmitClick)
+				execErr = handleLever(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
 			} else if strings.Contains(urlLower, "ashbyhq.com") {
 				clickApplyIfPresent(page)
 				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
@@ -1287,7 +1338,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				); err != nil {
 					return fmt.Errorf("Ashby form rejected before use: %w", err)
 				}
-				execErr = handleAshby(target, resumePath, coverPath, pii, autoSubmitClick)
+				execErr = handleAshby(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
@@ -1348,7 +1399,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)
 					storage.SaveFormMapping(domain, newMappingJSON)
 					urlBeforeSubmitClick = page.URL()
-					execErr = handleDynamic(target, resumePath, coverPath, pii, newMappingJSON, autoSubmitClick)
+					execErr = handleDynamic(target, resumePath, coverPath, pii, newMappingJSON, copilotMode, autoSubmitClick)
+					if isSubmitGated(execErr) {
+						// The mapping the Learner Module just produced worked;
+						// keep it rather than discarding a fresh, good blueprint.
+						return execErr
+					}
 					if execErr != nil {
 						log.Printf("[Auto-Submit] Dynamic fill failed for %s after Learner Module mapping. Invalidating cache. Falling back to Vision module. Error: %v", domain, execErr)
 						storage.DeleteFormMapping(domain)
@@ -1366,6 +1422,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 							coverPath,
 							pii,
 							mapper,
+							copilotMode,
 							autoSubmitClick,
 						)
 					}
@@ -1382,6 +1439,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 						coverPath,
 						pii,
 						mapper,
+						copilotMode,
 						autoSubmitClick,
 					)
 				}
@@ -1536,6 +1594,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				log.Printf("[Auto-Submit] Entered the emailed security code for %s; resubmitting", companyName)
 				if sLoc, sCount := findSubmitControl(target); sCount > 0 {
 					if visible, ok := firstVisibleSubmit(sLoc, sCount); ok {
+						if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+							return err
+						}
 						urlBeforeSubmitClick = page.URL()
 						submitClickedAt = time.Now()
 						if clickErr := visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); clickErr == nil {
@@ -1682,6 +1743,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if !ok {
 					execErr = fmt.Errorf("found %d submit control(s) but none visible", count)
 				} else {
+					if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+						return err
+					}
 					urlBeforeSubmitClick = page.URL()
 					submitClickedAt = time.Now()
 					execErr = visible.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
@@ -1691,6 +1755,13 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			}
 		}
 
+		if isSubmitGated(execErr) {
+			// Nothing was clicked, so there is no failed click to explain and
+			// no bot-protection verdict to reach. Returning here also keeps the
+			// sentinel's identity intact — the ErrCaptchaBlocked rewrap below
+			// formats execErr with %v and would file this as BLOCKED_CAPTCHA.
+			return execErr
+		}
 		if execErr != nil {
 			// bugs.md #101: a bare `Timeout 30000ms exceeded` from the submit
 			// click says the click never landed and nothing about what stopped
@@ -1758,7 +1829,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	return fmt.Errorf("failed to submit application after 3 validation error attempts")
 }
 
-func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, autoSubmitClick bool) error {
+func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected LinkedIn Job. Implementing Easy Apply automation...")
 
 	// Click Easy Apply button
@@ -1828,7 +1899,7 @@ func fillPreMappedATSSelectors(target fillTarget, pii *config.PII, ats string) {
 	}
 }
 
-func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
+func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PII, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Ashby ATS. Filling out fields...")
 
 	if _, err := target.WaitForSel("input[name='name'], input[name='email']", 30000); err != nil {
@@ -1878,19 +1949,20 @@ func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PI
 		}
 	}
 
-	if autoSubmitClick {
-		submitLoc := target.Loc("button[type='submit']")
-		if count, _ := submitLoc.Count(); count > 0 {
-			if err := submitLoc.First().Click(); err != nil {
-				return fmt.Errorf("failed to click submit: %w", err)
-			}
+	if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+		return err
+	}
+	submitLoc := target.Loc("button[type='submit']")
+	if count, _ := submitLoc.Count(); count > 0 {
+		if err := submitLoc.First().Click(); err != nil {
+			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}
 
 	return nil
 }
 
-func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
+func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *config.PII, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
 	if _, err := target.WaitForSel("input#first_name", 30000); err != nil {
@@ -1961,27 +2033,28 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 	// inside the helper covers boards that render a paste textarea instead.
 	fillCoverLetterIfPresent(target, coverPath, "input[type='file'][name='cover_letter']", "Cover Letter")
 
-	if autoSubmitClick {
-		// Bug #49: input#submit_app only exists on Greenhouse's legacy embed
-		// theme. Confirmed live 2026-07-23 (job-boards.greenhouse.io/
-		// alphasense): a modern-board posting has zero elements matching
-		// that ID at all — the real control is a plain, unidentified
-		// <button type="submit">Submit application</button>. Try the legacy
-		// selector first so postings that do use it are unaffected, then
-		// fall back to the type-submit button.
-		submitLoc := target.Loc("input#submit_app")
-		if count, _ := submitLoc.Count(); count == 0 {
-			submitLoc = target.Loc("button[type='submit']")
-		}
-		if err := submitLoc.Click(); err != nil {
-			return fmt.Errorf("failed to click submit: %w", err)
-		}
+	if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+		return err
+	}
+	// Bug #49: input#submit_app only exists on Greenhouse's legacy embed
+	// theme. Confirmed live 2026-07-23 (job-boards.greenhouse.io/
+	// alphasense): a modern-board posting has zero elements matching
+	// that ID at all — the real control is a plain, unidentified
+	// <button type="submit">Submit application</button>. Try the legacy
+	// selector first so postings that do use it are unaffected, then
+	// fall back to the type-submit button.
+	submitLoc := target.Loc("input#submit_app")
+	if count, _ := submitLoc.Count(); count == 0 {
+		submitLoc = target.Loc("button[type='submit']")
+	}
+	if err := submitLoc.Click(); err != nil {
+		return fmt.Errorf("failed to click submit: %w", err)
 	}
 
 	return nil
 }
 
-func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
+func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PII, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Lever ATS. Filling out fields...")
 
 	if _, err := target.WaitForSel("input[name='name']", 30000); err != nil {
@@ -2038,10 +2111,11 @@ func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PI
 	// handles; the label fallback covers templates that differ.
 	fillCoverLetterIfPresent(target, coverPath, "textarea[name='comments']", "Cover Letter")
 
-	if autoSubmitClick {
-		if err := target.Loc("button.postings-btn.template-btn-submit").Click(); err != nil {
-			return fmt.Errorf("failed to click submit: %w", err)
-		}
+	if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+		return err
+	}
+	if err := target.Loc("button.postings-btn.template-btn-submit").Click(); err != nil {
+		return fmt.Errorf("failed to click submit: %w", err)
 	}
 
 	return nil
@@ -3651,7 +3725,7 @@ func attachResume(target fillTarget, mappedSelector, resumePath string, required
 	return nil
 }
 
-func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.PII, mappingJSON string, autoSubmitClick bool) error {
+func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.PII, mappingJSON string, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Executing dynamic Playwright mapping...")
 	var mapping FormMapping
 	if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
@@ -3696,12 +3770,13 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 		}
 	}
 
-	if autoSubmitClick {
-		if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
-			err := target.Loc(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
-			if err != nil {
-				return fmt.Errorf("failed to click submit: %w", err)
-			}
+	if err := submitGate(copilotMode, autoSubmitClick); err != nil {
+		return err
+	}
+	if sel, ok := mapping.Fields["submit_button"]; ok && sel != "" {
+		err := target.Loc(sel).Click(playwright.LocatorClickOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
+		if err != nil {
+			return fmt.Errorf("failed to click submit: %w", err)
 		}
 	}
 

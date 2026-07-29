@@ -12,6 +12,12 @@ const (
 	AttemptApplied           TerminalClass = "APPLIED"
 	AttemptPostSubmitCaptcha TerminalClass = "POST_SUBMIT_CAPTCHA"
 	AttemptManualAccountGate TerminalClass = "MANUAL_ACCOUNT_GATE"
+	// AttemptAwaitingReview is a deliberate stop before the final submit click
+	// (copilot mode, or auto_submit_click disabled), not a property of the ATS.
+	// It is counted with the manual outcomes below because both mean "a human
+	// must finish this", but it is stored distinctly so source health never
+	// reads a working board as one that demands an account.
+	AttemptAwaitingReview    TerminalClass = "AWAITING_REVIEW"
 	AttemptDeadPosting       TerminalClass = "DEAD_POSTING"
 	AttemptValidationFailure TerminalClass = "VALIDATION_FAILURE"
 	AttemptOtherFailure      TerminalClass = "OTHER_FAILURE"
@@ -82,7 +88,7 @@ func GetSourceHealthSummaries(periodDays int) ([]SourceHealthSummary, error) {
 			COUNT(id) as total_attempts,
 			SUM(CASE WHEN terminal_class = 'APPLIED' THEN 1 ELSE 0 END) as applied_count,
 			SUM(CASE WHEN terminal_class = 'POST_SUBMIT_CAPTCHA' THEN 1 ELSE 0 END) as captcha_count,
-			SUM(CASE WHEN terminal_class = 'MANUAL_ACCOUNT_GATE' THEN 1 ELSE 0 END) as manual_count,
+			SUM(CASE WHEN terminal_class IN ('MANUAL_ACCOUNT_GATE', 'AWAITING_REVIEW') THEN 1 ELSE 0 END) as manual_count,
 			SUM(CASE WHEN terminal_class = 'DEAD_POSTING' THEN 1 ELSE 0 END) as dead_count,
 			SUM(CASE WHEN terminal_class = 'VALIDATION_FAILURE' THEN 1 ELSE 0 END) as validation_count,
 			SUM(CASE WHEN terminal_class = 'OTHER_FAILURE' THEN 1 ELSE 0 END) as other_count,
