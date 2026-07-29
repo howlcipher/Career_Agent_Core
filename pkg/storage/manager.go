@@ -422,8 +422,12 @@ func GetTrackedCompanies() ([]string, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
+	// Bug #434: AWAITING_REVIEW belongs here for the same reason
+	// MANUAL_REQUIRED does — the user finishes those applications by hand, so
+	// an inbound outcome email for one is legitimate. Leaving it out meant a
+	// copilot-filled company was not even a candidate for correlation.
 	rows, err := db.Query(`SELECT DISTINCT company_name FROM job_funnel
-		WHERE status IN ('APPLIED', 'INTERVIEW_REQUESTED', 'MANUAL_REQUIRED') AND company_name != ''`)
+		WHERE status IN ('APPLIED', 'INTERVIEW_REQUESTED', 'MANUAL_REQUIRED', 'AWAITING_REVIEW') AND company_name != ''`)
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +518,84 @@ func RecordApplicationInDB(companyName, jobTitle, url string) error {
 	_, err := db.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, companyName, jobTitle, url, time.Now().Format(time.RFC3339))
 	return err
+}
+
+// HandoffStatuses are the funnel statuses that mean "the agent stopped and a
+// human has to finish this": an ATS account gate (MANUAL_REQUIRED) or a
+// deliberate pre-submit stop (AWAITING_REVIEW, copilot mode). Kept in one
+// place because bug #434 was precisely the two halves of the codebase
+// disagreeing about which statuses these were — GetTrackedCompanies listed one
+// of them, the tracker's candidate query listed neither.
+var HandoffStatuses = []string{"MANUAL_REQUIRED", "AWAITING_REVIEW"}
+
+func isHandoffStatus(status string) bool {
+	for _, s := range HandoffStatuses {
+		if status == s {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkHandoffApplied promotes a job the user submitted by hand out of its
+// hand-off status, and is the only writer that moves a row out of one.
+//
+// Bug #434: nothing did this before. A job handed to the user stayed recorded
+// as un-submitted forever, so the funnel under-reported every application the
+// user personally sent, and the tracker — which correlates outcome emails
+// against applied rows — dropped the resulting rejection or interview notice
+// for exactly those applications.
+//
+// It is deliberately narrow. It refuses any row that is not currently in a
+// hand-off status, so a stale ticked checkbox can never overwrite a REJECTED
+// or INTERVIEW_REQUESTED outcome the tracker has since recorded, nor re-apply
+// to something already APPLIED. A missing row is not an error: checklists
+// outlive the database rows they describe.
+//
+// The status update and the dedup record commit together, because a promotion
+// visible in the funnel but not in applied_jobs would let the agent re-apply
+// to a job the user already submitted.
+func MarkHandoffApplied(companyName, jobTitle, applyURL string) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("db not initialized")
+	}
+	applyURL = NormalizeURL(applyURL)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin handoff promotion: %w", err)
+	}
+	defer tx.Rollback()
+
+	var current string
+	err = tx.QueryRow(`SELECT status FROM job_funnel WHERE url = ?`, applyURL).Scan(&current)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("look up handoff status: %w", err)
+	}
+	if !isHandoffStatus(current) {
+		return false, nil
+	}
+
+	if _, err := tx.Exec(`UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?`,
+		"APPLIED", time.Now(), applyURL); err != nil {
+		return false, fmt.Errorf("promote handoff row: %w", err)
+	}
+
+	// Same ON CONFLICT DO NOTHING reasoning as RecordApplicationInDB: the user
+	// may tick a box that a previous reconcile run already promoted.
+	if _, err := tx.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`,
+		companyName, jobTitle, applyURL, time.Now().Format(time.RFC3339)); err != nil {
+		return false, fmt.Errorf("record handoff application: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit handoff promotion: %w", err)
+	}
+	return true, nil
 }
 
 type Metadata struct {

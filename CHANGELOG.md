@@ -1,5 +1,11 @@
 # Career Agent Core - Changelog
 
+## 2026-07-29 — Hand-off applications can now be recorded and tracked
+
+* **Fix (bug #434):** nothing ever moved a job out of `MANUAL_REQUIRED` or `AWAITING_REVIEW`, so every application the user completed by hand stayed recorded as un-submitted and its rejection or interview email correlated to nothing.
+* **New command `cmd/reconcile`:** reads the hand-off checklists and records every ticked entry as applied, including the deduplication row so the agent never re-applies to a job the user sent. Dry run by default; `-confirm` to write. It refuses any row that has already moved past the hand-off stage, so a stale tick cannot overwrite a recorded outcome.
+* **Tracker:** outcome emails now correlate against hand-off rows, not just `APPLIED` ones. `AWAITING_REVIEW` was also missing from the tracked-company set entirely. The rollback-rather-than-guess behaviour for ambiguous multi-row matches is unchanged.
+
 ## 2026-07-29 — Human-in-the-Loop Copilot Mode
 
 * **Feature:** Added `copilot_mode` to `profile.yaml`. The agent performs every step of an application — discovery, scoring, tailoring, and confirming the form is reachable and fillable — then stops before the final submit click. Jobs are recorded as `AWAITING_REVIEW`, their tailored documents move to `applications/needs_manual_apply/`, and each is queued in `copilot_queue.md` with its apply URL. The agent's own form fill happens in an ephemeral automated browser session and does not carry into the user's browser; the documents and the vetting are what carry over.

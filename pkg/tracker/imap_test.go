@@ -173,6 +173,76 @@ func TestUpdateDBWithTrackerResultStates(t *testing.T) {
 	}
 }
 
+// TestUpdateDBWithTrackerResultHandoffStatuses covers bug #434.
+//
+// The candidate query used to match only APPLIED rows, which made the tracker
+// a complete no-op for hand-off applications — the ones the user finishes by
+// hand and therefore cares most about. MANUAL_REQUIRED was already in
+// GetTrackedCompanies' match set, so those emails were fetched, recognised as
+// belonging to a tracked company, and then silently dropped for want of a
+// candidate row.
+func TestUpdateDBWithTrackerResultHandoffStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		start  string
+		status string
+		want   string
+	}{
+		{"account-gated rejection", "MANUAL_REQUIRED", "REJECTED", "REJECTED"},
+		{"copilot-filled rejection", "AWAITING_REVIEW", "REJECTED", "REJECTED"},
+		{"copilot-filled interview", "AWAITING_REVIEW", "INTERVIEW_REQUESTED", "INTERVIEW_REQUESTED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+			insertTrackerTestJob(t, db, "Handoff Corp", tc.start, "https://example.com/"+tc.name)
+
+			messageID := "<" + tc.name + "@example.com>"
+			got, err := updateDBWithTrackerResult(messageID, "Handoff Corp", tc.status, "", "")
+			if err != nil {
+				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+			}
+			if got != trackerUpdateUpdated {
+				t.Fatalf("update result = %q, want %q — a real outcome email for a hand-off application must not be dropped",
+					got, trackerUpdateUpdated)
+			}
+			if !storage.WasEmailProcessed(messageID) {
+				t.Fatal("successfully handled email was not acknowledged")
+			}
+			assertTrackerTestStatus(t, db, "Handoff Corp", tc.want)
+		})
+	}
+}
+
+// TestUpdateDBWithTrackerResultHandoffAmbiguity confirms widening the candidate
+// set did not weaken the rollback-rather-than-guess behaviour from bugs
+// #124/#125: two eligible rows must still resolve to ambiguous, not to a coin
+// flip, even when they hold different hand-off statuses.
+func TestUpdateDBWithTrackerResultHandoffAmbiguity(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Mixed Corp", "AWAITING_REVIEW", "https://example.com/mixed-one")
+	insertTrackerTestJob(t, db, "Mixed Corp", "MANUAL_REQUIRED", "https://example.com/mixed-two")
+
+	messageID := "<mixed-handoff@example.com>"
+	got, err := updateDBWithTrackerResult(messageID, "Mixed Corp", "REJECTED", "", "")
+	if err != nil {
+		t.Fatalf("ambiguous hand-off match returned an error: %v", err)
+	}
+	if got != trackerUpdateAmbiguous {
+		t.Fatalf("got %q, want ambiguous", got)
+	}
+
+	var rejected int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM job_funnel WHERE company_name = ? AND status = 'REJECTED'",
+		"Mixed Corp",
+	).Scan(&rejected); err != nil {
+		t.Fatalf("count REJECTED rows: %v", err)
+	}
+	if rejected != 0 {
+		t.Errorf("%d row(s) were written on an ambiguous match; the transaction must roll back instead of guessing", rejected)
+	}
+}
+
 func TestUpdateDBWithTrackerResultAmbiguousCompany(t *testing.T) {
 	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
 	insertTrackerTestJob(t, db, "Double Corp", "APPLIED", "https://example.com/one")

@@ -620,6 +620,11 @@ func TestGetTrackedCompanies(t *testing.T) {
 	AddToFunnel("GatedCorp", "SRE", "https://b.example.com/1", "DISCOVERED")
 	UpdateFunnelStatus("https://b.example.com/1", "MANUAL_REQUIRED")
 	AddToFunnel("DiscoveredCorp", "SRE", "https://c.example.com/1", "DISCOVERED")
+	// Bug #434: a copilot-filled company is finished by hand exactly like an
+	// account-gated one, so its outcome emails are legitimate and it must be in
+	// the match set. It was omitted, so those emails correlated to nothing.
+	AddToFunnel("CopilotCorp", "SRE", "https://d.example.com/1", "DISCOVERED")
+	UpdateFunnelStatus("https://d.example.com/1", "AWAITING_REVIEW")
 
 	companies, err := GetTrackedCompanies()
 	if err != nil {
@@ -629,9 +634,122 @@ func TestGetTrackedCompanies(t *testing.T) {
 	if !strings.Contains(got, "AppliedCorp") || !strings.Contains(got, "GatedCorp") {
 		t.Errorf("expected applied and manual-required companies, got %q", got)
 	}
+	if !strings.Contains(got, "CopilotCorp") {
+		t.Errorf("expected awaiting-review companies to be tracked, got %q", got)
+	}
 	if strings.Contains(got, "DiscoveredCorp") {
 		t.Errorf("merely-discovered companies must not be tracked, got %q", got)
 	}
+}
+
+// TestMarkHandoffApplied covers bug #434's promotion path. The refusal cases
+// matter more than the success cases: a stale ticked checkbox must never
+// overwrite an outcome the tracker has already recorded.
+func TestMarkHandoffApplied(t *testing.T) {
+	t.Run("promotes both hand-off statuses", func(t *testing.T) {
+		for _, from := range []string{"MANUAL_REQUIRED", "AWAITING_REVIEW"} {
+			setupTestDB(t)
+
+			url := "https://promote.example.com/1"
+			AddToFunnel("HandoffCorp", "SRE", url, "DISCOVERED")
+			UpdateFunnelStatus(url, from)
+
+			ok, err := MarkHandoffApplied("HandoffCorp", "SRE", url)
+			if err != nil {
+				t.Fatalf("from %s: MarkHandoffApplied failed: %v", from, err)
+			}
+			if !ok {
+				t.Fatalf("from %s: expected the row to be promoted", from)
+			}
+
+			var status string
+			if err := db.QueryRow(`SELECT status FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&status); err != nil {
+				t.Fatalf("from %s: reading back status: %v", from, err)
+			}
+			if status != "APPLIED" {
+				t.Errorf("from %s: status = %q, want APPLIED", from, status)
+			}
+
+			// The dedup record must land in the same commit, or the agent
+			// would re-apply to a job the user already submitted.
+			if !HasApplied(url) {
+				t.Errorf("from %s: promotion is not visible to the dedup check", from)
+			}
+
+			teardownTestDB()
+		}
+	})
+
+	t.Run("refuses to overwrite a non-handoff status", func(t *testing.T) {
+		for _, from := range []string{"APPLIED", "REJECTED", "INTERVIEW_REQUESTED", "DISCOVERED", "BLOCKED_CAPTCHA"} {
+			setupTestDB(t)
+
+			url := "https://protected.example.com/1"
+			AddToFunnel("ProtectedCorp", "SRE", url, "DISCOVERED")
+			UpdateFunnelStatus(url, from)
+
+			ok, err := MarkHandoffApplied("ProtectedCorp", "SRE", url)
+			if err != nil {
+				t.Fatalf("from %s: unexpected error: %v", from, err)
+			}
+			if ok {
+				t.Errorf("from %s: expected the promotion to be refused", from)
+			}
+
+			var status string
+			if err := db.QueryRow(`SELECT status FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&status); err != nil {
+				t.Fatalf("from %s: reading back status: %v", from, err)
+			}
+			if status != from {
+				t.Errorf("from %s: status was changed to %q; non-hand-off rows must be left alone", from, status)
+			}
+
+			teardownTestDB()
+		}
+	})
+
+	t.Run("missing row is not an error", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		ok, err := MarkHandoffApplied("GhostCorp", "SRE", "https://nowhere.example.com/1")
+		if err != nil {
+			t.Errorf("a checklist entry with no funnel row must not be an error, got %v", err)
+		}
+		if ok {
+			t.Error("expected no promotion for a URL with no funnel row")
+		}
+	})
+
+	t.Run("is idempotent", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		url := "https://twice.example.com/1"
+		AddToFunnel("TwiceCorp", "SRE", url, "DISCOVERED")
+		UpdateFunnelStatus(url, "AWAITING_REVIEW")
+
+		if ok, err := MarkHandoffApplied("TwiceCorp", "SRE", url); err != nil || !ok {
+			t.Fatalf("first call: ok=%v err=%v", ok, err)
+		}
+		// The user leaves the box ticked; a second reconcile run must be a
+		// no-op rather than an error or a duplicate applied_jobs row.
+		ok, err := MarkHandoffApplied("TwiceCorp", "SRE", url)
+		if err != nil {
+			t.Fatalf("second call errored: %v", err)
+		}
+		if ok {
+			t.Error("second call reported a promotion; the row was already APPLIED")
+		}
+
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM applied_jobs WHERE url = ?`, NormalizeURL(url)).Scan(&count); err != nil {
+			t.Fatalf("counting applied_jobs: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("applied_jobs rows = %d, want 1", count)
+		}
+	})
 }
 
 func TestMoveToManualApply(t *testing.T) {

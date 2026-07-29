@@ -312,6 +312,8 @@ The repair is idempotent and limited to known private files plus the `applicatio
 ## Managing Submissions
 If `auto_submit_click: true` is enabled in `profile.yaml` but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to the Dynamic Learner Module, or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.
 
+Whenever you submit one of these by hand, tick its checkbox and run `go run ./cmd/reconcile -confirm`. That is what tells the funnel the application was really sent, and what lets the email tracker match its eventual rejection or interview reply — see [Copilot Mode](#copilot-mode-reviewing-before-you-submit) below.
+
 ### Copilot Mode: reviewing before you submit
 
 With `copilot_mode: true` (or `auto_submit_click: false`), the agent never clicks Submit. It still does everything else — scores the job, writes a tailored resume and cover letter, opens the form, fills every field it can, and resolves validation errors — then stops and hands the application to you:
@@ -320,7 +322,16 @@ With `copilot_mode: true` (or `auto_submit_click: false`), the agent never click
 - its tailored documents are moved into `applications/needs_manual_apply/<Company>/`;
 - a checklist entry is appended to `applications/needs_manual_apply/copilot_queue.md` with the company, role, apply URL, and the path to those documents.
 
-To finish an application, open `copilot_queue.md`, follow the apply link, fill the form using the saved documents, and submit. Tick the checkbox to track what you've handled.
+To finish an application, open `copilot_queue.md`, follow the apply link, fill the form using the saved documents, and submit. **Tick the checkbox** — that is how you tell the agent you sent it.
+
+Then run:
+
+```bash
+go run ./cmd/reconcile            # dry run: shows what would be recorded
+go run ./cmd/reconcile -confirm   # records the ticked applications as applied
+```
+
+`cmd/reconcile` reads all three hand-off checklists (`manual_submissions.md`, `manual_queue.md`, `copilot_queue.md`), promotes every ticked entry to `APPLIED`, and records it for deduplication so the agent never re-applies to a job you sent yourself. Until you do this, the funnel counts those applications as un-submitted and the email tracker cannot match their rejection or interview replies. It refuses to touch any row that has already moved on — a rejection or interview outcome recorded since you ticked the box is left exactly as it is — so it is safe to re-run at any time.
 
 **What does and does not carry over.** The agent fills the form inside its own automated browser session, which closes when it stops at the gate. That fill does **not** appear in your browser — expect a blank form when you open the link. What you get is the expensive part: the job was scored as a genuine fit, a tailored resume and cover letter were written for it, and the form was confirmed reachable and fillable rather than dead, gated, or bot-blocked. The typing is left to you.
 

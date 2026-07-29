@@ -308,8 +308,17 @@ func updateDBWithTrackerResult(
 
 	result := trackerUpdateUnmatched
 	if companyExact != "" {
+		// Bug #434: this used to match only APPLIED, which made the whole
+		// tracker a no-op for hand-off applications. MANUAL_REQUIRED was
+		// already in GetTrackedCompanies' match set, so those emails were
+		// fetched, recognised as belonging to a tracked company, and then
+		// silently dropped here for want of a candidate row. A real rejection
+		// or interview email from a company is strong evidence the user did
+		// submit the application the agent handed them, so the outcome is
+		// recorded rather than discarded.
 		rows, err := tx.Query(
-			`SELECT id, job_title, url FROM job_funnel WHERE company_name = ? AND status = 'APPLIED'`,
+			`SELECT id, job_title, url FROM job_funnel
+			 WHERE company_name = ? AND status IN ('APPLIED', 'MANUAL_REQUIRED', 'AWAITING_REVIEW')`,
 			companyExact,
 		)
 		if err != nil {
@@ -340,7 +349,7 @@ func updateDBWithTrackerResult(
 				}
 				result = trackerUpdateUpdated
 			} else {
-				if err := storage.LogManualRequired(companyExact, "Ambiguous "+status, "Multiple APPLIED roles match this outcome email", ""); err != nil {
+				if err := storage.LogManualRequired(companyExact, "Ambiguous "+status, "Multiple open applications match this outcome email", ""); err != nil {
 					log.Printf("[Tracker] WARNING: failed to log manual review for ambiguous email: %v", err)
 				}
 				result = trackerUpdateAmbiguous
