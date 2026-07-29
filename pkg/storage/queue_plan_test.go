@@ -42,7 +42,7 @@ func TestGetQueuePlan(t *testing.T) {
 		VALUES ('http://lever.co/c', 'C', 'Role C', 'BLOCKED_CAPTCHA', 90, 0.90, ?)`, yesterday)
 	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, fit_score, fit_similarity, discovered_at)
 		VALUES ('https://lever.co/c', 'C', 'Role C', 'APPLIED', 90, 0.90, ?)`, yesterday)
-	
+
 	// Unrelated status
 	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, fit_score, fit_similarity, discovered_at)
 		VALUES ('https://lever.co/d', 'D', 'Role D', 'DISCOVERED', 70, 0.70, ?)`, yesterday)
@@ -98,7 +98,7 @@ func TestGetQueuePlan(t *testing.T) {
 			t.Errorf("expected 1 dedup total, got %d", plan.TotalWithDedup)
 		}
 	})
-	
+
 	t.Run("Clear dedup true", func(t *testing.T) {
 		plan, err := GetQueuePlan("%lever.co%", "FAILED_SUBMIT", true)
 		if err != nil {

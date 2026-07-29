@@ -102,7 +102,7 @@ func TestPollBoard_NoRetryOn404(t *testing.T) {
 
 	f := &FunnelEngine{}
 	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, nil)
-	
+
 	if attempts != 1 {
 		t.Errorf("expected 1 attempt for a 404, got %d", attempts)
 	}

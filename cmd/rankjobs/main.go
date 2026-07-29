@@ -107,7 +107,7 @@ func main() {
 				failed.Add(1)
 				return nil
 			}
-			
+
 			done.Add(1)
 			d := done.Load()
 			if d%25 == 0 {

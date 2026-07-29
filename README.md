@@ -1,5 +1,9 @@
 # Career Agent Core
 
+<div align="center">
+  <img src="docs/images/og-image.jpg" alt="Career Agent Core Banner" width="100%">
+</div>
+
 Career Agent Core is an autonomous AI-driven job application engine written in Go. It discovers remote jobs, filters them against your strict salary and career requirements, and uses an LLM (local Ollama by default, or Claude/Gemini) to write highly tailored resumes and cover letters using your central AI Knowledge Library.
 
 ## Features

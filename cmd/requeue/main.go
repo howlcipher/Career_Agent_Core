@@ -108,12 +108,12 @@ func main() {
 				log.Printf("[%s] plan query failed: %v", name, err)
 				continue
 			}
-			
+
 			fmt.Printf("\n=== Queue Plan for %s (pattern: %s, from: %s) ===\n", name, p, *fromStatus)
 			fmt.Printf("Total Candidates: %d\n", plan.TotalCandidates)
 			fmt.Printf("Total with Dedup Row: %d\n", plan.TotalWithDedup)
 			fmt.Printf("Total with Scheme Duplicate: %d\n\n", plan.TotalWithSchemeDup)
-			
+
 			if plan.TotalCandidates > 0 {
 				fmt.Printf("%-50s | %-15s | %-10s | %-5s | %-7s | %-7s | %-35s | %-15s | %-12s | %s\n", "Normalized URL", "Source", "Status", "Age", "Fit", "Score", "Reason", "Prior Outcome", "SchemeDup?", "Action")
 				fmt.Println(strings.Repeat("-", 180))
@@ -136,7 +136,7 @@ func main() {
 			}
 			fmt.Printf("\nNOTE: This is a dry run. Re-run with -confirm to apply these changes.\n")
 			fmt.Printf("NOTE: A running agent needs a restart before a changed queue can be observed.\n\n")
-			
+
 			if !*confirm {
 				continue
 			}

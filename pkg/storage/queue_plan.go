@@ -26,8 +26,8 @@ type QueuePlanCandidate struct {
 	IsExploration bool
 }
 
-func (c *QueuePlanCandidate) GetURL() string { return c.OriginalURL }
-func (c *QueuePlanCandidate) GetFitSimilarity() float64 { return c.FitSimilarity }
+func (c *QueuePlanCandidate) GetURL() string             { return c.OriginalURL }
+func (c *QueuePlanCandidate) GetFitSimilarity() float64  { return c.FitSimilarity }
 func (c *QueuePlanCandidate) GetDiscoveredAt() time.Time { return c.DiscoveredAt }
 func (c *QueuePlanCandidate) SetRankData(score float64, reason string, isExploration bool) {
 	c.RankingScore = score
@@ -75,7 +75,7 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		cand.AgeDays = int(time.Since(discoveredAt).Hours() / 24)
 		cand.PriorOutcome = cand.CurrentStatus
 		cand.DiscoveredAt = discoveredAt
-		
+
 		// Determine source from domain
 		source := cand.OriginalURL
 		if idx := strings.Index(source, "://"); idx != -1 {
@@ -107,7 +107,7 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		if cand.HasSchemeDup {
 			plan.TotalWithSchemeDup++
 		}
-		
+
 		plan.Candidates = append(plan.Candidates, cand)
 	}
 

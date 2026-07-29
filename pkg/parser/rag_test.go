@@ -12,7 +12,7 @@ import (
 func TestChunkMarkdown(t *testing.T) {
 	input := "# Header 1\nContent 1\n## Header 2\nContent 2"
 	chunks := ChunkMarkdown(input)
-	
+
 	if len(chunks) != 2 {
 		t.Fatalf("expected 2 chunks, got %d", len(chunks))
 	}

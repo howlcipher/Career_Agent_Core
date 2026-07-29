@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 	"path/filepath"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -59,7 +59,7 @@ func main() {
 	// Assuming there's a dummy resume file
 	dummyResumePath := filepath.Join(cwd, "cmd/prototype_go_rod/dummy_resume.pdf")
 	os.WriteFile(dummyResumePath, []byte("dummy pdf content"), 0644)
-	
+
 	if el, err := page.Element("input[type='file'][name='resume']"); err == nil {
 		err := el.SetFiles([]string{dummyResumePath})
 		if err == nil {

@@ -30,13 +30,13 @@ func ComputeSourceScores(summaries []SourceHealthSummary) map[string]SourceRankS
 	// Priors for Bayesian smoothing
 	const priorWeight = 5.0
 	const priorSuccessRate = 0.05 // Assume 5% success for unseen sources
-	
+
 	for _, s := range summaries {
 		// Calculate smoothed success rate
 		// Applied counts as success.
 		successCount := float64(s.AppliedCount)
 		totalCount := float64(s.TotalAttempts)
-		
+
 		smoothedSuccess := (successCount + priorWeight*priorSuccessRate) / (totalCount + priorWeight)
 
 		// Calculate penalty factor (e.g. high CAPTCHA or DEAD posting rate).
@@ -46,7 +46,7 @@ func ComputeSourceScores(summaries []SourceHealthSummary) map[string]SourceRankS
 		if totalCount == 0 {
 			badRate = 0.5 // Default penalty for sparse
 		}
-		
+
 		// Map badRate (0 to 1) to a penalty factor (0.2 to 1.0)
 		penaltyFactor := 1.0 - (badRate * 0.8)
 
@@ -85,9 +85,9 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 	if len(jobs) == 0 {
 		return jobs
 	}
-	
+
 	sourceScores := ComputeSourceScores(summaries)
-	
+
 	// Priors for unknown sources
 	const priorSuccessRate = 0.05
 	const priorPenalty = 0.6 // Medium penalty
@@ -123,21 +123,21 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 		}
 
 		ageDays := int(time.Since(j.GetDiscoveredAt()).Hours() / 24)
-		freshnessMultiplier := math.Exp(-0.02 * float64(ageDays)) 
+		freshnessMultiplier := math.Exp(-0.02 * float64(ageDays))
 
 		combinedFit := 0.2 + (0.8 * fit)
 		rawScore := scoreObj.SmoothedSuccessRate * combinedFit * freshnessMultiplier * scoreObj.PenaltyFactor
-		
+
 		isExploration := scoreObj.Confidence == "Sparse"
 		reason := "Ranked by outcome"
 		if isExploration {
 			reason = "Exploration candidate (sparse data)"
 		}
-		
+
 		// Adjust score to give exploration jobs a boost or segregate them.
 		// For simplicity, we just set the data and use the wrappers to sort.
 		j.SetRankData(rawScore, reason, isExploration)
-		
+
 		wrappers[i] = jobWrapper{
 			Index:         i,
 			Score:         rawScore,
@@ -169,7 +169,7 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 	result := make([]T, 0, len(jobs))
 	exploitIdx := 0
 	exploreIdx := 0
-	
+
 	// Example: if explorationShare = 0.2, 1 in 5 jobs should be from explore if available.
 	exploreInterval := 0
 	if explorationShare > 0 {
@@ -181,7 +181,7 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 		if exploreInterval > 0 && i%exploreInterval == (exploreInterval-1) {
 			takeExplore = true
 		}
-		
+
 		if takeExplore && exploreIdx < len(explore) {
 			result = append(result, jobs[explore[exploreIdx].Index])
 			exploreIdx++

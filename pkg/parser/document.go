@@ -49,7 +49,7 @@ func ExtractFromFallbackPDF(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to extract text from pdf: %w", err)
 	}
-	
+
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(b); err != nil {
 		return "", fmt.Errorf("failed to read from pdf reader: %w", err)

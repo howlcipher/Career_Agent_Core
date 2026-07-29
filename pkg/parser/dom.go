@@ -60,7 +60,7 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 				toRemove = append(toRemove, n)
 				return
 			}
-			
+
 			if form == nil && tag == "form" {
 				form = n
 			}
@@ -74,7 +74,7 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 			}
 			n.Attr = kept
 		}
-		
+
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			traverse(c)
 		}
@@ -95,7 +95,7 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 			return "", err
 		}
 	}
-	
+
 	return buf.String(), nil
 }
 

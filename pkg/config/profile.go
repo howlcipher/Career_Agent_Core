@@ -123,7 +123,7 @@ func (p *Profile) ValidateJob(companyName string, salary int, remote bool) bool 
 	if p.RemoteOnly && !remote {
 		return false
 	}
-	
+
 	// Security check: Never apply to current/past employers
 	nameLower := strings.ToLower(companyName)
 	for _, excluded := range p.ExcludeCompanies {
@@ -132,6 +132,6 @@ func (p *Profile) ValidateJob(companyName string, salary int, remote bool) bool 
 			return false
 		}
 	}
-	
+
 	return true
 }

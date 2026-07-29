@@ -14,7 +14,7 @@ func TestApplicationAttempts(t *testing.T) {
 	db.Exec("DELETE FROM application_attempts")
 
 	now := time.Now()
-	
+
 	// Create some attempts
 	attempts := []ApplicationAttempt{
 		{

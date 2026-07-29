@@ -120,7 +120,7 @@ Text to evaluate:
 // trailing details. Cutting only the tail would quietly blind the two
 // largest deductions in the rubric.
 const (
-	maxScoringDescChars = 9000
+	maxScoringDescChars  = 9000
 	scoringDescHeadChars = 6000
 	scoringDescTailChars = 3000
 	scoringElision       = "\n\n[... middle of posting omitted for scoring ...]\n\n"
@@ -246,12 +246,12 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		sys := "You are an expert technical recruiter. Analyze the job description and tailor the base resume. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Do not use hyphens."
 		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the tailored Markdown resume based on my profile. Output ONLY the markdown resume without extra commentary.",
 			scrapedData["title"], scrapedData["desc"], parsedDocument)
-		
+
 		if err := incrementAndLogAPICall("ProcessJobApplication-Resume", len(prompt)); err != nil {
 			errResume = err
 			return
 		}
-		
+
 		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
 		resumeOut, errResume = c.generate(req)
 	}()
@@ -261,12 +261,12 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		sys := "You are an expert technical recruiter. Analyze the job description and tailor the cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Do not use hyphens."
 		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output a tailored plain text cover letter. Output ONLY the plain text cover letter without extra commentary.",
 			scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
-		
+
 		if err := incrementAndLogAPICall("ProcessJobApplication-CoverLetter", len(prompt)); err != nil {
 			errCover = err
 			return
 		}
-		
+
 		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
 		coverOut, errCover = c.generate(req)
 	}()
@@ -276,12 +276,12 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		sys := "You are an expert technical recruiter. Analyze the job description and create an interview preparation sheet."
 		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output a cheat sheet of likely interview questions and talking points based on my profile. Output ONLY the cheat sheet.",
 			scrapedData["title"], scrapedData["desc"], parsedDocument)
-		
+
 		if err := incrementAndLogAPICall("ProcessJobApplication-InterviewPrep", len(prompt)); err != nil {
 			errPrep = err
 			return
 		}
-		
+
 		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
 		prepOut, errPrep = c.generate(req)
 	}()

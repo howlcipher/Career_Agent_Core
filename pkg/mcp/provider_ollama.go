@@ -25,8 +25,8 @@ import (
 //	OLLAMA_EMBED_MODEL     embedding model, default nomic-embed-text
 //	OLLAMA_TIMEOUT_MINUTES per-request client timeout, default 45
 type ollamaProvider struct {
-	host        string
-	model       string
+	host  string
+	model string
 	// fastModel serves calls that set genRequest.fast — currently ScoreJob
 	// only. Empty (the default) means fall back to model, so this feature is
 	// inert until OLLAMA_FAST_MODEL is deliberately set.
@@ -94,8 +94,8 @@ type ollamaChatMessage struct {
 }
 
 type ollamaChatRequest struct {
-	Model    string                 `json:"model"`
-	Messages []ollamaChatMessage    `json:"messages"`
+	Model     string                 `json:"model"`
+	Messages  []ollamaChatMessage    `json:"messages"`
 	Stream    bool                   `json:"stream"`
 	Format    string                 `json:"format,omitempty"`
 	Options   map[string]interface{} `json:"options,omitempty"`

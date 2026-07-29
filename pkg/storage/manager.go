@@ -258,16 +258,26 @@ func mergeStatuses(s1, s2 string) string {
 	}
 	rank := func(s string) int {
 		switch s {
-		case "DISCOVERED": return 1
-		case "PROCESSING": return 2
-		case "SKIPPED": return 3
-		case "BLOCKED_CAPTCHA": return 4
-		case "FAILED_SUBMIT": return 5
-		case "MANUAL_REQUIRED": return 6
-		case "APPLIED": return 7
-		case "REJECTED": return 8
-		case "INTERVIEW_REQUESTED": return 9
-		default: return 0
+		case "DISCOVERED":
+			return 1
+		case "PROCESSING":
+			return 2
+		case "SKIPPED":
+			return 3
+		case "BLOCKED_CAPTCHA":
+			return 4
+		case "FAILED_SUBMIT":
+			return 5
+		case "MANUAL_REQUIRED":
+			return 6
+		case "APPLIED":
+			return 7
+		case "REJECTED":
+			return 8
+		case "INTERVIEW_REQUESTED":
+			return 9
+		default:
+			return 0
 		}
 	}
 
@@ -314,7 +324,7 @@ func migrateURLSchemes() error {
 		return fmt.Errorf("failed to query http urls in applied_jobs: %w", err)
 	}
 	defer rowsApp.Close()
-	
+
 	type appRow struct {
 		id  int
 		url string
@@ -356,20 +366,20 @@ func migrateURLSchemes() error {
 		}
 
 		newStatus := mergeStatuses(r.status, httpsStatus)
-		
+
 		_, err = tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, newStatus, httpsID)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
-		
+
 		_, err = tx.Exec(`DELETE FROM job_funnel WHERE id = ?`, r.id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
-	
+
 	for _, r := range appToProcess {
 		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
 		var httpsID int
@@ -391,7 +401,7 @@ func migrateURLSchemes() error {
 			return fmt.Errorf("failed to check https url in applied_jobs: %w", err)
 		}
 	}
-	
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -975,8 +985,8 @@ type FunnelJob struct {
 	IsExploration bool
 }
 
-func (j *FunnelJob) GetURL() string { return j.URL }
-func (j *FunnelJob) GetFitSimilarity() float64 { return j.FitSimilarity }
+func (j *FunnelJob) GetURL() string             { return j.URL }
+func (j *FunnelJob) GetFitSimilarity() float64  { return j.FitSimilarity }
 func (j *FunnelJob) GetDiscoveredAt() time.Time { return j.DiscoveredAt }
 func (j *FunnelJob) SetRankData(score float64, reason string, isExploration bool) {
 	j.RankingScore = score
@@ -1040,7 +1050,7 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 		}
 		jobs = append(jobs, j)
 	}
-	
+
 	summaries, err := GetSourceHealthSummaries(30)
 	if err != nil {
 		log.Printf("[Storage] Error getting source health: %v", err)
@@ -1050,10 +1060,10 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	for i := range jobs {
 		ptrs = append(ptrs, &jobs[i])
 	}
-	
+
 	// Apply ranking with 20% exploration share
 	ptrs = RankJobs(ptrs, summaries, 0.20)
-	
+
 	var result []FunnelJob
 	for _, p := range ptrs {
 		result = append(result, *p)

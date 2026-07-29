@@ -82,11 +82,11 @@ func ChunkMarkdown(content string) []string {
 		}
 		currentChunk = append(currentChunk, line)
 	}
-	
+
 	if len(currentChunk) > 0 {
 		chunks = append(chunks, strings.Join(currentChunk, "\n"))
 	}
-	
+
 	return chunks
 }
 

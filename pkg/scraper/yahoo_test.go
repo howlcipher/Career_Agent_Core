@@ -45,7 +45,7 @@ func TestDiscoverWithYahooHTML_RetryTransientErrors(t *testing.T) {
 
 	engine := NewFunnelEngine([]string{"backend"})
 	jobChan := make(chan Job, 10)
-	
+
 	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
 	close(jobChan)
 
@@ -87,7 +87,7 @@ func TestDiscoverWithYahooHTML_ExhaustsRetries(t *testing.T) {
 
 	engine := NewFunnelEngine([]string{"backend"})
 	jobChan := make(chan Job, 10)
-	
+
 	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
 	close(jobChan)
 
@@ -129,7 +129,7 @@ func TestDiscoverWithYahooHTML_NonRetryableResponse(t *testing.T) {
 
 	engine := NewFunnelEngine([]string{"backend"})
 	jobChan := make(chan Job, 10)
-	
+
 	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
 	close(jobChan)
 
@@ -163,14 +163,14 @@ func TestDiscoverWithYahooHTML_Cancellation(t *testing.T) {
 
 	engine := NewFunnelEngine([]string{"backend"})
 	jobChan := make(chan Job, 10)
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
-	
+
 	engine.discoverWithYahooHTML(ctx, "test query", "backend", jobChan)
 	close(jobChan)
 
-	// Since context is cancelled immediately, it should only make at most 1 attempt 
+	// Since context is cancelled immediately, it should only make at most 1 attempt
 	// or no attempts if http client detects cancellation before sending.
 	// Actually, http.NewRequestWithContext with a cancelled context will cause client.Do to fail immediately.
 	// We want to ensure it doesn't loop 3 times.
