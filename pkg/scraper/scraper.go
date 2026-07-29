@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"golang.org/x/sync/errgroup"
 )
 
 var remoteOKBaseURL = "https://remoteok.com/api"
@@ -65,6 +67,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 	log.Printf("[Scraper] Scraping RemoteOK API for roles: %v...", e.Roles)
 
 	var allJobs []Job
+	var mu sync.Mutex
 	seenURLs := make(map[string]bool)
 
 	rolesToSearch := e.Roles
@@ -72,103 +75,116 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		rolesToSearch = []string{"backend"}
 	}
 
+	var eg errgroup.Group
+	eg.SetLimit(3)
+
 	for _, role := range rolesToSearch {
-		// Convert "DevOps Engineer" to "devops-engineer"
-		tag := url.QueryEscape(strings.ToLower(strings.ReplaceAll(role, " ", "-")))
+		role := role
+		eg.Go(func() error {
+			tag := url.QueryEscape(strings.ToLower(strings.ReplaceAll(role, " ", "-")))
 
-		// Sleep for a random jitter (1-3 seconds) to seem human
-		SleepFunc(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
+			SleepFunc(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
 
-		reqURL := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
-		req, err := http.NewRequest("GET", reqURL, nil)
-		if err != nil {
-			log.Printf("[Scraper] Failed to create request for %s: %v", role, err)
-			continue
-		}
-
-		// Humanize the headers to bypass basic bot protection
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-		req.Header.Set("Connection", "keep-alive")
-		req.Header.Set("Upgrade-Insecure-Requests", "1")
-
-		client := newHTTPClient(30 * time.Second)
-		body, err := func() ([]byte, error) {
-			resp, err := client.Do(req)
+			reqURL := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
+			req, err := http.NewRequest("GET", reqURL, nil)
 			if err != nil {
-				return nil, fmt.Errorf("failed to execute request: %w", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
-				SleepFunc(5 * time.Second)
-				return nil, nil
+				log.Printf("[Scraper] Failed to create request for %s: %v", role, err)
+				return nil
 			}
 
-			b, err := io.ReadAll(resp.Body)
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+			req.Header.Set("Connection", "keep-alive")
+			req.Header.Set("Upgrade-Insecure-Requests", "1")
+
+			client := newHTTPClient(30 * time.Second)
+			body, err := func() ([]byte, error) {
+				resp, err := client.Do(req)
+				if err != nil {
+					return nil, fmt.Errorf("failed to execute request: %w", err)
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
+					SleepFunc(5 * time.Second)
+					return nil, nil
+				}
+
+				b, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read response body: %w", err)
+				}
+				return b, nil
+			}()
+
 			if err != nil {
-				return nil, fmt.Errorf("failed to read response body: %w", err)
+				log.Printf("[Scraper] Error fetching data for %s: %v", role, err)
+				return nil
 			}
-			return b, nil
-		}()
-
-		if err != nil {
-			log.Printf("[Scraper] Error fetching data for %s: %v", role, err)
-			continue
-		}
-		if body == nil {
-			continue
-		}
-
-		var rawJobs []json.RawMessage
-		if err := json.Unmarshal(body, &rawJobs); err != nil {
-			log.Printf("[Scraper] Failed to unmarshal JSON for %s: %v", role, err)
-			continue
-		}
-
-		if len(rawJobs) <= 1 {
-			continue
-		}
-
-		for i := 1; i < len(rawJobs); i++ {
-			var roJob RemoteOkJob
-			if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
-				log.Printf("[Scraper] Failed to unmarshal job %d: %v", i, err)
-				continue
+			if body == nil {
+				return nil
 			}
 
-			if seenURLs[roJob.URL] {
-				continue
-			}
-			seenURLs[roJob.URL] = true
-
-			isRemote := true
-			if strings.Contains(strings.ToLower(roJob.Location), "hybrid") || strings.Contains(strings.ToLower(roJob.Location), "onsite") {
-				isRemote = false
+			var rawJobs []json.RawMessage
+			if err := json.Unmarshal(body, &rawJobs); err != nil {
+				log.Printf("[Scraper] Failed to unmarshal JSON for %s: %v", role, err)
+				return nil
 			}
 
-			estimatedSalary := roJob.SalaryMax
-			if roJob.SalaryMin > 0 && roJob.SalaryMax == 0 {
-				estimatedSalary = roJob.SalaryMin
-			}
-			u, err := url.Parse(roJob.URL)
-			if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
-				continue
+			if len(rawJobs) <= 1 {
+				return nil
 			}
 
-			allJobs = append(allJobs, Job{
-				CompanyName: roJob.Company,
-				Title:       roJob.Position,
-				Location:    roJob.Location,
-				URL:         roJob.URL,
-				Salary:      estimatedSalary,
-				Remote:      isRemote,
-				Description: roJob.Description,
-			})
-		}
+			var localJobs []Job
+			for i := 1; i < len(rawJobs); i++ {
+				var roJob RemoteOkJob
+				if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
+					log.Printf("[Scraper] Failed to unmarshal job %d: %v", i, err)
+					continue
+				}
+
+				mu.Lock()
+				if seenURLs[roJob.URL] {
+					mu.Unlock()
+					continue
+				}
+				seenURLs[roJob.URL] = true
+				mu.Unlock()
+
+				isRemote := true
+				if strings.Contains(strings.ToLower(roJob.Location), "hybrid") || strings.Contains(strings.ToLower(roJob.Location), "onsite") {
+					isRemote = false
+				}
+
+				estimatedSalary := roJob.SalaryMax
+				if roJob.SalaryMin > 0 && roJob.SalaryMax == 0 {
+					estimatedSalary = roJob.SalaryMin
+				}
+				u, err := url.Parse(roJob.URL)
+				if err != nil || u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "169.254.169.254" {
+					continue
+				}
+
+				localJobs = append(localJobs, Job{
+					CompanyName: roJob.Company,
+					Title:       roJob.Position,
+					Location:    roJob.Location,
+					URL:         roJob.URL,
+					Salary:      estimatedSalary,
+					Remote:      isRemote,
+					Description: roJob.Description,
+				})
+			}
+			
+			mu.Lock()
+			allJobs = append(allJobs, localJobs...)
+			mu.Unlock()
+			return nil
+		})
 	}
+	_ = eg.Wait()
 
 	// Architectural Stubs for Data collection engine targeting fully remote listings only
 	log.Println("[Scraper] Scraping We Work Remotely (Implementation pending)")
