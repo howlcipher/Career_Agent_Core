@@ -94,23 +94,31 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 		req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 		client := newHTTPClient(30 * time.Second)
-		resp, err := client.Do(req)
+		body, err := func() ([]byte, error) {
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("failed to execute request: %w", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
+				SleepFunc(5 * time.Second)
+				return nil, nil
+			}
+
+			b, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read response body: %w", err)
+			}
+			return b, nil
+		}()
+
 		if err != nil {
-			log.Printf("[Scraper] Failed to execute request for %s: %v", role, err)
+			log.Printf("[Scraper] Error fetching data for %s: %v", role, err)
 			continue
 		}
-
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("[Scraper] API returned non-200 status for %s: %d", role, resp.StatusCode)
-			SleepFunc(5 * time.Second)
-			resp.Body.Close()
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[Scraper] Failed to read response body for %s: %v", role, err)
+		if body == nil {
 			continue
 		}
 
