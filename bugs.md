@@ -136,6 +136,7 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 **2026-07-28 groom-pass note (session 12):** Evaluated pipeline for applications filled and submitted. Discovered that the ATS feed truncation bug (#131) was only partially addressed by retries; the true cause was an 8MB `LimitReader` artificially truncating large Lever JSON feeds (e.g., jobgether at 37MB+). Increased the limit to 128MB. Added bug #396 and marked it Done. Backlogs groomed. Usability Gate is MET.
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
+| 432 | [`auto_submit_click: false` records a false `APPLIED` for a form that was never submitted](#432-auto_submit_click-false-records-a-false-applied-for-a-form-that-was-never-submitted) | Major | Done (2026-07-29) | 7.0 = 7×1.0÷1 | claude-sonnet-4-6 | gemini-3.1-pro-high | — | — | Found while mapping the submit path for improvement #423. The README's documented "fill and wait for review" toggle silently wrote confirmed-application rows plus permanent dedup entries. Fixed with the same sentinel-error mechanism #423 needed |
 | 414 | [Enforce single-instance execution to prevent DB corruption and stuck jobs](#414-enforce-single-instance-execution-to-prevent-db-corruption-and-stuck-jobs) | Blocker | Done (2026-07-29) | 8.0 = 8×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Simple locking logic and DB status reset on startup. | Multiple instances corrupt DB and get jobs stuck in PROCESSING. Preventing this is a critical operational fix with minimal effort. |
 | 412 | [Duplicate check in pipeline.go resets APPLIED jobs back to DISCOVERED](#412-duplicate-check-in-pipelinego-resets-applied-jobs-back-to-discovered) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Infinite loop logic error. | Discovered jobs that were already applied were being reset to DISCOVERED status, creating an infinite processing loop. |
 | 413 | [Enhance Greenhouse validation error resolver for <fieldset> and radio groups](#413-enhance-greenhouse-validation-error-resolver-for-fieldset-and-radio-groups) | Major | Resolved (2026-07-29, root-caused and fixed) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | DOM Parsing Issue | SolveValidationErrors struggles on Greenhouse forms with required radio groups where aria-invalid is applied to parent elements. |
@@ -276,6 +277,25 @@ These assignments cover current Pending bugs only. They are task-fit starting po
 | 131 | `gpt-5.6-terra` | Parser and polling resilience is a moderate, testable reliability change. |
 
 ## Details
+
+### 432. `auto_submit_click: false` records a false `APPLIED` for a form that was never submitted
+
+**Found 2026-07-29** while mapping the submission path for improvement #423 — not by a test and not by a live run. That is the point of this bug: nothing observes it.
+
+`README.md:192` documents `auto_submit_click: false` as "fill out the form and wait for you to review it." The fill half worked. The accounting half did not:
+
+1. Each of the four ATS handlers guarded its final `.Click()` with `if autoSubmitClick`, so with the flag off, the handler filled the form and returned `nil`.
+2. `confirmOrError` (`pkg/submitter/browser.go:520`) short-circuited with `return nil` for the same reason — no click, so nothing to confirm.
+3. `AttemptSubmit` therefore returned `nil`.
+4. `cmd/agent/pipeline.go:490` reads `err == nil` as its success arm: `SaveCheckpoint("COMPLETED")`, `UpdateFunnelStatus(url, "APPLIED")`, and **`RecordApplicationInDB(...)`**, which writes the `applied_jobs` dedup row.
+
+So every job processed with `auto_submit_click: false` was recorded as a confirmed application **and permanently deduped against ever being attempted again** — for a form that was filled and abandoned. The funnel metrics, the dashboard's `APPLIED` count, and `HasApplied` were all corrupted by a toggle the README tells people to use.
+
+**Same defect class as #94/#95/#102/#107/#108** — the pipeline misreading its own outcome — and it lands squarely on the standing check earned by #94: *a benign-looking log line is not evidence of a benign event.* A run in this mode logs an ordinary success for every job, and the resulting `applied_jobs` rows are indistinguishable from real ones after the fact.
+
+**Severity Major, not Blocker:** the live `profile.yaml` has `auto_submit_click: true`, so the currently-configured run path never enters it. The exposure is to anyone following the README's documented instruction, and to the historical record if the flag was ever flipped. **Not audited:** whether any historical `applied_jobs` row was produced this way. The rows carry no marker distinguishing them, so it cannot be determined retrospectively — noted here rather than guessed at.
+
+**Fix (shipped 2026-07-29 with improvement #423, commit `8281adb`):** the no-click case now returns a distinct sentinel, `submitter.ErrSubmitClickDisabled`, produced by the shared `submitGate` helper every submit site consults. `cmd/agent/pipeline.go` branches it to `AWAITING_REVIEW` alongside Copilot Mode's `ErrAwaitingHumanReview`, moves the generated documents to the manual-apply folder, logs the job to `applications/needs_manual_apply/copilot_queue.md`, and **does not** call `RecordApplicationInDB`. `AWAITING_REVIEW` is ranked in `mergeStatuses` at the same needs-a-human tier as `MANUAL_REQUIRED`, so a dedup merge cannot discard it as an unknown rank-0 status, and it is recorded under its own `AttemptAwaitingReview` terminal class so source-health scoring does not read a deliberate stop as an ATS account gate. Covered by `TestSubmitGate`, `TestIsSubmitGated`, `TestSubmitGateResultsAreGated`, and `TestConfirmOrError_ReturnsSentinelWhenDisabled`.
 
 ### 118. Resume-selector fallback work breaks every submitter path without a readable resume (Resolved 2026-07-26)
 

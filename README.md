@@ -22,6 +22,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
 - **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers and pre-mapped selectors for Greenhouse, Lever, and Ashby, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
+- **Human-in-the-Loop Copilot Mode**: Set `copilot_mode: true` in `profile.yaml` to do all the expensive work — discovery, scoring, tailoring, form-filling and validation — and stop at the one irreversible step. The job is recorded as `AWAITING_REVIEW`, its tailored documents are moved to `applications/needs_manual_apply/`, and it is queued in `copilot_queue.md` with the apply URL so you can open it and click Submit yourself. Useful where bot protection blocks automated submits but not a real person.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry.
 - **Live Web Dashboard & Controls**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) featuring start/stop agent controls, funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
@@ -189,7 +190,8 @@ Open `profile.yaml` to customize your search parameters:
 - **`salary_floor`**: Your absolute lowest acceptable base pay.
 - **`target_compensation`**: The ideal number the AI will negotiate or enter into application fields.
 - **`roles`**: An array of explicit job titles the system will actively scrape for.
-- **`auto_submit_click`**: Set to `true` to have the bot physically click "Submit Application" on Greenhouse, Lever, and Ashby platforms. Set to `false` to have it fill out the form and wait for you to review it.
+- **`auto_submit_click`**: Set to `true` to have the bot physically click "Submit Application" on Greenhouse, Lever, and Ashby platforms. Set to `false` to have it fill out the form and stop without submitting; the job is recorded as `AWAITING_REVIEW` and queued for you in `applications/needs_manual_apply/copilot_queue.md`.
+- **`copilot_mode`**: Set to `true` to force the review hand-off for every job regardless of `auto_submit_click` — the agent fills the form completely, then stops before the final click so you can review and submit it yourself. Jobs land in `AWAITING_REVIEW` with their tailored documents saved alongside. Nothing is ever submitted on your behalf in this mode.
 - **`headless_browser`**: Set to `true` to run the bot silently in the background, or `false` to watch it operate visibly.
 
 ### 3. Ensure Your Context Exists
@@ -308,3 +310,15 @@ The repair is idempotent and limited to known private files plus the `applicatio
 
 ## Managing Submissions
 If `auto_submit_click: true` is enabled in `profile.yaml` but the agent encounters a non-standard Applicant Tracking System (ATS), it will intelligently fall back to the Dynamic Learner Module, or gracefully add the job to `applications/manual_submissions.md` as a checklist for you to submit manually using the generated documents.
+
+### Copilot Mode: reviewing before you submit
+
+With `copilot_mode: true` (or `auto_submit_click: false`), the agent never clicks Submit. It still does everything else — scores the job, writes a tailored resume and cover letter, opens the form, fills every field it can, and resolves validation errors — then stops and hands the application to you:
+
+- the job's funnel status becomes `AWAITING_REVIEW`, which the dashboard reports as "Filled by Copilot — awaiting your review and submit";
+- its tailored documents are moved into `applications/needs_manual_apply/<Company>/`;
+- a checklist entry is appended to `applications/needs_manual_apply/copilot_queue.md` with the company, role, apply URL, and the path to those documents.
+
+To finish an application, open `copilot_queue.md`, follow the apply link, review the fields, attach the saved documents if the site did not retain your upload, and submit. Tick the checkbox to keep track of what you've handled.
+
+This is the mode to use when bot protection is the binding constraint. The project's own monitoring measured 6 of 7 fully-filled forms blocked *after* an automated submit — a challenge a real person clicking in their own browser session is not subject to. You keep the expensive part of the automation and give up only the last click.

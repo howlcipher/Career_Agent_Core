@@ -1,5 +1,12 @@
 # Career Agent Core - Changelog
 
+## 2026-07-29 — Human-in-the-Loop Copilot Mode
+
+* **Feature:** Added `copilot_mode` to `profile.yaml`. The agent performs every step of an application — discovery, scoring, tailoring, form-filling, validation — then stops before the final submit click. Jobs are recorded as `AWAITING_REVIEW`, their tailored documents move to `applications/needs_manual_apply/`, and each is queued in `copilot_queue.md` with its apply URL.
+* **Fix:** `auto_submit_click: false` previously returned no error, which the pipeline read as success and recorded as `APPLIED` with a permanent dedup row, for forms that were never submitted. It now routes to `AWAITING_REVIEW` and never reaches the application record.
+* **Structure:** All six submit-click sites and the outcome-confirmation path now consult one shared `submitGate` helper instead of each testing the flags themselves, so a submission gate cannot be wired into one ATS handler and missed in another.
+* **Dashboard:** `AWAITING_REVIEW` is reported as a needs-action outcome and counted in the metrics API.
+
 ## 2026-07-27 — Documentation drift correction
 
 * **Setup:** Added a fake-data-only `pii.yaml.template` and a parser test so clean-checkout setup remains safe and schema-valid.
