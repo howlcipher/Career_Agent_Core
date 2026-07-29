@@ -2434,3 +2434,9 @@ Two related leak paths observed live 2026-07-22: (1) the 2,001-row DISCOVERED ba
 **Impact:** Validation loop fails to resolve form errors because the API call to Ollama times out.
 **Fix:** Increase the HTTP client timeout for Ollama calls, especially during the validation phase which may pass large DOM contexts.
 **Status:** Done. Increased `defaultOllamaTimeoutMinutes` to 120 (from 45) to allow sufficient time for attention decoding of massive DOM contexts.
+
+## 399 Newly discovered jobs bypass Bayesian smoothing due to queue architecture flaw
+**Symptom:** In daemon mode, `candidates` channel interleaves the ranked backlog with newly discovered jobs pushed directly by `discoverJobs`. 
+**Impact:** Newly discovered jobs bypass `RankJobs` and get processed immediately at the tail of the channel, completely circumventing the Bayesian source-health smoothing and `FitSimilarity` ranking logic. Additionally, `cycleLimit` caused the `runAgentCycle` producer to aggressively discard thousands of ranked jobs from the channel, wasting CPU and forcing a full DB reload on every cycle.
+**Fix:** Decoupled discovery from processing. Passed a `nil` channel to `discoverJobs` so it only populates the database as `DISCOVERED` without injecting into the active queue. Limited the backlog producer loop to `cycleLimit` to prevent channel thrashing and dropping backlog items.
+**Status:** Done.

@@ -220,10 +220,12 @@ func TestRunAgentCycleRefreshesBacklogAndDiscovery(t *testing.T) {
 		},
 		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
 			discoveryCalls++
-			jobChan <- scraper.Job{
-				CompanyName: "Discovery",
-				Title:       fmt.Sprintf("Cycle %d", discoveryCalls),
-				URL:         fmt.Sprintf("https://example.com/discovery/%d", discoveryCalls),
+			if jobChan != nil {
+				jobChan <- scraper.Job{
+					CompanyName: "Discovery",
+					Title:       fmt.Sprintf("Cycle %d", discoveryCalls),
+					URL:         fmt.Sprintf("https://example.com/discovery/%d", discoveryCalls),
+				}
 			}
 			return nil
 		},
@@ -253,8 +255,9 @@ func TestRunAgentCycleRefreshesBacklogAndDiscovery(t *testing.T) {
 		t.Fatalf("batches = %d, want 2", len(batches))
 	}
 	for i, batch := range batches {
-		if len(batch) != 2 {
-			t.Errorf("batch %d jobs = %v, want one backlog and one discovery job", i+1, batch)
+		// With decoupled discovery, ONLY the backlog job is processed this cycle.
+		if len(batch) != 1 {
+			t.Errorf("batch %d jobs = %v, want exactly one backlog job", i+1, batch)
 		}
 	}
 }
@@ -274,11 +277,13 @@ func TestRunAgentCycleEnforcesPerCycleCap(t *testing.T) {
 			return jobs, nil
 		},
 		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
-			for i := 0; i < 3; i++ {
-				jobChan <- scraper.Job{
-					CompanyName: "Discovery",
-					Title:       fmt.Sprintf("Discovery %d", i),
-					URL:         fmt.Sprintf("https://example.com/discovery/%d", i),
+			if jobChan != nil {
+				for i := 0; i < 3; i++ {
+					jobChan <- scraper.Job{
+						CompanyName: "Discovery",
+						Title:       fmt.Sprintf("Discovery %d", i),
+						URL:         fmt.Sprintf("https://example.com/discovery/%d", i),
+					}
 				}
 			}
 			return nil

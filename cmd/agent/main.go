@@ -596,7 +596,9 @@ func runAgentCycle(
 		return errors.New("agent cycle dependencies are incomplete")
 	}
 
-	candidates := make(chan scraper.Job, 2000)
+	// Bug #399: Decouple discovery from queue consumption so newly discovered jobs
+	// are persisted to the database and ranked properly on the next cycle,
+	// rather than bypassing Bayesian smoothing by being appended to the channel tail.
 	jobs := make(chan scraper.Job, 2000)
 	discoveredJobs, loadErr := deps.loadDiscovered()
 
@@ -607,10 +609,15 @@ func runAgentCycle(
 			defer producerWg.Done()
 			matched := 0
 			for _, discovered := range discoveredJobs {
-				if len(deps.targetJobURLs) > 0 &&
-					!deps.targetJobURLs[discovered.URL] {
+				if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
 					continue
 				}
+				
+				// Respect cycle limit during injection to prevent channel thrashing
+				if cycleLimit > 0 && matched >= cycleLimit {
+					break
+				}
+				
 				matched++
 				candidate := scraper.Job{
 					CompanyName: discovered.CompanyName,
@@ -620,25 +627,16 @@ func runAgentCycle(
 					Remote:      true,
 				}
 				select {
-				case candidates <- candidate:
+				case jobs <- candidate:
 				case <-ctx.Done():
 					return
 				}
 			}
+			
 			if len(deps.targetJobURLs) > 0 {
-				log.Printf(
-					"[Agent] TARGET_JOB_URL set: loaded %d matching job(s) "+
-						"(of %d discovered, %d targeted) into the queue.",
-					matched,
-					len(discoveredJobs),
-					len(deps.targetJobURLs),
-				)
+				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", matched)
 			} else {
-				log.Printf(
-					"[Agent] Loaded %d previously discovered jobs from "+
-						"backlog into the queue.",
-					len(discoveredJobs),
-				)
+				log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", matched)
 			}
 		}()
 	}
@@ -651,41 +649,22 @@ func runAgentCycle(
 			discoveryErr <- nil
 			return
 		}
-		discoveryErr <- deps.discoverJobs(ctx, candidates)
+		// Pass a nil channel so newly discovered jobs go straight to the DB 
+		// and are correctly ranked by Bayesian smoothing on the next cycle!
+		discoveryErr <- deps.discoverJobs(ctx, nil)
 	}()
 
 	go func() {
 		producerWg.Wait()
-		close(candidates)
+		close(jobs)
 	}()
 
-	forwarded := make(chan int, 1)
-	go func() {
-		defer close(jobs)
-		count := 0
-		accepting := true
-		for candidate := range candidates {
-			if !accepting ||
-				(cycleLimit > 0 && count >= cycleLimit) {
-				continue
-			}
-			select {
-			case jobs <- candidate:
-				count++
-			case <-ctx.Done():
-				accepting = false
-			}
-		}
-		forwarded <- count
-	}()
 
 	deps.processJobs(ctx, jobs)
-	accepted := <-forwarded
 	discoverErr := <-discoveryErr
 	if cycleLimit > 0 {
 		log.Printf(
-			"[Agent] Cycle admitted %d job(s) with a configured cap of %d.",
-			accepted,
+			"[Agent] Cycle completed with a configured cap of %d.",
 			cycleLimit,
 		)
 	}
