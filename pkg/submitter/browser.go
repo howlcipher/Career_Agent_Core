@@ -1272,6 +1272,22 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					return fmt.Errorf("Lever form rejected before use: %w", err)
 				}
 				execErr = handleLever(target, resumePath, coverPath, pii, autoSubmitClick)
+			} else if strings.Contains(urlLower, "ashbyhq.com") {
+				clickApplyIfPresent(page)
+				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
+				urlBeforeSubmitClick = page.URL()
+				target := resolveFillTarget(page)
+				if err := quarantineFillTargetDOM(
+					filter,
+					applyURL,
+					companyName,
+					target,
+				); err != nil {
+					return fmt.Errorf("Ashby form rejected before use: %w", err)
+				}
+				execErr = handleAshby(target, resumePath, coverPath, pii, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
@@ -1764,6 +1780,116 @@ func handleLinkedIn(page playwright.Page, resumePath string, pii *config.PII, au
 	return fmt.Errorf("linkedin easy apply modal interaction not fully implemented")
 }
 
+func fillPreMappedATSSelectors(target fillTarget, pii *config.PII, ats string) {
+	if pii == nil {
+		return
+	}
+
+	type selectorMapping struct {
+		value    string
+		selector string
+	}
+
+	var mappings []selectorMapping
+
+	switch ats {
+	case "greenhouse":
+		mappings = []selectorMapping{
+			{pii.Links.LinkedIn, "input[autocomplete='custom-network-linkedin'], label:has-text('LinkedIn') input, label:has-text('LinkedIn') textarea"},
+			{pii.Links.GitHub, "input[autocomplete='custom-network-github'], label:has-text('GitHub') input, label:has-text('GitHub') textarea"},
+			{pii.Links.Portfolio, "input[autocomplete='custom-network-portfolio'], label:has-text('Portfolio') input, label:has-text('Website') input, label:has-text('Portfolio') textarea, label:has-text('Website') textarea"},
+			{pii.Links.Twitter, "input[autocomplete='custom-network-twitter'], label:has-text('Twitter') input, label:has-text('Twitter') textarea"},
+			{pii.Work.CurrentEmployer, "label:has-text('Current Company') input, label:has-text('Current Employer') input"},
+		}
+	case "lever":
+		mappings = []selectorMapping{
+			{pii.Links.LinkedIn, "input[name='urls[LinkedIn]']"},
+			{pii.Links.GitHub, "input[name='urls[GitHub]']"},
+			{pii.Links.Portfolio, "input[name='urls[Portfolio]'], input[name='urls[Website]']"},
+			{pii.Links.Twitter, "input[name='urls[Twitter]']"},
+			{pii.Work.CurrentEmployer, "input[name='org']"},
+		}
+	case "ashby":
+		mappings = []selectorMapping{
+			{pii.Links.LinkedIn, "input[name='linkedin'], input[name='linkedInUrl'], label:has-text('LinkedIn') input"},
+			{pii.Links.GitHub, "input[name='github'], input[name='githubUrl'], label:has-text('GitHub') input"},
+			{pii.Links.Portfolio, "input[name='portfolio'], input[name='portfolioUrl'], input[name='website'], input[name='websiteUrl'], label:has-text('Website') input, label:has-text('Portfolio') input"},
+			{pii.Work.CurrentEmployer, "input[name='currentEmployer'], label:has-text('Current Employer') input"},
+		}
+	}
+
+	for _, m := range mappings {
+		if m.value != "" {
+			loc := target.Loc(m.selector)
+			if count, _ := loc.Count(); count > 0 {
+				_ = loc.First().Fill(m.value)
+			}
+		}
+	}
+}
+
+func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
+	log.Printf("[Auto-Submit] Detected Ashby ATS. Filling out fields...")
+
+	if _, err := target.WaitForSel("input[name='name'], input[name='email']", 30000); err != nil {
+		return fmt.Errorf("form failed to render in time: %w", err)
+	}
+
+	if pii != nil {
+		if pii.FirstName != "" || pii.LastName != "" {
+			nameLoc := target.Loc("input[name='name']")
+			if count, _ := nameLoc.Count(); count > 0 {
+				if err := nameLoc.First().Fill(pii.FirstName + " " + pii.LastName); err != nil {
+					return fmt.Errorf("failed to fill name: %w", err)
+				}
+			}
+		}
+		if pii.Email != "" {
+			emailLoc := target.Loc("input[name='email']")
+			if count, _ := emailLoc.Count(); count > 0 {
+				if err := emailLoc.First().Fill(pii.Email); err != nil {
+					return fmt.Errorf("failed to fill email: %w", err)
+				}
+			}
+		}
+		if pii.Phone != "" {
+			phoneLoc := target.Loc("input[name='phone']")
+			if count, _ := phoneLoc.Count(); count > 0 {
+				if err := phoneLoc.First().Fill(pii.Phone); err != nil {
+					return fmt.Errorf("failed to fill phone: %w", err)
+				}
+			}
+		}
+		
+		fillPreMappedATSSelectors(target, pii, "ashby")
+	}
+
+	// Resume upload
+	fileInput := target.Loc("input[type='file']").First()
+	if count, _ := fileInput.Count(); count > 0 && resumePath != "" {
+		fileBytes, err := os.ReadFile(resumePath)
+		if err == nil {
+			if err := fileInput.SetInputFiles([]playwright.InputFile{{
+				Name:   "resume.pdf",
+				Buffer: fileBytes,
+			}}); err != nil {
+				return fmt.Errorf("failed to set resume file: %w", err)
+			}
+		}
+	}
+
+	if autoSubmitClick {
+		submitLoc := target.Loc("button[type='submit']")
+		if count, _ := submitLoc.Count(); count > 0 {
+			if err := submitLoc.First().Click(); err != nil {
+				return fmt.Errorf("failed to click submit: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *config.PII, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Greenhouse ATS. Filling out fields...")
 
@@ -1810,6 +1936,8 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 			pii.LocationSearchCandidates(), pii.LocationMustContain())
 		fillComboboxFromCandidates(target, "input#country", "Country",
 			pii.CountrySearchCandidates(), nil)
+
+		fillPreMappedATSSelectors(target, pii, "greenhouse")
 	}
 
 	// Upload resume
@@ -1886,6 +2014,8 @@ func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PI
 		// genuinely uncommittable location to manual review.
 		fillComboboxFromCandidates(target, "input[data-qa='location-input']", "Location",
 			pii.LocationSearchCandidates(), pii.LocationMustContain())
+
+		fillPreMappedATSSelectors(target, pii, "lever")
 	}
 
 	fileInput := target.Loc("input[type='file'][id='resume-upload-input']")

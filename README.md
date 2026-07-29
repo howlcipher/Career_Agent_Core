@@ -20,7 +20,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
-- **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers for Greenhouse and Lever, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
+- **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers and pre-mapped selectors for Greenhouse, Lever, and Ashby, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry.
 - **Live Web Dashboard & Controls**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) featuring start/stop agent controls, funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
@@ -186,7 +186,7 @@ Open `profile.yaml` to customize your search parameters:
 - **`salary_floor`**: Your absolute lowest acceptable base pay.
 - **`target_compensation`**: The ideal number the AI will negotiate or enter into application fields.
 - **`roles`**: An array of explicit job titles the system will actively scrape for.
-- **`auto_submit_click`**: Set to `true` to have the bot physically click "Submit Application" on Greenhouse/Lever ATS platforms. Set to `false` to have it fill out the form and wait for you to review it.
+- **`auto_submit_click`**: Set to `true` to have the bot physically click "Submit Application" on Greenhouse, Lever, and Ashby platforms. Set to `false` to have it fill out the form and wait for you to review it.
 - **`headless_browser`**: Set to `true` to run the bot silently in the background, or `false` to watch it operate visibly.
 
 ### 3. Ensure Your Context Exists
