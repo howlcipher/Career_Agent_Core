@@ -308,45 +308,6 @@ func migrateURLSchemes() error {
 	}
 	rows.Close()
 
-	for _, r := range toProcess {
-		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
-		var httpsID int
-		var httpsStatus string
-		err := db.QueryRow(`SELECT id, status FROM job_funnel WHERE url = ?`, httpsURL).Scan(&httpsID, &httpsStatus)
-		if err == sql.ErrNoRows {
-			_, err = db.Exec(`UPDATE job_funnel SET url = ? WHERE id = ?`, httpsURL, r.id)
-			if err != nil {
-				return fmt.Errorf("failed to update job_funnel url to https: %w", err)
-			}
-			continue
-		} else if err != nil {
-			return fmt.Errorf("failed to check https url in job_funnel: %w", err)
-		}
-
-		newStatus := mergeStatuses(r.status, httpsStatus)
-		
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-		
-		_, err = tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, newStatus, httpsID)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-		
-		_, err = tx.Exec(`DELETE FROM job_funnel WHERE id = ?`, r.id)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-		
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	
 	rowsApp, err := db.Query(`SELECT id, url FROM applied_jobs WHERE url LIKE 'http://%'`)
 	if err != nil {
 		return fmt.Errorf("failed to query http urls in applied_jobs: %w", err)
@@ -366,26 +327,73 @@ func migrateURLSchemes() error {
 		appToProcess = append(appToProcess, r)
 	}
 	rowsApp.Close()
+
+	if len(toProcess) == 0 && len(appToProcess) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	for _, r := range toProcess {
+		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
+		var httpsID int
+		var httpsStatus string
+		err := tx.QueryRow(`SELECT id, status FROM job_funnel WHERE url = ?`, httpsURL).Scan(&httpsID, &httpsStatus)
+		if err == sql.ErrNoRows {
+			_, err = tx.Exec(`UPDATE job_funnel SET url = ? WHERE id = ?`, httpsURL, r.id)
+			if err != nil {
+				tx.Rollback()
+				return fmt.Errorf("failed to update job_funnel url to https: %w", err)
+			}
+			continue
+		} else if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to check https url in job_funnel: %w", err)
+		}
+
+		newStatus := mergeStatuses(r.status, httpsStatus)
+		
+		_, err = tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, newStatus, httpsID)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		
+		_, err = tx.Exec(`DELETE FROM job_funnel WHERE id = ?`, r.id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
 	
 	for _, r := range appToProcess {
 		httpsURL := "https://" + strings.TrimPrefix(r.url, "http://")
 		var httpsID int
-		err := db.QueryRow(`SELECT id FROM applied_jobs WHERE url = ?`, httpsURL).Scan(&httpsID)
+		err := tx.QueryRow(`SELECT id FROM applied_jobs WHERE url = ?`, httpsURL).Scan(&httpsID)
 		if err == sql.ErrNoRows {
-			_, err = db.Exec(`UPDATE applied_jobs SET url = ? WHERE id = ?`, httpsURL, r.id)
+			_, err = tx.Exec(`UPDATE applied_jobs SET url = ? WHERE id = ?`, httpsURL, r.id)
 			if err != nil {
+				tx.Rollback()
 				return fmt.Errorf("failed to update applied_jobs url to https: %w", err)
 			}
 		} else if err == nil {
-			_, err = db.Exec(`DELETE FROM applied_jobs WHERE id = ?`, r.id)
+			_, err = tx.Exec(`DELETE FROM applied_jobs WHERE id = ?`, r.id)
 			if err != nil {
+				tx.Rollback()
 				return fmt.Errorf("failed to delete duplicate http url from applied_jobs: %w", err)
 			}
 		} else {
+			tx.Rollback()
 			return fmt.Errorf("failed to check https url in applied_jobs: %w", err)
 		}
 	}
 	
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	return nil
 }
 
