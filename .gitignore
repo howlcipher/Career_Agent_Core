@@ -21,3 +21,6 @@ agent_run_batch.pid
 /agent
 
 Omni_CoverLetter.pdf
+
+# Python bytecode from the nlp_service microservice
+__pycache__/

@@ -51,6 +51,8 @@ graph TD
     C -->|Untrusted Posting Text| F[pkg/security: Deterministic Quarantine]
     F -->|Verified Payload| D[pkg/mcp: LLM Client - Ollama/Claude/Gemini]
     D -->|Fit Score > 50| C
+    D -->|Tailored Doc Request| P[nlp_service: FastAPI Microservice]
+    P -->|LLM Prompt| D
 
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
     C -->|Posting Fetch| N
@@ -194,6 +196,7 @@ Open `profile.yaml` to customize your search parameters:
 - **`copilot_mode`**: Set to `true` to force the review hand-off for every job regardless of `auto_submit_click` — the agent fills the form completely, then stops before the final click so you can review and submit it yourself. Jobs land in `AWAITING_REVIEW` with their tailored documents saved alongside. Nothing is ever submitted on your behalf in this mode. **Requires `auto_submit: true`**; see the note below.
 - **`auto_submit`**: Controls whether the agent proceeds past scoring at all. With `auto_submit: false` a job stops immediately after being scored — status `PROCESSED_MANUAL`, no resume, no cover letter, no form ever opened. This is a *narrower* setting than its name suggests, and it takes precedence over `copilot_mode`: setting `copilot_mode: true` while leaving `auto_submit: false` produces nothing to review, because the agent never reaches the browser. **For Copilot Mode, set `auto_submit: true` and `copilot_mode: true`** — the pair means "do all the work, submit nothing."
 - **`headless_browser`**: Set to `true` to run the bot silently in the background, or `false` to watch it operate visibly.
+- **`use_master_cover_letter`**: Set to `true` to reuse one static `master_cover_letter.txt` for every application — no per-job tailoring, and the Python NLP microservice is never called. Set to `false` for per-job tailored resumes, cover letters, and interview prep; this requires the NLP microservice running on port 8000 (see [Launch the Agent and Dashboard](#launch-the-agent-and-dashboard)).
 
 ### 3. Ensure Your Context Exists
 The AI relies on a readable Markdown career profile for grounded scoring and screening context. Resolution is shared by `cmd/agent` and `cmd/reingest`, in this order:
@@ -208,9 +211,9 @@ Startup stops if no readable regular file is found, even when old career chunks 
 Examples:
 
 ```bash
-go run cmd/agent/main.go -profile /path/to/USER_PROFILE.md
+go run ./cmd/agent -profile /path/to/USER_PROFILE.md
 CAREER_PROFILE_PATH=/path/to/USER_PROFILE.md go run ./cmd/reingest
-go run cmd/agent/main.go -no-rag
+go run ./cmd/agent -no-rag
 ```
 
 ### 4. Choose an LLM Provider & Authenticate APIs
@@ -265,13 +268,13 @@ Start the agent in one terminal. Choose one mode:
 
 ```bash
 # Process the current discovery and backlog once, then exit
-go run cmd/agent/main.go
+go run ./cmd/agent
 
 # Run continuously with fresh discovery and at most 15 jobs every 6 hours
-go run cmd/agent/main.go --daemon
+go run ./cmd/agent --daemon
 
 # Override the per-cycle job cap
-go run cmd/agent/main.go --daemon -cycle-limit 10
+go run ./cmd/agent --daemon -cycle-limit 10
 ```
 
 Batch mode reads the queue and discovery sources once, processes the complete
@@ -280,26 +283,46 @@ result, and exits. Daemon mode repeats that same fresh cycle every six hours.
 it is ignored in batch mode. `SIGINT` and `SIGTERM` stop the daemon instead of
 leaving it asleep until the next cycle.
 
+> **⚠️ For daemon or repeatedly-restarted runs, build a binary instead of using `go run`.** `go run` does not exec into the binary it compiles — it stays alive as a thin wrapper around a separately-spawned child process (visible in `ps` as something like `/tmp/go-build.../b001/exe/main`). Killing the `go run` PID does **not** kill that child, which keeps running orphaned, still sharing `applications.db` and the log file. A real session accumulated five concurrent orphaned agents this way over a few hours. `go run` is fine for a one-off batch run; for `--daemon` or any run you expect to restart, build an explicit binary so the PID you launch is the PID doing the work:
+>
+> ```bash
+> go build -o career_agent_bin ./cmd/agent
+> ./career_agent_bin --daemon
+> ```
+
 In a second terminal, start the UI dashboard:
 
 ```bash
-go run cmd/dashboard/main.go
+go run ./cmd/dashboard
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion metrics. It can run before or after the agent; it shows data once the database exists.
 
+The dashboard frontend is a Vite/React app at `cmd/dashboard/ui`, and `cmd/dashboard/main.go` embeds its build output directly with `//go:embed ui/dist`. `dist/` is committed to git on purpose — it's a compile-time dependency, and a clone without it fails `go build ./...`. Anyone changing `cmd/dashboard/ui/src` must run `npm run build` in `cmd/dashboard/ui` and commit the regenerated `dist/` alongside their source change, or the built dashboard will silently keep serving the old bundle.
+
 The dashboard listens only on `127.0.0.1:8080` by default. To choose a different loopback port:
 
 ```bash
-go run cmd/dashboard/main.go -addr 127.0.0.1:9090
+go run ./cmd/dashboard -addr 127.0.0.1:9090
 ```
 
 Binding a non-loopback address exposes private application data without authentication; the dashboard prints a warning when such an address is selected.
 
 To enable auto-tracking of employer rejections and interview requests, launch the Email Tracker in the background:
 ```bash
-go run cmd/tracker/main.go
+go run ./cmd/tracker
 ```
+
+If `profile.yaml` sets `use_master_cover_letter: false`, also start the Python NLP microservice — it does the per-job resume, cover letter, and interview-prep tailoring for that mode:
+```bash
+cd nlp_service
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --port 8000
+```
+The port is not configurable — `pkg/mcp/client.go` calls it at a hardcoded `http://localhost:8000/process`. With `use_master_cover_letter: false` and the service not running, every tailored-document generation in the run fails.
+
+> **⚠️ Known defect — starting the service is not currently sufficient.** `ProcessJobApplication` hardcodes `"provider": "ollama"` and `"model": "llama3"` into its request, so this path ignores `LLM_PROVIDER` and `OLLAMA_MODEL` entirely and always asks for `llama3` — which none of this project's setup steps install. Until this is fixed, either leave `use_master_cover_letter: true`, or `ollama pull llama3` first and accept that your configured provider and model are bypassed. Tracked as bug #439 in `bugs.md`.
 
 Every maintained command verifies private workspace permissions before it opens the database or writes logs. Startup fails with a clear warning if a path cannot be secured. To repair an existing checkout explicitly, or after copying files in from another account or container, run:
 
