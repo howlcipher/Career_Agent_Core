@@ -198,8 +198,8 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 							break
 						}
 						if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
-							time.Sleep(60 * time.Second)
+							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping with backoff...", workerID, attempt)
+							time.Sleep(mcp.ExponentialBackoff(attempt))
 						} else {
 							break
 						}
@@ -271,8 +271,8 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 							stopWorker = true
 							return
 						} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-							log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-							time.Sleep(60 * time.Second)
+							log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
+							time.Sleep(mcp.ExponentialBackoff(attempt))
 						} else {
 							break
 						}
@@ -407,8 +407,8 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 					deps.Cancel()
 					return "", "", fmt.Errorf("quota exceeded")
 				} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
-					log.Printf("[Worker-%d] Network error processing application %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-					time.Sleep(60 * time.Second)
+					log.Printf("[Worker-%d] Network error processing application %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
+					time.Sleep(mcp.ExponentialBackoff(attempt))
 				} else {
 					break
 				}

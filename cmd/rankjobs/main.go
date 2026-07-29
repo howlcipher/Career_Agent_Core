@@ -89,8 +89,8 @@ func main() {
 					break
 				}
 				if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-					log.Printf("Network or rate-limit error embedding %q (attempt %d/3). Sleeping 60s...", j.JobTitle, attempt)
-					time.Sleep(60 * time.Second)
+					log.Printf("Network or rate-limit error embedding %q (attempt %d/3). Sleeping with backoff...", j.JobTitle, attempt)
+					time.Sleep(mcp.ExponentialBackoff(attempt))
 				} else {
 					break
 				}
