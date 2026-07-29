@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
@@ -55,87 +56,102 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 	f.discoverWithHackerNews(jobChan)
 	f.discoverWithATSFeeds(jobChan)
 
-	useFallback := apiKey == ""
-	if useFallback {
+	var fallback atomic.Bool
+	fallback.Store(apiKey == "")
+
+	if fallback.Load() {
 		log.Println("[FunnelEngine] SERPAPI_API_KEY is not configured; using Yahoo HTML search for role/ATS queries.")
 	} else {
 		log.Println("[FunnelEngine] Augmenting free sources with SerpApi role/ATS queries...")
 	}
 
+	var eg errgroup.Group
+	eg.SetLimit(5) // Limit concurrency to respect rate limits and system resources
+
 	for _, role := range f.Roles {
 		for _, ats := range f.TargetATS {
-			select {
-			case <-ctx.Done():
-				log.Println("[FunnelEngine] Job discovery cancelled")
-				return ctx.Err()
-			default:
-			}
+			role := role
+			ats := ats
 
-			query := fmt.Sprintf(`Remote %s site:%s`, role, ats)
-			log.Printf("[FunnelEngine] Searching Google for: %s", query)
+			eg.Go(func() error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 
-			if useFallback {
-				f.discoverWithYahooHTML(ctx, query, role, jobChan)
-				SleepFunc(3 * time.Second)
-				continue
-			}
+				query := fmt.Sprintf(`Remote %s site:%s`, role, ats)
+				log.Printf("[FunnelEngine] Searching Google for: %s", query)
 
-			reqURL := fmt.Sprintf("%s?q=%s&api_key=%s&num=100", serpAPIBaseURL, url.QueryEscape(query), apiKey)
+				if fallback.Load() {
+					f.discoverWithYahooHTML(ctx, query, role, jobChan)
+					SleepFunc(3 * time.Second)
+					return nil
+				}
 
-			client := newHTTPClient(30 * time.Second)
-			resp, err := client.Get(reqURL)
-			if err != nil {
-				safeErr := strings.ReplaceAll(err.Error(), apiKey, "REDACTED")
-				log.Printf("[FunnelEngine] API request failed: %v", safeErr)
-				continue
-			}
+				reqURL := fmt.Sprintf("%s?q=%s&api_key=%s&num=100", serpAPIBaseURL, url.QueryEscape(query), apiKey)
 
-			body, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				log.Printf("[FunnelEngine] Failed to read response body: %v", err)
-				continue
-			}
-
-			var serpResult SerpApiResponse
-			if err := json.Unmarshal(body, &serpResult); err != nil {
-				log.Printf("[FunnelEngine] Failed to parse API response: %v", err)
-				continue
-			}
-
-			if serpResult.Error != "" {
-				log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Yahoo Fallback...", serpResult.Error)
-				useFallback = true
-				f.discoverWithYahooHTML(ctx, query, role, jobChan)
-				SleepFunc(3 * time.Second)
-				continue
-			}
-
-			if len(serpResult.OrganicResults) == 0 {
-				log.Printf("[FunnelEngine] No results found for query: %s", query)
-			}
-
-			for _, result := range serpResult.OrganicResults {
-				// Some basic sanitization to extract company name from Title
-				company := extractCompanyFromTitle(result.Title)
-				log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
-
-				jobTitle := extractJobTitleFromResult(result.Title, role)
-				isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED")
+				client := newHTTPClient(30 * time.Second)
+				resp, err := client.Get(reqURL)
 				if err != nil {
-					log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
-				} else if isNew && jobChan != nil {
-					jobChan <- Job{
-						CompanyName: company,
-						Title:       role,
-						URL:         result.Link,
+					safeErr := strings.ReplaceAll(err.Error(), apiKey, "REDACTED")
+					log.Printf("[FunnelEngine] API request failed: %v", safeErr)
+					return nil
+				}
+
+				body, err := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if err != nil {
+					log.Printf("[FunnelEngine] Failed to read response body: %v", err)
+					return nil
+				}
+
+				var serpResult SerpApiResponse
+				if err := json.Unmarshal(body, &serpResult); err != nil {
+					log.Printf("[FunnelEngine] Failed to parse API response: %v", err)
+					return nil
+				}
+
+				if serpResult.Error != "" {
+					log.Printf("[FunnelEngine] SerpApi error: %s. Switching to Yahoo Fallback...", serpResult.Error)
+					fallback.Store(true)
+					f.discoverWithYahooHTML(ctx, query, role, jobChan)
+					SleepFunc(3 * time.Second)
+					return nil
+				}
+
+				if len(serpResult.OrganicResults) == 0 {
+					log.Printf("[FunnelEngine] No results found for query: %s", query)
+				}
+
+				for _, result := range serpResult.OrganicResults {
+					// Some basic sanitization to extract company name from Title
+					company := extractCompanyFromTitle(result.Title)
+					log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
+
+					jobTitle := extractJobTitleFromResult(result.Title, role)
+					isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED")
+					if err != nil {
+						log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
+					} else if isNew && jobChan != nil {
+						jobChan <- Job{
+							CompanyName: company,
+							Title:       role,
+							URL:         result.Link,
+						}
 					}
 				}
-			}
 
-			// Sleep to respect rate limits if on free tier
-			SleepFunc(1 * time.Second)
+				// Sleep to respect rate limits if on free tier
+				SleepFunc(1 * time.Second)
+				return nil
+			})
 		}
+	}
+
+	if err := eg.Wait(); err != nil {
+		log.Println("[FunnelEngine] Job discovery cancelled")
+		return err
 	}
 
 	log.Println("[FunnelEngine] Job discovery complete. Backlog updated in applications.db")
