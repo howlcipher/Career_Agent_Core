@@ -1,14 +1,16 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
+	"time"
 	"unicode"
 )
 
@@ -223,100 +225,52 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		compContext = fmt.Sprintf("\n\nNOTE: If a desired salary or target compensation is requested, explicitly state it as $%d.", comp)
 	}
 
-	// Calculate a dynamic num_ctx based on rough token estimation (characters / 3) + safety margin
-	totalChars := len(scrapedData["title"]) + len(scrapedData["desc"]) + len(parsedDocument)
-	numCtx := (totalChars / 3) + 2000
-	if numCtx < 8192 {
-		numCtx = 8192
-	}
-	if numCtx > 64000 {
-		numCtx = 64000
-	}
+	fmt.Printf("Offloading resume tailoring and NLP structuring to Python microservice...\n")
 
-	fmt.Printf("Sending concurrent application context requests to %s...\n", c.provider.Name())
-
-	// Pre-Submission Keyword Gap Analysis
-	gapSys := "You are an expert technical recruiter. Analyze the job description and the candidate's profile. Identify key skills, tools, or requirements in the job description that are MISSING or UNDERREPRESENTED in the candidate's profile. Output ONLY a comma-separated list of these missing keywords. If none, output 'NONE'."
-	gapPrompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nMissing keywords:", scrapedData["title"], scrapedData["desc"], parsedDocument)
+	payload := map[string]interface{}{
+		"job_title":       scrapedData["title"],
+		"job_description": scrapedData["desc"],
+		"parsed_document": parsedDocument,
+		"tone_context":    toneContext,
+		"comp_context":    compContext,
+		"provider":        "ollama", // Hardcoded for local NLP service for now
+		"model":           "llama3", // Can be read from environment
+	}
 	
-	if err := incrementAndLogAPICall("ProcessJobApplication-GapAnalysis", len(gapPrompt)); err == nil {
-		gapReq := genRequest{system: gapSys, prompt: gapPrompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
-		if gapOut, errGap := c.generate(gapReq); errGap == nil {
-			gapOut = strings.TrimSpace(gapOut)
-			if strings.ToUpper(gapOut) != "NONE" && gapOut != "" {
-				gapContext := fmt.Sprintf("\n\nNOTE: The following keywords from the job description are missing in the base profile. Find creative but truthful ways to address them if possible, or de-emphasize their necessity: %s", gapOut)
-				// Inject gap context into the parsed document so all downstream generators see it
-				parsedDocument += gapContext
-			}
-		} else {
-			log.Printf("Warning: Gap analysis failed: %v", errGap)
-		}
+	reqBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to marshal nlp service request: %w", err)
 	}
 
-	var wg sync.WaitGroup
-	var resumeOut, coverOut, prepOut string
-	var errResume, errCover, errPrep error
-
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		sys := "You are an expert technical recruiter. Analyze the job description and tailor the base resume. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Do not use hyphens."
-		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the tailored Markdown resume based on my profile. Output ONLY the markdown resume without extra commentary.",
-			scrapedData["title"], scrapedData["desc"], parsedDocument)
-
-		if err := incrementAndLogAPICall("ProcessJobApplication-Resume", len(prompt)); err != nil {
-			errResume = err
-			return
-		}
-
-		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
-		resumeOut, errResume = c.generate(req)
-	}()
-
-	go func() {
-		defer wg.Done()
-		sys := "You are an expert technical recruiter. Analyze the job description and tailor the cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Do not use hyphens."
-		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output a tailored plain text cover letter. Output ONLY the plain text cover letter without extra commentary.",
-			scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
-
-		if err := incrementAndLogAPICall("ProcessJobApplication-CoverLetter", len(prompt)); err != nil {
-			errCover = err
-			return
-		}
-
-		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
-		coverOut, errCover = c.generate(req)
-	}()
-
-	go func() {
-		defer wg.Done()
-		sys := "You are an expert technical recruiter. Analyze the job description and create an interview preparation sheet."
-		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output a cheat sheet of likely interview questions and talking points based on my profile. Output ONLY the cheat sheet.",
-			scrapedData["title"], scrapedData["desc"], parsedDocument)
-
-		if err := incrementAndLogAPICall("ProcessJobApplication-InterviewPrep", len(prompt)); err != nil {
-			errPrep = err
-			return
-		}
-
-		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
-		prepOut, errPrep = c.generate(req)
-	}()
-
-	wg.Wait()
-
-	if errResume != nil {
-		return "", "", "", fmt.Errorf("failed to generate resume: %w", errResume)
+	// Assuming Python NLP microservice is running on port 8000
+	req, err := http.NewRequest("POST", "http://localhost:8000/process", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to create nlp service request: %w", err)
 	}
-	if errCover != nil {
-		return "", "", "", fmt.Errorf("failed to generate cover letter: %w", errCover)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", "", fmt.Errorf("nlp microservice request failed: %w", err)
 	}
-	if errPrep != nil {
-		return "", "", "", fmt.Errorf("failed to generate interview prep: %w", errPrep)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", fmt.Errorf("nlp microservice returned status %d", resp.StatusCode)
 	}
 
-	return strings.TrimSpace(resumeOut), strings.TrimSpace(coverOut), strings.TrimSpace(prepOut), nil
+	var result struct {
+		Resume        string `json:"resume"`
+		CoverLetter   string `json:"cover_letter"`
+		InterviewPrep string `json:"interview_prep"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", "", fmt.Errorf("failed to decode nlp service response: %w", err)
+	}
+
+	return result.Resume, result.CoverLetter, result.InterviewPrep, nil
 }
 
 // ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright.

@@ -29,6 +29,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SkipScoring Fast Track**: Instantly bypass the ~10-minute LLM scoring bottleneck by specifying `SkipScoring` in `profile.yaml` for jobs that already pass your strict keyword filters.
 - **Cost & Token Optimization**: Prunes DOM footprints (removing CSS, SVGs, scripts, and other non-structural content) before interacting with the LLM, then enforces per-call payload circuit breakers of 50,000 characters by default and 75,000 for scoped validation forms. Lazy Document Generation ensures expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
 - **Concurrent Processing Pipeline**: Splits monolithic generation into concurrent processes, injecting dynamic context limits and `keep_alive` values to eliminate model cold-starts. Utilizes bounded worker pools, parallel IO streams, `sync.Pool` byte buffers across HTTP clients to reduce GC pressure, and explicit SQLite batch transactions for high-speed scraping and inference.
+- **Python NLP Microservice**: Offloads complex text generation, resume tailoring, and interview prep logic from Go to a specialized concurrent FastAPI microservice, improving latency and freeing up the main agent pipeline.
 - **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it clicks through any "Apply"-gated form, sends the rendered DOM to your configured LLM to map the input selectors, and caches the learned blueprint in SQLite. If a mapped CSS selector turns out to be wrong, it falls back to the field's accessible label (`<label>`/`aria-label`) before finally falling back to a screenshot-based visual mapping (Visual Reasoning) — three independent strategies for the same field before giving up.
 - **Stateful Graph Pipeline**: Processes complex multi-step application forms using a robust, state-machine driven graph architecture for resilient error handling and flow control.
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
@@ -36,6 +37,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **Pure Go Architecture**: Operates on a 100% CGO-free stack using `modernc.org/sqlite` for effortless cross-platform compilation and minimal dependencies.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
 - **Extensible Handlers:** Decoupled `parser`, `scraper`, and `submitter` logic for effortless ATS expansion.
+- **Zero CLI Tooling:** Utilizes the custom Zero transpiler to implement robust API-fetching data ingestion and analytics CLI scripts (e.g., `queue_analysis.zero` and `metrics_summary.zero`) efficiently without Go boilerplate.
 
 ### 🏛️ System Architecture
 ```mermaid
