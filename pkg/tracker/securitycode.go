@@ -10,6 +10,7 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message/mail"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 )
 
 // improvements.md #32: retrieving one-time codes an ATS emails mid-application.
@@ -166,7 +167,7 @@ func readMessageBody(msg *imap.Message, section *imap.BodySectionName) string {
 			break
 		}
 		if _, ok := part.Header.(*mail.InlineHeader); ok {
-			b, _ := io.ReadAll(part.Body)
+			b, _ := util.ReadAll(part.Body)
 			sb.Write(b)
 			sb.WriteString("\n")
 		}

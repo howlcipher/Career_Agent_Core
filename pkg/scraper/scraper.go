@@ -3,7 +3,6 @@ package scraper
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -11,8 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -112,7 +111,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 					return nil, nil
 				}
 
-				b, err := io.ReadAll(resp.Body)
+				b, err := util.ReadAll(resp.Body)
 				if err != nil {
 					return nil, fmt.Errorf("failed to read response body: %w", err)
 				}

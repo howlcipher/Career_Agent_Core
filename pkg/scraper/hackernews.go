@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -211,7 +210,7 @@ func fetchHNJSON(reqURL string, out interface{}) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, reqURL)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}

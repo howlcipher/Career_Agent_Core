@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -183,7 +184,7 @@ func fetchATSFeed(endpoint string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("board feed returned HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+	return util.ReadAll(io.LimitReader(resp.Body, 128<<20))
 }
 
 func parseGreenhouseBoard(body []byte) ([]feedJob, error) {

@@ -12,6 +12,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"os"
 	"path/filepath"
 )
@@ -424,7 +425,7 @@ func extractBody(msg *imap.Message, section *imap.BodySectionName) string {
 
 		switch p.Header.(type) {
 		case *mail.InlineHeader:
-			b, _ := io.ReadAll(p.Body)
+			b, _ := util.ReadAll(p.Body)
 			textBody.Write(b)
 		}
 	}

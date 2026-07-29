@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -99,7 +99,7 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 					return nil
 				}
 
-				body, err := io.ReadAll(resp.Body)
+				body, err := util.ReadAll(resp.Body)
 				resp.Body.Close()
 				if err != nil {
 					log.Printf("[FunnelEngine] Failed to read response body: %v", err)
@@ -244,7 +244,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			return
 		}
 
-		b, err := io.ReadAll(resp.Body)
+		b, err := util.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			if attempt < maxRetries && ctx.Err() == nil {
@@ -570,7 +570,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 				return nil
 			}
 
-			body, err := io.ReadAll(resp.Body)
+			body, err := util.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
 				log.Printf("[FunnelEngine] Failed to read response body for %s: %v", tag, err)

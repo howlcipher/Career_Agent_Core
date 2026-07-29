@@ -6,11 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 )
 
 // ollamaProvider talks to a local Ollama server (https://ollama.com).
@@ -194,7 +195,7 @@ func (p *ollamaProvider) post(ctx context.Context, path string, payload interfac
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
+	respBody, err := util.ReadAll(httpResp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read ollama response: %w", err)
 	}
