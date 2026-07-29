@@ -167,7 +167,7 @@ func fetchATSFeed(endpoint string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("board feed returned HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return io.ReadAll(io.LimitReader(resp.Body, 128<<20))
 }
 
 func parseGreenhouseBoard(body []byte) ([]feedJob, error) {
