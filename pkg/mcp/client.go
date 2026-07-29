@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode"
 )
@@ -88,6 +89,7 @@ Text to evaluate:
 		system:      "You are a strict security classifier.",
 		prompt:      prompt,
 		temperature: 0.1,
+		keepAlive:   "30m",
 	}
 
 	if err := incrementAndLogAPICall("VerifySafeJobDescription", len(prompt)); err != nil {
@@ -171,7 +173,7 @@ My Background:
 	// a smaller model: the entire expected output is one integer, and the
 	// salvage path below already tolerates a weaker model wrapping that
 	// number in prose. No behavior change when OLLAMA_FAST_MODEL is unset.
-	raw, err := c.generate(genRequest{prompt: prompt, temperature: 0.1, fast: true})
+	raw, err := c.generate(genRequest{prompt: prompt, temperature: 0.1, fast: true, keepAlive: "30m"})
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -221,39 +223,82 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		compContext = fmt.Sprintf("\n\nNOTE: If a desired salary or target compensation is requested, explicitly state it as $%d.", comp)
 	}
 
-	prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output the Markdown resume followed by exactly this separator on its own line: ===COVERLETTER===\nThen output the plain text cover letter below it, followed by exactly this separator on its own line: ===INTERVIEWPREP===\nThen output a cheat sheet of likely interview questions and talking points based on my profile.",
-		scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
-
-	fmt.Printf("Sending application context to %s...\n", c.provider.Name())
-	if err := incrementAndLogAPICall("ProcessJobApplication", len(prompt)); err != nil {
-		return "", "", "", err
+	// Calculate a dynamic num_ctx based on rough token estimation (characters / 3) + safety margin
+	totalChars := len(scrapedData["title"]) + len(scrapedData["desc"]) + len(parsedDocument)
+	numCtx := (totalChars / 3) + 2000
+	if numCtx < 8192 {
+		numCtx = 8192
+	}
+	if numCtx > 64000 {
+		numCtx = 64000
 	}
 
-	fullText, err := c.generate(genRequest{system: SystemPrompt, prompt: prompt, temperature: -1})
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to generate content: %w", err)
-	}
+	fmt.Printf("Sending concurrent application context requests to %s...\n", c.provider.Name())
 
-	// Parse the output using the separators
-	resumeOut := ""
-	coverOut := ""
-	prepOut := "Interview prep failed to generate properly."
+	var wg sync.WaitGroup
+	var resumeOut, coverOut, prepOut string
+	var errResume, errCover, errPrep error
 
-	parts1 := strings.Split(fullText, "===COVERLETTER===")
-	if len(parts1) > 0 {
-		resumeOut = strings.TrimSpace(parts1[0])
-	}
-	if len(parts1) > 1 {
-		parts2 := strings.Split(parts1[1], "===INTERVIEWPREP===")
-		if len(parts2) > 0 {
-			coverOut = strings.TrimSpace(parts2[0])
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		sys := "You are an expert technical recruiter. Analyze the job description and tailor the base resume. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Do not use hyphens."
+		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the tailored Markdown resume based on my profile. Output ONLY the markdown resume without extra commentary.",
+			scrapedData["title"], scrapedData["desc"], parsedDocument)
+		
+		if err := incrementAndLogAPICall("ProcessJobApplication-Resume", len(prompt)); err != nil {
+			errResume = err
+			return
 		}
-		if len(parts2) > 1 {
-			prepOut = strings.TrimSpace(parts2[1])
+		
+		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
+		resumeOut, errResume = c.generate(req)
+	}()
+
+	go func() {
+		defer wg.Done()
+		sys := "You are an expert technical recruiter. Analyze the job description and tailor the cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Do not use hyphens."
+		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output a tailored plain text cover letter. Output ONLY the plain text cover letter without extra commentary.",
+			scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext)
+		
+		if err := incrementAndLogAPICall("ProcessJobApplication-CoverLetter", len(prompt)); err != nil {
+			errCover = err
+			return
 		}
+		
+		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
+		coverOut, errCover = c.generate(req)
+	}()
+
+	go func() {
+		defer wg.Done()
+		sys := "You are an expert technical recruiter. Analyze the job description and create an interview preparation sheet."
+		prompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output a cheat sheet of likely interview questions and talking points based on my profile. Output ONLY the cheat sheet.",
+			scrapedData["title"], scrapedData["desc"], parsedDocument)
+		
+		if err := incrementAndLogAPICall("ProcessJobApplication-InterviewPrep", len(prompt)); err != nil {
+			errPrep = err
+			return
+		}
+		
+		req := genRequest{system: sys, prompt: prompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
+		prepOut, errPrep = c.generate(req)
+	}()
+
+	wg.Wait()
+
+	if errResume != nil {
+		return "", "", "", fmt.Errorf("failed to generate resume: %w", errResume)
+	}
+	if errCover != nil {
+		return "", "", "", fmt.Errorf("failed to generate cover letter: %w", errCover)
+	}
+	if errPrep != nil {
+		return "", "", "", fmt.Errorf("failed to generate interview prep: %w", errPrep)
 	}
 
-	return resumeOut, coverOut, prepOut, nil
+	return strings.TrimSpace(resumeOut), strings.TrimSpace(coverOut), strings.TrimSpace(prepOut), nil
 }
 
 // ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright.
@@ -311,7 +356,16 @@ Return a JSON object in this exact format:
 		return "", err
 	}
 
-	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1})
+	totalChars := len(domHTML) + len(profileContext)
+	numCtx := (totalChars / 3) + 2000
+	if numCtx < 8192 {
+		numCtx = 8192
+	}
+	if numCtx > 128000 {
+		numCtx = 128000
+	}
+
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1, numCtx: numCtx, keepAlive: "30m"})
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping: %w", err)
 	}
@@ -355,7 +409,7 @@ Return a JSON object in this exact format:
 		return "", err
 	}
 
-	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1, imagePNG: screenshotBytes})
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1, imagePNG: screenshotBytes, keepAlive: "30m"})
 	if err != nil {
 		return "", fmt.Errorf("failed to generate form mapping from vision: %w", err)
 	}
@@ -382,7 +436,7 @@ func (c *Client) ExtractRejectionReason(emailText string) (string, error) {
 	}
 
 	system := "You are an HR analytics expert. Analyze this rejection email and concisely state WHY the candidate was rejected (e.g., 'Not enough Kubernetes experience', 'Role was canceled', 'Timezone mismatch', or 'Generic templated rejection')."
-	raw, err := c.generate(genRequest{system: system, prompt: emailText, temperature: -1})
+	raw, err := c.generate(genRequest{system: system, prompt: emailText, temperature: -1, keepAlive: "30m"})
 	if err != nil {
 		return "", fmt.Errorf("failed to extract rejection reason: %w", err)
 	}
@@ -413,7 +467,16 @@ Return a JSON object in this exact format mapping the CSS selector to the string
 		return nil, err
 	}
 
-	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1})
+	totalChars := len(domHTML) + len(profileContext)
+	numCtx := (totalChars / 3) + 2000
+	if numCtx < 8192 {
+		numCtx = 8192
+	}
+	if numCtx > 128000 {
+		numCtx = 128000
+	}
+
+	raw, err := c.generate(genRequest{system: systemDirective, prompt: prompt, json: true, temperature: -1, numCtx: numCtx, keepAlive: "30m"})
 	if err != nil {
 		return nil, fmt.Errorf("failed to solve validation errors: %w", err)
 	}

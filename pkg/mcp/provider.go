@@ -19,7 +19,9 @@ type genRequest struct {
 	// one configured, falling back to the standard model otherwise. Set it
 	// only for calls whose output is simple enough to survive a weaker model
 	// (improvements.md #24).
-	fast bool
+	fast      bool
+	numCtx    int    // optional override for Ollama num_ctx (e.g. 32000 for large inputs)
+	keepAlive string // optional keep_alive duration (e.g. "30m")
 }
 
 // provider abstracts an LLM backend (Ollama, Claude, Gemini).

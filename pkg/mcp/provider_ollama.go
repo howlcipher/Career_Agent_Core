@@ -96,9 +96,10 @@ type ollamaChatMessage struct {
 type ollamaChatRequest struct {
 	Model    string                 `json:"model"`
 	Messages []ollamaChatMessage    `json:"messages"`
-	Stream   bool                   `json:"stream"`
-	Format   string                 `json:"format,omitempty"`
-	Options  map[string]interface{} `json:"options,omitempty"`
+	Stream    bool                   `json:"stream"`
+	Format    string                 `json:"format,omitempty"`
+	Options   map[string]interface{} `json:"options,omitempty"`
+	KeepAlive string                 `json:"keep_alive,omitempty"`
 }
 
 type ollamaChatResponse struct {
@@ -123,15 +124,23 @@ func (p *ollamaProvider) Generate(ctx context.Context, req genRequest) (string, 
 	messages = append(messages, userMsg)
 
 	body := ollamaChatRequest{
-		Model:    model,
-		Messages: messages,
-		Stream:   false,
+		Model:     model,
+		Messages:  messages,
+		Stream:    false,
+		KeepAlive: req.keepAlive,
 	}
 	if req.json {
 		body.Format = "json"
 	}
+	options := make(map[string]interface{})
 	if req.temperature >= 0 {
-		body.Options = map[string]interface{}{"temperature": req.temperature}
+		options["temperature"] = req.temperature
+	}
+	if req.numCtx > 0 {
+		options["num_ctx"] = req.numCtx
+	}
+	if len(options) > 0 {
+		body.Options = options
 	}
 
 	var resp ollamaChatResponse
