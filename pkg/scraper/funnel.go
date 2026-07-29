@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -507,68 +508,76 @@ func isValidATSUrl(link string) bool {
 func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 	log.Println("[FunnelEngine] Scraping RemoteOK API...")
 
+	var eg errgroup.Group
+	eg.SetLimit(5)
+
 	for _, role := range f.Roles {
-		tag := strings.ReplaceAll(strings.ToLower(role), " ", "-")
+		r := role
+		eg.Go(func() error {
+			tag := strings.ReplaceAll(strings.ToLower(r), " ", "-")
 
-		url := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			log.Printf("[FunnelEngine] Failed to create request for %s: %v", tag, err)
-			continue
-		}
-
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-		client := newHTTPClient(30 * time.Second)
-		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
+			url := fmt.Sprintf("%s?tag=%s", remoteOKBaseURL, tag)
+			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
-				log.Printf("[FunnelEngine] Failed to execute request for %s: %v", tag, err)
-			} else {
-				log.Printf("[FunnelEngine] API returned non-200 status for %s: %d", tag, resp.StatusCode)
-			}
-			if resp != nil {
-				resp.Body.Close()
-			}
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[FunnelEngine] Failed to read response body for %s: %v", tag, err)
-			continue
-		}
-
-		var rawJobs []json.RawMessage
-		if err := json.Unmarshal(body, &rawJobs); err != nil {
-			log.Printf("[FunnelEngine] Failed to unmarshal JSON for %s: %v", tag, err)
-			continue
-		}
-
-		if len(rawJobs) <= 1 {
-			continue
-		}
-
-		for i := 1; i < len(rawJobs); i++ {
-			var roJob RemoteOkJob
-			if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
-				log.Printf("[FunnelEngine] Failed to unmarshal job %d: %v", i, err)
-				continue
+				log.Printf("[FunnelEngine] Failed to create request for %s: %v", tag, err)
+				return nil
 			}
 
-			// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
-			isNew, err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+			client := newHTTPClient(30 * time.Second)
+			resp, err := client.Do(req)
+			if err != nil || resp.StatusCode != http.StatusOK {
+				if err != nil {
+					log.Printf("[FunnelEngine] Failed to execute request for %s: %v", tag, err)
+				} else {
+					log.Printf("[FunnelEngine] API returned non-200 status for %s: %d", tag, resp.StatusCode)
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+				return nil
+			}
+
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			if err != nil {
-				log.Printf("[FunnelEngine] Failed to add %s to funnel: %v", roJob.URL, err)
-			} else if isNew && jobChan != nil {
-				log.Printf("[FunnelEngine] Discovered RemoteOK Job: %s at %s", roJob.Position, roJob.URL)
-				jobChan <- Job{
-					CompanyName: roJob.Company,
-					Title:       roJob.Position,
-					URL:         roJob.URL,
+				log.Printf("[FunnelEngine] Failed to read response body for %s: %v", tag, err)
+				return nil
+			}
+
+			var rawJobs []json.RawMessage
+			if err := json.Unmarshal(body, &rawJobs); err != nil {
+				log.Printf("[FunnelEngine] Failed to unmarshal JSON for %s: %v", tag, err)
+				return nil
+			}
+
+			if len(rawJobs) <= 1 {
+				return nil
+			}
+
+			for i := 1; i < len(rawJobs); i++ {
+				var roJob RemoteOkJob
+				if err := json.Unmarshal(rawJobs[i], &roJob); err != nil {
+					log.Printf("[FunnelEngine] Failed to unmarshal job %d: %v", i, err)
+					continue
+				}
+
+				// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
+				isNew, err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
+				if err != nil {
+					log.Printf("[FunnelEngine] Failed to add %s to funnel: %v", roJob.URL, err)
+				} else if isNew && jobChan != nil {
+					log.Printf("[FunnelEngine] Discovered RemoteOK Job: %s at %s", roJob.Position, roJob.URL)
+					jobChan <- Job{
+						CompanyName: roJob.Company,
+						Title:       roJob.Position,
+						URL:         roJob.URL,
+					}
 				}
 			}
-		}
+			return nil
+		})
 	}
+	_ = eg.Wait()
 }

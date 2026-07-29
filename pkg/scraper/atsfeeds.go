@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"golang.org/x/sync/errgroup"
 )
 
 // Greenhouse and Lever both publish every posting on a company's board through
@@ -68,13 +70,27 @@ func (f *FunnelEngine) discoverWithATSFeeds(jobChan chan<- Job) {
 		log.Printf("[FunnelEngine] Could not list known Lever companies: %v", err)
 	}
 
-	found := 0
+	var found int32
+	var eg errgroup.Group
+	eg.SetLimit(10)
+
 	for _, slug := range gh {
-		found += f.pollBoard(slug, fmt.Sprintf(greenhouseBoardAPI, slug), parseGreenhouseBoard, jobChan)
+		s := slug
+		eg.Go(func() error {
+			f := f.pollBoard(s, fmt.Sprintf(greenhouseBoardAPI, s), parseGreenhouseBoard, jobChan)
+			atomic.AddInt32(&found, int32(f))
+			return nil
+		})
 	}
 	for _, slug := range lv {
-		found += f.pollBoard(slug, fmt.Sprintf(leverBoardAPI, slug), parseLeverBoard, jobChan)
+		s := slug
+		eg.Go(func() error {
+			f := f.pollBoard(s, fmt.Sprintf(leverBoardAPI, s), parseLeverBoard, jobChan)
+			atomic.AddInt32(&found, int32(f))
+			return nil
+		})
 	}
+	_ = eg.Wait()
 	log.Printf("[FunnelEngine] ATS board feeds contributed %d new posting(s) across %d board(s).", found, len(gh)+len(lv))
 }
 

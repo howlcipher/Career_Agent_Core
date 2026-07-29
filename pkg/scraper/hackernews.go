@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"golang.org/x/sync/errgroup"
 )
 
 // hnAlgoliaBaseURL is the public, unauthenticated Hacker News search API
@@ -108,17 +109,42 @@ func latestWhoIsHiringStoryID() (int64, error) {
 // fetchHNThreadComments fetches every comment (all nesting levels) for the
 // given story, paging through Algolia's search results.
 func fetchHNThreadComments(storyID int64) ([]hnComment, error) {
+	reqURL := fmt.Sprintf("%s?tags=comment,story_%d&hitsPerPage=1000&page=0", hnAlgoliaBaseURL, storyID)
+	var resp hnCommentSearchResponse
+	if err := fetchHNJSON(reqURL, &resp); err != nil {
+		return nil, err
+	}
+
+	if resp.NbPages <= 1 {
+		return resp.Hits, nil
+	}
+
+	allHits := make([][]hnComment, resp.NbPages)
+	allHits[0] = resp.Hits
+
+	var eg errgroup.Group
+	eg.SetLimit(5)
+
+	for page := 1; page < resp.NbPages; page++ {
+		p := page
+		eg.Go(func() error {
+			pageURL := fmt.Sprintf("%s?tags=comment,story_%d&hitsPerPage=1000&page=%d", hnAlgoliaBaseURL, storyID, p)
+			var pageResp hnCommentSearchResponse
+			if err := fetchHNJSON(pageURL, &pageResp); err != nil {
+				return err
+			}
+			allHits[p] = pageResp.Hits
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+
 	var all []hnComment
-	for page := 0; ; page++ {
-		reqURL := fmt.Sprintf("%s?tags=comment,story_%d&hitsPerPage=1000&page=%d", hnAlgoliaBaseURL, storyID, page)
-		var resp hnCommentSearchResponse
-		if err := fetchHNJSON(reqURL, &resp); err != nil {
-			return all, err
-		}
-		all = append(all, resp.Hits...)
-		if len(resp.Hits) == 0 || page+1 >= resp.NbPages {
-			break
-		}
+	for _, hits := range allHits {
+		all = append(all, hits...)
 	}
 	return all, nil
 }
