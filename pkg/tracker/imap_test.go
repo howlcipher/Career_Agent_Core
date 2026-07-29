@@ -264,7 +264,7 @@ func TestUpdateDBWithTrackerResultRetriesAfterDatabaseLock(t *testing.T) {
 	db := setupTrackerTestDB(t, dsn)
 	insertTrackerTestJob(t, db, "Locked Corp", "APPLIED", "https://example.com/locked")
 
-	locker, err := sql.Open("sqlite3", dsn)
+	locker, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("open locking connection: %v", err)
 	}

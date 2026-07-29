@@ -5,11 +5,11 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
-	db, err := sql.Open("sqlite3", "./applications.db")
+	db, err := sql.Open("sqlite", "./applications.db")
 	if err != nil {
 		fmt.Println("Error opening db:", err)
 		return

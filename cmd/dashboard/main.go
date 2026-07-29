@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type Metrics struct {
@@ -207,7 +207,7 @@ func main() {
 		log.Fatalf("Invalid dashboard address: %v", err)
 	}
 
-	db, err = sql.Open("sqlite3", "./applications.db?_journal_mode=WAL")
+	db, err = sql.Open("sqlite", "./applications.db?_journal_mode=WAL")
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 	fmt.Printf("Found %d unique unsupported URLs in logs.\n", len(unsupportedURLs))
 
 	// 2. Connect to database
-	db, err := sql.Open("sqlite3", "./applications.db")
+	db, err := sql.Open("sqlite", "./applications.db")
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}

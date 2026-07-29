@@ -9,11 +9,11 @@ import (
 	"net/url"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
-	db, err := sql.Open("sqlite3", "applications.db")
+	db, err := sql.Open("sqlite", "applications.db")
 	if err != nil {
 		log.Fatal(err)
 	}
