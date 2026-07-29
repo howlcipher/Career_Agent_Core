@@ -81,6 +81,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 **2026-07-28 groom-pass note (session 14):** Investigated data manipulation/queue logic. Identified a critical flaw where newly discovered jobs completely bypassed Bayesian smoothing because they were injected unranked into the execution channel tail, while cycle limits caused massive CPU channel-thrashing. Decoupled discovery from pipeline execution (bug #399). All free Pending rows were re-verified. Task journals are clean.
 
+**2026-07-28 groom-pass note (session 15):** Item #404 completed and verified. All free Pending rows (#403, #407) were re-verified against current code and recomputed with no rank change. No items fell below the 0.5 floor. Task journals are clean.
+
 **2026-07-28 groom-pass note (session 15):** Investigated system learning and caching capabilities. Found that the Learner Module cache was being incorrectly wiped when ATS forms omitted optional standard fields (Bug A, #401) and identified a related vulnerability to transient timeouts (Bug B). Fixed Bug A. Also identified that `AvgInferenceMs` was tracked but completely ignored during Bayesian smoothing; implemented an explicit speed penalty (Bug #400) to penalize massively slow LLM/vision endpoints, allowing the queue to naturally prioritize faster applications. Backlogs groomed. Usability Gate is MET.
 **2026-07-28 groom-pass note (session 16):** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after multi-agent optimization sweep. Verified that 403, 404, 405, 406, and 407 are accurately scoped pending improvements that target massive GC reductions and IO-bound concurrency blockers, all scoring well above the 0.5 ROI floor. Task journals are clean.
 
