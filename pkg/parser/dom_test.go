@@ -34,7 +34,7 @@ func TestPruneDOMToText(t *testing.T) {
 		</body>
 	</html>`
 
-	output, err := PruneDOMToText(input)
+	output, err := PruneDOMToText(strings.NewReader(input))
 	if err != nil {
 		t.Fatalf("PruneDOMToText error: %v", err)
 	}

@@ -1311,7 +1311,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				); err != nil {
 					return fmt.Errorf("generic form rejected before model use: %w", err)
 				}
-				prunedHTML, err := parser.PruneDOMToText(domHTML)
+				prunedHTML, err := parser.PruneDOMToText(strings.NewReader(domHTML))
 				if err != nil {
 					prunedHTML = domHTML
 				}
@@ -1403,9 +1403,6 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			prunedHTML, err := parser.PruneDOMToForm(domHTML)
 			if err != nil {
 				prunedHTML = domHTML
-			}
-			if stripped, err := parser.StripPresentationalAttrs(prunedHTML); err == nil {
-				prunedHTML = stripped
 			}
 
 			// bugs.md #111: ask the mailbox whether the previous submit was in fact

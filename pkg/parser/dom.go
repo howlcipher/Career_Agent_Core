@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"io"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -42,48 +43,59 @@ func PruneDOM(rawHTML string) (string, error) {
 	return buf.String(), nil
 }
 
-// PruneDOMToForm behaves like PruneDOM but, when a <form> element is present,
-// renders only that element instead of the whole document. A page's full body
-// (nav, footer, marketing copy, unrelated widgets) contributes nothing toward
-// solving a validation error and can push modern ATS pages well past LLM
-// payload safety limits. Falls back to the full pruned document when no
-// <form> element is found, so callers stay safe against forms assembled
-// without a real <form> tag.
 func PruneDOMToForm(rawHTML string) (string, error) {
-	pruned, err := PruneDOM(rawHTML)
+	doc, err := html.Parse(strings.NewReader(rawHTML))
 	if err != nil {
 		return "", err
 	}
 
-	doc, err := html.Parse(strings.NewReader(pruned))
-	if err != nil {
-		return "", err
-	}
-
+	var toRemove []*html.Node
 	var form *html.Node
+
 	var traverse func(*html.Node)
 	traverse = func(n *html.Node) {
-		if form != nil {
-			return
+		if n.Type == html.ElementNode {
+			tag := strings.ToLower(n.Data)
+			if tag == "script" || tag == "style" || tag == "svg" || tag == "path" || tag == "iframe" || tag == "noscript" || tag == "meta" || tag == "link" {
+				toRemove = append(toRemove, n)
+				return
+			}
+			
+			if form == nil && tag == "form" {
+				form = n
+			}
+
+			// Strip presentational attributes
+			var kept []html.Attribute
+			for _, a := range n.Attr {
+				if !presentationalAttrs[strings.ToLower(a.Key)] {
+					kept = append(kept, a)
+				}
+			}
+			n.Attr = kept
 		}
-		if n.Type == html.ElementNode && strings.ToLower(n.Data) == "form" {
-			form = n
-			return
-		}
+		
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			traverse(c)
 		}
 	}
 	traverse(doc)
 
-	if form == nil {
-		return pruned, nil
+	for _, n := range toRemove {
+		n.Parent.RemoveChild(n)
 	}
 
 	var buf bytes.Buffer
-	if err := html.Render(&buf, form); err != nil {
-		return "", err
+	if form != nil {
+		if err := html.Render(&buf, form); err != nil {
+			return "", err
+		}
+	} else {
+		if err := html.Render(&buf, doc); err != nil {
+			return "", err
+		}
 	}
+	
 	return buf.String(), nil
 }
 
@@ -152,20 +164,21 @@ func StripPresentationalAttrs(rawHTML string) (string, error) {
 	return buf.String(), nil
 }
 
-// PruneDOMToText extracts only the visible plain text from an HTML string to drastically save LLM tokens.
-func PruneDOMToText(rawHTML string) (string, error) {
-	doc, err := html.Parse(strings.NewReader(rawHTML))
+// PruneDOMToText extracts only the visible plain text from an HTML stream to drastically save LLM tokens.
+func PruneDOMToText(r io.Reader) (string, error) {
+	doc, err := html.Parse(r)
 	if err != nil {
 		return "", err
 	}
 
-	var buf bytes.Buffer
+	var buf strings.Builder
 	var traverse func(*html.Node)
 	traverse = func(n *html.Node) {
 		if n.Type == html.TextNode {
 			text := strings.TrimSpace(n.Data)
 			if text != "" {
-				buf.WriteString(text + " ")
+				buf.WriteString(text)
+				buf.WriteByte(' ')
 			}
 		}
 
@@ -400,7 +413,7 @@ var attestationPatterns = map[string][]string{
 // question is "does answering this form require a declaration the user has not
 // made?" rather than "which control is it".
 func DetectAttestationQuestions(formHTML string) []string {
-	text, err := PruneDOMToText(formHTML)
+	text, err := PruneDOMToText(strings.NewReader(formHTML))
 	if err != nil {
 		text = formHTML
 	}
@@ -463,7 +476,7 @@ func DetectSecurityCodeChallenge(formHTML string) bool {
 		return false
 	}
 
-	text, err := PruneDOMToText(formHTML)
+	text, err := PruneDOMToText(strings.NewReader(formHTML))
 	if err != nil {
 		text = formHTML
 	}

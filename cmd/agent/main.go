@@ -306,13 +306,15 @@ func readJobPageResponse(resp *http.Response) (htmlText, description string, err
 		err = errors.Join(err, resp.Body.Close())
 	}()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	var b strings.Builder
+	tr := io.TeeReader(io.LimitReader(resp.Body, 10<<20), &b)
+
+	description, err = parser.PruneDOMToText(tr)
 	if err != nil {
 		return "", "", err
 	}
-	htmlText = string(body)
-	description, err = parser.PruneDOMToText(htmlText)
-	return htmlText, description, err
+	htmlText = b.String()
+	return htmlText, description, nil
 }
 
 // errDeadRedirect is returned when a URL redirects to a known dead-end.
