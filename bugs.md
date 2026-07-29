@@ -25,6 +25,8 @@ This project reaches 100% usable when every box below is checked. Until then, th
 
 **Status after #112 resolution: MET.** URL scheme deduplication and migration is verified, resolving the final open Major defect. The gate is clear, and the agent may now proceed to features in `improvements.md`.
 
+**Re-verified MET 2026-07-28 (`/groom_backlogs`):** `go build ./...`, `go vet ./...`, and `go test ./...` are all clean without CGO enabled following the pure Go SQLite migration. Zero Pending rows remain in the Ranked Bug Backlog. The gate is clear.
+
 **Historical status as of 2026-07-24 ~15:50: MET.** At that point all six gate boxes were checked: static checks, Ollama, dashboard, tracker crash-safety, a live end-to-end application and zero known open Blocker/Major bugs were confirmed. The later first genuinely confirmed application resolved the old 82-job journal's core question; that superseded journal was removed in the 2026-07-26 sweep, with current live-run context retained in `documentation/task_journals/2026-07-25_monitor-live-run-and-fix-bugs.md`. The current gate status is the newer UNMET line above.
 
 Every session — Claude Code, Gemini CLI, or manual — that touches this repo should glance at this checklist. When the last box is checked, change the Status line to `MET (YYYY-MM-DD)` and add a one-line note on what was verified; from that point on, `improvements.md`'s Pending rows become fair game for normal ROI-ranked selection instead of being blocked behind this gate.
