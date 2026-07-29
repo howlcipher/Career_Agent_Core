@@ -39,7 +39,7 @@ func InitDBWithPath(path string) error {
 	var err error
 	dsn := path
 	if !strings.Contains(path, "?") {
-		dsn += "?_journal_mode=WAL&_busy_timeout=5000"
+		dsn += "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000"
 	}
 	db, err = sql.Open("sqlite", dsn)
 	if err != nil {
@@ -114,7 +114,8 @@ func InitDBWithPath(path string) error {
 		ended_at DATETIME,
 		model_call_count INTEGER,
 		inference_ms INTEGER
-	);`
+	);
+	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);`
 	if _, err = db.Exec(createTableQuery); err != nil {
 		return err
 	}
