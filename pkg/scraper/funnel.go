@@ -160,15 +160,19 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 
 func extractCompanyFromTitle(title string) string {
 	// Usually titles look like "Senior Backend Engineer at Stripe - Lever"
-	parts := strings.Split(title, " at ")
-	if len(parts) > 1 {
-		subParts := strings.Split(parts[1], " - ")
-		return strings.TrimSpace(subParts[0])
+	idx := strings.Index(title, " at ")
+	if idx != -1 {
+		rest := title[idx+4:]
+		dashIdx := strings.Index(rest, " - ")
+		if dashIdx != -1 {
+			return strings.TrimSpace(rest[:dashIdx])
+		}
+		return strings.TrimSpace(rest)
 	}
 	// Fallback
-	parts = strings.Split(title, " - ")
-	if len(parts) > 1 {
-		return strings.TrimSpace(parts[0])
+	dashIdx := strings.Index(title, " - ")
+	if dashIdx != -1 {
+		return strings.TrimSpace(title[:dashIdx])
 	}
 	return "Unknown Company"
 }
@@ -186,14 +190,16 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 	if t == "" {
 		return fallbackRole
 	}
-	if parts := strings.Split(t, " at "); len(parts) > 1 {
-		if title := strings.TrimSpace(parts[0]); title != "" {
+	idx := strings.Index(t, " at ")
+	if idx != -1 {
+		if title := strings.TrimSpace(t[:idx]); title != "" {
 			return title
 		}
 	}
 	// Headlines without " at " commonly read "Title - Company - ATS".
-	if parts := strings.Split(t, " - "); len(parts) > 1 {
-		if title := strings.TrimSpace(parts[0]); title != "" {
+	idx = strings.Index(t, " - ")
+	if idx != -1 {
+		if title := strings.TrimSpace(t[:idx]); title != "" {
 			return title
 		}
 	}
@@ -334,10 +340,22 @@ func companyFromURL(link string) string {
 			}
 		}
 	}
-	for _, seg := range strings.Split(u.Path, "/") {
-		if seg == "" {
-			continue
+	path := u.Path
+	for len(path) > 0 {
+		path = strings.TrimPrefix(path, "/")
+		if len(path) == 0 {
+			break
 		}
+		idx := strings.IndexByte(path, '/')
+		var seg string
+		if idx == -1 {
+			seg = path
+			path = ""
+		} else {
+			seg = path[:idx]
+			path = path[idx+1:]
+		}
+		
 		lower := strings.ToLower(seg)
 		if genericPathSegments[lower] || localeSegmentRe.MatchString(lower) {
 			continue
@@ -444,10 +462,9 @@ func IsKnownJunkJobURL(link string) bool {
 	for _, domain := range pathTenantATS {
 		if host == domain || strings.HasSuffix(host, "."+domain) {
 			segments := 0
-			for _, seg := range strings.Split(u.Path, "/") {
-				if seg != "" {
-					segments++
-				}
+			trimmed := strings.Trim(u.Path, "/")
+			if trimmed != "" {
+				segments = strings.Count(trimmed, "/") + 1
 			}
 			if segments <= 1 {
 				return true
@@ -464,10 +481,9 @@ func IsKnownJunkJobURL(link string) bool {
 	// across 176 attempts on this platform — this is very likely why.
 	if strings.HasSuffix(host, ".applytojob.com") {
 		segments := 0
-		for _, seg := range strings.Split(u.Path, "/") {
-			if seg != "" {
-				segments++
-			}
+		trimmed := strings.Trim(u.Path, "/")
+		if trimmed != "" {
+			segments = strings.Count(trimmed, "/") + 1
 		}
 		if segments <= 1 {
 			return true
@@ -482,10 +498,9 @@ func IsKnownJunkJobURL(link string) bool {
 	// the /o prefix itself.
 	if strings.HasSuffix(host, ".recruitee.com") {
 		segments := 0
-		for _, seg := range strings.Split(u.Path, "/") {
-			if seg != "" {
-				segments++
-			}
+		trimmed := strings.Trim(u.Path, "/")
+		if trimmed != "" {
+			segments = strings.Count(trimmed, "/") + 1
 		}
 		if segments <= 1 {
 			return true
