@@ -69,6 +69,11 @@ type Profile struct {
 	// before this field existed. Read it through ShouldSendCoverLetter rather
 	// than dereferencing it directly.
 	SendCoverLetter *bool `yaml:"send_cover_letter"`
+	// SkipScoring allows bypassing the expensive fit-score LLM call. When true,
+	// any job that passes keyword and metadata filters (salary, remote, role)
+	// will automatically be assigned a score of 100 and proceed to application.
+	// This is useful for high-volume pipelines where local inference takes too long.
+	SkipScoring bool `yaml:"skip_scoring"`
 }
 
 // ShouldSendCoverLetter reports whether applications should include a cover

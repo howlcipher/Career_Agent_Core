@@ -1197,21 +1197,26 @@ func main() {
 							}
 
 							var scoreErr error
-							for attempt := 1; attempt <= 3; attempt++ {
-								score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
-								if scoreErr == nil {
-									break
-								}
-								if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-									log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
-									cancel()
-									stopWorker = true
-									return
-								} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-									log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-									time.Sleep(60 * time.Second)
-								} else {
-									break
+							if prof.SkipScoring {
+								log.Printf("[Worker-%d] SkipScoring enabled: bypassed LLM fit evaluation for %s", workerID, job.CompanyName)
+								score = 100
+							} else {
+								for attempt := 1; attempt <= 3; attempt++ {
+									score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
+									if scoreErr == nil {
+										break
+									}
+									if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
+										log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
+										cancel()
+										stopWorker = true
+										return
+									} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
+										log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
+										time.Sleep(60 * time.Second)
+									} else {
+										break
+									}
 								}
 							}
 

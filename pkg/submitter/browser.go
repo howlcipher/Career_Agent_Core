@@ -1084,9 +1084,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// If a captcha blocks the page, Playwright will time out instead of hanging the worker forever.
 	page.SetDefaultTimeout(45000)
 
-	// Stealth: Overwrite navigator.webdriver
+	// Stealth: Overwrite properties to bypass naive bot protection
 	page.AddInitScript(playwright.Script{
-		Content: playwright.String("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"),
+		Content: playwright.String(`
+			Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+			window.chrome = { runtime: {} };
+			Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+			Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+		`),
 	})
 
 	log.Printf("[Auto-Submit] Navigating to %s", applyURL)

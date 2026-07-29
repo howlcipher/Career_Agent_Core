@@ -88,3 +88,4 @@ cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly
 use_master_cover_letter: true
 master_cover_letter_path: "Omni_CoverLetter.pdf"
 send_cover_letter: false
+skip_scoring: true
