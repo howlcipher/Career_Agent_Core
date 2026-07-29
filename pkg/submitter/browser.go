@@ -3533,19 +3533,19 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 
 	if pii != nil {
 		if pii.FirstName != "" {
-			if err := safeFillWithLabelFallback(target, mapping.Fields["first_name"], mapping.Labels["first_name"], pii.FirstName); err != nil {
+			if err := safeFillWithLabelFallback(target, mapping.Fields["first_name"], mapping.Labels["first_name"], pii.FirstName); err != nil && !errors.Is(err, ErrEmptySelector) {
 				return fmt.Errorf("failed to fill first_name: %w", err)
 			}
 		}
 		if pii.LastName != "" {
-			if err := safeFillWithLabelFallback(target, mapping.Fields["last_name"], mapping.Labels["last_name"], pii.LastName); err != nil {
+			if err := safeFillWithLabelFallback(target, mapping.Fields["last_name"], mapping.Labels["last_name"], pii.LastName); err != nil && !errors.Is(err, ErrEmptySelector) {
 				return fmt.Errorf("failed to fill last_name: %w", err)
 			}
 		}
-		if err := safeFillWithLabelFallback(target, mapping.Fields["email"], mapping.Labels["email"], pii.Email); err != nil {
+		if err := safeFillWithLabelFallback(target, mapping.Fields["email"], mapping.Labels["email"], pii.Email); err != nil && !errors.Is(err, ErrEmptySelector) {
 			return fmt.Errorf("failed to fill email: %w", err)
 		}
-		if err := safeFillWithLabelFallback(target, mapping.Fields["phone"], mapping.Labels["phone"], pii.Phone); err != nil {
+		if err := safeFillWithLabelFallback(target, mapping.Fields["phone"], mapping.Labels["phone"], pii.Phone); err != nil && !errors.Is(err, ErrEmptySelector) {
 			return fmt.Errorf("failed to fill phone: %w", err)
 		}
 	}

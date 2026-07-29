@@ -50,6 +50,19 @@ func ComputeSourceScores(summaries []SourceHealthSummary) map[string]SourceRankS
 		// Map badRate (0 to 1) to a penalty factor (0.2 to 1.0)
 		penaltyFactor := 1.0 - (badRate * 0.8)
 
+		// Bug #400 / Improvement: Apply speed penalty for very slow sources to make the pipeline faster
+		if s.AvgInferenceMs > 20000 {
+			// e.g. 120s (120,000ms) = 0.2 penalty
+			speedPenalty := float64(s.AvgInferenceMs-20000) / 500000.0
+			if speedPenalty > 0.4 {
+				speedPenalty = 0.4
+			}
+			penaltyFactor -= speedPenalty
+		}
+		if penaltyFactor < 0.1 {
+			penaltyFactor = 0.1
+		}
+
 		scores[s.Source] = SourceRankScore{
 			SmoothedSuccessRate: smoothedSuccess,
 			PenaltyFactor:       penaltyFactor,
