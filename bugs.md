@@ -2470,6 +2470,12 @@ When `storage.HasApplied(job.URL)` was true, the funnel status was updated to `D
 
 `SolveValidationErrors` struggles on Greenhouse forms with required radio groups (work authorization, sponsorship) where `aria-invalid` or error class attributes are applied to the parent `<fieldset>` or container `<div>` instead of child `<input type="radio">`. Validation error detection should be expanded to inspect parent `<fieldset>` and container elements.
 
+### 416. modernc.org/sqlite uses invalid pragma format, causing DB locks
+The database connection strings in `pkg/storage/manager.go` and `cmd/dashboard/main.go` use the old `go-sqlite3` format for pragmas (e.g. `?_journal_mode=WAL&_busy_timeout=5000`). The `modernc.org/sqlite` driver ignores this format, requiring `_pragma=name(value)`. This silently disables WAL mode and busy timeouts, causing `database is locked` errors during concurrent access. Fix: Update all connection strings to the `_pragma=` format.
+
+### 417. go-rod prototype hangs on missing elements without timeouts
+The `go-rod` prototype in `cmd/prototype_go_rod/main.go` utilizes `.MustWaitLoad()`, `page.Element()`, and `.MustInput()` without configuring a page timeout. If an element is missing from the page or the network stalls, these methods will block and hang indefinitely. Fix: Apply a timeout context (e.g., `page.Timeout(15 * time.Second)`) before performing DOM selections and waits.
+
 ### 414. Enforce single-instance execution to prevent DB corruption and stuck jobs
 
 We have a known critical bug where multiple `cmd/agent` processes can run simultaneously, fighting over `applications.db` and Ollama, leading to database corruption and stuck `PROCESSING` jobs.

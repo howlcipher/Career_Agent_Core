@@ -93,8 +93,11 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 **2026-07-28 groom-pass note (session 18):** Usability Gate is MET (0 pending bugs, static tests pass). Completed evaluation and prototyping of `go-rod` (improvement 403). Confirmed 68% binary size reduction and instantaneous startup compared to Playwright. Created a migration plan in the details. Groomed `improvements.md`. Task journals are clean.
 
 **2026-07-28 groom-pass note:** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after correcting #411 effort score and completing #409 (Frontend Rendering Speed Optimizations). Removed V3 gimmick references from Github Pages. Task journals are clean.
+**2026-07-29 groom-pass note:** Added two new improvements (418, 419) found by research subagent.
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
+| 418 | [Parallelize DiscoverJobs queries in funnel.go](#418-parallelize-discoverjobs-queries-in-funnelgo) | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Basic Go concurrency | `DiscoverJobs` in `pkg/scraper/funnel.go` runs SerpApi and Yahoo fallback queries in deeply nested sequential loops over `Roles` and `TargetATS`. Parallelizing this would significantly speed up discovery. |
+| 419 | [Use defer for resp.Body.Close() in scraper.go](#419-use-defer-for-respbodyclose-in-scrapergo) | Pending | 1.0 = 1×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Minor code style fix | In `pkg/scraper/scraper.go`, `resp.Body.Close()` is called explicitly. While it doesn't leak on the happy path, using `defer` provides panic and early-return safety. |
 | 415 | [UI Overhaul & Agent Start/Stop Controls](#415-ui-overhaul--agent-startstop-controls) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | UI and backend process management | Essential for user control over the autonomous agent. Requires new API endpoints to manage agent processes, and a complete aesthetic revamp of the dashboard. |
 | 412 | [Implement Exponential Backoff with Jitter for LLM API Retries](#412-implement-exponential-backoff-with-jitter-for-llm-api-retries) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Core Go retry logic. | API retries currently use fixed 60-second loops which can cause thundering herd contention. |
 | 411 | [Implement Stateful Graph-Based Pipeline Architecture](#411-implement-stateful-graph-based-pipeline-architecture) | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Complex routing logic. | Move from sequential loops to a state machine (like LangGraph) for robust error handling on multi-step forms. |
@@ -158,6 +161,11 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 30 | `gpt-5.6-sol` | Unanswerable-attestation detection is safety-sensitive and benefits from deeper reasoning. |
 
 ## Details
+### 418. Parallelize DiscoverJobs queries in funnel.go
+`DiscoverJobs` in `pkg/scraper/funnel.go` runs SerpApi and Yahoo fallback queries in deeply nested sequential loops over `Roles` and `TargetATS`. Parallelizing this execution with bounded worker pools or `errgroup` would significantly speed up discovery performance.
+
+### 419. Use defer for resp.Body.Close() in scraper.go
+In `pkg/scraper/scraper.go`, `resp.Body.Close()` is called explicitly instead of using `defer`. While it doesn't currently leak in the happy path, it lacks panic/early-return safety and is non-idiomatic Go. Wrapping it in a `defer` immediately after successful response checking will ensure proper resource management.
 
 ### 36. Reconcile setup and feature documentation with executable behavior
 
