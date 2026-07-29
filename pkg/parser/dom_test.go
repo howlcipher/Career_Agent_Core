@@ -250,6 +250,44 @@ func TestStripPresentationalAttrs_KeepsAriaInvalid(t *testing.T) {
 	}
 }
 
+// bugs.md #413: Greenhouse applies aria-invalid to the parent <fieldset> or 
+// uses a class like "field_with_errors" on a container for radio groups.
+func TestPruneDOMToInvalidFields_ChecksAncestorsForInvalidMarkers(t *testing.T) {
+	// First test: aria-invalid on fieldset
+	form1 := `<form><fieldset aria-invalid="true"><input type="radio" id="auth_yes" name="auth" value="1"><input type="radio" id="auth_no" name="auth" value="0"></fieldset></form>`
+	out1, narrowed1, err1 := PruneDOMToInvalidFields(form1)
+	if err1 != nil {
+		t.Fatalf("PruneDOMToInvalidFields error: %v", err1)
+	}
+	if !narrowed1 {
+		t.Fatal("expected the payload to be narrowed for fieldset aria-invalid, got narrowed=false")
+	}
+	if !strings.Contains(out1, `id="auth_yes"`) {
+		t.Errorf("child radio button must be kept when parent is invalid, got: %s", out1)
+	}
+
+	// Second test: error class on div container
+	// PruneDOMToForm translates error classes to data-has-error="true"
+	rawForm2 := `<form><div class="field_with_errors"><input type="radio" id="sponsor_yes" name="sponsor" value="1"><input type="radio" id="sponsor_no" name="sponsor" value="0"></div><div class="valid_field"><input type="text" id="ok_field" name="ok"></div></form>`
+	prunedForm2, err2 := PruneDOMToForm(rawForm2)
+	if err2 != nil {
+		t.Fatalf("PruneDOMToForm error: %v", err2)
+	}
+	out2, narrowed2, err2_invalid := PruneDOMToInvalidFields(prunedForm2)
+	if err2_invalid != nil {
+		t.Fatalf("PruneDOMToInvalidFields error: %v", err2_invalid)
+	}
+	if !narrowed2 {
+		t.Fatal("expected the payload to be narrowed for container with error class, got narrowed=false")
+	}
+	if !strings.Contains(out2, `id="sponsor_yes"`) {
+		t.Errorf("child radio button must be kept when parent container has error class, got: %s", out2)
+	}
+	if strings.Contains(out2, `id="ok_field"`) {
+		t.Errorf("valid field must not be kept, got: %s", out2)
+	}
+}
+
 // bugs.md #70: the narrowed retry payload kept the rejected control and its
 // label but dropped the page's own error text, which is the only thing that
 // says *why* the field bounced. "Phone" plus aria-invalid tells the model the

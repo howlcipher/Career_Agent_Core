@@ -68,6 +68,14 @@ func PruneDOMToForm(rawHTML string) (string, error) {
 			// Strip presentational attributes
 			var kept []html.Attribute
 			for _, a := range n.Attr {
+				if strings.ToLower(a.Key) == "class" {
+					for _, c := range strings.Fields(strings.ToLower(a.Val)) {
+						if c == "error" || c == "invalid" || c == "field_with_errors" || strings.Contains(c, "has-error") {
+							kept = append(kept, html.Attribute{Key: "data-has-error", Val: "true"})
+							break
+						}
+					}
+				}
 				if !presentationalAttrs[strings.ToLower(a.Key)] {
 					kept = append(kept, a)
 				}
@@ -145,6 +153,14 @@ func StripPresentationalAttrs(rawHTML string) (string, error) {
 		if n.Type == html.ElementNode {
 			var kept []html.Attribute
 			for _, a := range n.Attr {
+				if strings.ToLower(a.Key) == "class" {
+					for _, c := range strings.Fields(strings.ToLower(a.Val)) {
+						if c == "error" || c == "invalid" || c == "field_with_errors" || strings.Contains(c, "has-error") {
+							kept = append(kept, html.Attribute{Key: "data-has-error", Val: "true"})
+							break
+						}
+					}
+				}
 				if !presentationalAttrs[strings.ToLower(a.Key)] {
 					kept = append(kept, a)
 				}
@@ -363,9 +379,16 @@ func isInvalidControl(n *html.Node) bool {
 	default:
 		return false
 	}
-	for _, marker := range invalidFieldMarkers {
-		if strings.EqualFold(attrValue(n, marker[0]), marker[1]) {
-			return true
+
+	for curr := n; curr != nil && curr.Type == html.ElementNode; curr = curr.Parent {
+		if strings.ToLower(curr.Data) == "form" {
+			break
+		}
+
+		for _, marker := range invalidFieldMarkers {
+			if strings.EqualFold(attrValue(curr, marker[0]), marker[1]) {
+				return true
+			}
 		}
 	}
 	return false
