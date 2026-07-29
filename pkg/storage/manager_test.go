@@ -569,6 +569,112 @@ func TestMergeStatuses_AwaitingReview(t *testing.T) {
 	}
 }
 
+// TestMergeStatuses_PreviouslyUnrankedStatusesBeatQueueStatuses guards bug
+// #433: five statuses the codebase actually writes (FAILED_SCORE,
+// PROCESSED_MANUAL, INVALID_URL, QUARANTINED_PROMPT_INJECTION,
+// QUARANTINED_RAG_CONTEXT) used to fall into mergeStatusRank's default arm
+// and rank below DISCOVERED/PROCESSING, so a scheme-dedup merge could
+// resurrect a job that had been deliberately closed. Each of these must now
+// beat both queue statuses, symmetrically regardless of argument order.
+func TestMergeStatuses_PreviouslyUnrankedStatusesBeatQueueStatuses(t *testing.T) {
+	unranked := []string{
+		"FAILED_SCORE",
+		"PROCESSED_MANUAL",
+		"INVALID_URL",
+		"QUARANTINED_PROMPT_INJECTION",
+		"QUARANTINED_RAG_CONTEXT",
+	}
+	queueStatuses := []string{"DISCOVERED", "PROCESSING"}
+
+	for _, terminal := range unranked {
+		for _, queued := range queueStatuses {
+			if got := mergeStatuses(terminal, queued); got != terminal {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s", terminal, queued, got, terminal)
+			}
+			if got := mergeStatuses(queued, terminal); got != terminal {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s (symmetry)", queued, terminal, got, terminal)
+			}
+		}
+	}
+}
+
+// TestMergeStatuses_QuarantineOutranksNonOutcomesButNotOutcomes guards the
+// security-closure half of bug #433: a scheme-dedup merge must never reopen
+// a job that was quarantined for prompt injection or bad RAG context, but it
+// also must not clobber a real observed outcome (APPLIED/REJECTED/
+// INTERVIEW_REQUESTED) with a quarantine status.
+func TestMergeStatuses_QuarantineOutranksNonOutcomesButNotOutcomes(t *testing.T) {
+	quarantineStatuses := []string{"QUARANTINED_PROMPT_INJECTION", "QUARANTINED_RAG_CONTEXT"}
+	nonOutcomeStatuses := []string{
+		"DISCOVERED",
+		"PROCESSING",
+		"FAILED_SCORE",
+		"SKIPPED",
+		"BLOCKED_CAPTCHA",
+		"FAILED_SUBMIT",
+		"INVALID_URL",
+		"MANUAL_REQUIRED",
+		"AWAITING_REVIEW",
+		"PROCESSED_MANUAL",
+	}
+	outcomeStatuses := []string{"APPLIED", "REJECTED", "INTERVIEW_REQUESTED"}
+
+	for _, quarantine := range quarantineStatuses {
+		for _, nonOutcome := range nonOutcomeStatuses {
+			if got := mergeStatuses(quarantine, nonOutcome); got != quarantine {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s", quarantine, nonOutcome, got, quarantine)
+			}
+			if got := mergeStatuses(nonOutcome, quarantine); got != quarantine {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s (symmetry)", nonOutcome, quarantine, got, quarantine)
+			}
+		}
+		for _, outcome := range outcomeStatuses {
+			if got := mergeStatuses(outcome, quarantine); got != outcome {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s", outcome, quarantine, got, outcome)
+			}
+			if got := mergeStatuses(quarantine, outcome); got != outcome {
+				t.Errorf("mergeStatuses(%s, %s) = %s, want %s (symmetry)", quarantine, outcome, got, outcome)
+			}
+		}
+	}
+}
+
+// TestMergeStatusRank_NoKnownStatusIsUnranked is the real regression guard
+// for bug #433. mergeStatusRank's default arm returns 0, which loses to
+// every ranked status including DISCOVERED — that silent fallthrough is
+// exactly how the bug happened: a status the codebase writes but the rank
+// switch didn't know about got treated as lower priority than a brand new,
+// never-processed job. If a future status gets added to job_funnel without
+// an explicit case in mergeStatusRank, this test must fail.
+func TestMergeStatusRank_NoKnownStatusIsUnranked(t *testing.T) {
+	knownStatuses := []string{
+		"DISCOVERED",
+		"PROCESSING",
+		"SKIPPED",
+		"BLOCKED_CAPTCHA",
+		"FAILED_SCORE",
+		"FAILED_SUBMIT",
+		"INVALID_URL",
+		"MANUAL_REQUIRED",
+		"AWAITING_REVIEW",
+		"PROCESSED_MANUAL",
+		"QUARANTINED_PROMPT_INJECTION",
+		"QUARANTINED_RAG_CONTEXT",
+		"APPLIED",
+		"REJECTED",
+		"INTERVIEW_REQUESTED",
+	}
+
+	for _, status := range knownStatuses {
+		if rank := mergeStatusRank(status); rank == 0 {
+			t.Errorf("mergeStatusRank(%q) = 0, want a nonzero rank; this status "+
+				"falls into the unknown/default arm and would lose to every "+
+				"other status, including DISCOVERED, in a scheme-dedup merge "+
+				"(bug #433 recurring)", status)
+		}
+	}
+}
+
 func TestSaveFormMappingRejectsNonJSON(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

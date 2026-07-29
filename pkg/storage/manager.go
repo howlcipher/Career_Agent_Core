@@ -255,36 +255,70 @@ func migrateJobFunnelToneVariant() error {
 	return err
 }
 
+// mergeStatusRank ranks job_funnel statuses for mergeStatuses' scheme-dedup
+// merges: the higher-ranked status wins and survives the merge.
+//
+// The ordering is a deliberate decision (bug #433), not an accident of
+// insertion order — do not "tidy" it without re-reading the rationale below.
+//
+//   - Anything terminal must outrank DISCOVERED/PROCESSING, or a merge
+//     silently requeues a closed job. That is the whole bug: five statuses
+//     the codebase actually writes (FAILED_SCORE, PROCESSED_MANUAL,
+//     INVALID_URL, and the two QUARANTINED_* statuses) used to fall through
+//     to the default case and rank below DISCOVERED, so merging a dedup pair
+//     could resurrect a job that had been deliberately closed.
+//   - INVALID_URL sits above the "we tried and it failed" statuses
+//     (FAILED_SUBMIT, BLOCKED_CAPTCHA, etc.) because the URL is not a
+//     posting at all — there is nothing to retry.
+//   - The two QUARANTINED_* statuses rank above every non-outcome status so
+//     a merge can never reopen a security closure, but deliberately below
+//     APPLIED/REJECTED/INTERVIEW_REQUESTED: those are real observed
+//     outcomes and a merge must not destroy them. There is no reprocessing
+//     risk in ranking them below those three, because none of those three
+//     statuses is ever pulled back into the queue anyway.
+func mergeStatusRank(s string) int {
+	switch s {
+	case "DISCOVERED":
+		return 1
+	case "PROCESSING":
+		return 2
+	case "FAILED_SCORE":
+		return 3
+	case "SKIPPED":
+		return 4
+	case "BLOCKED_CAPTCHA":
+		return 5
+	case "FAILED_SUBMIT":
+		return 6
+	case "INVALID_URL":
+		return 7
+	case "MANUAL_REQUIRED", "AWAITING_REVIEW":
+		return 8
+	case "PROCESSED_MANUAL":
+		return 9
+	case "QUARANTINED_PROMPT_INJECTION", "QUARANTINED_RAG_CONTEXT":
+		return 10
+	case "APPLIED":
+		return 11
+	case "REJECTED":
+		return 12
+	case "INTERVIEW_REQUESTED":
+		return 13
+	default:
+		// Unknown status: loses to everything. This is exactly how bug
+		// #433 happened — a status the codebase writes but this switch
+		// doesn't know about silently ranks below DISCOVERED. Any new
+		// status added to job_funnel MUST get an explicit rank above.
+		return 0
+	}
+}
+
 func mergeStatuses(s1, s2 string) string {
 	if s1 == s2 {
 		return s1
 	}
-	rank := func(s string) int {
-		switch s {
-		case "DISCOVERED":
-			return 1
-		case "PROCESSING":
-			return 2
-		case "SKIPPED":
-			return 3
-		case "BLOCKED_CAPTCHA":
-			return 4
-		case "FAILED_SUBMIT":
-			return 5
-		case "MANUAL_REQUIRED", "AWAITING_REVIEW":
-			return 6
-		case "APPLIED":
-			return 7
-		case "REJECTED":
-			return 8
-		case "INTERVIEW_REQUESTED":
-			return 9
-		default:
-			return 0
-		}
-	}
 
-	r1, r2 := rank(s1), rank(s2)
+	r1, r2 := mergeStatusRank(s1), mergeStatusRank(s2)
 
 	isSuccess1 := s1 == "APPLIED" || s1 == "REJECTED" || s1 == "INTERVIEW_REQUESTED"
 	isSuccess2 := s2 == "APPLIED" || s2 == "REJECTED" || s2 == "INTERVIEW_REQUESTED"
