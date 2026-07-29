@@ -235,6 +235,24 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 
 	fmt.Printf("Sending concurrent application context requests to %s...\n", c.provider.Name())
 
+	// Pre-Submission Keyword Gap Analysis
+	gapSys := "You are an expert technical recruiter. Analyze the job description and the candidate's profile. Identify key skills, tools, or requirements in the job description that are MISSING or UNDERREPRESENTED in the candidate's profile. Output ONLY a comma-separated list of these missing keywords. If none, output 'NONE'."
+	gapPrompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nMissing keywords:", scrapedData["title"], scrapedData["desc"], parsedDocument)
+	
+	if err := incrementAndLogAPICall("ProcessJobApplication-GapAnalysis", len(gapPrompt)); err == nil {
+		gapReq := genRequest{system: gapSys, prompt: gapPrompt, temperature: -1, numCtx: numCtx, keepAlive: "30m"}
+		if gapOut, errGap := c.generate(gapReq); errGap == nil {
+			gapOut = strings.TrimSpace(gapOut)
+			if strings.ToUpper(gapOut) != "NONE" && gapOut != "" {
+				gapContext := fmt.Sprintf("\n\nNOTE: The following keywords from the job description are missing in the base profile. Find creative but truthful ways to address them if possible, or de-emphasize their necessity: %s", gapOut)
+				// Inject gap context into the parsed document so all downstream generators see it
+				parsedDocument += gapContext
+			}
+		} else {
+			log.Printf("Warning: Gap analysis failed: %v", errGap)
+		}
+	}
+
 	var wg sync.WaitGroup
 	var resumeOut, coverOut, prepOut string
 	var errResume, errCover, errPrep error
