@@ -1,0 +1,14 @@
+(cli_app
+  (print "Fetching source health statistics from local requeue tool...")
+  (try_let (out (exec "go" "run" "./cmd/requeue" "-stats"))
+    (catch err
+      (print "Failed to fetch source health:" err))
+    (do
+       (let (lines (str_split (bytes_to_string out) "\n"))
+         (for line lines
+           (print line)
+         )
+       )
+    )
+  )
+)

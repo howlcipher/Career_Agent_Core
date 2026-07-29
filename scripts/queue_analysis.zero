@@ -1,0 +1,52 @@
+(cli_app
+  (struct Metrics 
+    (Discovered int)
+    (Processing int)
+    (Skipped int)
+    (Applied int)
+    (Failed int)
+    (Manual_required int)
+    (Blocked_captcha int)
+    (Invalid_url int)
+  )
+
+  (print "Fetching queue data from local dashboard...")
+  (try_let (res (fetch "http://127.0.0.1:8080/api/metrics" "GET"))
+    (catch err
+      (print "Error fetching metrics:" err))
+    (do
+      (try_let (m (parse_json Metrics res))
+        (catch err
+          (print "Error parsing JSON:" err))
+        (do
+          (print "--- Queue Analysis ---")
+          (let (total (+ m.Applied (+ m.Failed (+ m.Skipped (+ m.Manual_required m.Blocked_captcha)))))
+            (if (> total 0)
+              (do
+                (let (applied_pct (/ (* m.Applied 100) total))
+                (let (failed_pct (/ (* m.Failed 100) total))
+                (let (skipped_pct (/ (* m.Skipped 100) total))
+                (let (manual_pct (/ (* m.Manual_required 100) total))
+                (let (captcha_pct (/ (* m.Blocked_captcha 100) total))
+                  (do
+                    (print "Total Finalized Jobs:" total)
+                    (print "Applied Rate:" applied_pct "%")
+                    (print "Skipped Rate:" skipped_pct "%")
+                    (print "Failed Rate:" failed_pct "%")
+                    (print "Manual Req Rate:" manual_pct "%")
+                    (print "CAPTCHA Rate:" captcha_pct "%")
+                  )
+                )))))
+              )
+              (print "No finalized jobs available for analysis.")
+            )
+          )
+          (print "--- Current Queue ---")
+          (print "Jobs Pending (Discovered):" m.Discovered)
+          (print "Currently Processing:" m.Processing)
+          (print "Invalid URLs found:" m.Invalid_url)
+        )
+      )
+    )
+  )
+)
