@@ -13,10 +13,10 @@ const (
 	AttemptPostSubmitCaptcha TerminalClass = "POST_SUBMIT_CAPTCHA"
 	AttemptManualAccountGate TerminalClass = "MANUAL_ACCOUNT_GATE"
 	// AttemptAwaitingReview is a deliberate stop before the final submit click
-	// (copilot mode, or auto_submit_click disabled), not a property of the ATS.
-	// It is counted with the manual outcomes below because both mean "a human
-	// must finish this", but it is stored distinctly so source health never
-	// reads a working board as one that demands an account.
+	// (copilot mode, or auto_submit_click disabled). It is an operator choice
+	// applied uniformly to every board, not a property of any ATS, so it is
+	// neither stored as nor counted with the manual-account-gate outcomes and
+	// is excluded from the source-health penalty entirely.
 	AttemptAwaitingReview    TerminalClass = "AWAITING_REVIEW"
 	AttemptDeadPosting       TerminalClass = "DEAD_POSTING"
 	AttemptValidationFailure TerminalClass = "VALIDATION_FAILURE"
@@ -34,18 +34,26 @@ type ApplicationAttempt struct {
 }
 
 type SourceHealthSummary struct {
-	Source          string
-	PeriodDays      int
-	TotalAttempts   int
-	AppliedCount    int
-	CaptchaCount    int
-	ManualCount     int
-	DeadCount       int
-	ValidationCount int
-	OtherCount      int
-	AvgInferenceMs  int
-	AvgModelCalls   float64
-	Confidence      string // "High", "Medium", "Sparse"
+	Source        string
+	PeriodDays    int
+	TotalAttempts int
+	AppliedCount  int
+	CaptchaCount  int
+	ManualCount   int
+	// AwaitingReviewCount is tracked separately from ManualCount and is
+	// deliberately excluded from the bad-outcome penalty in ComputeSourceScores.
+	// A copilot stop says nothing about the source — the operator chose it, and
+	// it applies uniformly to every board — so counting it as a source defect
+	// would drive a successfully-filled board below the prior for a board never
+	// attempted at all, and keep doing so for the whole 30-day lookback after
+	// copilot mode is switched back off.
+	AwaitingReviewCount int
+	DeadCount           int
+	ValidationCount     int
+	OtherCount          int
+	AvgInferenceMs      int
+	AvgModelCalls       float64
+	Confidence          string // "High", "Medium", "Sparse"
 }
 
 // RecordAttempt saves a single application attempt to the database
@@ -88,7 +96,8 @@ func GetSourceHealthSummaries(periodDays int) ([]SourceHealthSummary, error) {
 			COUNT(id) as total_attempts,
 			SUM(CASE WHEN terminal_class = 'APPLIED' THEN 1 ELSE 0 END) as applied_count,
 			SUM(CASE WHEN terminal_class = 'POST_SUBMIT_CAPTCHA' THEN 1 ELSE 0 END) as captcha_count,
-			SUM(CASE WHEN terminal_class IN ('MANUAL_ACCOUNT_GATE', 'AWAITING_REVIEW') THEN 1 ELSE 0 END) as manual_count,
+			SUM(CASE WHEN terminal_class = 'MANUAL_ACCOUNT_GATE' THEN 1 ELSE 0 END) as manual_count,
+			SUM(CASE WHEN terminal_class = 'AWAITING_REVIEW' THEN 1 ELSE 0 END) as awaiting_review_count,
 			SUM(CASE WHEN terminal_class = 'DEAD_POSTING' THEN 1 ELSE 0 END) as dead_count,
 			SUM(CASE WHEN terminal_class = 'VALIDATION_FAILURE' THEN 1 ELSE 0 END) as validation_count,
 			SUM(CASE WHEN terminal_class = 'OTHER_FAILURE' THEN 1 ELSE 0 END) as other_count,
@@ -118,6 +127,7 @@ func GetSourceHealthSummaries(periodDays int) ([]SourceHealthSummary, error) {
 			&s.AppliedCount,
 			&s.CaptchaCount,
 			&s.ManualCount,
+			&s.AwaitingReviewCount,
 			&s.DeadCount,
 			&s.ValidationCount,
 			&s.OtherCount,

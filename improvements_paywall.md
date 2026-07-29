@@ -29,6 +29,8 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 **2026-07-28 groom-pass note (session 8):** both paywalled Pending rows were re-verified and recomputed with no score change. #17 (1.75) still needs a paid key. #14 (0.43) remains below floor and needs paid compute.
 
 **2026-07-28 groom-pass note (session 10):** both paywalled Pending rows were re-verified and recomputed with no score change. #17 (1.75) still needs a paid key. #14 (0.43) remains below floor and needs paid compute.
+
+**2026-07-29 groom-pass note (post-#423):** this file gained **#424 (Cloud-Offloading for DOM Parsing)**, moved unchanged from `improvements.md` at its existing 2.0 = 8×1.0÷4. It was mis-filed in the free backlog: its premise is routing heavy DOM mapping to cloud models, which requires a paid API key, so it was reachable by `/work_next_item`'s autonomous selection when it should never have been. #17 (1.75) and #14 (0.43, below floor) are unchanged and still need a paid key and paid compute respectively. #424 is now the highest-scoring row here, but like everything in this file it is only worked when the user explicitly names it.
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-4-6 | gemini-3.1-pro-high | — | — | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |

@@ -741,7 +741,16 @@ func LogCopilotReview(companyName, jobTitle, applyURL, docsDir string) error {
 	reportPath := filepath.Join(manualApplyBase, "copilot_queue.md")
 
 	if _, err := os.Stat(reportPath); os.IsNotExist(err) {
-		header := "# Copilot Review Queue\n\nThese job applications were filled completely in Copilot mode. Open each URL in your browser to review the pre-filled form and click submit.\n\n"
+		// The header must not promise a pre-filled form. The agent fills the
+		// form inside its own ephemeral Playwright context, which is closed the
+		// moment it stops at the gate — nothing about that fill survives into
+		// the user's browser. What genuinely carries over is the tailored
+		// resume and cover letter, which are the expensive part. Saying
+		// otherwise would send the user to a blank form expecting their work.
+		header := "# Copilot Review Queue\n\n" +
+			"The agent scored each job below, wrote tailored documents for it, and confirmed the application form was reachable and fillable — then stopped without submitting.\n\n" +
+			"Open the apply link, fill the form using the documents saved alongside each entry, and submit it yourself. The agent's own fill happened in a separate automated browser session and is not carried over, so expect a blank form.\n\n" +
+			"Tick a checkbox once you've submitted that application.\n\n"
 		if err := writePrivateFile(reportPath, []byte(header)); err != nil {
 			return fmt.Errorf("failed to initialize copilot queue: %w", err)
 		}
@@ -1188,9 +1197,9 @@ func SourceOutcomeBreakdown(urlPattern string) (SourceOutcomeStat, error) {
 		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'FAILED_SUBMIT' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0)
 		FROM job_funnel
-		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','PROCESSED_MANUAL')`,
+		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','AWAITING_REVIEW','PROCESSED_MANUAL')`,
 		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual)
 	return s, err
 }

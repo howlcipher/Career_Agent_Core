@@ -137,7 +137,12 @@ exclude_companies:
   - "Trendset Communications"
 auto_submit: true
 auto_submit_click: true
-# copilot_mode: when true, fill application forms completely but stop before clicking submit.
+# copilot_mode: when true, fill application forms completely but stop before
+# clicking submit. The job is recorded AWAITING_REVIEW, its tailored documents
+# move to applications/needs_manual_apply/, and it is queued for you in
+# copilot_queue.md. Requires auto_submit: true — with auto_submit: false a job
+# stops right after scoring and never reaches a form at all, so there would be
+# nothing to review.
 copilot_mode: false
 headless_browser: true
 cover_letter_tone: "Confident but humble, direct, zero corporate fluff, slightly conversational."

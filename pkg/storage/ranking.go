@@ -35,7 +35,19 @@ func ComputeSourceScores(summaries []SourceHealthSummary) map[string]SourceRankS
 		// Calculate smoothed success rate
 		// Applied counts as success.
 		successCount := float64(s.AppliedCount)
-		totalCount := float64(s.TotalAttempts)
+		// Attempts that stopped before the submit click (copilot mode, or
+		// auto_submit_click disabled) are excluded from the denominator as well
+		// as from badOutcomes below. They are evidence about the operator's
+		// configuration, not about the source: the agent never found out
+		// whether that board would have accepted the submission. Counting them
+		// would drive every board's success rate toward zero during a copilot
+		// run while an unattempted board kept the 0.05 prior, inverting the
+		// ranking — and would keep doing so for the full lookback window after
+		// copilot mode was switched back off.
+		totalCount := float64(s.TotalAttempts - s.AwaitingReviewCount)
+		if totalCount < 0 {
+			totalCount = 0
+		}
 
 		smoothedSuccess := (successCount + priorWeight*priorSuccessRate) / (totalCount + priorWeight)
 
