@@ -350,13 +350,13 @@ func checkJobAlive(ctx context.Context, jobURL string) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return fmt.Errorf("%w: HTTP %d", errDeadRedirect, resp.StatusCode)
 	}
@@ -614,12 +614,12 @@ func runAgentCycle(
 				if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
 					continue
 				}
-				
+
 				// Respect cycle limit during injection to prevent channel thrashing
 				if cycleLimit > 0 && matched >= cycleLimit {
 					break
 				}
-				
+
 				matched++
 				candidate := scraper.Job{
 					CompanyName: discovered.CompanyName,
@@ -634,7 +634,7 @@ func runAgentCycle(
 					return
 				}
 			}
-			
+
 			if len(deps.targetJobURLs) > 0 {
 				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", matched)
 			} else {
@@ -651,7 +651,7 @@ func runAgentCycle(
 			discoveryErr <- nil
 			return
 		}
-		// Pass a nil channel so newly discovered jobs go straight to the DB 
+		// Pass a nil channel so newly discovered jobs go straight to the DB
 		// and are correctly ranked by Bayesian smoothing on the next cycle!
 		discoveryErr <- deps.discoverJobs(ctx, nil)
 	}()
@@ -660,7 +660,6 @@ func runAgentCycle(
 		producerWg.Wait()
 		close(jobs)
 	}()
-
 
 	deps.processJobs(ctx, jobs)
 	discoverErr := <-discoveryErr
@@ -884,6 +883,17 @@ func main() {
 			wg.Add(1)
 			go func(workerID int) {
 				defer wg.Done()
+				pipelineDeps := JobPipelineDeps{
+					NetworkGuard: networkGuard,
+					Profile:      prof,
+					PIIData:      piiData,
+					Client:       client,
+					Filter:       filter,
+					Submitter:    pipeline,
+					RAGEnabled:   ragEnabled,
+					Cancel:       cancel,
+				}
+				jobGraph := buildJobPipeline(pipelineDeps)
 				for job := range jobChan {
 					select {
 					case <-cycleCtx.Done():
@@ -891,662 +901,21 @@ func main() {
 						return
 					default:
 					}
-					// Stale backlog rows predate the discovery filters (bugs.md #22), so
-					// known-junk URLs must be caught again at intake or they burn full
-					// scoring/tailoring/Vision cycles on every restart.
-					if scraper.IsKnownJunkJobURL(job.URL) {
-						log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
-						if err := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); err != nil {
-							log.Printf("[Worker-%d] Failed to mark known-junk URL invalid: %v", workerID, err)
-						}
-						continue
+					state := &JobState{
+						Job:      job,
+						WorkerID: workerID,
 					}
-					if err := networkGuard.ValidateURL(cycleCtx, job.URL); err != nil {
-						if errors.Is(err, security.ErrUnsafeNetworkTarget) {
-							log.Printf(
-								"[Worker-%d] Unsafe job URL blocked.",
-								workerID,
-							)
-							if statusErr := storage.UpdateFunnelStatus(
-								job.URL,
-								"INVALID_URL",
-							); statusErr != nil {
-								log.Printf(
-									"[Worker-%d] Failed to mark unsafe URL invalid: %v",
-									workerID,
-									statusErr,
-								)
-							}
-						} else {
-							log.Printf(
-								"[Worker-%d] Job URL could not be resolved safely; leaving it retryable: %v",
-								workerID,
-								err,
-							)
-						}
-						continue
+					err := jobGraph.Run(cycleCtx, StateInit, state)
+					if err != nil {
+						log.Printf("[Worker-%d] Pipeline error for %s: %v", workerID, job.CompanyName, err)
 					}
-					if err := storage.UpdateFunnelStatus(job.URL, "PROCESSING"); err != nil {
-						log.Printf("[Worker-%d] Failed to claim %s for processing: %v", workerID, job.CompanyName, err)
-						continue
-					}
-
-					// Pre-flight check: #96 Filter out dead or expired job postings early
-					// Checking URL validity early saves inference and bandwidth.
-					if checkErr := checkJobAlive(cycleCtx, job.URL); checkErr != nil {
-						if errors.Is(checkErr, errDeadRedirect) {
-							log.Printf("[Worker-%d] Pre-flight check failed: Job posting is no longer available for %s: %v", workerID, job.CompanyName, checkErr)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
-								log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
-							}
-						} else {
-							log.Printf("[Worker-%d] Pre-flight check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
-								log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
-							}
-						}
-						continue
-					}
-
-					// The LLM will perform the real analysis of fit, salary, and remote status based on the job description.
-					// We only need to enforce the hard blocklist here.
-					nameLower := strings.ToLower(job.CompanyName)
-					excluded := false
-					for _, ex := range prof.ExcludeCompanies {
-						if strings.Contains(nameLower, strings.ToLower(ex)) {
-							log.Printf("[Worker-%d] Security Block: Skipping %s (Found in ExcludeCompanies blocklist)", workerID, job.CompanyName)
-							excluded = true
-							break
-						}
-					}
-					if excluded {
-						if err := storage.UpdateFunnelStatus(job.URL, "SKIPPED"); err != nil {
-							log.Printf("[Worker-%d] Failed to record blocklist skip for %s: %v", workerID, job.CompanyName, err)
-						}
-						continue
-					}
-
-					var rawJobHTML string
-					// Fetch the job description if it's missing (which is the case for all Yahoo/SerpApi funnel jobs)
-					if job.Description == "" {
-						log.Printf("[Worker-%d] Fetching job description for %s...", workerID, job.CompanyName)
-						httpClient := networkGuard.HTTPClient(10 * time.Second)
-						fetchResult, fetchErr := fetchJobPage(
-							cycleCtx,
-							httpClient,
-							job.URL,
-							nil,
-						)
-						if errors.Is(fetchErr, errJobPageWeakContent) &&
-							isRawJobPageCaptchaBlocked(
-								job.URL,
-								fetchResult.html,
-								fetchResult.description,
-							) {
-							log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA"); statusErr != nil {
-								log.Printf("[Worker-%d] Failed to record CAPTCHA block for %s: %v", workerID, job.CompanyName, statusErr)
-							}
-							continue
-						}
-						if fetchErr != nil {
-							switch fetchResult.disposition {
-							case jobPageTerminal:
-								log.Printf("[Worker-%d] Job posting is no longer available for %s: %v", workerID, job.CompanyName, fetchErr)
-								if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
-									log.Printf("[Worker-%d] Failed to mark unavailable job invalid: %v", workerID, statusErr)
-								}
-							default:
-								log.Printf("[Worker-%d] Job page fetch is retryable for %s: %v", workerID, job.CompanyName, fetchErr)
-								if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
-									log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
-								}
-							}
-							continue
-						}
-
-						// Captcha / Bot protection check. A bare "recaptcha"/
-						// "cf-turnstile" substring match is not reliable proof of an
-						// actual block on its own (bug #46, same class as bug #45's
-						// fix to pkg/submitter/browser.go's isCaptchaBlocked): these
-						// anti-spam widgets are standard on legitimate Greenhouse/
-						// Lever/Ashby/Workable job pages, and this check was killing
-						// the large majority of real postings on those platforms
-						// before they ever reached fit-scoring. A genuine
-						// interstitial instead replaces the real page content,
-						// leaving little real text behind once pruned to plain text
-						// — require that corroborating signal for the widget-only
-						// phrases too, same as the explicit Cloudflare phrasing.
-						// Bug: the "little real text behind" corroborating signal
-						// assumes a legitimate page has server-rendered visible text
-						// in a bare (non-JS-executing) fetch. Confirmed live
-						// 2026-07-24 on two real, unblocked, currently-open Ashby
-						// postings: raw HTML ~42KB, 0 chars of visible text after
-						// pruning, "recaptcha" present in its script bundle — Ashby
-						// renders everything client-side, so this exact shape is
-						// what *every* Ashby posting looks like to a non-JS fetch,
-						// genuinely blocked or not. This check cannot tell the two
-						// apart without executing JavaScript, so for known
-						// client-rendered platforms, only the explicit block
-						// phrasing in isRawJobPageCaptchaBlocked is trusted — same reasoning as
-						// authGatedATSHosts in pkg/submitter/browser.go.
-						if isRawJobPageCaptchaBlocked(job.URL, fetchResult.html, fetchResult.description) {
-							log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA"); statusErr != nil {
-								log.Printf("[Worker-%d] Failed to record CAPTCHA block for %s: %v", workerID, job.CompanyName, statusErr)
-							}
-							continue
-						}
-
-						rawJobHTML = fetchResult.html
-						job.Description = fetchResult.description
-					}
-
-					if storage.HasApplied(job.URL) {
-						log.Printf("[Worker-%d] Duplicate check: Already applied to %s. Skipping.", workerID, job.CompanyName)
-						// bugs.md #85: undo the PROCESSING claim rather than stranding the
-						// row. Deliberately DISCOVERED and not APPLIED: the applied_jobs
-						// record is written at document generation, not at confirmed
-						// submission (the very falsehood this 82-job re-verification
-						// exists to audit -- see #53), so asserting APPLIED here would
-						// manufacture exactly the claim under investigation. This restores
-						// the pre-PROCESSING state, matching what the startup reaper
-						// already does, and makes no new claim about the job.
-						storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
-						continue
-					}
-
-					scrapedData := map[string]string{
-						"title": job.Title,
-						"desc":  job.Description,
-					}
-
-					var tailoredContext string
-					var toneVariantLabel string
-					var hasToneVariant bool
-					var profileConstraints map[string]interface{}
-					var score int
-					skipJob := false
-					stopWorker := false
-					quarantineErr := runQuarantinedPostingModelStage(
-						postingPayload{
-							url:         job.URL,
-							companyName: job.CompanyName,
-							title:       job.Title,
-							description: job.Description,
-							rawHTML:     rawJobHTML,
-						},
-						postingQuarantineDependencies{
-							filter:        filter,
-							logDetections: storage.LogPromptInjectionDetections,
-							updateStatus:  storage.UpdateFunnelStatus,
-						},
-						func() {
-							if ragEnabled {
-								// RAG Retrieval: Dynamically build tailored context.
-								jobDescText := job.Title + "\n" + job.Description
-
-								var jobEmb []float32
-								var embErr error
-								for attempt := 1; attempt <= 3; attempt++ {
-									jobEmb, embErr = client.GetEmbedding(jobDescText)
-									if embErr == nil {
-										break
-									}
-									if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-										log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping 60s...", workerID, attempt)
-										time.Sleep(60 * time.Second)
-									} else {
-										break
-									}
-								}
-
-								if embErr == nil {
-									topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
-									if retrieveErr != nil {
-										log.Printf(
-											"[Worker-%d] Failed to retrieve grounded career context: %v",
-											workerID,
-											retrieveErr,
-										)
-										if statusErr := storage.UpdateFunnelStatus(
-											job.URL,
-											"DISCOVERED",
-										); statusErr != nil {
-											log.Printf(
-												"[Worker-%d] Failed to return job after RAG retrieval error: %v",
-												workerID,
-												statusErr,
-											)
-										}
-										skipJob = true
-										return
-									}
-									var sb strings.Builder
-									sb.WriteString("Highly Relevant Career Context (Retrieved via RAG):\n\n")
-									for _, tc := range topChunks {
-										sb.WriteString(tc.Text + "\n\n")
-									}
-									tailoredContext = sb.String()
-								} else {
-									log.Printf("[RAG] Embedding failed after retries: %v", embErr)
-									if statusErr := storage.UpdateFunnelStatus(
-										job.URL,
-										"DISCOVERED",
-									); statusErr != nil {
-										log.Printf(
-											"[Worker-%d] Failed to return job after RAG embedding error: %v",
-											workerID,
-											statusErr,
-										)
-									}
-									skipJob = true
-									return
-								}
-							}
-
-							if err := filter.CheckPayload(tailoredContext); err != nil {
-								log.Printf("[Worker-%d] Security quarantine triggered on trusted RAG output: %v", workerID, err)
-								if statusErr := storage.UpdateFunnelStatus(
-									job.URL,
-									"QUARANTINED_RAG_CONTEXT",
-								); statusErr != nil {
-									log.Printf(
-										"[Worker-%d] Failed to record trusted RAG quarantine for %s: %v",
-										workerID,
-										job.CompanyName,
-										statusErr,
-									)
-								}
-								skipJob = true
-								return
-							}
-
-							var selectedTone string
-							toneVariantLabel, selectedTone, hasToneVariant = config.SelectToneVariant(prof.CoverLetterTones)
-							coverLetterTone := prof.CoverLetterTone
-							if hasToneVariant {
-								coverLetterTone = selectedTone
-							}
-
-							profileConstraints = map[string]interface{}{
-								"salary_floor":        prof.SalaryFloor,
-								"target_compensation": prof.TargetComp,
-								"remote_only":         prof.RemoteOnly,
-								"cover_letter_tone":   coverLetterTone,
-								"location":            piiData.Address,
-							}
-
-							var scoreErr error
-							if prof.SkipScoring {
-								log.Printf("[Worker-%d] SkipScoring enabled: bypassed LLM fit evaluation for %s", workerID, job.CompanyName)
-								score = 100
-							} else {
-								for attempt := 1; attempt <= 3; attempt++ {
-									score, scoreErr = client.ScoreJob(scrapedData, profileConstraints, tailoredContext)
-									if scoreErr == nil {
-										break
-									}
-									if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-										log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
-										cancel()
-										stopWorker = true
-										return
-									} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-										log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-										time.Sleep(60 * time.Second)
-									} else {
-										break
-									}
-								}
-							}
-
-							if scoreErr != nil {
-								log.Printf("[Worker-%d] Failed to score job for %s after retries: %v", workerID, job.CompanyName, scoreErr)
-								if statusErr := storage.UpdateFunnelStatus(job.URL, "FAILED_SCORE"); statusErr != nil {
-									log.Printf(
-										"[Worker-%d] Failed to record score failure for %s: %v",
-										workerID,
-										job.CompanyName,
-										statusErr,
-									)
-								}
-								time.Sleep(1 * time.Second)
-								skipJob = true
-							}
-						},
-					)
-					if quarantineErr != nil {
-						log.Printf(
-							"[Worker-%d] Posting quarantined before model use for %s: %v",
-							workerID,
-							job.CompanyName,
-							quarantineErr,
-						)
-						continue
-					}
-					if stopWorker {
-						return
-					}
-					if skipJob {
-						continue
-					}
-
-					// bugs.md #63: persist the score. ScoreJob is the most expensive step
-					// in the pipeline (~9m49s/job measured live after #23 removed
-					// tailoring), and its result used to be read once for the threshold
-					// check below and then thrown away — UpdateFunnelStatusWithScore, the
-					// only writer of fit_score, had zero callers.
-					if score < 50 {
-						log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", workerID, job.CompanyName, score)
-						if err := storage.UpdateFunnelStatusWithScore(job.URL, "SKIPPED", score); err != nil {
-							log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
-						}
-						time.Sleep(1 * time.Second)
-						continue
-					}
-					log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d! Proceeding with application.", workerID, job.CompanyName, score)
-					if err := storage.UpdateFunnelStatusWithScore(job.URL, "PROCESSING", score); err != nil {
-						log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
-					}
-
-					if prof.AutoSubmit {
-						// Improvements #37: Revalidate posting freshness before expensive document generation.
-						// Scoring can take up to 10 minutes on local CPU; jobs can expire while being scored.
-						log.Printf("[Worker-%d] Revalidating posting freshness for %s before document generation...", workerID, job.CompanyName)
-						freshnessStart := time.Now()
-						if checkErr := checkJobAlive(cycleCtx, job.URL); checkErr != nil {
-							log.Printf("[Worker-%d] Post-score freshness check took %s", workerID, time.Since(freshnessStart))
-							if errors.Is(checkErr, errDeadRedirect) {
-								log.Printf("[Worker-%d] Post-score check failed: Job posting expired during scoring for %s: %v", workerID, job.CompanyName, checkErr)
-								if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
-									log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
-								}
-								_ = storage.RecordAttempt(storage.ApplicationAttempt{
-									Source:        getATSProvider(job.URL),
-									URL:           job.URL,
-									TerminalClass: storage.AttemptDeadPosting,
-									StartedAt:     freshnessStart,
-									EndedAt:       time.Now(),
-									InferenceMs:   int(time.Since(freshnessStart).Milliseconds()),
-								})
-							} else {
-								log.Printf("[Worker-%d] Post-score check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-								if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
-									log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
-								}
-							}
-							continue
-						}
-						log.Printf("[Worker-%d] Post-score freshness check passed for %s in %s", workerID, job.CompanyName, time.Since(freshnessStart))
-
-						if err := pipeline.SaveCheckpoint(job.CompanyName, job.URL, "INITIATED"); err != nil {
-							log.Printf("[Worker-%d] Failed to checkpoint: %v", workerID, err)
-						}
-
-						var docsDir string
-						generateDocsFunc := func() (string, string, error) {
-							// One static, job-agnostic cover letter for every application
-							// (profile.yaml's use_master_cover_letter). Skips the
-							// ProcessJobApplication LLM call entirely rather than
-							// generating documents and discarding them: that call is the
-							// most expensive step in the pipeline by a wide margin, and
-							// its per-job resume never reaches the employer anyway since
-							// the uploaded file is always masterResumePath below.
-							//
-							// SaveApplication still runs, because the folder it creates is
-							// what MoveToManualApply archives for MANUAL_REQUIRED jobs and
-							// what the dashboard reads. It no longer writes the dedup row
-							// (bugs.md #94) -- that happens only on confirmed submission.
-							if prof.UseMasterCoverLetter {
-								// An empty coverPath is the documented "no cover letter"
-								// signal: fillCoverLetterIfPresent returns immediately on
-								// it, so send_cover_letter: false disables the attachment
-								// without disturbing any of the machinery around it.
-								coverPath := ""
-								letterText := "Cover letters are disabled (send_cover_letter: false); none was sent with this application."
-								if prof.ShouldSendCoverLetter() {
-									coverPath = prof.MasterCoverLetterPath
-									if coverPath == "" {
-										coverPath = defaultMasterCoverLetterPath
-									}
-									// Extracted text, not raw bytes: the letter may be a
-									// PDF, and the saved record is meant to be readable.
-									text, readErr := parser.ExtractDocumentText(coverPath)
-									if readErr != nil {
-										log.Printf("[Worker-%d] Failed to read master cover letter %s: %v", workerID, coverPath, readErr)
-										return "", "", fmt.Errorf("failed to read master cover letter: %w", readErr)
-									}
-									letterText = text
-								}
-								const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
-								var saveErr error
-								docsDir, saveErr = storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, untailoredNote, letterText, untailoredNote)
-								if saveErr != nil {
-									log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, saveErr)
-									return "", "", saveErr
-								}
-								if coverPath == "" {
-									log.Printf("[Worker-%d] Using master resume for %s (no per-job tailoring, cover letter disabled)", workerID, job.CompanyName)
-								} else {
-									log.Printf("[Worker-%d] Using master resume and master cover letter (%s) for %s (no per-job tailoring)", workerID, coverPath, job.CompanyName)
-								}
-								return masterResumePath, coverPath, nil
-							}
-
-							var resume, coverLetter, interviewPrep string
-							var processErr error
-							for attempt := 1; attempt <= 3; attempt++ {
-								resume, coverLetter, interviewPrep, processErr = client.ProcessJobApplication(scrapedData, profileConstraints, tailoredContext)
-								if processErr == nil {
-									break
-								}
-								if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-									log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Shutting down agent...", workerID, job.CompanyName)
-									cancel()
-									return "", "", fmt.Errorf("quota exceeded")
-								} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
-									log.Printf("[Worker-%d] Network error processing application %s (attempt %d/3). Sleeping 60s...", workerID, job.CompanyName, attempt)
-									time.Sleep(60 * time.Second)
-								} else {
-									break
-								}
-							}
-
-							if processErr != nil {
-								log.Printf("[Worker-%d] Failed to process job for %s after retries: %v", workerID, job.CompanyName, processErr)
-								return "", "", processErr
-							}
-
-							docsDir, processErr = storage.SaveApplication(job.CompanyName, job.Title, job.Location, job.URL, resume, coverLetter, interviewPrep)
-							if processErr != nil {
-								log.Printf("[Worker-%d] Failed to save application for %s: %v", workerID, job.CompanyName, processErr)
-								return "", "", processErr
-							}
-							if hasToneVariant {
-								if err := storage.UpdateToneVariant(job.URL, toneVariantLabel); err != nil {
-									log.Printf("[Worker-%d] Failed to record tone variant for %s: %v", workerID, job.CompanyName, err)
-								}
-							}
-
-							log.Printf("[Worker-%d] Successfully generated and saved application for %s", workerID, job.CompanyName)
-
-							// The tailored letter is still generated above (it comes out of
-							// the same combined call as the resume and interview prep) and
-							// still saved to the application folder, but an empty path
-							// keeps it from being attached when cover letters are off.
-							if !prof.ShouldSendCoverLetter() {
-								return masterResumePath, "", nil
-							}
-							// bugs.md #62: this used to concatenate the raw company name,
-							// while SaveApplication writes under the sanitized one — so
-							// for any company whose name isn't already sanitize-stable
-							// ("Backend Software Engineer" -> "Backend_Software_Engineer")
-							// the path pointed at a file that did not exist.
-							return masterResumePath, storage.CoverLetterPath(job.CompanyName, job.URL), nil
-						}
-
-						attemptStart := time.Now()
-						err := submitter.AttemptSubmit(browser, filter, client, client, job.CompanyName, job.URL, generateDocsFunc, piiData, tailoredContext, prof.HeadlessBrowser, prof.AutoSubmitClick)
-						inferenceMs := int(time.Since(attemptStart).Milliseconds())
-						
-						var terminalClass storage.TerminalClass
-						if err == nil {
-							terminalClass = storage.AttemptApplied
-						} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
-							terminalClass = storage.AttemptPostSubmitCaptcha
-						} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || submitter.IsManualReviewError(err) {
-							terminalClass = storage.AttemptManualAccountGate
-						} else if errors.Is(err, submitter.ErrUncommittableField) {
-							terminalClass = storage.AttemptValidationFailure
-						} else {
-							terminalClass = storage.AttemptOtherFailure
-						}
-
-						_ = storage.RecordAttempt(storage.ApplicationAttempt{
-							Source:        getATSProvider(job.URL),
-							URL:           job.URL,
-							TerminalClass: terminalClass,
-							StartedAt:     attemptStart,
-							EndedAt:       time.Now(),
-							InferenceMs:   inferenceMs,
-						})
-
-						if errors.Is(err, security.ErrPromptInjectionDetected) {
-							log.Printf(
-								"[Worker-%d] %s's browser DOM was quarantined before model use: %v",
-								workerID,
-								job.CompanyName,
-								err,
-							)
-							if checkpointErr := pipeline.SaveCheckpoint(
-								job.CompanyName,
-								job.URL,
-								promptInjectionQuarantineStatus,
-							); checkpointErr != nil {
-								log.Printf(
-									"[Worker-%d] Failed to checkpoint browser quarantine for %s: %v",
-									workerID,
-									job.CompanyName,
-									checkpointErr,
-								)
-							}
-							if statusErr := storage.UpdateFunnelStatus(
-								job.URL,
-								promptInjectionQuarantineStatus,
-							); statusErr != nil {
-								log.Printf(
-									"[Worker-%d] Failed to record browser quarantine for %s: %v",
-									workerID,
-									job.CompanyName,
-									statusErr,
-								)
-							}
-						} else if errors.Is(err, submitter.ErrAuthWall) {
-							// Bug #18: not an automation failure — the ATS gates its form
-							// behind an account. Tailored docs are already saved; queue
-							// the job for a manual application instead.
-							log.Printf("[Worker-%d] %s requires an account to apply — queued for manual submission: %v", workerID, job.CompanyName, err)
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
-							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(docsDir)
-							if mvErr != nil {
-								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
-							}
-							if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
-								log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
-							}
-						} else if errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) {
-							// bugs.md #82/#84: this form asks the applicant to declare
-							// something not set in pii.yaml -- work authorization,
-							// sponsorship, clearance or criminal history -- and those
-							// questions offer no decline option. Guessing would submit a
-							// false legal statement under the user's name, so the job goes
-							// to manual review with its tailored documents saved. Fill the
-							// matching key in pii.yaml to unblock it; the error names the
-							// missing category.
-							log.Printf("[Worker-%d] %s needs a legal attestation not set in pii.yaml — queued for manual submission: %v", workerID, job.CompanyName, err)
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
-							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(docsDir)
-							if mvErr != nil {
-								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
-							}
-							if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
-								log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
-							}
-						} else if errors.Is(err, submitter.ErrFormTooLargeForModel) {
-							// Bug #52's later recurrences: this form's content would
-							// exceed the local model's context window regardless of how
-							// much the DOM gets trimmed. Same manual-routing outcome as
-							// ErrAuthWall -- tailored docs are already saved -- rather
-							// than burning a doomed LLM call.
-							log.Printf("[Worker-%d] %s's form is too large for the local model — queued for manual submission: %v", workerID, job.CompanyName, err)
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
-							storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-							docsDir, mvErr := storage.MoveToManualApply(docsDir)
-							if mvErr != nil {
-								log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
-							}
-							if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
-								log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
-							}
-						} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
-							// Bug #23: not a submit failure — the site is bot-walled.
-							log.Printf("[Worker-%d] %s is behind a bot-protection challenge — marked BLOCKED_CAPTCHA: %v", workerID, job.CompanyName, err)
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "BLOCKED_CAPTCHA")
-							storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
-						} else if err != nil {
-							if submitter.IsManualReviewError(err) {
-								// bugs.md #84: a manual-review sentinel that no branch above
-								// claimed. Never let one fall through to FAILED_SUBMIT --
-								// the job is fine, it just needs a human, and its tailored
-								// documents must be preserved.
-								log.Printf("[Worker-%d] %s needs manual completion — queued for manual submission: %v", workerID, job.CompanyName, err)
-								pipeline.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
-								storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
-								docsDir, mvErr := storage.MoveToManualApply(docsDir)
-								if mvErr != nil {
-									log.Printf("[Worker-%d] Failed to move %s docs to the manual-apply folder: %v", workerID, job.CompanyName, mvErr)
-								}
-								if logErr := storage.LogManualRequired(job.CompanyName, job.Title, job.URL, docsDir); logErr != nil {
-									log.Printf("[Worker-%d] Also failed to log manual-apply queue entry for %s: %v", workerID, job.CompanyName, logErr)
-								}
-								continue
-							}
-							log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
-							storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
-							if logErr := storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL); logErr != nil {
-								log.Printf("[Worker-%d] Also failed to log manual submission for %s: %v", workerID, job.CompanyName, logErr)
-							}
-						} else {
-							pipeline.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")
-							storage.UpdateFunnelStatus(job.URL, "APPLIED")
-							// bugs.md #94: the dedup row is written HERE, on confirmed
-							// submission, and nowhere else. SaveApplication used to write
-							// it at document-generation time, which marked jobs as applied
-							// that had never been submitted -- they were then skipped on
-							// every subsequent run and could never be retried.
-							if err := storage.RecordApplicationInDB(job.CompanyName, job.Title, job.URL); err != nil {
-								log.Printf("[Worker-%d] Submitted %s but failed to record the dedup row: %v", workerID, job.CompanyName, err)
-							}
-						}
-					} else {
-						// If not auto-submitting, we still consider the pipeline processing done
-						storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
-					}
-
-					// Sleep for 15 seconds to ensure we never hit the 5 RPM rate limit
 					time.Sleep(1 * time.Second)
-				} // close for job := range jobChan
+				}
 			}(w)
 		}
-
 		wg.Wait()
 		log.Println("[Agent] Batch execution complete!")
 	}
-
 	cycleDeps := agentCycleDependencies{
 		loadDiscovered: storage.GetDiscoveredJobs,
 		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
