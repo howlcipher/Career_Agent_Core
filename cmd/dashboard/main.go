@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	_ "modernc.org/sqlite"
 )
@@ -212,7 +214,7 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(10)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serveDashboard)
@@ -228,162 +230,176 @@ func main() {
 
 func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	var m Metrics
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED' OR status = 'NEW'").Scan(&m.Discovered)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'PROCESSING'").Scan(&m.Processing)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'SKIPPED'").Scan(&m.Skipped)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('APPLIED', 'PROCESSED_MANUAL')").Scan(&m.Applied)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT')").Scan(&m.Failed)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'MANUAL_REQUIRED'").Scan(&m.ManualRequired)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'BLOCKED_CAPTCHA'").Scan(&m.BlockedCaptcha)
-	db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'INVALID_URL'").Scan(&m.InvalidURL)
+	var g errgroup.Group
 
-	// applied_jobs only records that a tailored resume/cover letter was
-	// generated and saved (SaveApplication runs early in AttemptSubmit,
-	// before the actual browser fill/submit) - it does NOT mean the
-	// submission itself succeeded. job_funnel.status only reaches APPLIED
-	// after the full AttemptSubmit call returns without error. Join both so
-	// "last applied" only ever shows a job that genuinely completed.
-	var lastAppliedAt, lastAppliedDiscoveredAt sql.NullTime
-	err := db.QueryRow(`SELECT aj.company_name, aj.job_title, aj.url, aj.applied_at, jf.discovered_at
-		FROM applied_jobs aj
-		JOIN job_funnel jf ON jf.url = aj.url
-		WHERE jf.status IN ('APPLIED', 'PROCESSED_MANUAL')
-		ORDER BY aj.applied_at DESC LIMIT 1`).
-		Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt, &lastAppliedDiscoveredAt)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Failed to query last applied job: %v", err)
-	}
-	if lastAppliedAt.Valid {
-		m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
-	}
-	if lastAppliedAt.Valid && lastAppliedDiscoveredAt.Valid {
-		m.LastAppliedProcessingTime = formatDuration(lastAppliedAt.Time.Sub(lastAppliedDiscoveredAt.Time))
-	}
+	g.Go(func() error {
+		err := db.QueryRow(`SELECT 
+			COALESCE(SUM(CASE WHEN status IN ('DISCOVERED', 'NEW') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'PROCESSING' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('APPLIED', 'PROCESSED_MANUAL') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('FAILED_SCORE', 'FAILED_SUBMIT') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel`).Scan(
+			&m.Discovered, &m.Processing, &m.Skipped, &m.Applied,
+			&m.Failed, &m.ManualRequired, &m.BlockedCaptcha, &m.InvalidURL,
+		)
+		if err != nil {
+			log.Printf("Failed to query basic counts: %v", err)
+		}
+		return nil
+	})
 
-	// Currently processing: the most recently touched PROCESSING row.
-	// last_updated is required here, not id/discovered_at - multiple rows
-	// can be stuck at PROCESSING from an interrupted run (confirmed live
-	// 2026-07-21, see bugs.md #12's data-correction notes), so only
-	// "most recently touched" reliably identifies what's actually active
-	// right now versus an old orphaned entry.
-	var currentCompany, currentTitle sql.NullString
-	var currentSince sql.NullTime
-	err = db.QueryRow(`SELECT company_name, job_title, last_updated FROM job_funnel
-		WHERE status = 'PROCESSING' ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&currentCompany, &currentTitle, &currentSince)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Failed to query currently processing job: %v", err)
-	}
-	m.CurrentCompany = currentCompany.String
-	m.CurrentTitle = currentTitle.String
-	if currentSince.Valid {
-		m.CurrentSince = currentSince.Time.Local().Format("3:04:05 PM")
-	}
+	g.Go(func() error {
+		var lastAppliedAt, lastAppliedDiscoveredAt sql.NullTime
+		err := db.QueryRow(`SELECT aj.company_name, aj.job_title, aj.url, aj.applied_at, jf.discovered_at
+			FROM applied_jobs aj
+			JOIN job_funnel jf ON jf.url = aj.url
+			WHERE jf.status IN ('APPLIED', 'PROCESSED_MANUAL')
+			ORDER BY aj.applied_at DESC LIMIT 1`).
+			Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt, &lastAppliedDiscoveredAt)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Failed to query last applied job: %v", err)
+		}
+		if lastAppliedAt.Valid {
+			m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
+		}
+		if lastAppliedAt.Valid && lastAppliedDiscoveredAt.Valid {
+			m.LastAppliedProcessingTime = formatDuration(lastAppliedAt.Time.Sub(lastAppliedDiscoveredAt.Time))
+		}
+		return nil
+	})
 
-	var skippedCompany, skippedTitle, skippedStatus sql.NullString
-	var skippedAt, skippedDiscoveredAt sql.NullTime
-	// Narrowed to just SKIPPED (was SKIPPED + BLOCKED_CAPTCHA) now that
-	// BLOCKED_CAPTCHA has its own dedicated tile -- this widget's status
-	// used to disagree with the Skipped tile's own count, which never
-	// included BLOCKED_CAPTCHA (confirmed live 2026-07-24, bugs.md #55's
-	// investigation).
-	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
-		WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Failed to query last skipped job: %v", err)
-	}
-	m.LastSkippedCompany = skippedCompany.String
-	m.LastSkippedTitle = skippedTitle.String
-	if skippedStatus.Valid {
-		m.LastSkippedReason = statusReason(skippedStatus.String)
-	}
-	if skippedAt.Valid {
-		m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")
-	}
-	if skippedAt.Valid && skippedDiscoveredAt.Valid {
-		m.LastSkippedProcessingTime = formatDuration(skippedAt.Time.Sub(skippedDiscoveredAt.Time))
-	}
+	g.Go(func() error {
+		var currentCompany, currentTitle sql.NullString
+		var currentSince sql.NullTime
+		err := db.QueryRow(`SELECT company_name, job_title, last_updated FROM job_funnel
+			WHERE status = 'PROCESSING' ORDER BY last_updated DESC LIMIT 1`).
+			Scan(&currentCompany, &currentTitle, &currentSince)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Failed to query currently processing job: %v", err)
+		}
+		m.CurrentCompany = currentCompany.String
+		m.CurrentTitle = currentTitle.String
+		if currentSince.Valid {
+			m.CurrentSince = currentSince.Time.Local().Format("3:04:05 PM")
+		}
+		return nil
+	})
 
-	var failedCompany, failedTitle, failedStatus sql.NullString
-	var failedAt, failedDiscoveredAt sql.NullTime
-	err = db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
-		WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt, &failedDiscoveredAt)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Failed to query last failed job: %v", err)
-	}
-	m.LastFailedCompany = failedCompany.String
-	m.LastFailedTitle = failedTitle.String
-	if failedStatus.Valid {
-		m.LastFailedReason = statusReason(failedStatus.String)
-	}
-	if failedAt.Valid {
-		m.LastFailedAt = failedAt.Time.Local().Format("Jan 2, 3:04 PM")
-	}
-	if failedAt.Valid && failedDiscoveredAt.Valid {
-		m.LastFailedProcessingTime = formatDuration(failedAt.Time.Sub(failedDiscoveredAt.Time))
-	}
+	g.Go(func() error {
+		var skippedCompany, skippedTitle, skippedStatus sql.NullString
+		var skippedAt, skippedDiscoveredAt sql.NullTime
+		err := db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
+			WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
+			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Failed to query last skipped job: %v", err)
+		}
+		m.LastSkippedCompany = skippedCompany.String
+		m.LastSkippedTitle = skippedTitle.String
+		if skippedStatus.Valid {
+			m.LastSkippedReason = statusReason(skippedStatus.String)
+		}
+		if skippedAt.Valid {
+			m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")
+		}
+		if skippedAt.Valid && skippedDiscoveredAt.Valid {
+			m.LastSkippedProcessingTime = formatDuration(skippedAt.Time.Sub(skippedDiscoveredAt.Time))
+		}
+		return nil
+	})
 
-	var manualCompany, manualTitle sql.NullString
-	var manualAt, manualDiscoveredAt sql.NullTime
-	err = db.QueryRow(`SELECT company_name, job_title, last_updated, discovered_at FROM job_funnel
-		WHERE status = 'MANUAL_REQUIRED' ORDER BY last_updated DESC LIMIT 1`).
-		Scan(&manualCompany, &manualTitle, &manualAt, &manualDiscoveredAt)
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Failed to query last manual-required job: %v", err)
-	}
-	m.LastManualCompany = manualCompany.String
-	m.LastManualTitle = manualTitle.String
-	if manualAt.Valid {
-		m.LastManualAt = manualAt.Time.Local().Format("Jan 2, 3:04 PM")
-	}
-	if manualAt.Valid && manualDiscoveredAt.Valid {
-		m.LastManualProcessingTime = formatDuration(manualAt.Time.Sub(manualDiscoveredAt.Time))
-	}
+	g.Go(func() error {
+		var failedCompany, failedTitle, failedStatus sql.NullString
+		var failedAt, failedDiscoveredAt sql.NullTime
+		err := db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
+			WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
+			Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt, &failedDiscoveredAt)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Failed to query last failed job: %v", err)
+		}
+		m.LastFailedCompany = failedCompany.String
+		m.LastFailedTitle = failedTitle.String
+		if failedStatus.Valid {
+			m.LastFailedReason = statusReason(failedStatus.String)
+		}
+		if failedAt.Valid {
+			m.LastFailedAt = failedAt.Time.Local().Format("Jan 2, 3:04 PM")
+		}
+		if failedAt.Valid && failedDiscoveredAt.Valid {
+			m.LastFailedProcessingTime = formatDuration(failedAt.Time.Sub(failedDiscoveredAt.Time))
+		}
+		return nil
+	})
 
-	// Conversion-rate analytics (improvements.md #15): pkg/tracker only ever
-	// moves a job_funnel row from APPLIED to REJECTED or INTERVIEW_REQUESTED
-	// (never a distinct OFFER status), so "ever applied" = status IN
-	// ('APPLIED','REJECTED','INTERVIEW_REQUESTED').
-	var interviews, rejections int
-	err = db.QueryRow(`SELECT
-		COUNT(*),
-		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0)
-		FROM job_funnel WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
-		Scan(&m.TotalApplied, &interviews, &rejections)
-	if err != nil {
-		log.Printf("Failed to query conversion stats: %v", err)
-	}
-	m.Interviews = interviews
-	m.Rejections = rejections
-	if m.TotalApplied > 0 {
-		m.InterviewRatePct = fmt.Sprintf("%.1f%%", float64(interviews)/float64(m.TotalApplied)*100)
-	}
+	g.Go(func() error {
+		var manualCompany, manualTitle sql.NullString
+		var manualAt, manualDiscoveredAt sql.NullTime
+		err := db.QueryRow(`SELECT company_name, job_title, last_updated, discovered_at FROM job_funnel
+			WHERE status = 'MANUAL_REQUIRED' ORDER BY last_updated DESC LIMIT 1`).
+			Scan(&manualCompany, &manualTitle, &manualAt, &manualDiscoveredAt)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Failed to query last manual-required job: %v", err)
+		}
+		m.LastManualCompany = manualCompany.String
+		m.LastManualTitle = manualTitle.String
+		if manualAt.Valid {
+			m.LastManualAt = manualAt.Time.Local().Format("Jan 2, 3:04 PM")
+		}
+		if manualAt.Valid && manualDiscoveredAt.Valid {
+			m.LastManualProcessingTime = formatDuration(manualAt.Time.Sub(manualDiscoveredAt.Time))
+		}
+		return nil
+	})
 
-	sourceRows, err := db.Query(`SELECT
-		CASE
-			WHEN url LIKE '%greenhouse%' THEN 'Greenhouse'
-			WHEN url LIKE '%lever.co%' THEN 'Lever'
-			WHEN url LIKE '%myworkdayjobs.com%' THEN 'Workday'
-			WHEN url LIKE '%smartrecruiters%' THEN 'SmartRecruiters'
-			WHEN url LIKE '%ashbyhq%' THEN 'Ashby'
-			ELSE 'Other'
-		END AS source,
-		COUNT(*),
-		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
-		FROM job_funnel
-		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
-		GROUP BY source
-		HAVING COUNT(*) > 0
-		ORDER BY COUNT(*) DESC`)
-	if err != nil {
-		log.Printf("Failed to query conversion stats by source: %v", err)
-	} else {
+	g.Go(func() error {
+		var interviews, rejections int
+		err := db.QueryRow(`SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0)
+			FROM job_funnel WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
+			Scan(&m.TotalApplied, &interviews, &rejections)
+		if err != nil {
+			log.Printf("Failed to query conversion stats: %v", err)
+		}
+		m.Interviews = interviews
+		m.Rejections = rejections
+		if m.TotalApplied > 0 {
+			m.InterviewRatePct = fmt.Sprintf("%.1f%%", float64(interviews)/float64(m.TotalApplied)*100)
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		sourceRows, err := db.Query(`SELECT
+			CASE
+				WHEN url LIKE '%greenhouse%' THEN 'Greenhouse'
+				WHEN url LIKE '%lever.co%' THEN 'Lever'
+				WHEN url LIKE '%myworkdayjobs.com%' THEN 'Workday'
+				WHEN url LIKE '%smartrecruiters%' THEN 'SmartRecruiters'
+				WHEN url LIKE '%ashbyhq%' THEN 'Ashby'
+				ELSE 'Other'
+			END AS source,
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+			FROM job_funnel
+			WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+			GROUP BY source
+			HAVING COUNT(*) > 0
+			ORDER BY COUNT(*) DESC`)
+		if err != nil {
+			log.Printf("Failed to query conversion stats by source: %v", err)
+			return nil
+		}
 		defer sourceRows.Close()
+
+		var bySource []SourceConversionStat
 		for sourceRows.Next() {
 			var s SourceConversionStat
 			if err := sourceRows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
@@ -393,29 +409,31 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			if s.TotalApplied > 0 {
 				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
 			}
-			m.BySource = append(m.BySource, s)
+			bySource = append(bySource, s)
 		}
-	}
+		m.BySource = bySource
+		return nil
+	})
 
-	// Conversion-by-tone-variant (improvements.md #13). Rows never tagged
-	// with a variant (A/B testing not configured, or applied before this
-	// feature existed) are grouped under "unspecified" so this total always
-	// reconciles with m.TotalApplied above.
-	variantRows, err := db.Query(`SELECT
-		COALESCE(NULLIF(tone_variant, ''), 'unspecified') AS variant,
-		COUNT(*),
-		COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
-		FROM job_funnel
-		WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
-		GROUP BY variant
-		HAVING COUNT(*) > 0
-		ORDER BY COUNT(*) DESC`)
-	if err != nil {
-		log.Printf("Failed to query conversion stats by variant: %v", err)
-	} else {
+	g.Go(func() error {
+		variantRows, err := db.Query(`SELECT
+			COALESCE(NULLIF(tone_variant, ''), 'unspecified') AS variant,
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN status = 'INTERVIEW_REQUESTED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0)
+			FROM job_funnel
+			WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')
+			GROUP BY variant
+			HAVING COUNT(*) > 0
+			ORDER BY COUNT(*) DESC`)
+		if err != nil {
+			log.Printf("Failed to query conversion stats by variant: %v", err)
+			return nil
+		}
 		defer variantRows.Close()
+
+		var byVariant []VariantConversionStat
 		for variantRows.Next() {
 			var s VariantConversionStat
 			if err := variantRows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
@@ -425,9 +443,13 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			if s.TotalApplied > 0 {
 				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
 			}
-			m.ByVariant = append(m.ByVariant, s)
+			byVariant = append(byVariant, s)
 		}
-	}
+		m.ByVariant = byVariant
+		return nil
+	})
+
+	_ = g.Wait()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(m)

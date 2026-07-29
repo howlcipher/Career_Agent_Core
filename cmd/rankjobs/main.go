@@ -26,7 +26,10 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/mcp"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
@@ -65,44 +68,54 @@ func main() {
 	log.Printf("Backfilling fit_similarity for %d job(s) against %d resume chunk(s)...", len(jobs), len(chunks))
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-	var done, failed int
-	for i, j := range jobs {
-		text := strings.TrimSpace(j.CompanyName + " " + j.JobTitle)
-		if text == "" {
-			failed++
-			continue
-		}
+	var done, failed atomic.Int32
+	var g errgroup.Group
+	g.SetLimit(4) // Bounded concurrency for embeddings
 
-		var emb []float32
-		var embErr error
-		for attempt := 1; attempt <= 3; attempt++ {
-			emb, embErr = client.GetEmbedding(text)
-			if embErr == nil {
-				break
+	for _, j := range jobs {
+		j := j
+		g.Go(func() error {
+			text := strings.TrimSpace(j.CompanyName + " " + j.JobTitle)
+			if text == "" {
+				failed.Add(1)
+				return nil
 			}
-			if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
-				log.Printf("Network or rate-limit error embedding %q (attempt %d/3). Sleeping 60s...", j.JobTitle, attempt)
-				time.Sleep(60 * time.Second)
-			} else {
-				break
-			}
-		}
-		if embErr != nil {
-			log.Printf("Embedding failed for %s at %s: %v", j.JobTitle, j.URL, embErr)
-			failed++
-			continue
-		}
 
-		score := parser.BestSimilarity(emb, chunks)
-		if err := storage.UpdateFitSimilarity(j.URL, score); err != nil {
-			log.Printf("Failed to save fit_similarity for %s: %v", j.URL, err)
-			failed++
-			continue
-		}
-		done++
-		if (i+1)%25 == 0 {
-			log.Printf("Progress: %d/%d done", i+1, len(jobs))
-		}
+			var emb []float32
+			var embErr error
+			for attempt := 1; attempt <= 3; attempt++ {
+				emb, embErr = client.GetEmbedding(text)
+				if embErr == nil {
+					break
+				}
+				if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+					log.Printf("Network or rate-limit error embedding %q (attempt %d/3). Sleeping 60s...", j.JobTitle, attempt)
+					time.Sleep(60 * time.Second)
+				} else {
+					break
+				}
+			}
+			if embErr != nil {
+				log.Printf("Embedding failed for %s at %s: %v", j.JobTitle, j.URL, embErr)
+				failed.Add(1)
+				return nil
+			}
+
+			score := parser.BestSimilarity(emb, chunks)
+			if err := storage.UpdateFitSimilarity(j.URL, score); err != nil {
+				log.Printf("Failed to save fit_similarity for %s: %v", j.URL, err)
+				failed.Add(1)
+				return nil
+			}
+			
+			done.Add(1)
+			d := done.Load()
+			if d%25 == 0 {
+				log.Printf("Progress: %d/%d done", d, len(jobs))
+			}
+			return nil
+		})
 	}
-	log.Printf("Done. %d succeeded, %d failed.", done, failed)
+	_ = g.Wait()
+	log.Printf("Done. %d succeeded, %d failed.", done.Load(), failed.Load())
 }
