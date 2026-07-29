@@ -438,11 +438,24 @@
         .mini-status.failed .reason { color: var(--neon-red); }
         .mini-status.manual .reason { color: var(--neon-orange); }
 
+        .mini-status.applied::before { background: var(--neon-green); }
+        .mini-status.skipped::before { background: var(--neon-yellow); }
+        .mini-status.failed::before { background: var(--neon-red); }
+        .mini-status.manual::before { background: var(--neon-orange); }
+
         .mini-status .at {
             color: var(--text-muted);
             font-size: 0.75rem;
             margin-top: 6px;
         }
+        
+        .mini-status.applied .at { color: var(--neon-green); font-weight: 600; font-size: 0.85rem; }
+
+        .mini-status a {
+            color: var(--neon-cyan);
+            text-decoration: none;
+        }
+        .mini-status a:hover { text-decoration: underline; }
 
         .mini-status .duration {
             color: var(--text-muted);
@@ -463,89 +476,10 @@
             .working-on .since { margin-left: 0; }
         }
 
-        /* --- Last applied card --- */
-        .last-applied {
-            width: 100%;
-            background: var(--card-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--card-border);
-            border-radius: 16px;
-            padding: 22px 28px;
-            margin-bottom: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            flex-wrap: wrap;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .last-applied::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 4px;
-            background: var(--neon-green);
-        }
-
-        .last-applied .label {
-            color: var(--text-muted);
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin: 0 0 6px 0;
-        }
-
-        .last-applied .company {
-            font-family: system-ui, -apple-system, sans-serif;
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #fff;
-            margin: 0;
-        }
-
-        .last-applied .title {
-            color: var(--text-muted);
-            font-size: 0.95rem;
-            margin: 4px 0 0 0;
-        }
-
-        .last-applied .when {
-            text-align: right;
-            color: var(--neon-green);
-            font-weight: 600;
-            font-size: 1rem;
-            white-space: nowrap;
-        }
-
-        .last-applied .duration {
-            color: var(--text-muted);
-            font-weight: 400;
-            font-style: italic;
-            font-size: 0.8rem;
-            margin-top: 2px;
-        }
-
-        .last-applied a {
-            color: var(--neon-blue);
-            text-decoration: none;
-        }
-        .last-applied a:hover { text-decoration: underline; }
-
-        .last-applied.empty .company {
-            color: var(--text-muted);
-            font-weight: 500;
-            font-size: 1.1rem;
-        }
-
         @media (max-width: 768px) {
             h1 { font-size: 2rem; }
             .grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
             .card h2 { font-size: 2.5rem; }
-            .last-applied { flex-direction: column; align-items: flex-start; }
-            .last-applied .when { text-align: left; }
         }
     </style>
 </head>
@@ -574,19 +508,14 @@
     </div>
 
     <div class="dashboard-container">
-        <div class="last-applied empty" id="last-applied-card">
-            <div>
+        <div class="secondary-row">
+            <div class="mini-status applied empty" id="last-applied-card">
                 <p class="label">Last Successful Application</p>
                 <p class="company" id="last-applied-company">No applications recorded yet</p>
-                <p class="title" id="last-applied-title"></p>
+                <p class="reason" id="last-applied-title"></p>
+                <p class="at" id="last-applied-when"></p>
+                <p class="duration" id="last-applied-duration"></p>
             </div>
-            <div class="when">
-                <div id="last-applied-when"></div>
-                <div class="duration" id="last-applied-duration"></div>
-            </div>
-        </div>
-
-        <div class="secondary-row">
             <div class="mini-status skipped empty" id="last-skipped-card">
                 <p class="label">Last Skipped</p>
                 <p class="company" id="last-skipped-company">None yet</p>
