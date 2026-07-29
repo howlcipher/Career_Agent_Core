@@ -509,7 +509,7 @@ func RecordApplicationInDB(companyName, jobTitle, url string) error {
 	}
 	url = NormalizeURL(url)
 	_, err := db.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
-		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, companyName, jobTitle, url, time.Now())
+		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, companyName, jobTitle, url, time.Now().Format(time.RFC3339))
 	return err
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -219,6 +220,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serveDashboard)
 	mux.HandleFunc("/api/metrics", serveMetrics)
+	mux.HandleFunc("/api/agent/start", serveAgentStart)
+	mux.HandleFunc("/api/agent/stop", serveAgentStop)
+	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 	mux.HandleFunc("/favicon.png", serveFavicon)
 
 	if warning := dashboardExposureWarning(address); warning != "" {
@@ -474,3 +478,44 @@ func serveFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(content)
 }
+
+func serveAgentStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status": "already_running"}`))
+		return
+	}
+
+	cmd := exec.Command("./career_agent_bin", "-daemon", "-cycle-limit", "5")
+	if err := cmd.Start(); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to start agent: %v", err), http.StatusInternalServerError)
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status": "started"}`))
+}
+
+func serveAgentStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = exec.Command("pkill", "-f", "career_agent_bin").Run()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status": "stopped"}`))
+}
+
+func serveAgentStatus(w http.ResponseWriter, r *http.Request) {
+	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
+	running := err == nil
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"running": running})
+}
+

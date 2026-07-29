@@ -33,7 +33,7 @@
         }
 
         body { 
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
             background-color: var(--bg-color); 
             background-image: 
                 radial-gradient(circle at 15% 50%, rgba(112, 0, 255, 0.15), transparent 25%),
@@ -45,6 +45,64 @@
             display: flex;
             flex-direction: column;
             align-items: center;
+        }
+
+        /* --- Agent Controls --- */
+        .agent-control {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 30px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .btn {
+            padding: 12px 28px;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: scale(0.98);
+        }
+
+        .btn-start {
+            background: rgba(0, 255, 136, 0.15);
+            border: 1px solid rgba(0, 255, 136, 0.4);
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.1);
+        }
+
+        .btn-start:hover:not(:disabled) {
+            background: rgba(0, 255, 136, 0.25);
+            box-shadow: 0 8px 25px rgba(0, 255, 136, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .btn-stop {
+            background: rgba(255, 51, 102, 0.15);
+            border: 1px solid rgba(255, 51, 102, 0.4);
+            box-shadow: 0 4px 15px rgba(255, 51, 102, 0.1);
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: rgba(255, 51, 102, 0.25);
+            box-shadow: 0 8px 25px rgba(255, 51, 102, 0.2);
+            transform: translateY(-2px);
         }
 
         h1 {
@@ -495,6 +553,11 @@
     <main>
     <h1>🚀 Career Agent Live Metrics</h1>
 
+    <div class="agent-control">
+        <button id="btn-start" class="btn btn-start" onclick="startAgent()">▶ Start Agent</button>
+        <button id="btn-stop" class="btn btn-stop" onclick="stopAgent()" disabled>🛑 Stop Agent</button>
+    </div>
+
     <div class="status-bar" aria-live="polite">
         <span class="status-dot offline" id="status-dot"></span>
         <span class="status-label" id="status-label">Connecting…</span>
@@ -796,8 +859,44 @@
                 activityFill.classList.remove('active');
             }
         }
+
+        async function checkAgentStatus() {
+            try {
+                const res = await fetch('/api/agent/status');
+                const data = await res.json();
+                document.getElementById('btn-start').disabled = data.running;
+                document.getElementById('btn-stop').disabled = !data.running;
+            } catch (err) {
+                console.error('Failed to fetch agent status:', err);
+                document.getElementById('btn-start').disabled = true;
+                document.getElementById('btn-stop').disabled = true;
+            }
+        }
+
+        async function startAgent() {
+            document.getElementById('btn-start').disabled = true;
+            try {
+                await fetch('/api/agent/start', { method: 'POST' });
+            } catch (err) {
+                console.error(err);
+            }
+            setTimeout(checkAgentStatus, 500);
+        }
+
+        async function stopAgent() {
+            document.getElementById('btn-stop').disabled = true;
+            try {
+                await fetch('/api/agent/stop', { method: 'POST' });
+            } catch (err) {
+                console.error(err);
+            }
+            setTimeout(checkAgentStatus, 500);
+        }
+
         setInterval(fetchMetrics, 3000);
+        setInterval(checkAgentStatus, 3000);
         fetchMetrics();
+        checkAgentStatus();
     </script>
 </body>
 </html>
