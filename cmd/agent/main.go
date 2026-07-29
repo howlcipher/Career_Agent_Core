@@ -783,6 +783,7 @@ func main() {
 				ragResult.chunkCount,
 			)
 		}
+		go runContinuousJobMatching(ctx, client)
 	} else {
 		log.Println(
 			"[RAG] Disabled explicitly by -no-rag; career context retrieval is off.",
@@ -967,3 +968,79 @@ func defaultWorkerCount() int {
 	}
 	return 10
 }
+
+func runContinuousJobMatching(ctx context.Context, client *mcp.Client) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[Matcher] Shutting down continuous job matching pipeline...")
+			return
+		case <-ticker.C:
+			chunks, err := storage.GetAllCareerChunks()
+			if err != nil {
+				log.Printf("[Matcher] Failed to load career chunks: %v", err)
+				continue
+			}
+			if len(chunks) == 0 {
+				continue
+			}
+
+			jobs, err := storage.GetJobsMissingFitSimilarity(50)
+			if err != nil {
+				log.Printf("[Matcher] Failed to get jobs missing fit_similarity: %v", err)
+				continue
+			}
+			if len(jobs) == 0 {
+				continue
+			}
+
+			log.Printf("[Matcher] Backfilling fit_similarity for %d job(s)...", len(jobs))
+			for _, j := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				text := strings.TrimSpace(j.CompanyName + " " + j.JobTitle)
+				if text == "" {
+					continue
+				}
+
+				var emb []float32
+				var embErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					if ctx.Err() != nil {
+						return
+					}
+					emb, embErr = client.GetEmbedding(text)
+					if embErr == nil {
+						break
+					}
+					if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+						log.Printf("[Matcher] Network/rate-limit error embedding %q (attempt %d/3). Sleeping...", j.JobTitle, attempt)
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(mcp.ExponentialBackoff(attempt)):
+						}
+					} else {
+						break
+					}
+				}
+				if embErr != nil {
+					log.Printf("[Matcher] Embedding failed for %s at %s: %v", j.JobTitle, j.URL, embErr)
+					continue
+				}
+
+				score := parser.BestSimilarity(emb, chunks)
+				if err := storage.UpdateFitSimilarity(j.URL, score); err != nil {
+					log.Printf("[Matcher] Failed to save fit_similarity for %s: %v", j.URL, err)
+					continue
+				}
+			}
+		}
+	}
+}
+
