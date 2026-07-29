@@ -156,7 +156,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 
 		if storage.HasApplied(job.URL) {
 			log.Printf("[Worker-%d] Duplicate check: Already applied to %s. Skipping.", workerID, job.CompanyName)
-			storage.UpdateFunnelStatus(job.URL, "DISCOVERED")
+			storage.UpdateFunnelStatus(job.URL, "APPLIED")
 			return StateEnd, nil
 		}
 

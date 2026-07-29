@@ -95,6 +95,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 **2026-07-28 groom-pass note:** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after correcting #411 effort score and completing #409 (Frontend Rendering Speed Optimizations). Removed V3 gimmick references from Github Pages. Task journals are clean.
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
+| 412 | [Implement Exponential Backoff with Jitter for LLM API Retries](#412-implement-exponential-backoff-with-jitter-for-llm-api-retries) | Pending | 1.5 = 3×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Core Go retry logic. | API retries currently use fixed 60-second loops which can cause thundering herd contention. |
 | 411 | [Implement Stateful Graph-Based Pipeline Architecture](#411-implement-stateful-graph-based-pipeline-architecture) | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Complex routing logic. | Move from sequential loops to a state machine (like LangGraph) for robust error handling on multi-step forms. |
 | 410 | [AI Processing Optimizations (Concurrency & Context Limits)](#410-ai-processing-optimizations-concurrency--context-limits) | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Core Go concurrency. | Split monolithic generation into concurrent goroutines, inject dynamic num_ctx, and add keep_alive to prevent cold starts. |
 | 409 | [Frontend Rendering Speed Optimizations](#409-frontend-rendering-speed-optimizations) | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Frontend JS/CSS tweaks. | Remove expensive CSS blurs, SVG noise, infinite animation loops, and scroll thrashing. |
@@ -639,3 +640,8 @@ The live 2026-07-27 run scored five postings at 80 or 90 and then found them dea
 **Background:** Current logic relies on simple query-response loops for navigating complex forms. Adopting a stateful graph-based state machine (similar to LangGraph) combined with a multi-agent orchestration approach would significantly increase resiliency against UI changes and complex branching paths on job boards.
 **Acceptance criteria:** Refactor the core pipeline to handle application state using a directed graph, enabling branching, loops, and targeted retries. Design clear boundaries between Discovery, Scoring, Tailoring, and Submission sub-agents for parallel processing and modular updates.
 **Done 2026-07-28:** Created a `graph` package that implements a stateful graph-based pipeline execution engine. Refactored the core loop in `cmd/agent/main.go` and `cmd/agent/pipeline.go` to use this new directed graph state machine. Replaced the monolithic sequential job processing loop with discrete, encapsulated states (`StateInit`, `StateDiscovery`, `StateScoring`, `StateTailoring`, `StateSubmission`), establishing clear boundaries for parallel processing and modular updates.
+
+
+### 412. Implement Exponential Backoff with Jitter for LLM API Retries
+
+API retries currently use fixed `time.Sleep(60 * time.Second)` loops on network/429 errors. Replace flat 60-second sleeps with exponential backoff and jitter to prevent thundering herd contention across workers.

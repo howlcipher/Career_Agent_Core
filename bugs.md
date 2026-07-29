@@ -134,6 +134,8 @@ Ranking is otherwise unchanged and no re-scoring was warranted. `improvements.md
 **2026-07-28 groom-pass note (session 12):** Evaluated pipeline for applications filled and submitted. Discovered that the ATS feed truncation bug (#131) was only partially addressed by retries; the true cause was an 8MB `LimitReader` artificially truncating large Lever JSON feeds (e.g., jobgether at 37MB+). Increased the limit to 128MB. Added bug #396 and marked it Done. Backlogs groomed. Usability Gate is MET.
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
+| 412 | [Duplicate check in pipeline.go resets APPLIED jobs back to DISCOVERED](#412-duplicate-check-in-pipelinego-resets-applied-jobs-back-to-discovered) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Infinite loop logic error. | Discovered jobs that were already applied were being reset to DISCOVERED status, creating an infinite processing loop. |
+| 413 | [Enhance Greenhouse validation error resolver for <fieldset> and radio groups](#413-enhance-greenhouse-validation-error-resolver-for-fieldset-and-radio-groups) | Major | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | DOM Parsing Issue | SolveValidationErrors struggles on Greenhouse forms with required radio groups where aria-invalid is applied to parent elements. |
 | 396 | [ATS board feed truncates large JSON feeds (30MB+)](#396-ats-board-feed-truncates-large-json-feeds) | Major | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Root cause analysis and trivial fix. | Lever board feeds for companies like Jobgether exceed 37MB, which hits the 8MB `io.LimitReader` in `fetchATSFeed`. Increased the limit to 128MB. |
 | 393 | [Playwright Host missing dependencies to run browsers](#393-playwright-host-missing-dependencies-to-run-browsers) | Blocker | Done (2026-07-28) | — | claude-sonnet-4-6 | gemini-3.6-flash-high | gpt-5.6-terra | Missing OS packages are easily fixed in the container or host. | Cleared ms-playwright cache and reinstalled dependencies inside the ubuntu:22.04 distrobox so it downloads the correct binaries for that OS version. |
 | 394 | [QUARANTINED_PROMPT_INJECTION has massive false positive rate on legitimate jobs](#394-quarantined_prompt_injection-has-massive-false-positive-rate-on-legitimate-jobs) | Major | Done (2026-07-28) | — | claude-opus-4-6-thinking | gemini-3.1-pro-high | gpt-5.6-sol | Security heuristics require careful tuning. | Over 400 legitimate jobs (Lever, Greenhouse) were quarantined. The detection heuristic is too aggressive. |
@@ -2454,3 +2456,13 @@ Two related leak paths observed live 2026-07-22: (1) the 2,001-row DISCOVERED ba
 **Impact:** The app could not get "faster" over time because it never learned to penalize excessively slow ATS endpoints (e.g., endpoints requiring huge DOM parsing times).
 **Fix:** Added an explicit `speedPenalty` to the Bayesian `PenaltyFactor` in `pkg/storage/ranking.go`. If a source consistently takes over 20,000ms (20s) to process, its rank score is penalized up to 40%, naturally surfacing faster applications to the front of the queue.
 **Status:** Done.
+
+
+### 412. Duplicate check in pipeline.go resets APPLIED jobs back to DISCOVERED
+
+When `storage.HasApplied(job.URL)` was true, the funnel status was updated to `DISCOVERED` instead of `APPLIED`. This caused already-applied jobs to be re-discovered and re-processed in every subsequent batch run, creating an infinite loop. Fixed by changing the status to `APPLIED`.
+
+
+### 413. Enhance Greenhouse validation error resolver for <fieldset> and radio groups
+
+`SolveValidationErrors` struggles on Greenhouse forms with required radio groups (work authorization, sponsorship) where `aria-invalid` or error class attributes are applied to the parent `<fieldset>` or container `<div>` instead of child `<input type="radio">`. Validation error detection should be expanded to inspect parent `<fieldset>` and container elements.
