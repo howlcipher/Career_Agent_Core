@@ -65,16 +65,29 @@ document.addEventListener('DOMContentLoaded', () => {
     let mouseY = window.innerHeight / 2;
     let currentX = mouseX;
     let currentY = mouseY;
+    let isAnimating = true;
     
     window.addEventListener('mousemove', (e) => {
         mouseX = e.clientX;
         mouseY = e.clientY;
-    });
+        if (!isAnimating) {
+            isAnimating = true;
+            requestAnimationFrame(animateOrbs);
+        }
+    }, { passive: true });
 
     function animateOrbs() {
+        const dx = mouseX - currentX;
+        const dy = mouseY - currentY;
+
+        if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+            isAnimating = false;
+            return;
+        }
+
         // Smooth interpolation for parallax
-        currentX += (mouseX - currentX) * 0.05;
-        currentY += (mouseY - currentY) * 0.05;
+        currentX += dx * 0.05;
+        currentY += dy * 0.05;
 
         const x = currentX / window.innerWidth;
         const y = currentY / window.innerHeight;
@@ -104,12 +117,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Scrolled Nav Effect ---
     const nav = document.querySelector('.glass-nav');
     if (nav) {
-        window.addEventListener('scroll', () => {
-            if (window.scrollY > 50) {
-                nav.classList.add('scrolled');
-            } else {
-                nav.classList.remove('scrolled');
-            }
-        }, { passive: true });
+        const navObserver = new IntersectionObserver(
+            ([e]) => nav.classList.toggle('scrolled', !e.isIntersecting)
+        );
+        const sentinel = document.createElement('div');
+        sentinel.style.position = 'absolute';
+        sentinel.style.top = '50px';
+        sentinel.style.height = '1px';
+        sentinel.style.width = '100%';
+        document.body.prepend(sentinel);
+        navObserver.observe(sentinel);
     }
 });
