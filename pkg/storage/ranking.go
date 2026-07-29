@@ -2,8 +2,8 @@ package storage
 
 import (
 	"math"
-	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -95,11 +95,16 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 	wrappers := make([]jobWrapper, len(jobs))
 
 	for i, j := range jobs {
-		source := ""
-		if u, err := url.Parse(j.GetURL()); err == nil {
-			source = u.Hostname()
-		} else {
-			source = j.GetURL()
+		source := j.GetURL()
+		// fast hostname extraction
+		if idx := strings.Index(source, "://"); idx != -1 {
+			source = source[idx+3:]
+		}
+		if idx := strings.IndexByte(source, '/'); idx != -1 {
+			source = source[:idx]
+		}
+		if idx := strings.IndexByte(source, ':'); idx != -1 {
+			source = source[:idx]
 		}
 
 		scoreObj, exists := sourceScores[source]

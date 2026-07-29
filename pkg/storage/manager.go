@@ -115,7 +115,8 @@ func InitDBWithPath(path string) error {
 		model_call_count INTEGER,
 		inference_ms INTEGER
 	);
-	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);`
+	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);
+	CREATE INDEX IF NOT EXISTS idx_application_attempts_started ON application_attempts(started_at);`
 	if _, err = db.Exec(createTableQuery); err != nil {
 		return err
 	}

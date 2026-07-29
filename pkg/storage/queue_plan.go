@@ -3,7 +3,6 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -48,7 +47,10 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		return nil, fmt.Errorf("db not initialized")
 	}
 
-	query := `SELECT url, status, discovered_at, fit_similarity FROM job_funnel WHERE status = ? AND url LIKE ?`
+	query := `SELECT f.url, f.status, f.discovered_at, f.fit_similarity,
+		(SELECT COUNT(*) FROM applied_jobs a WHERE a.url = f.url OR a.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') ELSE f.url END) as dedup_count,
+		(SELECT COUNT(*) FROM job_funnel dup WHERE dup.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') WHEN f.url LIKE 'https://%' THEN REPLACE(f.url, 'https://', 'http://') ELSE f.url END AND dup.url != f.url) as scheme_dup_count
+		FROM job_funnel f WHERE f.status = ? AND f.url LIKE ?`
 	rows, err := db.Query(query, fromStatus, urlPattern)
 	if err != nil {
 		return nil, err
@@ -61,7 +63,8 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		var cand QueuePlanCandidate
 		var discoveredAt time.Time
 		var fitSim sql.NullFloat64
-		if err := rows.Scan(&cand.OriginalURL, &cand.CurrentStatus, &discoveredAt, &fitSim); err != nil {
+		var dedupCount, dupCount int
+		if err := rows.Scan(&cand.OriginalURL, &cand.CurrentStatus, &discoveredAt, &fitSim, &dedupCount, &dupCount); err != nil {
 			return nil, err
 		}
 		if fitSim.Valid {
@@ -74,37 +77,20 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		cand.DiscoveredAt = discoveredAt
 		
 		// Determine source from domain
-		if u, err := url.Parse(cand.OriginalURL); err == nil {
-			cand.Source = u.Hostname()
-		} else {
-			cand.Source = cand.OriginalURL
+		source := cand.OriginalURL
+		if idx := strings.Index(source, "://"); idx != -1 {
+			source = source[idx+3:]
 		}
+		if idx := strings.IndexByte(source, '/'); idx != -1 {
+			source = source[:idx]
+		}
+		if idx := strings.IndexByte(source, ':'); idx != -1 {
+			source = source[:idx]
+		}
+		cand.Source = source
 
-		// Check for dedup row
-		var dedupCount int
-		err = db.QueryRow(`SELECT COUNT(*) FROM applied_jobs WHERE url = ? OR url = ?`, cand.OriginalURL, cand.NormalizedURL).Scan(&dedupCount)
-		if err != nil {
-			return nil, err
-		}
 		cand.HasDedupRow = dedupCount > 0
-
-		// Check for scheme duplicate
-		var dupCount int
-		// A scheme duplicate is another row with the same normalized URL but a different original URL, or maybe just different scheme
-		otherScheme := cand.OriginalURL
-		if strings.HasPrefix(cand.OriginalURL, "http://") {
-			otherScheme = strings.Replace(cand.OriginalURL, "http://", "https://", 1)
-		} else if strings.HasPrefix(cand.OriginalURL, "https://") {
-			otherScheme = strings.Replace(cand.OriginalURL, "https://", "http://", 1)
-		}
-		
-		if otherScheme != cand.OriginalURL {
-			err = db.QueryRow(`SELECT COUNT(*) FROM job_funnel WHERE url = ?`, otherScheme).Scan(&dupCount)
-			if err != nil {
-				return nil, err
-			}
-			cand.HasSchemeDup = dupCount > 0
-		}
+		cand.HasSchemeDup = dupCount > 0
 
 		cand.ProposedAction = "Requeue to DISCOVERED"
 		if cand.HasDedupRow {
