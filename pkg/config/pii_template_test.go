@@ -48,10 +48,29 @@ func TestREADMENamesCurrentSetupEntrypoints(t *testing.T) {
 		"CAREER_PROFILE_PATH",
 		"OLLAMA_TIMEOUT_MINUTES",
 		"http://127.0.0.1:8080",
-		"go run cmd/agent/main.go --daemon",
+		// Must be the package form, not "go run cmd/agent/main.go". cmd/agent
+		// is a multi-file package -- main.go needs JobPipelineDeps,
+		// buildJobPipeline, JobState and StateInit from pipeline.go -- so the
+		// single-file form does not compile. This assertion previously pinned
+		// the broken form, which is how the README kept documenting a command
+		// that could never have worked for anyone.
+		"go run ./cmd/agent --daemon",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md is missing current setup entrypoint %q", required)
+		}
+	}
+
+	// Guard the above: assert the broken single-file form is absent entirely,
+	// rather than only that the working one is present. Both can be true at
+	// once, and a stale copy elsewhere in the README would still mislead.
+	for _, broken := range []string{
+		"go run cmd/agent/main.go",
+		"go run cmd/dashboard/main.go",
+		"go run cmd/tracker/main.go",
+	} {
+		if strings.Contains(text, broken) {
+			t.Errorf("README.md documents %q; cmd/... packages must be run in package form (go run ./cmd/...) so multi-file packages compile", broken)
 		}
 	}
 }
