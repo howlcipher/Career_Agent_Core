@@ -648,7 +648,15 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command("./career_agent_bin", "-daemon", "-cycle-limit", "5")
+	// Keep the dashboard-launched agent actively draining its backlog while
+	// retaining a short pause between source-refresh cycles to avoid a tight
+	// retry loop when an upstream job board is unavailable.
+	cmd := exec.Command(
+		"./career_agent_bin",
+		"-daemon",
+		"-cycle-limit", "5",
+		"-cycle-interval", "1m",
+	)
 	if err := cmd.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start agent: %v", err), http.StatusInternalServerError)
 		return

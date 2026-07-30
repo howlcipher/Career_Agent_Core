@@ -737,6 +737,11 @@ func main() {
 		defaultDaemonCycleLimit,
 		"maximum jobs processed per daemon cycle",
 	)
+	daemonCycleInterval := flag.Duration(
+		"cycle-interval",
+		defaultDaemonCycleInterval,
+		"delay between daemon cycles (for example, 1m or 6h)",
+	)
 	careerProfileFlag := flag.String(
 		"profile",
 		"",
@@ -781,10 +786,15 @@ func main() {
 				"Daemon configuration error: -cycle-limit must be greater than zero",
 			)
 		}
+		if *daemonCycleInterval <= 0 {
+			log.Fatalf(
+				"Daemon configuration error: -cycle-interval must be greater than zero",
+			)
+		}
 		log.Printf(
 			"[Agent] [DAEMON MODE] Agent will process at most %d jobs every %s.",
 			*daemonCycleLimit,
-			defaultDaemonCycleInterval,
+			*daemonCycleInterval,
 		)
 	}
 
@@ -987,7 +997,7 @@ func main() {
 		ctx,
 		*daemonMode,
 		*daemonCycleLimit,
-		defaultDaemonCycleInterval,
+		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
 			return runAgentCycle(cycleCtx, limit, cycleDeps)
 		},
