@@ -323,6 +323,8 @@ go run ./cmd/dashboard
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion analytics: an overall interview rate plus two breakdown tables, one for conversion by ATS platform and one for conversion by cover-letter tone variant. Both tables stay hidden until at least one application has been tracked to an outcome. It can run before or after the agent; it shows data once the database exists.
 
+Either command may be the one that creates `applications.db`, so both build their connection string from the same helper (`storage.DSN` in `pkg/storage/dsn.go`) and both therefore configure WAL mode and a five-second busy timeout. This matters because `modernc.org/sqlite`, the pure Go driver this project uses, reads pragmas as `_pragma=name(value)` and *silently ignores* the `mattn/go-sqlite3` spelling (`?_journal_mode=WAL`) rather than rejecting it — a connection carrying the wrong form looks configured and is not. Starting the dashboard first used to leave a new database in rollback-journal mode for exactly that reason.
+
 The dashboard frontend is a Vite/React app at `cmd/dashboard/ui`, and `cmd/dashboard/main.go` embeds its build output directly with `//go:embed ui/dist`. `dist/` is committed to git on purpose — it's a compile-time dependency, and a clone without it fails `go build ./...`. Anyone changing `cmd/dashboard/ui/src` must run `npm run build` in `cmd/dashboard/ui` and commit the regenerated `dist/` alongside their source change, or the built dashboard will silently keep serving the old bundle.
 
 The dashboard listens only on `127.0.0.1:8080` by default. To choose a different loopback port:
