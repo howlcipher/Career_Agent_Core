@@ -1089,3 +1089,60 @@ func TestNewDashboardServerUsesAddressHandlerAndTimeouts(t *testing.T) {
 		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
 	}
 }
+
+// TestServeMetrics_QueryFailure_Returns500NotZeroedJSON is the regression
+// test for bug #452: every g.Go closure in serveMetrics used to log its
+// error and unconditionally return nil, and the errgroup's result was
+// discarded (`_ = g.Wait()`), so a genuine query failure -- not an empty
+// table, a real failure -- always answered 200 OK carrying whatever
+// zero/stale values the failed scans left behind. A user watching the
+// dashboard during an outage saw a confident "nothing has happened yet"
+// instead of an error.
+func TestServeMetrics_QueryFailure_Returns500NotZeroedJSON(t *testing.T) {
+	setupTestDB(t)
+
+	// Drop the table the basic-counts query depends on so the query
+	// genuinely fails (e.g. "no such table"), which is a different failure
+	// shape than sql.ErrNoRows on an empty-but-present table.
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop table: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	serveMetrics(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on a genuine query failure, got %d with body %q", rec.Code, rec.Body.String())
+	}
+
+	// The bug's exact failure shape was a 200 response carrying a fully
+	// decodable, all-zero Metrics -- confirm the response is not that shape.
+	var m Metrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err == nil {
+		t.Errorf("expected a non-JSON error body, got a decodable Metrics: %+v", m)
+	}
+}
+
+// TestServeMetrics_EmptyTable_StillReturns200 pins the legitimate-empty-state
+// side of bug #452's fix: an empty (but present) table must still answer 200
+// with zero values, not be mistaken for the query-failure case above.
+func TestServeMetrics_EmptyTable_StillReturns200(t *testing.T) {
+	setupTestDB(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	serveMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on an empty-but-present table, got %d with body %q", rec.Code, rec.Body.String())
+	}
+
+	var m Metrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("expected a decodable Metrics body, got error: %v (body %q)", err, rec.Body.String())
+	}
+	if m.Discovered != 0 || m.Applied != 0 {
+		t.Errorf("expected all-zero counts on an empty table, got %+v", m)
+	}
+}

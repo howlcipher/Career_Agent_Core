@@ -416,7 +416,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			&m.BlockedCaptcha, &m.InvalidURL,
 		)
 		if err != nil {
-			log.Printf("Failed to query basic counts: %v", err)
+			return fmt.Errorf("query basic counts: %w", err)
 		}
 		return nil
 	})
@@ -430,7 +430,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			ORDER BY aj.applied_at DESC LIMIT 1`).
 			Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt, &lastAppliedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last applied job: %v", err)
+			return fmt.Errorf("query last applied job: %w", err)
 		}
 		if lastAppliedAt.Valid {
 			m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
@@ -448,7 +448,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status = 'PROCESSING' ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&currentCompany, &currentTitle, &currentSince)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query currently processing job: %v", err)
+			return fmt.Errorf("query currently processing job: %w", err)
 		}
 		m.CurrentCompany = currentCompany.String
 		m.CurrentTitle = currentTitle.String
@@ -465,7 +465,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last skipped job: %v", err)
+			return fmt.Errorf("query last skipped job: %w", err)
 		}
 		m.LastSkippedCompany = skippedCompany.String
 		m.LastSkippedTitle = skippedTitle.String
@@ -488,7 +488,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt, &failedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last failed job: %v", err)
+			return fmt.Errorf("query last failed job: %w", err)
 		}
 		m.LastFailedCompany = failedCompany.String
 		m.LastFailedTitle = failedTitle.String
@@ -515,7 +515,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&manualCompany, &manualTitle, &manualStatus, &manualAt, &manualDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last manual-required job: %v", err)
+			return fmt.Errorf("query last manual-required job: %w", err)
 		}
 		m.LastManualCompany = manualCompany.String
 		m.LastManualTitle = manualTitle.String
@@ -540,7 +540,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			FROM job_funnel WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
 			Scan(&m.TotalApplied, &interviews, &rejections)
 		if err != nil {
-			log.Printf("Failed to query conversion stats: %v", err)
+			return fmt.Errorf("query conversion stats: %w", err)
 		}
 		m.Interviews = interviews
 		m.Rejections = rejections
@@ -570,8 +570,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			HAVING COUNT(*) > 0
 			ORDER BY COUNT(*) DESC`)
 		if err != nil {
-			log.Printf("Failed to query conversion stats by source: %v", err)
-			return nil
+			return fmt.Errorf("query conversion stats by source: %w", err)
 		}
 		defer sourceRows.Close()
 
@@ -604,8 +603,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			HAVING COUNT(*) > 0
 			ORDER BY COUNT(*) DESC`)
 		if err != nil {
-			log.Printf("Failed to query conversion stats by variant: %v", err)
-			return nil
+			return fmt.Errorf("query conversion stats by variant: %w", err)
 		}
 		defer variantRows.Close()
 
@@ -625,7 +623,16 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	_ = g.Wait()
+	// A real query failure must not answer 200 with whatever zero/stale
+	// values the failed scans left behind (bug #452) -- that reads as a
+	// confident "nothing has happened yet" to a user watching the
+	// dashboard. sql.ErrNoRows is filtered out above at each call site
+	// because an empty table is a legitimate state, not a failure.
+	if err := g.Wait(); err != nil {
+		log.Printf("serveMetrics: %v", err)
+		http.Error(w, "failed to load metrics", http.StatusInternalServerError)
+		return
+	}
 
 	m.StatusLegend = statusLegend()
 

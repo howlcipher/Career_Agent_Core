@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The metrics API stops lying on a real query failure
+
+* **Fix (bug #452):** `cmd/dashboard`'s `/api/metrics` handler ran nine independent queries in parallel and logged each one's error but always answered `200 OK` with whatever zero/stale values the failed queries left behind — a genuine database failure (a locked file, a dropped table, a dead connection) looked identical to "nothing has happened yet." The handler now returns a real `500` when a query genuinely fails, while a legitimately empty table (`sql.ErrNoRows`) still renders as zero exactly as before.
+
 ## 2026-07-30 — The Working Protocol now keeps this changelog current
 
 * **Fix (improvement #454):** the Working Protocol's close-the-loop step (step 7 in `improvements.md`, shared by `bugs.md`) named the backlog row, the task journal, the build/vet/test run, the commit, and the push — but never this file. A session could follow the protocol exactly and still leave the changelog stale; five bug fixes shipped on 2026-07-30 alone (#436, #437, #441, #445, #446) before this file's most recent entry was updated by hand rather than by the protocol. Step 7 now requires a dated entry here in the same commit for any user-visible change, explicitly excluding internal refactors, backlog-only edits, and ignored/unused scripts.
