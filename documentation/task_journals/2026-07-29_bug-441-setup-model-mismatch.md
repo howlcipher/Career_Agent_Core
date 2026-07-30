@@ -31,8 +31,15 @@
 
 ## Progress Log
 
-- 2026-07-29 — Journal opened. Bug #441 re-verified live on all three of its halves (installer defaults, `.env.example` values, live tags endpoint). Confirmed still open and still correctly described.
+- 2026-07-29 — Journal opened. Bug #441 re-verified live on all three of its halves (installer defaults, `.env.example` values, live tags endpoint). Confirmed still open and still correctly described. Commit `99dc9be`.
+- 2026-07-29/30 — Two Claude subagents launched on disjoint file sets (Go preflight; installers + `.env.example`). **Both failed on API stream stalls**, one with no edits at all and one partway through, having finished `.env.example` and `install_ollama.sh` but not `install_ollama.ps1`. Reviewed what landed, kept it after fixing two real defects in it, and completed the rest inline.
+  - Fixed in the delegate's shell work: the `.env` value parser mishandled a quoted value followed by a trailing comment and did not strip unquoted trailing comments at all; and an empty-but-reachable model library was reported as "could not reach the server", two different problems with different fixes sharing one message.
+  - Parser correctness was then established the strong way rather than by reading: a fixture covering `export` prefixes, both quote styles, trailing comments, a `#` inside quotes and a commented-out `OLLAMA_MODEL` line resolves **byte-for-byte identically** through the bash parser and through `godotenv`, which is what `cmd/agent` loads the same file with.
+- 2026-07-30 — Implementation complete and committed as `15d821e`. `go build`/`go vet`/`go test ./...` all clean. Live verification on the real binary, not just tests: startup abort on a missing model in ~1s, the skip hatch announcing itself, the preflight passing against live Ollama, the installer reading the real `.env`, and a simulated fresh clone correctly reporting `llama3.1`/`llava` missing.
+- 2026-07-30 — Added the two repository-level guards in `pkg/config/setup_consistency_test.go` (`1e6e32d`) after noticing the runtime preflight only protects a machine that already installed, while nothing protected the repo. Verified by mutation: re-introducing #441 in `.env.example` fails the guard by name.
+- 2026-07-30 — README updated (setup ordering, model recommendation, installer behaviour, `SKIP_MODEL_PREFLIGHT`). Checked `docs/` GitHub Pages: it carries no setup instructions or model names, so #441 needed nothing there — but `docs/index.html:135` advertises the dashboard's "active conversions", which is exactly what bug #437 deleted. Recorded as a note on #437 rather than editing the copy, since restoring the tables makes the claim true again.
+- 2026-07-30 — Backlogs updated: #441 marked Done with its verification evidence, Usability Gate's Ollama box and Major-count box updated, and `improvements.md` #443 filed (eight files not `gofmt`-clean, with the observation that the project's own verification loop cannot see formatting).
 
 ## Next Step
 
-Delegate the Go preflight and the installer/docs work to two Claude subagents on disjoint file sets, then review the combined diff.
+Run `/groom_backlogs`, then commit and push; delete this journal in the final commit.

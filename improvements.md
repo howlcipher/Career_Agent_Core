@@ -126,6 +126,7 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
+| 443 | [Eight Go files are not `gofmt`-clean, and nothing in the verification loop notices](#443-eight-go-files-are-not-gofmt-clean-and-nothing-in-the-verification-loop-notices) | Pending | 2.0 = 2×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Mechanical cleanup | Found 2026-07-30 while formatting the files touched for bug #441. `gofmt -l ./cmd ./pkg` names eight files; every diff is trailing whitespace on otherwise-blank lines, 16 lines across the eight files. Nothing is broken and `go vet` is silent, because formatting is not what vet checks — the project's stated loop is `go build` / `go vet` / `go test`, none of which reads formatting. The cost is diff noise: any future edit near one of those lines carries an unrelated whitespace change, which is exactly the kind of collateral that hid what #437 and #439 dropped. One `gofmt -w` plus adding the check to the documented loop |
 | 428 | [Expand usage of Zero transpiler for analytics and tooling](#428-expand-usage-of-zero-transpiler-for-analytics-and-tooling) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Scripting & Tooling | The Lisp-like AI-first Zero transpiler (already used in `metrics_summary.zero`) is perfect for rapidly generating robust Go utility scripts for queue analysis and data exploration without writing boilerplate Go. |
 | 429 | [Rewrite data ingestion CLI tools in Zero](#429-rewrite-data-ingestion-cli-tools-in-zero) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Scripting & Tooling | Utilize the Zero transpiler's new direct string `parse_json` support (added 2026-07-28) to build robust API-fetching data ingestion scripts. |
 | 425 | [Memory Profiling & sync.Pool Implementation](#425-memory-profiling--syncpool-implementation) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Core Go Optimization | Leverage `sync.Pool` for byte buffers and pre-allocate slices across all API responses (e.g., in `mcp` logic) to reduce GC overhead. |
@@ -202,6 +203,29 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 | 30 | `gpt-5.6-sol` | Unanswerable-attestation detection is safety-sensitive and benefits from deeper reasoning. |
 
 ## Details
+
+### 443. Eight Go files are not `gofmt`-clean, and nothing in the verification loop notices
+
+**Filed 2026-07-30** while fixing bug #441. `cmd/agent/main.go` turned out to be unformatted before any of that session's edits — a single trailing blank line at EOF — which prompted running `gofmt -l` across the tree for the first time in a while.
+
+`gofmt -l ./cmd ./pkg` names eight files:
+
+| file | unformatted lines |
+| --- | --- |
+| `cmd/reconcile/main.go` | 2 |
+| `pkg/mcp/backoff.go` | 2 |
+| `pkg/parser/dom_test.go` | 1 |
+| `pkg/scraper/funnel.go` | 1 |
+| `pkg/scraper/hackernews.go` | 3 |
+| `pkg/scraper/scraper.go` | 4 |
+| `pkg/submitter/browser.go` | 1 |
+| `pkg/util/bufferpool.go` | 2 |
+
+Every one is the same thing: whitespace on a line that is otherwise blank. 16 lines total. Nothing is broken, the build is green, and `go vet` is silent — **because formatting is not what vet checks.** The project's documented loop in `AGENTS.md` is `go build ./...`, `go vet ./...`, `go test ./...`, and none of the three reads formatting, so this drift is invisible to the only gate anyone runs.
+
+Why it is worth 10 minutes rather than zero: an edit anywhere near one of those lines silently carries an unrelated whitespace change into the diff. This repository has now been bitten three times (#437, #438, #439) by *a diff nobody read closely enough*, and its own conclusion was that the only safe review of a rewrite is a line-by-line diff against what it replaced. Noise in that diff is not free.
+
+The work: `gofmt -w` the eight files as one whitespace-only commit — reviewable at a glance precisely because it touches nothing else — and add `gofmt -l ./cmd ./pkg` (empty output required) to the verification loop in `AGENTS.md` so the next drift is caught by the gate rather than by accident. Value 2, Effort 1: trivially small, but it makes a check exist where there was none.
 
 ### 442. Measure whether the NLP offload is worth keeping
 
