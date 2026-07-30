@@ -186,12 +186,19 @@ function App() {
   // number (bug #451: the Failed and Manual Queue tiles each do this). A
   // caption naming only one status was wrong whenever the other one
   // dominated the bucket, so this names whichever statuses actually
-  // contributed, joined when both did.
+  // contributed. "; " rather than a bare separator glyph, since these are
+  // two full sentences with no terminal punctuation of their own and a
+  // screen reader needs an actual pause between them, not a middot it may
+  // not announce at all. Falls back to naming both when the count is
+  // genuinely zero, matching every sibling tile (Skipped, Blocked, Invalid),
+  // which always show their static reason regardless of count -- an empty
+  // caption here would be the only tile in the grid that goes bare at 0.
   const explainPair = (statusA: string, countA: number, statusB: string, countB: number) => {
     const reasons = [];
     if (countA > 0) reasons.push(explain(statusA));
     if (countB > 0) reasons.push(explain(statusB));
-    return reasons.join(' · ');
+    if (reasons.length === 0) return `${explain(statusA)}; ${explain(statusB)}`;
+    return reasons.join('; ');
   };
 
   return (
