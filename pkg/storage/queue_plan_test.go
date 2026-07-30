@@ -47,6 +47,13 @@ func TestGetQueuePlan(t *testing.T) {
 	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, fit_score, fit_similarity, discovered_at)
 		VALUES ('https://lever.co/d', 'D', 'Role D', 'DISCOVERED', 70, 0.70, ?)`, yesterday)
 
+	// Null discovered_at (bug #453): should not abort the whole plan, and
+	// should fall back to time.Now() instead of the zero value.
+	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, fit_score, fit_similarity, discovered_at)
+		VALUES ('https://indeed.com/e', 'E', 'Role E', 'BLOCKED_CAPTCHA', 75, 0.75, NULL)`)
+	db.Exec(`INSERT INTO job_funnel (url, company_name, job_title, status, fit_score, fit_similarity, discovered_at)
+		VALUES ('https://indeed.com/f', 'F', 'Role F', 'BLOCKED_CAPTCHA', 78, 0.78, ?)`, yesterday)
+
 	t.Run("Empty cohort", func(t *testing.T) {
 		plan, err := GetQueuePlan("%greenhouse%", "BLOCKED_CAPTCHA", false)
 		if err != nil {
@@ -96,6 +103,29 @@ func TestGetQueuePlan(t *testing.T) {
 		}
 		if plan.TotalWithDedup != 1 {
 			t.Errorf("expected 1 dedup total, got %d", plan.TotalWithDedup)
+		}
+	})
+
+	t.Run("BLOCKED_CAPTCHA cohort with null discovered_at", func(t *testing.T) {
+		plan, err := GetQueuePlan("%indeed.com%", "BLOCKED_CAPTCHA", false)
+		if err != nil {
+			t.Fatalf("GetQueuePlan failed: %v", err)
+		}
+		if plan.TotalCandidates != 2 {
+			t.Fatalf("expected 2 candidates (null row must not abort the plan), got %d", plan.TotalCandidates)
+		}
+
+		var found bool
+		for _, c := range plan.Candidates {
+			if c.OriginalURL == "https://indeed.com/e" {
+				found = true
+				if time.Since(c.DiscoveredAt) > time.Minute {
+					t.Errorf("expected null discovered_at to fall back to time.Now(), got %v", c.DiscoveredAt)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected https://indeed.com/e (null discovered_at) to still be included in the plan")
 		}
 	})
 

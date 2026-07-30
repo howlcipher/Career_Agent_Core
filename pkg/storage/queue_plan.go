@@ -61,20 +61,27 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 
 	for rows.Next() {
 		var cand QueuePlanCandidate
-		var discoveredAt time.Time
+		var discoveredAt sql.NullTime
 		var fitSim sql.NullFloat64
 		var dedupCount, dupCount int
 		if err := rows.Scan(&cand.OriginalURL, &cand.CurrentStatus, &discoveredAt, &fitSim, &dedupCount, &dupCount); err != nil {
-			return nil, err
+			continue
 		}
 		if fitSim.Valid {
 			cand.FitSimilarity = fitSim.Float64
 		}
 
+		var discoveredAtTime time.Time
+		if discoveredAt.Valid {
+			discoveredAtTime = discoveredAt.Time
+		} else {
+			discoveredAtTime = time.Now()
+		}
+
 		cand.NormalizedURL = NormalizeURL(cand.OriginalURL)
-		cand.AgeDays = int(time.Since(discoveredAt).Hours() / 24)
+		cand.AgeDays = int(time.Since(discoveredAtTime).Hours() / 24)
 		cand.PriorOutcome = cand.CurrentStatus
-		cand.DiscoveredAt = discoveredAt
+		cand.DiscoveredAt = discoveredAtTime
 
 		// Determine source from domain
 		source := cand.OriginalURL
