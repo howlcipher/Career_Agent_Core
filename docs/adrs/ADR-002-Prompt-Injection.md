@@ -4,17 +4,20 @@
 Accepted
 
 ## Context
-When interacting with untrusted third-party job boards, the application dynamically parses HTML (DOM) and feeds it into the Gemini API to extract form mappings. Adversaries could embed prompt injections (e.g., `<!-- Ignore previous instructions -->`) into fake job postings. Additionally, headless browsers used for scraping are susceptible to Server-Side Request Forgery (SSRF) if a URL redirects to an internal network block (e.g., AWS Metadata IP `169.254.169.254`).
+When interacting with untrusted third-party job boards, the application dynamically parses HTML (DOM) and feeds it into the configured LLM provider to extract form mappings. The provider is selected by `LLM_PROVIDER` and reached through a provider-agnostic abstraction in `pkg/mcp`, with implementations for local Ollama (the project default), Claude, and Gemini (`pkg/mcp/provider_ollama.go`, `pkg/mcp/provider_claude.go`, `pkg/mcp/provider_gemini.go`). Adversaries could embed prompt injections (e.g., `<!-- Ignore previous instructions -->`) into fake job postings. Additionally, headless browsers used for scraping are susceptible to Server-Side Request Forgery (SSRF) if a URL redirects to an internal network block (e.g., AWS Metadata IP `169.254.169.254`).
 
 ## Decision
-1. **SSRF Filter:** Implemented a Playwright-level route interceptor (`page.Route("**/*")`) that aborts any network requests matching `localhost`, `127.0.0.1`, `169.254.169.254`, or `0.0.0.0`.
-2. **Prompt Injection Quarantine:** Integrated a `security.QuarantineLayer` that filters and validates the raw DOM text *before* passing it to the LLM backend for mapping generation.
+1. **SSRF Filter:** A Playwright-level route interceptor (`installSafeBrowserRoutes`, `pkg/submitter/network.go:80-113`) still calls `page.Route("**/*")` on every browser request, but it no longer decides safety by string-matching a fixed hostname blocklist. Each intercepted request is instead validated with `guard.ValidateURL(ctx, route.Request().URL())` against a `*security.NetworkGuard` (`pkg/security/network.go`), which aborts the request with `"accessdenied"` on failure. The guard resolves every hostname (`resolvePublicAddresses`, `pkg/security/network.go:143`) and rejects the entire resolved answer set if any IPv4 or IPv6 address is non-public (`IsPublicAddress`, `pkg/security/network.go:119`), then dials the validated IP directly rather than re-resolving the hostname (`DialContext`, `pkg/security/network.go:229`). Chromium itself is routed through an authenticated loopback HTTP proxy (`StartHTTPProxy`, `pkg/security/network.go:367`) so a request cannot bypass the browser boundary via DNS rebinding between validation and connection.
+2. **Prompt Injection Quarantine:** Integrated a `security.QuarantineLayer` (`pkg/security/filter.go:28`) that filters and validates the raw DOM text *before* passing it to the LLM backend for mapping generation.
 
 ## Consequences
 **Positive:**
-- Prevents headless browser from being weaponized against local internal infrastructure.
+- Prevents headless browser from being weaponized against local internal infrastructure, including targets reached only after a DNS rebind between an initial check and the actual connection.
 - Neutralizes prompt injection payloads embedded in raw DOM.
 
 **Negative:**
 - Adds slight latency to the page evaluation process.
-- Strict string matching on the SSRF filter may need periodic updates to encompass all private CIDR blocks safely.
+- Every outbound request now costs a DNS resolution the guard controls, rather than a cheap string comparison against a blocklist. A legitimate host that happens to resolve to a non-public address cannot be reached at all, with no override.
+
+## Superseded Decisions
+- **2026-07-30:** Decision item 1 originally described the SSRF filter as string-matching a fixed hostname blocklist (`localhost`, `127.0.0.1`, `169.254.169.254`, `0.0.0.0`), and its Negative consequence warned that the blocklist would need periodic updates for new private CIDR blocks. The route interceptor itself was never removed, but what it checks was replaced: it now delegates to `security.NetworkGuard`, which resolves and validates the complete DNS answer set for every request rather than comparing against a fixed list of strings. The blocklist-maintenance tradeoff no longer applies; the new tradeoff is the DNS-resolution cost and the loss of reachability for any legitimate host that resolves to a non-public address, recorded above. Also generalized the Context section's reference to "the Gemini API" to "the configured LLM provider," since LLM calls now go through the provider-agnostic `pkg/mcp` abstraction described above.

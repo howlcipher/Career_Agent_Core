@@ -333,6 +333,8 @@ go run ./cmd/dashboard -addr 127.0.0.1:9090
 
 Binding a non-loopback address exposes private application data without authentication; the dashboard prints a warning when such an address is selected.
 
+The loopback bind alone does not stop every page in your own browser from driving the dashboard: a request from a page you have open in any tab is ordinary loopback traffic, so binding to `127.0.0.1` does nothing against it, and starting the agent means submitting real applications with your real PII. `/api/agent/start` and `/api/agent/stop` guard against this by rejecting any request that is not same-origin. The check trusts the `Sec-Fetch-Site` header first, accepting only `same-origin` and `none`; if that header is absent it falls back to matching the `Origin` header's host, then the `Referer` header's host, against the request's own `Host`. A request carrying none of `Sec-Fetch-Site`, `Origin`, or `Referer` is allowed through on purpose, so `curl` and scripts keep working — which also means these two endpoints are not authenticated against a non-browser caller already on the same machine: anything able to reach the loopback address can still drive them directly. `/api/metrics` and `/api/agent/status` are read-only and are deliberately left ungated.
+
 To enable auto-tracking of employer rejections and interview requests, launch the Email Tracker in the background:
 ```bash
 go run ./cmd/tracker
@@ -418,3 +420,15 @@ go run ./cmd/requeue -source greenhouse -status BLOCKED_CAPTCHA -confirm
 `-status` accepts `BLOCKED_CAPTCHA` (the default), `FAILED_SUBMIT`, or `APPLIED`, and `-plan` prints a detailed per-row dry run. Add `-clear-dedup` for `FAILED_SUBMIT` re-queues, where tailored documents were already generated and the duplicate check would otherwise skip the job again; it is not needed for `BLOCKED_CAPTCHA`. Re-queue narrowly rather than resetting an entire source — a source's failures usually have several different causes, and only one of them is the one you fixed.
 
 > **A running agent will not notice.** The queue is read once at startup into an in-memory channel, so neither a code change nor a direct database status change affects a process that is already running. Stop the agent, then start a freshly built binary.
+
+### Backfilling fit-similarity scores for the discovery queue
+
+`cmd/rankjobs` backfills `job_funnel.fit_similarity` for `DISCOVERED` rows that do not have one yet, so the queue's existing source-priority ordering gets a resume-similarity tie-break within each tier, pushing jobs whose title and company most closely match your resume toward the front. It embeds `"<company> <title>"` per job through the same `GetEmbedding` path `cmd/agent` uses for RAG retrieval, then scores it against the resume chunks already in the database with `parser.BestSimilarity` — no fresh resume ingestion is needed as long as `cmd/agent` has run at least once (it seeds `career_chunks` from `USER_PROFILE.md` on first run).
+
+```bash
+go run ./cmd/rankjobs                # backfill up to 200 missing rows (default)
+go run ./cmd/rankjobs -limit 500     # backfill up to 500
+go run ./cmd/rankjobs -limit 0       # backfill everything missing, no cap
+```
+
+It is a separate CLI rather than something folded into `cmd/agent`'s own startup on purpose: it shares the same local Ollama instance a live `cmd/agent` run may already be using, so the bounded `-limit` keeps it from competing unboundedly against a run already in progress.
