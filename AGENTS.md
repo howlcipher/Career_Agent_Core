@@ -40,6 +40,8 @@ go test ./...
 
 There is no Makefile; run these directly from the repo root. `go test ./...` is fast enough to run in full every time — there is no "changed tests only" fast path here the way the library has.
 
+**`go test ./...` also checks the backlog documents, not just the code.** `internal/backlog` validates that every model named in a Pending row of `bugs.md`, `improvements.md`, or `improvements_paywall.md` appears in `documentation/model_allowlist.md`, and `pkg/config` asserts that `.env.example` and `scripts/install_ollama.sh` agree on which Ollama models exist. Both exist because the facts they check were previously "true by convention" — and both conventions had already been silently broken for days before anyone noticed (improvement #455, bug #441). If a documentation edit turns the suite red, that is the check working; fix the document or update the allowlist with real provenance, and do not weaken the test to make it pass.
+
 ## Constraints
 
 - No paid API keys are assumed present. `LLM_PROVIDER` defaults to local Ollama (`.env.example`); Claude and Gemini providers require keys the user must supply and are not assumed available for autonomous agent work.
