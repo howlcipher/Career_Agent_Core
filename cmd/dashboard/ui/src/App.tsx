@@ -29,7 +29,11 @@ interface Metrics {
   skipped: number;
   applied: number;
   failed: number;
+  failed_score: number;
+  failed_submit: number;
   manual_required: number;
+  manual_required_only: number;
+  awaiting_review: number;
   blocked_captcha: number;
   invalid_url: number;
   last_applied_company?: string;
@@ -178,6 +182,18 @@ function App() {
   const legend = metrics?.status_legend ?? {};
   const explain = (status: string) => legend[status] ?? '';
 
+  // explainPair captions a tile that counts two unrelated statuses as one
+  // number (bug #451: the Failed and Manual Queue tiles each do this). A
+  // caption naming only one status was wrong whenever the other one
+  // dominated the bucket, so this names whichever statuses actually
+  // contributed, joined when both did.
+  const explainPair = (statusA: string, countA: number, statusB: string, countB: number) => {
+    const reasons = [];
+    if (countA > 0) reasons.push(explain(statusA));
+    if (countB > 0) reasons.push(explain(statusB));
+    return reasons.join(' · ');
+  };
+
   return (
     <main>
       <h1>🚀 Career Agent Live Metrics</h1>
@@ -208,12 +224,21 @@ function App() {
           <div className="card failed">
             <h2>{metrics?.failed || 0}</h2>
             <p>Failed</p>
-            <span className="card-reason">{explain('FAILED_SUBMIT')}</span>
+            <span className="card-reason">
+              {explainPair('FAILED_SCORE', metrics?.failed_score ?? 0, 'FAILED_SUBMIT', metrics?.failed_submit ?? 0)}
+            </span>
           </div>
           <div className="card manual">
             <h2>{metrics?.manual_required || 0}</h2>
             <p>Manual Queue</p>
-            <span className="card-reason">{explain('MANUAL_REQUIRED')}</span>
+            <span className="card-reason">
+              {explainPair(
+                'MANUAL_REQUIRED',
+                metrics?.manual_required_only ?? 0,
+                'AWAITING_REVIEW',
+                metrics?.awaiting_review ?? 0
+              )}
+            </span>
           </div>
           <div className="card blocked">
             <h2>{metrics?.blocked_captcha || 0}</h2>

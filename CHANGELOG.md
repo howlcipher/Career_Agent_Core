@@ -9,6 +9,7 @@
 * **Fix (bug #441):** a clean install ended up configured for models the installer had never pulled — `.env.example` shipped one set, `install_ollama.sh`/`.ps1` pulled another. They now agree, and `cmd/agent` preflights Ollama's `/api/tags` at startup and refuses to run against an absent model instead of failing per-job much later.
 * **Fix (bug #436):** `//go:embed ui/dist` pointed at a gitignored build artifact, so `go build ./...` succeeded only in a working tree that happened to have it. No fresh clone could build. `dist/` is now committed on purpose.
 * **Docs:** the README documents the same-origin guard, the shared DSN helper, and the driver's pragma syntax; two stale ADRs were corrected.
+* **Fix (bug #451):** the Failed and Manual Queue tiles each count two statuses with unrelated meanings (`FAILED_SCORE`/`FAILED_SUBMIT`, `MANUAL_REQUIRED`/`AWAITING_REVIEW`) but captioned only one member of each pair, so a run whose failures were all scoring failures still reported "reached the form but failed to submit." The API now reports each status's count separately and the UI captions whichever one(s) actually contributed.
 
 ## 2026-07-29 — Document tailoring works again, and no longer needs a companion service
 

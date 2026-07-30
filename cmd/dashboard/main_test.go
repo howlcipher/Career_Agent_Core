@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -84,6 +85,86 @@ func TestServeMetrics_Counts(t *testing.T) {
 	// or Failed.
 	if m.Skipped != 1 {
 		t.Errorf("expected BLOCKED_CAPTCHA to not inflate the Skipped count, got %d", m.Skipped)
+	}
+}
+
+// TestServeMetrics_Counts_SplitsFailedAndManualPairs is the regression test
+// for bug #451: the Failed and Manual Queue tiles each aggregate two
+// statuses with genuinely different meanings ("failed to score" vs "failed
+// to submit"; "ATS requires an account" vs "filled by Copilot, awaiting your
+// click") into one number, and the API must expose which member(s) of each
+// pair actually contributed so the UI can caption the tile correctly rather
+// than hardcoding one status's reason regardless of which one dominates.
+func TestServeMetrics_Counts_SplitsFailedAndManualPairs(t *testing.T) {
+	cases := []struct {
+		name                   string
+		statuses               []string
+		wantFailed             int
+		wantFailedScore        int
+		wantFailedSubmit       int
+		wantManualRequired     int
+		wantManualRequiredOnly int
+		wantAwaitingReview     int
+	}{
+		{
+			name:            "only FAILED_SCORE",
+			statuses:        []string{"FAILED_SCORE", "FAILED_SCORE"},
+			wantFailed:      2,
+			wantFailedScore: 2,
+		},
+		{
+			name:             "only FAILED_SUBMIT",
+			statuses:         []string{"FAILED_SUBMIT"},
+			wantFailed:       1,
+			wantFailedSubmit: 1,
+		},
+		{
+			name:             "both failed statuses present",
+			statuses:         []string{"FAILED_SCORE", "FAILED_SUBMIT", "FAILED_SUBMIT"},
+			wantFailed:       3,
+			wantFailedScore:  1,
+			wantFailedSubmit: 2,
+		},
+		{
+			name:                   "only MANUAL_REQUIRED",
+			statuses:               []string{"MANUAL_REQUIRED"},
+			wantManualRequired:     1,
+			wantManualRequiredOnly: 1,
+		},
+		{
+			name:               "only AWAITING_REVIEW",
+			statuses:           []string{"AWAITING_REVIEW", "AWAITING_REVIEW"},
+			wantManualRequired: 2,
+			wantAwaitingReview: 2,
+		},
+		{
+			name:                   "both manual statuses present",
+			statuses:               []string{"MANUAL_REQUIRED", "AWAITING_REVIEW"},
+			wantManualRequired:     2,
+			wantManualRequiredOnly: 1,
+			wantAwaitingReview:     1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupTestDB(t)
+			for i, status := range tc.statuses {
+				db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)",
+					fmt.Sprintf("https://split-pair-%d.example.com", i), status)
+			}
+
+			m := fetchMetricsFromTestServer(t)
+
+			if m.Failed != tc.wantFailed || m.FailedScore != tc.wantFailedScore || m.FailedSubmit != tc.wantFailedSubmit {
+				t.Errorf("failed counts: got Failed=%d FailedScore=%d FailedSubmit=%d, want Failed=%d FailedScore=%d FailedSubmit=%d",
+					m.Failed, m.FailedScore, m.FailedSubmit, tc.wantFailed, tc.wantFailedScore, tc.wantFailedSubmit)
+			}
+			if m.ManualRequired != tc.wantManualRequired || m.ManualRequiredOnly != tc.wantManualRequiredOnly || m.AwaitingReview != tc.wantAwaitingReview {
+				t.Errorf("manual counts: got ManualRequired=%d ManualRequiredOnly=%d AwaitingReview=%d, want ManualRequired=%d ManualRequiredOnly=%d AwaitingReview=%d",
+					m.ManualRequired, m.ManualRequiredOnly, m.AwaitingReview, tc.wantManualRequired, tc.wantManualRequiredOnly, tc.wantAwaitingReview)
+			}
+		})
 	}
 }
 
@@ -353,6 +434,9 @@ func TestUIDistEmbed_RendersEveryServedMetricsField(t *testing.T) {
 	// confirmed anyone can see.
 	servedFields := []string{
 		"discovered", "processing", "skipped", "applied", "failed",
+		// The four #451 added so the Failed/Manual tiles can caption
+		// whichever status(es) in their pair actually contributed.
+		"failed_score", "failed_submit", "manual_required_only", "awaiting_review",
 		"manual_required", "blocked_captcha", "invalid_url",
 		"last_applied_company", "last_applied_title", "last_applied_at",
 		"last_applied_processing_time",

@@ -25,12 +25,22 @@ import (
 )
 
 type Metrics struct {
-	Discovered                int    `json:"discovered"`
-	Processing                int    `json:"processing"`
-	Skipped                   int    `json:"skipped"`
-	Applied                   int    `json:"applied"`
-	Failed                    int    `json:"failed"`
-	ManualRequired            int    `json:"manual_required"`
+	Discovered int `json:"discovered"`
+	Processing int `json:"processing"`
+	Skipped    int `json:"skipped"`
+	Applied    int `json:"applied"`
+	Failed     int `json:"failed"`
+	// FailedScore and FailedSubmit split the Failed total by which of the two
+	// unrelated statuses it counts (bug #451): the tile's number was already
+	// correct, but its caption was hardcoded to one member of the pair.
+	FailedScore    int `json:"failed_score"`
+	FailedSubmit   int `json:"failed_submit"`
+	ManualRequired int `json:"manual_required"`
+	// ManualRequiredOnly and AwaitingReview split the ManualRequired total the
+	// same way (bug #451) — the two statuses are "create an ATS account" and
+	// "click submit on a form already filled", not interchangeable asks.
+	ManualRequiredOnly        int    `json:"manual_required_only"`
+	AwaitingReview            int    `json:"awaiting_review"`
 	BlockedCaptcha            int    `json:"blocked_captcha"`
 	InvalidURL                int    `json:"invalid_url"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
@@ -392,12 +402,18 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status IN ('APPLIED', 'PROCESSED_MANUAL') THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status IN ('FAILED_SCORE', 'FAILED_SUBMIT') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'FAILED_SCORE' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'FAILED_SUBMIT' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'AWAITING_REVIEW' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' THEN 1 ELSE 0 END), 0)
 		FROM job_funnel`).Scan(
 			&m.Discovered, &m.Processing, &m.Skipped, &m.Applied,
-			&m.Failed, &m.ManualRequired, &m.BlockedCaptcha, &m.InvalidURL,
+			&m.Failed, &m.FailedScore, &m.FailedSubmit,
+			&m.ManualRequired, &m.ManualRequiredOnly, &m.AwaitingReview,
+			&m.BlockedCaptcha, &m.InvalidURL,
 		)
 		if err != nil {
 			log.Printf("Failed to query basic counts: %v", err)
