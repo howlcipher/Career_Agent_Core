@@ -1,5 +1,15 @@
 # Career Agent Core - Changelog
 
+## 2026-07-29 — Document tailoring works again, and no longer needs a companion service
+
+* **Fix (bug #439):** the per-job tailoring path hardcoded `"provider": "ollama"` and `"model": "llama3"` into its request to the NLP microservice, ignoring `LLM_PROVIDER` and `OLLAMA_MODEL` entirely. `llama3` is not installed by any setup step in this project, so with `use_master_cover_letter: false` — the toggle that turns on the project's headline feature — every generation asked for a model that did not exist and the job failed after three retries. Provider, model, host, context size and timeout are now threaded from the resolved configuration.
+* **Generation is in-process again by default.** Improvement #427 had made the Python microservice a hard, manually-started dependency of tailoring. It is now an optional offload behind `NLP_SERVICE_URL`, health-checked before use, with a fallback to in-process generation if it is unreachable or fails mid-job. Nothing external is required to generate documents.
+* **Restored what #427 dropped:** the per-call payload circuit breaker and `[API Metrics]` logging (absent from this path entirely), the dynamic `num_ctx` that stops Ollama truncating long postings to its own default window, the provider abstraction (a Claude or Gemini user was silently getting a local Ollama call), the 120-minute provider timeout in place of a hardcoded 10-minute Go and 5-minute Python deadline that could not finish a real CPU generation, and four prompt instructions lost when the prompts were retyped in Python.
+* **The prompts now live in Go only** and are sent over the wire, so the service owns no prompt text and the copies cannot drift again.
+* **`nlp_service` rewritten** as a generic concurrent Ollama executor with `GET /health` and `POST /generate`, per-call error isolation (one failed call no longer aborts the batch), and 12 tests.
+* **New:** an empty document from the model is now an error instead of a saved empty resume, and `scripts/verify_tailoring.go` drives one real generation through either route so the path can be checked without waiting on a batch run.
+* **Docs:** corrected the Ollama timeout default, documented `NLP_SERVICE_URL`, and removed the README's known-defect warning box for this bug.
+
 ## 2026-07-29 — Hand-off applications can now be recorded and tracked
 
 * **Fix (bug #434):** nothing ever moved a job out of `MANUAL_REQUIRED` or `AWAITING_REVIEW`, so every application the user completed by hand stayed recorded as un-submitted and its rejection or interview email correlated to nothing.

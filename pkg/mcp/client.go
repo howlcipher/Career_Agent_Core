@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 )
 
 const SystemPrompt = "You are an expert technical recruiter. Analyze the job description and tailor the base resume and cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Output the resume in Markdown and the cover letter in plain text. Do not use hyphens."
@@ -214,6 +218,322 @@ func firstInt(s string) (int, bool) {
 	return 0, false
 }
 
+// The tailoring path's system prompts and call keys live here, in Go, and are
+// sent over the wire to the optional nlp_service offload rather than being
+// duplicated there. Bug #439: when the microservice kept its own copies, they
+// silently drifted from these within one commit -- "anomaly detection",
+// "CCNA foundation", "without extra commentary" and "or de-emphasize their
+// necessity" were all dropped when the prompts were retyped in Python. One
+// copy, one place, and the drift class cannot recur.
+const (
+	tailoringKeyGap           = "gap"
+	tailoringKeyResume        = "resume"
+	tailoringKeyCoverLetter   = "cover_letter"
+	tailoringKeyInterviewPrep = "interview_prep"
+
+	tailoringGapSystem    = "You are an expert technical recruiter. Analyze the job description and the candidate's profile. Identify key skills, tools, or requirements in the job description that are MISSING or UNDERREPRESENTED in the candidate's profile. Output ONLY a comma-separated list of these missing keywords. If none, output 'NONE'."
+	tailoringResumeSystem = "You are an expert technical recruiter. Analyze the job description and tailor the base resume. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Use the heading Executive Summary. Do not hallucinate metrics. Do not use hyphens."
+	tailoringCoverSystem  = "You are an expert technical recruiter. Analyze the job description and tailor the cover letter. Emphasize Python and Go automation tools, log parsing, anomaly detection, MS Cyber Defense coursework, CCNA foundation, and secure network infrastructure deployments. Do not hallucinate metrics. Write a three paragraph cover letter highlighting 9 plus years of IT and software experience. Do not use hyphens."
+	tailoringPrepSystem   = "You are an expert technical recruiter. Analyze the job description and create an interview preparation sheet."
+)
+
+// nlpServiceURLEnv opts the tailoring path into the Python microservice in
+// nlp_service/. Unset (the default) means every call is generated in-process
+// through the configured provider, which is the only path that works for
+// Claude and Gemini and needs nothing running alongside the agent.
+const nlpServiceURLEnv = "NLP_SERVICE_URL"
+
+// nlpServiceProbeTimeout bounds the preflight health check. It is deliberately
+// short: the point is to tell "service not started" apart from "service
+// broken" before the pipeline commits a job to it, which was indistinguishable
+// while the URL was hardcoded and unchecked (bug #439).
+const nlpServiceProbeTimeout = 5 * time.Second
+
+// nlpServiceSlack is added to the provider's own timeout when waiting on the
+// offload service, so the service's per-call deadline is always the one that
+// fires first and the caller gets its structured per-call errors rather than a
+// bare client timeout.
+const nlpServiceSlack = 10 * time.Minute
+
+// offloadTarget is implemented only by providers the nlp_service offload can
+// actually reach. The service speaks Ollama's HTTP API and nothing else, so
+// Claude and Gemini deliberately do not implement it: silently routing a
+// Claude user's tailoring to a local Ollama is precisely the defect bug #439
+// was filed for.
+type offloadTarget interface {
+	offloadHost() string
+	offloadModel() string
+}
+
+// nlpCall is one generation request in a batch.
+type nlpCall struct {
+	Key    string `json:"key"`
+	System string `json:"system"`
+	Prompt string `json:"prompt"`
+	// callType names this call for incrementAndLogAPICall's metrics and
+	// payload circuit breaker. Not sent over the wire.
+	callType string `json:"-"`
+}
+
+type nlpGenerateRequest struct {
+	Host           string    `json:"host"`
+	Model          string    `json:"model"`
+	KeepAlive      string    `json:"keep_alive"`
+	NumCtx         int       `json:"num_ctx"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	Temperature    float32   `json:"temperature"`
+	Calls          []nlpCall `json:"calls"`
+}
+
+type nlpGenerateResponse struct {
+	Results map[string]string `json:"results"`
+	Errors  map[string]string `json:"errors"`
+}
+
+// offloadRoute is a health-checked nlp_service endpoint plus the Ollama
+// coordinates the service should generate against.
+type offloadRoute struct {
+	url   string
+	host  string
+	model string
+}
+
+// resolveOffloadRoute returns a usable offload route, or nil to generate
+// in-process. It refuses to return a route unless NLP_SERVICE_URL is set, the
+// provider is one the service can speak for, and the service answers its
+// health check -- in that order, each with its own log line, so a
+// misconfiguration says which of the three it was.
+func (c *Client) resolveOffloadRoute() *offloadRoute {
+	raw := strings.TrimSpace(os.Getenv(nlpServiceURLEnv))
+	if raw == "" {
+		return nil
+	}
+	base := strings.TrimSuffix(raw, "/")
+
+	target, ok := c.provider.(offloadTarget)
+	if !ok {
+		log.Printf("[NLP] %s is set, but provider %s cannot be offloaded (nlp_service speaks Ollama only). Generating in-process.", nlpServiceURLEnv, c.provider.Name())
+		return nil
+	}
+
+	if err := probeNLPService(base); err != nil {
+		log.Printf("[NLP] Offload service at %s failed its health check (%v). Generating in-process.", base, err)
+		return nil
+	}
+
+	route := &offloadRoute{url: base, host: target.offloadHost(), model: target.offloadModel()}
+	log.Printf("[NLP] Offloading tailoring to %s (model %s via %s)", route.url, route.model, route.host)
+	return route
+}
+
+// probeNLPService is the preflight readiness check bug #439 asked for.
+func probeNLPService(baseURL string) error {
+	client := &http.Client{Timeout: nlpServiceProbeTimeout}
+	resp, err := client.Get(baseURL + "/health")
+	if err != nil {
+		return fmt.Errorf("unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// tailoringSession runs one job's tailoring calls, through the offload service
+// when one is configured and healthy, and through the in-process provider
+// otherwise. A transport failure mid-run disables the offload for the rest of
+// the job and falls back rather than failing it: the service is an
+// optimization, so it must never be able to lose a job the agent could have
+// completed on its own.
+type tailoringSession struct {
+	client *Client
+	route  *offloadRoute
+	numCtx int
+}
+
+// run executes calls concurrently and returns per-key output and per-key
+// errors. A key always lands in exactly one of the two maps.
+func (s *tailoringSession) run(calls []nlpCall) (map[string]string, map[string]error) {
+	results := make(map[string]string, len(calls))
+	errs := make(map[string]error, len(calls))
+
+	// The payload circuit breaker applies per call, on both paths, so one
+	// oversized prompt fails only its own document (restored from the
+	// pre-microservice implementation, which lost it entirely -- bug #439).
+	var admitted []nlpCall
+	for _, call := range calls {
+		if err := incrementAndLogAPICall(call.callType, len(call.Prompt)); err != nil {
+			errs[call.Key] = err
+			continue
+		}
+		admitted = append(admitted, call)
+	}
+	if len(admitted) == 0 {
+		return results, errs
+	}
+
+	if s.route != nil {
+		offloaded, offloadErrs, transportErr := s.client.generateOffloaded(s.route, admitted, s.numCtx)
+		if transportErr == nil {
+			for k, v := range offloaded {
+				results[k] = v
+			}
+			for k, v := range offloadErrs {
+				errs[k] = v
+			}
+			return results, errs
+		}
+		log.Printf("[NLP] Offload service at %s failed mid-run (%v). Falling back to in-process generation for the rest of this job.", s.route.url, transportErr)
+		s.route = nil
+	}
+
+	for k, v := range s.client.generateConcurrently(admitted, s.numCtx, errs) {
+		results[k] = v
+	}
+	return results, errs
+}
+
+// generateConcurrently runs calls in parallel against the configured provider,
+// recording per-call failures in errs.
+func (c *Client) generateConcurrently(calls []nlpCall, numCtx int, errs map[string]error) map[string]string {
+	results := make(map[string]string, len(calls))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, call := range calls {
+		wg.Add(1)
+		go func(call nlpCall) {
+			defer wg.Done()
+			out, err := c.generate(genRequest{
+				system:      call.System,
+				prompt:      call.Prompt,
+				temperature: -1,
+				numCtx:      numCtx,
+				keepAlive:   "30m",
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs[call.Key] = err
+				return
+			}
+			results[call.Key] = strings.TrimSpace(out)
+		}(call)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// generateOffloaded posts a batch to nlp_service. The third return value is a
+// transport error -- the service itself being unreachable or answering
+// unusably -- which is the only condition that justifies falling back.
+// Per-call failures come back in the second return value and are the caller's
+// to interpret, because some of these calls are optional and some are not.
+func (c *Client) generateOffloaded(route *offloadRoute, calls []nlpCall, numCtx int) (map[string]string, map[string]error, error) {
+	payload := nlpGenerateRequest{
+		Host:           route.host,
+		Model:          route.model,
+		KeepAlive:      "30m",
+		NumCtx:         numCtx,
+		TimeoutSeconds: int(c.provider.Timeout().Seconds()),
+		Temperature:    -1,
+		Calls:          calls,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal nlp service request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, route.url+"/generate", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build nlp service request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: c.provider.Timeout() + nlpServiceSlack}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("nlp service request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := util.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read nlp service response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// The body carries FastAPI's {"detail": "..."} explanation. The
+		// previous implementation discarded it and reported a bare status
+		// code, which is what made a missing model unreadable (bug #439).
+		return nil, nil, fmt.Errorf("nlp service returned HTTP %d: %s", resp.StatusCode, truncateForError(string(raw)))
+	}
+
+	var decoded nlpGenerateResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode nlp service response: %w", err)
+	}
+
+	callErrs := make(map[string]error, len(decoded.Errors))
+	for key, msg := range decoded.Errors {
+		callErrs[key] = fmt.Errorf("nlp service: %s", msg)
+		// A key reported both ways is a broken service, not a partial
+		// success. Drop the result so "exactly one of results or errors" is
+		// an invariant this side enforces rather than one it trusts.
+		delete(decoded.Results, key)
+	}
+
+	// A key the service acknowledged neither way is a contract violation, not
+	// a generation failure; surface it against the key rather than silently
+	// returning an empty document.
+	for _, call := range calls {
+		if _, ok := decoded.Results[call.Key]; ok {
+			continue
+		}
+		if _, ok := callErrs[call.Key]; ok {
+			continue
+		}
+		callErrs[call.Key] = fmt.Errorf("nlp service returned neither a result nor an error for %q", call.Key)
+	}
+
+	return decoded.Results, callErrs, nil
+}
+
+func truncateForError(s string) string {
+	s = strings.TrimSpace(s)
+	const limit = 500
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "..."
+}
+
+// tailoringNumCtx sizes Ollama's context window to the actual prompt. Without
+// it Ollama falls back to its own small default and silently truncates long
+// job descriptions, which is what the microservice was doing on every call
+// (bug #439).
+func tailoringNumCtx(totalChars int) int {
+	numCtx := (totalChars / 3) + 2000
+	if numCtx < 8192 {
+		numCtx = 8192
+	}
+	if numCtx > 64000 {
+		numCtx = 64000
+	}
+	return numCtx
+}
+
+// ProcessJobApplication generates the per-job tailored resume, cover letter
+// and interview-prep sheet.
+//
+// Generation runs in-process against the configured provider by default. When
+// NLP_SERVICE_URL names a healthy nlp_service instance and the provider is one
+// that service can speak for, the calls are offloaded to it instead -- with
+// this side supplying the prompts, model, host and context size, so the
+// offload is a change of executor and never a change of configuration
+// (bug #439).
 func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (string, string, string, error) {
 	toneContext := ""
 	if tone, ok := profileConstraints["cover_letter_tone"].(string); ok && tone != "" {
@@ -225,52 +545,82 @@ func (c *Client) ProcessJobApplication(scrapedData map[string]string, profileCon
 		compContext = fmt.Sprintf("\n\nNOTE: If a desired salary or target compensation is requested, explicitly state it as $%d.", comp)
 	}
 
-	fmt.Printf("Offloading resume tailoring and NLP structuring to Python microservice...\n")
-
-	payload := map[string]interface{}{
-		"job_title":       scrapedData["title"],
-		"job_description": scrapedData["desc"],
-		"parsed_document": parsedDocument,
-		"tone_context":    toneContext,
-		"comp_context":    compContext,
-		"provider":        "ollama", // Hardcoded for local NLP service for now
-		"model":           "llama3", // Can be read from environment
+	totalChars := len(scrapedData["title"]) + len(scrapedData["desc"]) + len(parsedDocument)
+	session := &tailoringSession{
+		client: c,
+		route:  c.resolveOffloadRoute(),
+		numCtx: tailoringNumCtx(totalChars),
 	}
-	
-	reqBytes, err := json.Marshal(payload)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to marshal nlp service request: %w", err)
+	if session.route == nil {
+		log.Printf("[NLP] Generating tailored documents in-process via %s", c.provider.Name())
 	}
 
-	// Assuming Python NLP microservice is running on port 8000
-	req, err := http.NewRequest("POST", "http://localhost:8000/process", bytes.NewBuffer(reqBytes))
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to create nlp service request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", "", fmt.Errorf("nlp microservice request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", "", fmt.Errorf("nlp microservice returned status %d", resp.StatusCode)
+	// Pre-submission keyword gap analysis. Deliberately best-effort: its
+	// output only enriches the three prompts below, so a failure here must
+	// not cost the job its documents.
+	gapPrompt := fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nMissing keywords:", scrapedData["title"], scrapedData["desc"], parsedDocument)
+	gapResults, gapErrs := session.run([]nlpCall{{
+		Key:      tailoringKeyGap,
+		System:   tailoringGapSystem,
+		Prompt:   gapPrompt,
+		callType: "ProcessJobApplication-GapAnalysis",
+	}})
+	if err := gapErrs[tailoringKeyGap]; err != nil {
+		log.Printf("Warning: Gap analysis failed: %v", err)
+	} else if gapOut := strings.TrimSpace(gapResults[tailoringKeyGap]); gapOut != "" && strings.ToUpper(gapOut) != "NONE" {
+		parsedDocument += fmt.Sprintf("\n\nNOTE: The following keywords from the job description are missing in the base profile. Find creative but truthful ways to address them if possible, or de-emphasize their necessity: %s", gapOut)
 	}
 
-	var result struct {
-		Resume        string `json:"resume"`
-		CoverLetter   string `json:"cover_letter"`
-		InterviewPrep string `json:"interview_prep"`
+	calls := []nlpCall{
+		{
+			Key:    tailoringKeyResume,
+			System: tailoringResumeSystem,
+			Prompt: fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output the tailored Markdown resume based on my profile. Output ONLY the markdown resume without extra commentary.",
+				scrapedData["title"], scrapedData["desc"], parsedDocument),
+			callType: "ProcessJobApplication-Resume",
+		},
+		{
+			Key:    tailoringKeyCoverLetter,
+			System: tailoringCoverSystem,
+			Prompt: fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s%s%s\n\nPlease output a tailored plain text cover letter. Output ONLY the plain text cover letter without extra commentary.",
+				scrapedData["title"], scrapedData["desc"], parsedDocument, toneContext, compContext),
+			callType: "ProcessJobApplication-CoverLetter",
+		},
+		{
+			Key:    tailoringKeyInterviewPrep,
+			System: tailoringPrepSystem,
+			Prompt: fmt.Sprintf("Job Title: %s\n\nJob Description: %s\n\nMy Background:\n%s\n\nPlease output a cheat sheet of likely interview questions and talking points based on my profile. Output ONLY the cheat sheet.",
+				scrapedData["title"], scrapedData["desc"], parsedDocument),
+			callType: "ProcessJobApplication-InterviewPrep",
+		},
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", "", fmt.Errorf("failed to decode nlp service response: %w", err)
+	results, errs := session.run(calls)
+
+	// Each of the three is required, and an empty one is a failure rather than
+	// a result: Ollama can answer HTTP 200 with no content at all, and both
+	// generation paths would previously have handed that back as a successful
+	// document, so the pipeline saved an empty resume and applied with it.
+	for _, required := range []struct {
+		key   string
+		label string
+	}{
+		{tailoringKeyResume, "resume"},
+		{tailoringKeyCoverLetter, "cover letter"},
+		{tailoringKeyInterviewPrep, "interview prep"},
+	} {
+		if err := errs[required.key]; err != nil {
+			return "", "", "", fmt.Errorf("failed to generate %s: %w", required.label, err)
+		}
+		if strings.TrimSpace(results[required.key]) == "" {
+			return "", "", "", fmt.Errorf("failed to generate %s: the model returned an empty document", required.label)
+		}
 	}
 
-	return result.Resume, result.CoverLetter, result.InterviewPrep, nil
+	return strings.TrimSpace(results[tailoringKeyResume]),
+		strings.TrimSpace(results[tailoringKeyCoverLetter]),
+		strings.TrimSpace(results[tailoringKeyInterviewPrep]),
+		nil
 }
 
 // ExtractFormMapping parses an unknown ATS DOM and generates a JSON mapping for Playwright.

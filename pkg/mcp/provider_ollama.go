@@ -24,7 +24,10 @@ import (
 //	                       Unset means every text call uses OLLAMA_MODEL.
 //	OLLAMA_VISION_MODEL    vision model, default llava
 //	OLLAMA_EMBED_MODEL     embedding model, default nomic-embed-text
-//	OLLAMA_TIMEOUT_MINUTES per-request client timeout, default 45
+//	OLLAMA_TIMEOUT_MINUTES per-request client timeout, default 120
+//	                       (see defaultOllamaTimeoutMinutes below -- this
+//	                       comment said 45 while the constant said 120 until
+//	                       bug #439's docs pass caught the drift)
 type ollamaProvider struct {
 	host  string
 	model string
@@ -87,6 +90,19 @@ func (p *ollamaProvider) Name() string { return "ollama" }
 // Local inference can be slow, especially for long resume/cover-letter
 // generations on CPU-bound hardware; see defaultOllamaTimeoutMinutes.
 func (p *ollamaProvider) Timeout() time.Duration { return p.timeout }
+
+// offloadHost and offloadModel implement offloadTarget (client.go), which is
+// how the optional nlp_service offload learns which Ollama server and model to
+// generate against. Only this provider implements them, because that service
+// speaks Ollama's API and nothing else -- so a Claude or Gemini user's
+// tailoring always stays in-process rather than being silently redirected to a
+// local model (bug #439).
+//
+// These deliberately return the standard model, never fastModel: the fast
+// model exists for fit-scoring, whose entire output is one integer, and these
+// calls write the documents actually sent to an employer.
+func (p *ollamaProvider) offloadHost() string  { return p.host }
+func (p *ollamaProvider) offloadModel() string { return p.model }
 
 type ollamaChatMessage struct {
 	Role    string   `json:"role"`

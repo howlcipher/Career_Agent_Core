@@ -1,140 +1,155 @@
-import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+"""Generic concurrent Ollama executor.
+
+This service owns no prompts and no model choice. Callers (the Go
+agent) supply the system/user prompt text for every call, the model,
+and every Ollama option. The service's only job is to fan a batch of
+chat calls out to Ollama concurrently and report back per-call
+results/errors without letting one failure take down the others.
+"""
+
 import concurrent.futures
 
+import requests
+from fastapi import FastAPI
+from pydantic import BaseModel, Field, field_validator
 
 app = FastAPI(title="Career Agent NLP Microservice")
 
-
-class JobApplicationRequest(BaseModel):
-    job_title: str
-    job_description: str
-    parsed_document: str
-    tone_context: str = ""
-    comp_context: str = ""
-    provider: str = "ollama"
-    api_key: str = ""
-    ollama_host: str = "http://localhost:11434"
-    model: str = "llama3"
+DEFAULT_HOST = "http://localhost:11434"
+DEFAULT_KEEP_ALIVE = "30m"
+DEFAULT_TEMPERATURE = -1
+DEFAULT_NUM_CTX = 0
+DEFAULT_TIMEOUT_SECONDS = 7200
 
 
-class JobApplicationResponse(BaseModel):
-    resume: str
-    cover_letter: str
-    interview_prep: str
+class OllamaCall(BaseModel):
+    key: str = Field(min_length=1)
+    system: str = ""
+    prompt: str = ""
+
+
+class GenerateRequest(BaseModel):
+    host: str = DEFAULT_HOST
+    model: str = Field(min_length=1)
+    keep_alive: str = DEFAULT_KEEP_ALIVE
+    num_ctx: int = DEFAULT_NUM_CTX
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    temperature: float = DEFAULT_TEMPERATURE
+    calls: list[OllamaCall] = Field(min_length=1)
+
+    @field_validator("calls")
+    @classmethod
+    def keys_must_be_unique(
+        cls, calls: list[OllamaCall]
+    ) -> list[OllamaCall]:
+        seen = set()
+        dupes = set()
+        for call in calls:
+            if call.key in seen:
+                dupes.add(call.key)
+            seen.add(call.key)
+        if dupes:
+            raise ValueError(
+                "duplicate call keys: " + ", ".join(sorted(dupes))
+            )
+        return calls
+
+
+class GenerateResponse(BaseModel):
+    results: dict[str, str]
+    errors: dict[str, str]
 
 
 def call_ollama(
-    prompt: str, system: str, host: str, model: str, temperature: float = -1
+    call: OllamaCall,
+    host: str,
+    model: str,
+    keep_alive: str,
+    num_ctx: int,
+    timeout_seconds: int,
+    temperature: float,
 ) -> str:
+    """Run a single /api/chat call and return the stripped text.
+
+    Raises RuntimeError on any failure; the caller is responsible for
+    turning that into a per-key error entry rather than aborting the
+    whole batch.
+    """
+    messages = []
+    if call.system:
+        messages.append({"role": "system", "content": call.system})
+    messages.append({"role": "user", "content": call.prompt})
+
     payload = {
         "model": model,
-        "prompt": prompt,
-        "system": system,
+        "messages": messages,
         "stream": False,
-        "keep_alive": "30m"
+        "keep_alive": keep_alive,
     }
+
+    options = {}
     if temperature >= 0:
-        payload["options"] = {"temperature": temperature}
+        options["temperature"] = temperature
+    if num_ctx > 0:
+        options["num_ctx"] = num_ctx
+    if options:
+        payload["options"] = options
 
     try:
         resp = requests.post(
-            f"{host}/api/generate", json=payload, timeout=300
+            f"{host}/api/chat", json=payload, timeout=timeout_seconds
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("response", "").strip()
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Ollama generation failed: {str(e)}"
+        raise RuntimeError(f"failed to reach ollama at {host}: {e}")
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"ollama returned HTTP {resp.status_code}: {resp.text}"
         )
 
+    try:
+        data = resp.json()
+    except Exception as e:
+        raise RuntimeError(f"failed to parse ollama response: {e}")
 
-@app.post("/process", response_model=JobApplicationResponse)
-def process_job_application(req: JobApplicationRequest):
-    gap_sys = (
-        "You are an expert technical recruiter. Analyze the job description "
-        "and the candidate's profile. Identify key skills, tools, or "
-        "requirements in the job description that are MISSING or "
-        "UNDERREPRESENTED in the candidate's profile. Output ONLY a "
-        "comma-separated list of these missing keywords. If none, "
-        "output 'NONE'."
-    )
-    gap_prompt = (
-        f"Job Title: {req.job_title}\n\nJob Description: "
-        f"{req.job_description}\n\nMy Background:\n{req.parsed_document}\n\n"
-        "Missing keywords:"
-    )
+    error = data.get("error") or ""
+    if error:
+        raise RuntimeError(f"ollama error: {error}")
 
-    gap_out = call_ollama(
-        gap_prompt, gap_sys, req.ollama_host, req.model, temperature=-1
-    )
+    content = data.get("message", {}).get("content", "")
+    return content.strip()
 
-    parsed_doc = req.parsed_document
-    if gap_out.upper() != "NONE" and gap_out:
-        parsed_doc += (
-            "\n\nNOTE: The following keywords from the job description are "
-            "missing in the base profile. Find creative but truthful ways "
-            f"to address them if possible: {gap_out}"
-        )
 
-    sys_resume = (
-        "You are an expert technical recruiter. Analyze the job description "
-        "and tailor the base resume. Emphasize Python and Go automation, "
-        "log parsing, MS Cyber Defense, and secure networking. Use the "
-        "heading Executive Summary. Do not hallucinate metrics. "
-        "Do not use hyphens."
-    )
-    prompt_resume = (
-        f"Job Title: {req.job_title}\n\nJob Description: "
-        f"{req.job_description}\n\nMy Background:\n{parsed_doc}\n\nPlease "
-        "output the tailored Markdown resume based on my profile. Output ONLY "
-        "the markdown resume without extra commentary."
-    )
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
-    sys_cover = (
-        "You are an expert technical recruiter. Analyze the job description "
-        "and tailor the cover letter. Emphasize Python and Go automation, "
-        "log parsing, MS Cyber Defense, and secure networking. Write a "
-        "three paragraph cover letter highlighting 9 plus years experience. "
-        "Do not use hyphens."
-    )
-    prompt_cover = (
-        f"Job Title: {req.job_title}\n\nJob Description: "
-        f"{req.job_description}\n\nMy Background:\n{parsed_doc}"
-        f"{req.tone_context}{req.comp_context}\n\nPlease output a tailored "
-        "plain text cover letter. Output ONLY the cover letter."
-    )
 
-    sys_prep = (
-        "You are an expert technical recruiter. Analyze the job description "
-        "and create an interview preparation sheet."
-    )
-    prompt_prep = (
-        f"Job Title: {req.job_title}\n\nJob Description: "
-        f"{req.job_description}\n\nMy Background:\n{parsed_doc}\n\nPlease "
-        "output a cheat sheet of likely interview questions. Output ONLY "
-        "the cheat sheet."
-    )
+@app.post("/generate", response_model=GenerateResponse)
+def generate(req: GenerateRequest):
+    results: dict[str, str] = {}
+    errors: dict[str, str] = {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        f_resume = executor.submit(
-            call_ollama, prompt_resume, sys_resume, req.ollama_host, req.model
-        )
-        f_cover = executor.submit(
-            call_ollama, prompt_cover, sys_cover, req.ollama_host, req.model
-        )
-        f_prep = executor.submit(
-            call_ollama, prompt_prep, sys_prep, req.ollama_host, req.model
-        )
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=len(req.calls)
+    ) as executor:
+        futures = {
+            executor.submit(
+                call_ollama,
+                call,
+                req.host,
+                req.model,
+                req.keep_alive,
+                req.num_ctx,
+                req.timeout_seconds,
+                req.temperature,
+            ): call.key
+            for call in req.calls
+        }
+        for future, key in futures.items():
+            try:
+                results[key] = future.result()
+            except Exception as e:
+                errors[key] = str(e)
 
-        resume_out = f_resume.result()
-        cover_out = f_cover.result()
-        prep_out = f_prep.result()
-
-    return JobApplicationResponse(
-        resume=resume_out,
-        cover_letter=cover_out,
-        interview_prep=prep_out
-    )
+    return GenerateResponse(results=results, errors=errors)

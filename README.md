@@ -31,11 +31,11 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SkipScoring Fast Track**: Instantly bypass the ~10-minute LLM scoring bottleneck by specifying `SkipScoring` in `profile.yaml` for jobs that already pass your strict keyword filters.
 - **Cost & Token Optimization**: Prunes DOM footprints (removing CSS, SVGs, scripts, and other non-structural content) before interacting with the LLM, then enforces per-call payload circuit breakers of 50,000 characters by default and 75,000 for scoped validation forms. Lazy Document Generation ensures expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
 - **Concurrent Processing Pipeline**: Splits monolithic generation into concurrent processes, injecting dynamic context limits and `keep_alive` values to eliminate model cold-starts. Utilizes bounded worker pools, parallel IO streams, `sync.Pool` byte buffers across HTTP clients to reduce GC pressure, and explicit SQLite batch transactions for high-speed scraping and inference.
-- **Python NLP Microservice**: Offloads complex text generation, resume tailoring, and interview prep logic from Go to a specialized concurrent FastAPI microservice, improving latency and freeing up the main agent pipeline.
+- **Optional Python NLP Microservice**: Document generation runs in-process by default and needs nothing else installed. Set `NLP_SERVICE_URL` and the agent will instead offload the batch to the concurrent FastAPI service in `nlp_service/`, which frees the agent process while a long generation runs. The agent sends the prompts, model, host, and context size on every request, health-checks the service before using it, and silently falls back to in-process generation if it is down — so the offload can never cost you a job.
 - **Dynamic Learner Module**: When the agent encounters an unknown Applicant Tracking System (like Workday or Breezy), it clicks through any "Apply"-gated form, sends the rendered DOM to your configured LLM to map the input selectors, and caches the learned blueprint in SQLite. If a mapped CSS selector turns out to be wrong, it falls back to the field's accessible label (`<label>`/`aria-label`) before finally falling back to a screenshot-based visual mapping (Visual Reasoning) — three independent strategies for the same field before giving up.
 - **Stateful Graph Pipeline**: Processes complex multi-step application forms using a robust, state-machine driven graph architecture for resilient error handling and flow control.
 - **Strict ATS URL Validation**: Implements strict `net/url` parsing and hostname whitelist validation to guarantee search engine redirects, spam, and recruiter blogs never make it into the evaluation pipeline, saving 100% of LLM token spend on junk URLs.
-- **Resilient Networking**: LLM calls use provider-specific timeouts: Ollama defaults to 45 minutes for slow local generation, Claude to 5 minutes, and Gemini to 60 seconds. These bounds prevent workers from hanging indefinitely while allowing CPU-only local inference to finish.
+- **Resilient Networking**: LLM calls use provider-specific timeouts: Ollama defaults to 120 minutes for slow local generation, Claude to 5 minutes, and Gemini to 60 seconds. These bounds prevent workers from hanging indefinitely while allowing CPU-only local inference to finish.
 - **Pure Go Architecture**: Operates on a 100% CGO-free stack using `modernc.org/sqlite` for effortless cross-platform compilation and minimal dependencies.
 - **Self-Healing DOM Cache**: Instantly clears stale Playwright CSS mappings if a website updates its UI, forcing the LLM to learn the new layout on the next run.
 - **Extensible Handlers:** Decoupled `parser`, `scraper`, and `submitter` logic for effortless ATS expansion.
@@ -51,8 +51,9 @@ graph TD
     C -->|Untrusted Posting Text| F[pkg/security: Deterministic Quarantine]
     F -->|Verified Payload| D[pkg/mcp: LLM Client - Ollama/Claude/Gemini]
     D -->|Fit Score > 50| C
-    D -->|Tailored Doc Request| P[nlp_service: FastAPI Microservice]
-    P -->|LLM Prompt| D
+    D -->|"Tailored Docs (default: in-process)"| C
+    D -.->|"Tailored Docs (only if NLP_SERVICE_URL is set and healthy)"| P[nlp_service: optional FastAPI executor]
+    P -.->|Concurrent Ollama Calls| D
 
     C -->|Auto-Submit Request| E[pkg/submitter: Playwright Pool]
     C -->|Posting Fetch| N
@@ -196,7 +197,7 @@ Open `profile.yaml` to customize your search parameters:
 - **`copilot_mode`**: Set to `true` to force the review hand-off for every job regardless of `auto_submit_click` — the agent fills the form completely, then stops before the final click so you can review and submit it yourself. Jobs land in `AWAITING_REVIEW` with their tailored documents saved alongside. Nothing is ever submitted on your behalf in this mode. **Requires `auto_submit: true`**; see the note below.
 - **`auto_submit`**: Controls whether the agent proceeds past scoring at all. With `auto_submit: false` a job stops immediately after being scored — status `PROCESSED_MANUAL`, no resume, no cover letter, no form ever opened. This is a *narrower* setting than its name suggests, and it takes precedence over `copilot_mode`: setting `copilot_mode: true` while leaving `auto_submit: false` produces nothing to review, because the agent never reaches the browser. **For Copilot Mode, set `auto_submit: true` and `copilot_mode: true`** — the pair means "do all the work, submit nothing."
 - **`headless_browser`**: Set to `true` to run the bot silently in the background, or `false` to watch it operate visibly.
-- **`use_master_cover_letter`**: Set to `true` to reuse one static `master_cover_letter.txt` for every application — no per-job tailoring, and the Python NLP microservice is never called. Set to `false` for per-job tailored resumes, cover letters, and interview prep; this requires the NLP microservice running on port 8000 (see [Launch the Agent and Dashboard](#launch-the-agent-and-dashboard)).
+- **`use_master_cover_letter`**: Set to `true` to reuse one static `master_cover_letter.txt` for every application — no per-job tailoring at all. Set to `false` for per-job tailored resumes, cover letters, and interview prep, generated in-process by your configured LLM provider. This needs nothing running alongside the agent; the `nlp_service/` microservice is an optional offload, not a requirement (see [Launch the Agent and Dashboard](#launch-the-agent-and-dashboard)).
 
 ### 3. Ensure Your Context Exists
 The AI relies on a readable Markdown career profile for grounded scoring and screening context. Resolution is shared by `cmd/agent` and `cmd/reingest`, in this order:
@@ -233,8 +234,14 @@ OLLAMA_HOST="http://localhost:11434"      # optional
 OLLAMA_MODEL="llama3.1"                   # optional
 OLLAMA_VISION_MODEL="llava"               # optional
 OLLAMA_EMBED_MODEL="nomic-embed-text"     # optional
-# Optional per-call timeout in minutes; defaults to 45 for local CPU inference.
-OLLAMA_TIMEOUT_MINUTES="45"
+# Optional per-call timeout in minutes; defaults to 120 for local CPU inference.
+# A full resume + cover letter + interview-prep generation on CPU-only hardware
+# is measured in tens of minutes, and validation-phase DOM contexts longer still.
+OLLAMA_TIMEOUT_MINUTES="120"
+# Optional: offload document generation to the nlp_service/ microservice instead
+# of generating in-process. Unset (the default) means no external service is
+# used or needed. Ollama only — Claude and Gemini always generate in-process.
+NLP_SERVICE_URL="http://localhost:8000"
 ```
 
 **Claude (Anthropic)**:
@@ -313,16 +320,28 @@ To enable auto-tracking of employer rejections and interview requests, launch th
 go run ./cmd/tracker
 ```
 
-If `profile.yaml` sets `use_master_cover_letter: false`, also start the Python NLP microservice — it does the per-job resume, cover letter, and interview-prep tailoring for that mode:
+**Optionally**, offload per-job document generation to the Python microservice in `nlp_service/`. This is not required for anything: with `use_master_cover_letter: false` the agent generates the tailored resume, cover letter, and interview-prep sheet in-process using your configured provider, and nothing else needs to be running.
+
 ```bash
 cd nlp_service
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --port 8000
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/uvicorn main:app --port 8000
 ```
-The port is not configurable — `pkg/mcp/client.go` calls it at a hardcoded `http://localhost:8000/process`. With `use_master_cover_letter: false` and the service not running, every tailored-document generation in the run fails.
 
-> **⚠️ Known defect — starting the service is not currently sufficient.** `ProcessJobApplication` hardcodes `"provider": "ollama"` and `"model": "llama3"` into its request, so this path ignores `LLM_PROVIDER` and `OLLAMA_MODEL` entirely and always asks for `llama3` — which none of this project's setup steps install. Until this is fixed, either leave `use_master_cover_letter: true`, or `ollama pull llama3` first and accept that your configured provider and model are bypassed. Tracked as bug #439 in `bugs.md`.
+Then point the agent at it (any host and port — the URL is the configuration):
+```bash
+NLP_SERVICE_URL="http://localhost:8000"
+```
+
+The agent sends the prompts, the model, the Ollama host, the context size, and its own timeout on every request, so the service inherits your `.env` configuration rather than holding any of its own. Before using it the agent calls `GET /health`; if that fails, or if the service stops answering mid-job, it logs the reason and generates in-process instead. Leaving `NLP_SERVICE_URL` unset skips the service entirely. Because the service speaks Ollama's API, `LLM_PROVIDER=claude` and `LLM_PROVIDER=gemini` always generate in-process regardless of this setting.
+
+To confirm either route works on your machine, drive one real generation through it:
+```bash
+go run scripts/verify_tailoring.go                                    # in-process
+NLP_SERVICE_URL=http://localhost:8000 go run scripts/verify_tailoring.go   # offloaded
+```
+The log line names the route taken and the model requested. See `nlp_service/README.md` for the service's two endpoints.
 
 Every maintained command verifies private workspace permissions before it opens the database or writes logs. Startup fails with a clear warning if a path cannot be secured. To repair an existing checkout explicitly, or after copying files in from another account or container, run:
 

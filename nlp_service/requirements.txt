@@ -1,10 +1,10 @@
 # Dependencies for the Career Agent NLP microservice (nlp_service/main.py).
 #
-# cmd/agent reaches this service at the hardcoded http://localhost:8000/process
-# (pkg/mcp/client.go) whenever profile.yaml sets use_master_cover_letter: false,
-# with no fallback -- so with that toggle off and this service down, every
-# tailored-document generation in the run fails. See the README's launch
-# section.
+# This service is OPTIONAL. cmd/agent generates tailored documents in-process
+# by default and only calls this service when NLP_SERVICE_URL points at it, and
+# even then it falls back to in-process generation if the service fails its
+# health check or stops answering. Nothing breaks if it is never installed.
+# See nlp_service/README.md.
 #
 # Lower bounds are the versions this service has actually been run against,
 # read from the working venv rather than chosen; upper bounds are the next
@@ -17,3 +17,8 @@ requests>=2.34.2,<3.0
 # Not imported by main.py -- it is the ASGI server that runs it
 # (`uvicorn main:app --port 8000`).
 uvicorn>=0.52.0,<1.0
+
+# Test-only dependencies for test_main.py. httpx is not imported
+# directly but FastAPI's TestClient requires it to be installed.
+pytest>=9.1.1,<10.0
+httpx>=0.28.1,<1.0

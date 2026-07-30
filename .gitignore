@@ -22,5 +22,9 @@ agent_run_batch.pid
 
 Omni_CoverLetter.pdf
 
-# Python bytecode from the nlp_service microservice
+# Python bytecode and virtualenv from the nlp_service microservice.
+# A venv created by python3 -m venv self-ignores via its own .gitignore, but
+# that is a property of the tool's version, not something to rely on.
 __pycache__/
+nlp_service/venv/
+.pytest_cache/
