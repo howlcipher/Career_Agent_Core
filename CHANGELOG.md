@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The Working Protocol now keeps this changelog current
+
+* **Fix (improvement #454):** the Working Protocol's close-the-loop step (step 7 in `improvements.md`, shared by `bugs.md`) named the backlog row, the task journal, the build/vet/test run, the commit, and the push — but never this file. A session could follow the protocol exactly and still leave the changelog stale; five bug fixes shipped on 2026-07-30 alone (#436, #437, #441, #445, #446) before this file's most recent entry was updated by hand rather than by the protocol. Step 7 now requires a dated entry here in the same commit for any user-visible change, explicitly excluding internal refactors, backlog-only edits, and ignored/unused scripts.
+
 ## 2026-07-30 — Both database connections finally agree, and the setup path stops lying
 
 * **Fix (bug #446):** `cmd/dashboard` opened `"./applications.db?_journal_mode=WAL"` — the `mattn/go-sqlite3` pragma spelling, which the pure Go `modernc.org/sqlite` driver accepts without complaint and then ignores. Bug #416 had corrected exactly this and named both `pkg/storage/manager.go` and `cmd/dashboard/main.go`; only the first was ever changed. Both now build their DSN from one `storage.DSN` helper, and a test pins the dashboard's to it so the two cannot fork again.
