@@ -654,7 +654,7 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command(
 		"./career_agent_bin",
 		"-daemon",
-		"-cycle-limit", "5",
+		"-cycle-limit", "15",
 		"-cycle-interval", "1m",
 	)
 	if err := cmd.Start(); err != nil {

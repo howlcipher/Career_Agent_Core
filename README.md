@@ -301,17 +301,21 @@ go run ./cmd/agent --daemon
 # Override the per-cycle job cap
 go run ./cmd/agent --daemon -cycle-limit 10
 
-# Keep cycling with a one-minute pause between completed cycles
-go run ./cmd/agent --daemon -cycle-interval 1m
+# Keep draining the known backlog with a one-minute pause between batches,
+# while refreshing discovery every six hours
+go run ./cmd/agent --daemon -cycle-limit 15 -cycle-interval 1m -discovery-interval 6h
 ```
 
 Batch mode reads the queue and discovery sources once, processes the complete
 result, and exits. Daemon mode repeats that same fresh cycle every six hours by
-default. Use `-cycle-interval` to choose a shorter delay; it must be greater
-than zero. `-cycle-limit` must be greater than zero in daemon mode and defaults
-to 15; it is ignored in batch mode. The dashboard starts its agent with a
-five-job cap and a one-minute cycle interval. `SIGINT` and `SIGTERM` stop the
-daemon instead of leaving it asleep until the next cycle.
+default. In daemon mode, processing and discovery run independently: use
+`-cycle-interval` to choose the pause between backlog batches and
+`-discovery-interval` to choose the source-refresh cadence; both must be
+greater than zero. `-cycle-limit` must be greater than zero in daemon mode and
+defaults to 15; it is ignored in batch mode. The dashboard starts its agent
+with a 15-job cap and a one-minute processing interval while discovery remains
+on the six-hour default. `SIGINT` and `SIGTERM` stop the daemon instead of
+leaving it asleep until the next cycle.
 
 > **⚠️ For daemon or repeatedly-restarted runs, build a binary instead of using `go run`.** `go run` does not exec into the binary it compiles — it stays alive as a thin wrapper around a separately-spawned child process (visible in `ps` as something like `/tmp/go-build.../b001/exe/main`). Killing the `go run` PID does **not** kill that child, which keeps running orphaned, still sharing `applications.db` and the log file. A real session accumulated five concurrent orphaned agents this way over a few hours. `go run` is fine for a one-off batch run; for `--daemon` or any run you expect to restart, build an explicit binary so the PID you launch is the PID doing the work:
 >

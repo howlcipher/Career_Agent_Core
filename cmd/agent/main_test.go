@@ -303,6 +303,65 @@ func TestRunAgentCycleEnforcesPerCycleCap(t *testing.T) {
 	}
 }
 
+func TestRunAgentQueueCycleDrainsBacklogWithoutDiscovery(t *testing.T) {
+	var processed []string
+	deps := agentCycleDependencies{
+		loadDiscovered: func() ([]storage.FunnelJob, error) {
+			return []storage.FunnelJob{
+				{CompanyName: "One", URL: "https://example.com/one"},
+				{CompanyName: "Two", URL: "https://example.com/two"},
+				{CompanyName: "Three", URL: "https://example.com/three"},
+			}, nil
+		},
+		processJobs: func(_ context.Context, jobs <-chan scraper.Job) {
+			for job := range jobs {
+				processed = append(processed, job.URL)
+			}
+		},
+	}
+
+	if err := runAgentQueueCycle(context.Background(), 2, deps); err != nil {
+		t.Fatalf("runAgentQueueCycle returned an error: %v", err)
+	}
+	if want := []string{"https://example.com/one", "https://example.com/two"}; !reflect.DeepEqual(processed, want) {
+		t.Errorf("processed jobs = %v, want %v", processed, want)
+	}
+}
+
+func TestRunDaemonDiscoveryLoopRefreshesIndependently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	discoveryCalls := 0
+	waitCalls := 0
+	runDaemonDiscoveryLoop(
+		ctx,
+		time.Minute,
+		func(context.Context) error {
+			discoveryCalls++
+			return nil
+		},
+		func(ctx context.Context, delay time.Duration) error {
+			if delay != time.Minute {
+				t.Errorf("discovery delay = %s, want %s", delay, time.Minute)
+			}
+			waitCalls++
+			if waitCalls == 2 {
+				cancel()
+				return ctx.Err()
+			}
+			return nil
+		},
+	)
+
+	if discoveryCalls != 2 {
+		t.Errorf("discovery calls = %d, want 2", discoveryCalls)
+	}
+	if waitCalls != 2 {
+		t.Errorf("wait calls = %d, want 2", waitCalls)
+	}
+}
+
 func TestFetchJobPageAcceptsUsable2xxFromInjectedServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
