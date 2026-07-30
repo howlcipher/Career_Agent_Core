@@ -52,7 +52,10 @@ const (
 	defaultDiscoveryInterval     = 6 * time.Hour
 )
 
-var errJobPageWeakContent = errors.New("job page has too little visible text")
+var (
+	errJobPageWeakContent = errors.New("job page has too little visible text")
+	errNoEligibleJobs     = errors.New("no eligible jobs in the backlog")
+)
 
 const promptInjectionQuarantineStatus = "QUARANTINED_PROMPT_INJECTION"
 
@@ -560,7 +563,14 @@ func runAgentSchedule(
 		if ctx.Err() != nil {
 			return nil
 		}
-		if cycleErr != nil {
+		if cycleErr == nil {
+			log.Printf(
+				"[Agent] [DAEMON MODE] Cycle %d completed with work; continuing immediately.",
+				cycleNumber,
+			)
+			continue
+		}
+		if !errors.Is(cycleErr, errNoEligibleJobs) {
 			log.Printf(
 				"[Agent] [DAEMON MODE] Cycle %d completed with errors: %v",
 				cycleNumber,
@@ -569,7 +579,7 @@ func runAgentSchedule(
 		}
 
 		log.Printf(
-			"[Agent] [DAEMON MODE] Cycle %d complete; next cycle starts in %s.",
+			"[Agent] [DAEMON MODE] Cycle %d has no eligible work; retrying in %s.",
 			cycleNumber,
 			cycleInterval,
 		)
@@ -643,26 +653,36 @@ func runAgentQueueCycle(
 		return err
 	}
 
-	jobs := make(chan scraper.Job, 2000)
+	candidates := make([]scraper.Job, 0, min(len(discoveredJobs), 2000))
+	for _, discovered := range discoveredJobs {
+		if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
+			continue
+		}
+		if cycleLimit > 0 && len(candidates) >= cycleLimit {
+			break
+		}
+		candidates = append(candidates, scraper.Job{
+			CompanyName: discovered.CompanyName,
+			Title:       discovered.JobTitle,
+			URL:         discovered.URL,
+			Salary:      deps.targetCompensation,
+			Remote:      true,
+		})
+	}
+
+	if len(candidates) == 0 {
+		if len(deps.targetJobURLs) > 0 {
+			log.Println("[Agent] TARGET_JOB_URL set: no matching discovered jobs remain.")
+		} else {
+			log.Println("[Agent] No eligible discovered jobs remain in the backlog.")
+		}
+		return errNoEligibleJobs
+	}
+
+	jobs := make(chan scraper.Job, min(len(candidates), 2000))
 	go func() {
 		defer close(jobs)
-		matched := 0
-		for _, discovered := range discoveredJobs {
-			if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
-				continue
-			}
-			if cycleLimit > 0 && matched >= cycleLimit {
-				break
-			}
-
-			matched++
-			candidate := scraper.Job{
-				CompanyName: discovered.CompanyName,
-				Title:       discovered.JobTitle,
-				URL:         discovered.URL,
-				Salary:      deps.targetCompensation,
-				Remote:      true,
-			}
+		for _, candidate := range candidates {
 			select {
 			case jobs <- candidate:
 			case <-ctx.Done():
@@ -671,9 +691,9 @@ func runAgentQueueCycle(
 		}
 
 		if len(deps.targetJobURLs) > 0 {
-			log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", matched)
+			log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", len(candidates))
 		} else {
-			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", matched)
+			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(candidates))
 		}
 	}()
 
@@ -723,6 +743,9 @@ func runAgentCycle(
 
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if errors.Is(queueErr, errNoEligibleJobs) {
+		return discoverErr
 	}
 	return errors.Join(queueErr, discoverErr)
 }
@@ -791,7 +814,7 @@ func main() {
 	daemonCycleInterval := flag.Duration(
 		"cycle-interval",
 		defaultDaemonCycleInterval,
-		"delay between daemon cycles (for example, 1m or 6h)",
+		"idle retry delay when no eligible jobs remain (for example, 1m or 6h)",
 	)
 	discoveryInterval := flag.Duration(
 		"discovery-interval",

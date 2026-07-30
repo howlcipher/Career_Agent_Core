@@ -301,15 +301,15 @@ go run ./cmd/agent --daemon
 # Override the per-cycle job cap
 go run ./cmd/agent --daemon -cycle-limit 10
 
-# Keep draining the known backlog with a one-minute pause between batches,
-# while refreshing discovery every six hours
+# Keep draining the known backlog continuously. The one-minute delay applies
+# only when no eligible jobs remain; discovery refreshes every six hours.
 go run ./cmd/agent --daemon -cycle-limit 15 -cycle-interval 1m -discovery-interval 6h
 ```
 
 Batch mode reads the queue and discovery sources once, processes the complete
 result, and exits. Daemon mode repeats that same fresh cycle every six hours by
 default. In daemon mode, processing and discovery run independently: use
-`-cycle-interval` to choose the pause between backlog batches and
+`-cycle-interval` to choose the idle retry delay when the backlog is empty and
 `-discovery-interval` to choose the source-refresh cadence; both must be
 greater than zero. `-cycle-limit` must be greater than zero in daemon mode and
 defaults to 15; it is ignored in batch mode. The dashboard starts its agent

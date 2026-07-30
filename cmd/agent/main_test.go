@@ -92,7 +92,6 @@ func TestRunAgentScheduleDaemonRepeatsWithCycleCap(t *testing.T) {
 	defer cancel()
 
 	var limits []int
-	var waits []time.Duration
 	err := runAgentSchedule(
 		ctx,
 		true,
@@ -100,14 +99,13 @@ func TestRunAgentScheduleDaemonRepeatsWithCycleCap(t *testing.T) {
 		defaultDaemonCycleInterval,
 		func(_ context.Context, limit int) error {
 			limits = append(limits, limit)
+			if len(limits) == 2 {
+				cancel()
+			}
 			return nil
 		},
-		func(ctx context.Context, delay time.Duration) error {
-			waits = append(waits, delay)
-			if len(waits) == 2 {
-				cancel()
-				return ctx.Err()
-			}
+		func(context.Context, time.Duration) error {
+			t.Fatal("successful daemon cycles must continue without an idle wait")
 			return nil
 		},
 	)
@@ -116,12 +114,6 @@ func TestRunAgentScheduleDaemonRepeatsWithCycleCap(t *testing.T) {
 	}
 	if want := []int{7, 7}; !reflect.DeepEqual(limits, want) {
 		t.Errorf("cycle limits = %v, want %v", limits, want)
-	}
-	if want := []time.Duration{
-		defaultDaemonCycleInterval,
-		defaultDaemonCycleInterval,
-	}; !reflect.DeepEqual(waits, want) {
-		t.Errorf("waits = %v, want %v", waits, want)
 	}
 }
 
@@ -137,7 +129,7 @@ func TestRunAgentScheduleDaemonCancellationInterruptsWait(t *testing.T) {
 		defaultDaemonCycleInterval,
 		func(context.Context, int) error {
 			cycleCalls++
-			return nil
+			return errNoEligibleJobs
 		},
 		func(ctx context.Context, _ time.Duration) error {
 			cancel()
@@ -325,6 +317,22 @@ func TestRunAgentQueueCycleDrainsBacklogWithoutDiscovery(t *testing.T) {
 	}
 	if want := []string{"https://example.com/one", "https://example.com/two"}; !reflect.DeepEqual(processed, want) {
 		t.Errorf("processed jobs = %v, want %v", processed, want)
+	}
+}
+
+func TestRunAgentQueueCycleReportsEmptyBacklog(t *testing.T) {
+	deps := agentCycleDependencies{
+		loadDiscovered: func() ([]storage.FunnelJob, error) {
+			return nil, nil
+		},
+		processJobs: func(context.Context, <-chan scraper.Job) {
+			t.Fatal("empty backlog must not start workers")
+		},
+	}
+
+	err := runAgentQueueCycle(context.Background(), 15, deps)
+	if !errors.Is(err, errNoEligibleJobs) {
+		t.Fatalf("runAgentQueueCycle error = %v, want errNoEligibleJobs", err)
 	}
 }
 
