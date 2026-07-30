@@ -2,6 +2,27 @@ import { useState, useEffect } from 'react';
 import './index.css';
 import './App.css';
 
+// One row of a conversion table. The two breakdowns differ only in what
+// their first column is keyed by, so they share a shape and a renderer -
+// see ConversionTable below. Mirrors SourceConversionStat and
+// VariantConversionStat in cmd/dashboard/main.go; these were typed `any[]`
+// here, which is part of why bug #437 went unnoticed for so long.
+interface ConversionRow {
+  total_applied: number;
+  interviews: number;
+  rejections: number;
+  pending: number;
+  interview_rate_pct: string;
+}
+
+interface SourceConversionRow extends ConversionRow {
+  source: string;
+}
+
+interface VariantConversionRow extends ConversionRow {
+  variant: string;
+}
+
 interface Metrics {
   discovered: number;
   processing: number;
@@ -39,8 +60,63 @@ interface Metrics {
   interviews: number;
   rejections: number;
   interview_rate_pct?: string;
-  by_source?: any[];
-  by_variant?: any[];
+  by_source?: SourceConversionRow[];
+  by_variant?: VariantConversionRow[];
+}
+
+// ConversionTable renders one conversion breakdown. The <caption> and the
+// six scope="col" headers are not decoration: they are improvement #34's
+// shipped accessibility work, deleted by the #426 rewrite along with the
+// tables themselves and restored here (bug #437). A table whose row header
+// is a platform or tone name needs scope="row" on that cell too, so a
+// screen reader can announce "Greenhouse, Interviews, 3" rather than a
+// bare number.
+function ConversionTable<Row extends ConversionRow>({
+  caption,
+  keyHeader,
+  rows,
+  rowKey,
+}: {
+  caption: string;
+  keyHeader: string;
+  rows: Row[];
+  rowKey: (row: Row) => string;
+}) {
+  // The old template hid each section outright when its array was empty,
+  // rather than showing an empty table with headers. Preserved: an empty
+  // breakdown means nothing has been tracked yet, and a bare header row
+  // reads as a broken table.
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="conversion-breakdown">
+      <table>
+        <caption>{caption}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{keyHeader}</th>
+            <th scope="col">Applied</th>
+            <th scope="col">Interviews</th>
+            <th scope="col">Rejections</th>
+            <th scope="col">Pending</th>
+            <th scope="col">Rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={rowKey(row)}>
+              <th scope="row">{rowKey(row)}</th>
+              <td>{row.total_applied}</td>
+              <td>{row.interviews}</td>
+              <td>{row.rejections}</td>
+              <td>{row.pending}</td>
+              <td>{row.interview_rate_pct || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function App() {
@@ -149,6 +225,19 @@ function App() {
             <p>Not A Posting</p>
             <span className="card-reason">{explain('INVALID_URL')}</span>
           </div>
+          {/* interview_rate_pct is omitempty on the Go side: absent until at
+              least one application has been tracked to an outcome, which is
+              why this falls back to an em dash rather than "0%". */}
+          <div className="card interview">
+            <h2>{metrics?.interview_rate_pct || '—'}</h2>
+            <p>Interview Rate</p>
+            <span className="card-reason">
+              {metrics?.interviews ?? 0} interview{metrics?.interviews === 1 ? '' : 's'} and{' '}
+              {metrics?.rejections ?? 0} rejection{metrics?.rejections === 1 ? '' : 's'} across{' '}
+              {metrics?.total_applied_tracked ?? 0} tracked application
+              {metrics?.total_applied_tracked === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
 
         <section className="detail-grid">
@@ -218,6 +307,23 @@ function App() {
             )}
           </article>
         </section>
+
+        {/* Improvement #15 (per-ATS conversion) and improvement #13 (per
+            cover-letter-tone conversion). Both were shipped, marked Done,
+            and then silently lost when #426 replaced the template with a
+            tiles-only React app while the API kept serving the data. */}
+        <ConversionTable
+          caption="Conversion by Platform"
+          keyHeader="Platform"
+          rows={metrics?.by_source ?? []}
+          rowKey={(row) => row.source}
+        />
+        <ConversionTable
+          caption="Conversion by Cover-Letter Tone Variant"
+          keyHeader="Variant"
+          rows={metrics?.by_variant ?? []}
+          rowKey={(row) => row.variant}
+        />
       </div>
     </main>
   );

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,8 @@ func setupTestDB(t *testing.T) {
 		job_title TEXT,
 		status TEXT,
 		last_updated DATETIME,
-		discovered_at DATETIME
+		discovered_at DATETIME,
+		tone_variant TEXT
 	);
 	CREATE TABLE applied_jobs (
 		company_name TEXT,
@@ -294,6 +296,272 @@ func TestUIDistEmbed_ContainsBuiltAssets(t *testing.T) {
 	}
 	if !hasJS || !hasCSS {
 		t.Errorf("embedded UI assets are incomplete (js=%v css=%v); dist/ does not hold a real Vite build", hasJS, hasCSS)
+	}
+}
+
+// readBuiltUIBundle returns the embedded, built JS bundle as a string. The
+// two tests below assert on rendered markup, and the only artifact that
+// proves what actually reaches a browser is the bundle the binary embeds --
+// asserting on src/App.tsx instead would pass while dist/ still held a
+// pre-change build, which is exactly the trap TestUIDistEmbed_
+// ContainsBuiltAssets already guards one layer up.
+func readBuiltUIBundle(t *testing.T) string {
+	t.Helper()
+
+	entries, err := uiDistFS.ReadDir("ui/dist/assets")
+	if err != nil {
+		t.Fatalf("embedded UI has no assets directory -- dist/ was not built: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".js") {
+			data, err := uiDistFS.ReadFile("ui/dist/assets/" + entry.Name())
+			if err != nil {
+				t.Fatalf("failed to read embedded bundle %s: %v", entry.Name(), err)
+			}
+			return string(data)
+		}
+	}
+	t.Fatal("embedded UI has no .js bundle -- run `npm run build` in cmd/dashboard/ui and commit dist/")
+	return ""
+}
+
+// TestUIDistEmbed_RendersEveryServedMetricsField is the direct regression
+// guard for bug #437, and it is deliberately written against the *general*
+// failure rather than the specific fields that went missing.
+//
+// #426 rewrote the dashboard as a React app that rendered six count tiles.
+// The Go API was left untouched, so it kept computing and serving
+// by_source, by_variant and interview_rate_pct on every poll -- improvement
+// #15's and improvement #13's entire user-facing surface -- to a UI that
+// referenced none of them. Everything built, vetted, tested and served
+// 200s. Two separately-shipped, separately-Done improvements became
+// unreachable in one commit and nothing failed.
+//
+// The lesson recorded in bugs.md is that a rewrite's Done note describes
+// what was added and never what was dropped, and that for an API-backed
+// surface the response struct is a ready-made checklist of what the old
+// view consumed. This test makes that checklist executable: every field the
+// API bothers to serve must appear somewhere in the bundle that is supposed
+// to display it. It cannot verify the fields are rendered *well*, but it
+// fails loudly the moment one stops being referenced at all.
+func TestUIDistEmbed_RendersEveryServedMetricsField(t *testing.T) {
+	bundle := readBuiltUIBundle(t)
+
+	// Every JSON field serveMetrics populates that exists to be looked at.
+	// Add to this list whenever the Metrics struct grows a user-facing
+	// field; a field served but never listed here is a field nobody has
+	// confirmed anyone can see.
+	servedFields := []string{
+		"discovered", "processing", "skipped", "applied", "failed",
+		"manual_required", "blocked_captcha", "invalid_url",
+		"last_applied_company", "last_applied_title", "last_applied_at",
+		"last_applied_processing_time",
+		"last_skipped_company", "last_skipped_reason",
+		"last_failed_company", "last_failed_reason",
+		"last_manual_company", "last_manual_reason",
+		"status_legend",
+		// The three #426 deleted and #437 restored.
+		"total_applied_tracked", "interviews", "rejections",
+		"interview_rate_pct", "by_source", "by_variant",
+	}
+
+	for _, field := range servedFields {
+		if !strings.Contains(bundle, field) {
+			t.Errorf("the API serves %q but the built UI bundle never references it -- "+
+				"it is computed on every poll and rendered nowhere (bug #437's exact failure mode)", field)
+		}
+	}
+}
+
+// TestUIDistEmbed_KeepsAccessibleTableSemantics guards the other half of bug
+// #437. Improvement #34 ("Make the local dashboard accessible and
+// self-contained") shipped two <caption> elements and twelve scope="col"
+// headers; #426's rewrite deleted the template holding them, so that work
+// was silently reverted while still reading Done in improvements.md.
+//
+// Accessibility markup is uniquely prone to this: nothing renders
+// differently without it, no test that checks values notices, and the only
+// people who find out are the ones who cannot use the page.
+func TestUIDistEmbed_KeepsAccessibleTableSemantics(t *testing.T) {
+	bundle := readBuiltUIBundle(t)
+
+	if !strings.Contains(bundle, "caption") {
+		t.Error("built UI bundle has no caption element -- improvement #34's table semantics were dropped again")
+	}
+
+	// Minified JSX emits props as scope:`col` (or scope:"col"/scope:'col'
+	// depending on the minifier), so match the prop and its value together
+	// with the quoting left open. Checking for a bare "col" or "row"
+	// substring is worthless here: React's own bundled source contains
+	// both, so such an assertion passes even against a bundle with no
+	// tables in it at all -- verified against the pre-#437 bundle, where
+	// only the caption check failed.
+	scopeValue := regexp.MustCompile(`scope:\s*["'` + "`" + `](col|row)["'` + "`" + `]`)
+	found := map[string]bool{}
+	for _, match := range scopeValue.FindAllStringSubmatch(bundle, -1) {
+		found[match[1]] = true
+	}
+	if !found["col"] {
+		t.Error(`built UI bundle has no scope="col" header -- improvement #34's column semantics were dropped again`)
+	}
+	if !found["row"] {
+		t.Error(`built UI bundle has no scope="row" header -- conversion rows announce as bare numbers without it`)
+	}
+
+	// Both conversion tables must actually exist. Their captions are the
+	// least ambiguous proof, and they double as the check that the tables
+	// themselves survived rather than just their styling.
+	for _, caption := range []string{
+		"Conversion by Platform",
+		"Conversion by Cover-Letter Tone Variant",
+	} {
+		if !strings.Contains(bundle, caption) {
+			t.Errorf("built UI bundle is missing the %q table -- improvement #15/#13's surface was deleted again (bug #437)", caption)
+		}
+	}
+
+	if !strings.Contains(bundle, "Interview Rate") {
+		t.Error("built UI bundle is missing the Interview Rate tile -- interview_rate_pct is served and shown nowhere")
+	}
+}
+
+// TestServeMetrics_ConversionStats_CountsOutcomesAcrossTrackedStatuses
+// covers the aggregate conversion numbers, which had no test at all on the
+// dashboard side despite pkg/storage's mirror implementation carrying three
+// (TestGetConversionStats and friends). Found while restoring the UI that
+// consumes them for bug #437.
+func TestServeMetrics_ConversionStats_CountsOutcomesAcrossTrackedStatuses(t *testing.T) {
+	setupTestDB(t)
+
+	// Four tracked applications: one interview, one rejection, two still
+	// awaiting an outcome. DISCOVERED must not be counted -- a job that was
+	// never applied to is not a denominator.
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/1", "INTERVIEW_REQUESTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/2", "REJECTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/3", "APPLIED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/4", "APPLIED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/5", "DISCOVERED")
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.TotalApplied != 4 {
+		t.Errorf("expected 4 tracked applications, got %d (DISCOVERED must not count)", m.TotalApplied)
+	}
+	if m.Interviews != 1 || m.Rejections != 1 {
+		t.Errorf("expected 1 interview and 1 rejection, got %d and %d", m.Interviews, m.Rejections)
+	}
+	if m.InterviewRatePct != "25.0%" {
+		t.Errorf("expected interview rate 25.0%%, got %q", m.InterviewRatePct)
+	}
+}
+
+// TestServeMetrics_ConversionStats_EmptyWhenNothingTracked pins the
+// omitempty behaviour the restored UI depends on: with no tracked
+// applications there is no rate to show, and the tile must fall back to an
+// em dash rather than claim a 0% interview rate the data does not support.
+func TestServeMetrics_ConversionStats_EmptyWhenNothingTracked(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://x.greenhouse.io/1", "DISCOVERED")
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.TotalApplied != 0 {
+		t.Errorf("expected 0 tracked applications, got %d", m.TotalApplied)
+	}
+	if m.InterviewRatePct != "" {
+		t.Errorf("expected no interview rate when nothing is tracked, got %q", m.InterviewRatePct)
+	}
+	if len(m.BySource) != 0 || len(m.ByVariant) != 0 {
+		t.Errorf("expected empty breakdowns, got %d source rows and %d variant rows", len(m.BySource), len(m.ByVariant))
+	}
+}
+
+// TestServeMetrics_ConversionBySource_GroupsByATSPlatform covers the
+// per-platform breakdown (improvement #15) that bug #437 restored to the UI.
+func TestServeMetrics_ConversionBySource_GroupsByATSPlatform(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://boards.greenhouse.io/a", "INTERVIEW_REQUESTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://boards.greenhouse.io/b", "REJECTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://jobs.lever.co/c", "APPLIED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://example.com/d", "APPLIED")
+
+	m := fetchMetricsFromTestServer(t)
+
+	bySource := map[string]SourceConversionStat{}
+	for _, s := range m.BySource {
+		bySource[s.Source] = s
+	}
+
+	gh, ok := bySource["Greenhouse"]
+	if !ok {
+		t.Fatalf("expected a Greenhouse row, got %+v", m.BySource)
+	}
+	if gh.TotalApplied != 2 || gh.Interviews != 1 || gh.Rejections != 1 {
+		t.Errorf("unexpected Greenhouse row: %+v", gh)
+	}
+	// Pending is "applied, no outcome yet" -- both Greenhouse rows already
+	// have an outcome, so none is pending.
+	if gh.Pending != 0 {
+		t.Errorf("expected 0 pending Greenhouse applications, got %d", gh.Pending)
+	}
+	if gh.InterviewRate != "50.0%" {
+		t.Errorf("expected Greenhouse interview rate 50.0%%, got %q", gh.InterviewRate)
+	}
+
+	lever, ok := bySource["Lever"]
+	if !ok {
+		t.Fatalf("expected a Lever row, got %+v", m.BySource)
+	}
+	if lever.TotalApplied != 1 || lever.Pending != 1 {
+		t.Errorf("expected Lever to show 1 applied and 1 pending, got %+v", lever)
+	}
+	// A URL matching no known ATS still has to appear somewhere, or its
+	// applications vanish from the breakdown entirely.
+	if _, ok := bySource["Other"]; !ok {
+		t.Errorf("expected unrecognised ATS URLs to fall into an Other row, got %+v", m.BySource)
+	}
+}
+
+// TestServeMetrics_ConversionByVariant_GroupsByToneAndLabelsUnset covers the
+// per-cover-letter-tone breakdown (improvement #13) restored by bug #437.
+// The empty-tone case matters: the agent writes tone_variant only for jobs
+// that went through variant selection, so real databases hold a mix, and an
+// unlabelled group would render as a blank row header.
+func TestServeMetrics_ConversionByVariant_GroupsByToneAndLabelsUnset(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, status, tone_variant) VALUES (?, ?, ?)", "https://a.example.com", "INTERVIEW_REQUESTED", "formal")
+	db.Exec("INSERT INTO job_funnel (url, status, tone_variant) VALUES (?, ?, ?)", "https://b.example.com", "APPLIED", "formal")
+	db.Exec("INSERT INTO job_funnel (url, status, tone_variant) VALUES (?, ?, ?)", "https://c.example.com", "REJECTED", "")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://d.example.com", "APPLIED")
+
+	m := fetchMetricsFromTestServer(t)
+
+	byVariant := map[string]VariantConversionStat{}
+	for _, v := range m.ByVariant {
+		byVariant[v.Variant] = v
+	}
+
+	formal, ok := byVariant["formal"]
+	if !ok {
+		t.Fatalf("expected a formal variant row, got %+v", m.ByVariant)
+	}
+	if formal.TotalApplied != 2 || formal.Interviews != 1 || formal.Pending != 1 {
+		t.Errorf("unexpected formal row: %+v", formal)
+	}
+	if formal.InterviewRate != "50.0%" {
+		t.Errorf("expected formal interview rate 50.0%%, got %q", formal.InterviewRate)
+	}
+
+	// Both the empty string and SQL NULL must land in one labelled bucket.
+	unspecified, ok := byVariant["unspecified"]
+	if !ok {
+		t.Fatalf("expected empty and NULL tone_variant to group as 'unspecified', got %+v", m.ByVariant)
+	}
+	if unspecified.TotalApplied != 2 {
+		t.Errorf("expected 2 unspecified applications (one empty string, one NULL), got %d", unspecified.TotalApplied)
 	}
 }
 

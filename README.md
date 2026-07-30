@@ -7,7 +7,7 @@
 Career Agent Core is an autonomous AI-driven job application engine written in Go. It discovers remote jobs, filters them against your strict salary and career requirements, and uses an LLM (local Ollama by default, or Claude/Gemini) to write highly tailored resumes and cover letters using your central AI Knowledge Library.
 
 ## Features
-- **Massive Discovery Engine**: Concurrently scrapes Google/Yahoo dorks targeting 16 major Applicant Tracking Systems (Greenhouse, Workday, Lever, Jobvite, BambooHR, etc) using fuzzy keyword matching.
+- **Massive Discovery Engine**: Concurrently scrapes Google/Yahoo dorks targeting 12 major Applicant Tracking Systems (Greenhouse, Workday, Lever, Jobvite, BambooHR, etc) using fuzzy keyword matching.
 - **Tech-Stack Agnostic Fit Score**: Uses your configured LLM to evaluate job descriptions against your profile and constraints (Salary/Remote). Only proceeds if the fit score is 50 or higher. Evaluates based on core competencies, not strict language matching.
 - **AI Tailoring & Keyword Gap Analysis**: Analyzes job descriptions, identifies missing keywords, and synthesizes them with your `USER_PROFILE.md` via your configured LLM provider (Ollama by default, or Claude/Gemini).
 - **Stealth Writer**: The system prompt is engineered with strict humanizing constraints (banning words like "delve", "tapestry", "synergy") and high burstiness to completely bypass AI detection.
@@ -21,14 +21,14 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **SRE Logging**: Employs strict SRE-prefixed logging throughout the entire pipeline for enterprise-grade observability and debugging.
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
-- **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers and pre-mapped selectors for Greenhouse, Lever, and Ashby, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime, including a basic LinkedIn Easy Apply path.
+- **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers and pre-mapped selectors for Greenhouse, Lever, and Ashby, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime. LinkedIn is detected and routed to its own handler, but Easy Apply's multi-step modal is **not implemented** — those postings always fail submission and fall through to the manual-submission checklist.
 - **Human-in-the-Loop Copilot Mode**: Set `copilot_mode: true` in `profile.yaml` to do all the expensive work — discovery, scoring, tailoring, and confirming the form is reachable and fillable — and stop before the irreversible submit click. The job is recorded as `AWAITING_REVIEW`, its tailored documents are moved to `applications/needs_manual_apply/`, and it is queued in `copilot_queue.md` with the apply URL so you can submit it yourself. Useful where bot protection blocks automated submits but not a real person.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry.
 - **Live Web Dashboard & Controls**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) featuring start/stop agent controls, funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason.
 - **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
 - **Key-Optional Search Fallback**: Always runs the free RemoteOK, Hacker News, and public Greenhouse/Lever feed sources. Role/ATS searches use SerpApi when configured and Yahoo HTML search when no key is present or SerpApi reports an error.
 - **Pre-Score Fetch Validation**: Missing job descriptions reach embedding and fit scoring only after a meaningful successful page fetch. Closed postings become terminal, while rate limits, server failures, and transport errors use bounded retries and return to the discovery queue if they remain unavailable.
-- **SkipScoring Fast Track**: Instantly bypass the ~10-minute LLM scoring bottleneck by specifying `SkipScoring` in `profile.yaml` for jobs that already pass your strict keyword filters.
+- **Skip-Scoring Fast Track**: Instantly bypass the ~10-minute LLM scoring bottleneck by setting `skip_scoring: true` in `profile.yaml` for jobs that already pass your strict keyword filters.
 - **Cost & Token Optimization**: Prunes DOM footprints (removing CSS, SVGs, scripts, and other non-structural content) before interacting with the LLM, then enforces per-call payload circuit breakers of 50,000 characters by default and 75,000 for scoped validation forms. Lazy Document Generation ensures expensive LLM tokens are only spent after Playwright verifies the job page is live and submittable.
 - **Concurrent Processing Pipeline**: Splits monolithic generation into concurrent processes, injecting dynamic context limits and `keep_alive` values to eliminate model cold-starts. Utilizes bounded worker pools, parallel IO streams, `sync.Pool` byte buffers across HTTP clients to reduce GC pressure, and explicit SQLite batch transactions for high-speed scraping and inference.
 - **Optional Python NLP Microservice**: Document generation runs in-process by default and needs nothing else installed. Set `NLP_SERVICE_URL` and the agent will instead offload the batch to the concurrent FastAPI service in `nlp_service/`, which frees the agent process while a long generation runs. The agent sends the prompts, model, host, and context size on every request, health-checks the service before using it, and silently falls back to in-process generation if it is down — so the offload can never cost you a job.
@@ -251,7 +251,16 @@ SKIP_MODEL_PREFLIGHT="1"
 # of generating in-process. Unset (the default) means no external service is
 # used or needed. Ollama only — Claude and Gemini always generate in-process.
 NLP_SERVICE_URL="http://localhost:8000"
+# Optional: a smaller, faster text model used only for job fit-scoring, so the
+# slow high-quality model is spent on writing rather than on triage. Unset by
+# default, in which case OLLAMA_MODEL scores as well as writes.
+# NOTE: the installer does NOT pull this one — it reads only the four keys
+# above. Run `ollama pull <model>` yourself, or the startup model check will
+# refuse to run against it.
+OLLAMA_FAST_MODEL="qwen3:8b-instruct"
 ```
+
+One more variable applies to every provider: `WORKER_COUNT` overrides how many jobs are processed concurrently. It defaults to a value derived from the machine's CPU count, and an unparseable value is ignored with a logged warning rather than failing the run. Lower it if concurrent workers are starving a co-located Ollama of memory; that contention has been a real source of timeouts on CPU-only hosts.
 
 **Claude (Anthropic)**:
 ```bash
@@ -312,7 +321,7 @@ In a second terminal, start the UI dashboard:
 go run ./cmd/dashboard
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion metrics. It can run before or after the agent; it shows data once the database exists.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion analytics: an overall interview rate plus two breakdown tables, one for conversion by ATS platform and one for conversion by cover-letter tone variant. Both tables stay hidden until at least one application has been tracked to an outcome. It can run before or after the agent; it shows data once the database exists.
 
 The dashboard frontend is a Vite/React app at `cmd/dashboard/ui`, and `cmd/dashboard/main.go` embeds its build output directly with `//go:embed ui/dist`. `dist/` is committed to git on purpose — it's a compile-time dependency, and a clone without it fails `go build ./...`. Anyone changing `cmd/dashboard/ui/src` must run `npm run build` in `cmd/dashboard/ui` and commit the regenerated `dist/` alongside their source change, or the built dashboard will silently keep serving the old bundle.
 
@@ -387,3 +396,25 @@ go run ./cmd/reconcile -confirm   # records the ticked applications as applied
 **What does and does not carry over.** The agent fills the form inside its own automated browser session, which closes when it stops at the gate. That fill does **not** appear in your browser — expect a blank form when you open the link. What you get is the expensive part: the job was scored as a genuine fit, a tailored resume and cover letter were written for it, and the form was confirmed reachable and fillable rather than dead, gated, or bot-blocked. The typing is left to you.
 
 This is the mode to use when bot protection is the binding constraint. The project's own monitoring measured 6 of 7 fully-filled forms blocked *after* an automated submit — a challenge a real person applying in their own browser is not subject to.
+
+### Re-queueing jobs that failed for a reason you have since fixed
+
+A job that ends in a terminal failure status stays there forever. The agent only ever pulls `DISCOVERED` rows, so upgrading the agent does **not** retry anything already marked `BLOCKED_CAPTCHA` or `FAILED_SUBMIT` — a fix can be entirely correct and still produce no new applications, because nothing is left to exercise it.
+
+`cmd/requeue` is the recovery tool. Start by looking at what actually failed and why:
+
+```bash
+go run ./cmd/requeue -stats
+```
+
+That prints per-source outcome counts. `go run ./cmd/requeue -list-sources` prints the source names it accepts — they are short aliases like `greenhouse`, `lever`, and `workday`, not domains. Then reset only the jobs whose failure mode you believe is fixed:
+
+```bash
+# Dry run first — without -confirm nothing is written
+go run ./cmd/requeue -source greenhouse -status BLOCKED_CAPTCHA
+go run ./cmd/requeue -source greenhouse -status BLOCKED_CAPTCHA -confirm
+```
+
+`-status` accepts `BLOCKED_CAPTCHA` (the default), `FAILED_SUBMIT`, or `APPLIED`, and `-plan` prints a detailed per-row dry run. Add `-clear-dedup` for `FAILED_SUBMIT` re-queues, where tailored documents were already generated and the duplicate check would otherwise skip the job again; it is not needed for `BLOCKED_CAPTCHA`. Re-queue narrowly rather than resetting an entire source — a source's failures usually have several different causes, and only one of them is the one you fixed.
+
+> **A running agent will not notice.** The queue is read once at startup into an in-memory channel, so neither a code change nor a direct database status change affects a process that is already running. Stop the agent, then start a freshly built binary.
