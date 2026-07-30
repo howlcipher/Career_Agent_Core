@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
 )
 
@@ -180,6 +181,13 @@ var uiDistFS embed.FS
 
 var db *sql.DB
 
+// dashboardDSN is the connection string this command opens. It is derived from
+// pkg/storage rather than written out here, and TestDashboardDSNMatchesStorage
+// pins it to that derivation: bug #446 was this command quietly keeping a DSN
+// literal of its own, which then failed to follow pkg/storage when bug #416
+// corrected the pragma syntax.
+var dashboardDSN = storage.DSN(storage.DefaultDatabasePath)
+
 const defaultDashboardAddress = "127.0.0.1:8080"
 
 func normalizeDashboardAddress(raw string) (string, error) {
@@ -330,7 +338,12 @@ func main() {
 		log.Fatalf("Invalid dashboard address: %v", err)
 	}
 
-	db, err = sql.Open("sqlite", "./applications.db?_journal_mode=WAL")
+	// The dashboard keeps its own connection rather than going through
+	// pkg/storage, but it must not keep its own DSN: bug #446 was this line
+	// carrying the mattn/go-sqlite3 pragma spelling that modernc.org/sqlite
+	// ignores, which left this read-only connection with no busy timeout while
+	// cmd/agent held write locks. storage.DSN is the single source of truth.
+	db, err = sql.Open("sqlite", dashboardDSN)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

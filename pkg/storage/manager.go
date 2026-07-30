@@ -23,7 +23,7 @@ import (
 var db *sql.DB
 
 func InitDB() error {
-	return InitDBWithPath("./applications.db")
+	return InitDBWithPath(DefaultDatabasePath)
 }
 
 func InitDBWithPath(path string) error {
@@ -37,11 +37,7 @@ func InitDBWithPath(path string) error {
 	}
 
 	var err error
-	dsn := path
-	if !strings.Contains(path, "?") {
-		dsn += "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=cache_size(-20000)&_pragma=temp_store(MEMORY)"
-	}
-	db, err = sql.Open("sqlite", dsn)
+	db, err = sql.Open("sqlite", DSN(path))
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
