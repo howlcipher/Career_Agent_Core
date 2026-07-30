@@ -131,7 +131,9 @@ Stated as a rule, because it is a new shape for this backlog: **a number is evid
 | #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` still returns 0 |
 | #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates the opt-in offload at `pkg/mcp/client.go:244`, `:302`, `:532` — the same three anchors the row cites. Still unmeasured, which is the row's entire point |
 
-**2026-07-30 groom-pass note (sixth session):** re-verified every Pending row above against current code; none changed. **#458 had never appeared in a scored table row** (filed after the last snapshot) — added below, with a real finding rather than a re-guess:
+**2026-07-30 groom-pass note (seventh session, post-bug-#453 run):** re-verified every Pending row in this file against current code; none changed — this session's fix touched only `pkg/storage/queue_plan.go` and its test, nothing this file's rows cite. `bugs.md`'s #453 (the row that had tied this file's #454 at the top of the combined queue) is now Done, mutation-checked. **#454 is now the outright top of the free queue** with no tie. The Usability Gate stays MET; build, vet and the full test suite are clean.
+
+**Prior — 2026-07-30 groom-pass note (sixth session):** re-verified every Pending row above against current code; none changed. **#458 had never appeared in a scored table row** (filed after the last snapshot) — added below, with a real finding rather than a re-guess:
 
 | # | Score | Re-verified how |
 | --- | --- | --- |
