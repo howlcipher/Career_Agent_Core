@@ -676,6 +676,44 @@ func runAgentCycle(
 	return errors.Join(loadErr, discoverErr)
 }
 
+// skipModelPreflightEnv disables the startup check that every configured local
+// model is installed. The escape hatch exists for the one honest case the check
+// cannot distinguish from a misconfiguration: an OLLAMA_HOST pointing at a
+// server whose /api/tags is unreachable or firewalled even though generation
+// works. Setting it accepts the failure mode bugs.md #441 was filed about —
+// per-job model-not-found errors discovered hours into a run.
+const skipModelPreflightEnv = "SKIP_MODEL_PREFLIGHT"
+
+// runModelPreflight gates the model check behind SKIP_MODEL_PREFLIGHT and
+// leaves the fatal decision to the caller. check is normally
+// (*mcp.Client).PreflightModels; it is a parameter so the gating is testable
+// without a live Ollama.
+func runModelPreflight(
+	ctx context.Context,
+	skipRaw string,
+	check func(context.Context) error,
+) error {
+	if isTruthyEnv(skipRaw) {
+		log.Printf(
+			"[LLM] Model preflight SKIPPED because %s=%q. A model that is not "+
+				"installed will now fail per job instead of at startup.",
+			skipModelPreflightEnv, skipRaw,
+		)
+		return nil
+	}
+	return check(ctx)
+}
+
+// isTruthyEnv reads the conventional set of affirmative env-var spellings, so a
+// user who writes "true" instead of "1" is not silently ignored.
+func isTruthyEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "t", "y", "on", "true", "yes":
+		return true
+	}
+	return false
+}
+
 func main() {
 	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
@@ -756,6 +794,13 @@ func main() {
 	defer storage.CloseDB()
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
+	if err := runModelPreflight(ctx, os.Getenv(skipModelPreflightEnv), client.PreflightModels); err != nil {
+		log.Fatalf(
+			"Startup aborted before any job was touched — the configured LLM is "+
+				"not usable on this machine: %v",
+			err,
+		)
+	}
 	if ragEnabled {
 		ragResult, err := initializeCareerRAG(
 			careerProfilePath,
@@ -1043,4 +1088,3 @@ func runContinuousJobMatching(ctx context.Context, client *mcp.Client) {
 		}
 	}
 }
-

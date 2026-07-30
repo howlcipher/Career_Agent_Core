@@ -15,17 +15,24 @@
 #   ./scripts/install_ollama.sh --system     # force system install (official script)
 #   ./scripts/install_ollama.sh --no-models  # install only, skip model downloads
 #
-# Models pulled (overridable via the same env vars the agent reads):
+# Models pulled: read from .env in the repo root when present (OLLAMA_MODEL,
+# OLLAMA_VISION_MODEL, OLLAMA_EMBED_MODEL, OLLAMA_HOST), else these installer
+# defaults. A real environment variable of the same name always wins over
+# .env (so `OLLAMA_MODEL=x ./scripts/install_ollama.sh` still works):
 #   OLLAMA_MODEL        (default llama3.1)        text generation
 #   OLLAMA_VISION_MODEL (default llava)           screenshot form mapping
 #   OLLAMA_EMBED_MODEL  (default nomic-embed-text) embeddings / RAG
+#
+# After pulling (or with --no-models), the script confirms every configured
+# model is actually present via GET /api/tags. Normally this is fatal on
+# failure; with --no-models it's a warning, since skipping downloads was the
+# point.
 
 set -euo pipefail
 
-TEXT_MODEL="${OLLAMA_MODEL:-llama3.1}"
-VISION_MODEL="${OLLAMA_VISION_MODEL:-llava}"
-EMBED_MODEL="${OLLAMA_EMBED_MODEL:-nomic-embed-text}"
-OLLAMA_URL="${OLLAMA_HOST:-http://localhost:11434}"
+log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
 
 MODE="auto"        # auto | user | system
 PULL_MODELS=true
@@ -40,9 +47,65 @@ for arg in "$@"; do
     esac
 done
 
-log()  { printf '\033[1;36m[install]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*"; }
-die()  { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
+# ---------------------------------------------------------------- .env
+
+# Repo root relative to this script's own location (not $PWD), so
+# ./scripts/install_ollama.sh and bash /abs/path/scripts/install_ollama.sh
+# behave the same.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env"
+
+# Pull a single key's value out of .env without sourcing the file. .env is
+# user-authored and can hold secrets (ANTHROPIC_API_KEY, IMAP_APP_PASSWORD);
+# sourcing it would execute arbitrary shell and pull unrelated variables into
+# this script's environment. Only ever call this with one of the four model
+# keys below. Handles an optional "export " prefix, single- or double-quoted
+# values, an unquoted trailing '# comment', and surrounding whitespace. Blank
+# lines and '#'-commented lines never match the anchor, so they're skipped
+# automatically -- which is what keeps .env.example's commented-out
+# OLLAMA_MODEL recommendation from being read as configuration.
+#
+# The quote handling matches godotenv's (cmd/agent loads .env with it), so the
+# installer and the agent resolve the same file to the same model names. That
+# agreement is the entire point of bugs.md #441; a parser that disagreed with
+# the agent's would just relocate the bug.
+env_file_get() {
+    local key="$1" line value
+    [ -f "$ENV_FILE" ] || return 1
+    line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$ENV_FILE" | tail -n1)" || return 1
+    [ -n "$line" ] || return 1
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    case "$value" in
+        # Quoted: take everything up to the closing quote, so a trailing
+        # comment outside the quotes is dropped and a '#' inside them is kept.
+        \"*) value="${value#\"}"; value="${value%%\"*}" ;;
+        \'*) value="${value#\'}"; value="${value%%\'*}" ;;
+        # Unquoted: a '#' begins a comment. No Ollama model name contains one.
+        *)   value="${value%%#*}" ;;
+    esac
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+ENV_TEXT_MODEL="" ENV_VISION_MODEL="" ENV_EMBED_MODEL="" ENV_OLLAMA_HOST=""
+if [ -f "$ENV_FILE" ]; then
+    ENV_TEXT_MODEL="$(env_file_get OLLAMA_MODEL || true)"
+    ENV_VISION_MODEL="$(env_file_get OLLAMA_VISION_MODEL || true)"
+    ENV_EMBED_MODEL="$(env_file_get OLLAMA_EMBED_MODEL || true)"
+    ENV_OLLAMA_HOST="$(env_file_get OLLAMA_HOST || true)"
+fi
+
+TEXT_MODEL="${OLLAMA_MODEL:-${ENV_TEXT_MODEL:-llama3.1}}"
+VISION_MODEL="${OLLAMA_VISION_MODEL:-${ENV_VISION_MODEL:-llava}}"
+EMBED_MODEL="${OLLAMA_EMBED_MODEL:-${ENV_EMBED_MODEL:-nomic-embed-text}}"
+OLLAMA_URL="${OLLAMA_HOST:-${ENV_OLLAMA_HOST:-http://localhost:11434}}"
+
+if [ -f "$ENV_FILE" ]; then
+    log "Read .env (keys it leaves unset fall back to installer defaults): text=$TEXT_MODEL vision=$VISION_MODEL embed=$EMBED_MODEL"
+else
+    log "No .env found — using installer defaults: text=$TEXT_MODEL vision=$VISION_MODEL embed=$EMBED_MODEL. Copy .env.example to .env first to have this installer follow your configured models."
+fi
 
 # ---------------------------------------------------------------- OS detection
 
@@ -237,5 +300,66 @@ else
     log "Skipping model downloads (--no-models). Pull later with:"
     log "  ollama pull $TEXT_MODEL && ollama pull $VISION_MODEL && ollama pull $EMBED_MODEL"
 fi
+
+# ---------------------------------------------------------------- verify models
+
+# Ollama's /api/tags reports untagged pulls with an implicit ":latest" (a
+# pulled "nomic-embed-text" shows up as "nomic-embed-text:latest"). Add the
+# suffix to any bare name so both sides compare the same way.
+normalize_model_name() {
+    case "$1" in
+        *:*) printf '%s' "$1" ;;
+        *)   printf '%s:latest' "$1" ;;
+    esac
+}
+
+# Confirm every model this script was configured to pull is actually present.
+# fatal=true dies naming what's missing and the exact pull command to run;
+# fatal=false (the --no-models path) only warns, since the user opted out.
+verify_models() {
+    local fatal="$1" model wanted found line m
+    shift
+    local raw installed missing=()
+    # Fetch and extract separately. A reachable server with an empty library
+    # returns {"models":[]}, which yields no names -- the same empty string as
+    # an unreachable server, but a completely different problem with a
+    # different fix, so the two must not share one message.
+    if ! raw="$(curl -fsS --max-time 5 "$OLLAMA_URL/api/tags" 2>/dev/null)"; then
+        if $fatal; then
+            die "Could not reach $OLLAMA_URL/api/tags to verify models. Check 'ollama serve' output and re-run."
+        fi
+        warn "Could not reach $OLLAMA_URL/api/tags to verify models — skipping verification."
+        return 0
+    fi
+    installed="$(printf '%s' "$raw" | grep -o '"name":"[^"]*"' | sed -E 's/"name":"([^"]*)"/\1/')" || installed=""
+    if [ -z "$installed" ]; then
+        warn "$OLLAMA_URL reports no installed models at all."
+    fi
+    for model in "$@"; do
+        wanted="$(normalize_model_name "$model")"
+        found=false
+        while IFS= read -r line; do
+            [ "$(normalize_model_name "$line")" = "$wanted" ] && { found=true; break; }
+        done <<< "$installed"
+        $found || missing+=("$model")
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        log "Verified all configured models are present: $*"
+        return 0
+    fi
+    if $fatal; then
+        for m in "${missing[@]}"; do
+            warn "  missing: $m  (run: ollama pull $m)"
+        done
+        die "Model verification failed after pulling — see missing models above."
+    else
+        warn "Model verification: these configured models are not installed (--no-models was used, so this is not fatal):"
+        for m in "${missing[@]}"; do
+            warn "  missing: $m  (run: ollama pull $m)"
+        done
+    fi
+}
+
+verify_models "$PULL_MODELS" "$TEXT_MODEL" "$VISION_MODEL" "$EMBED_MODEL"
 
 log "Done. Career Agent Core will use Ollama automatically (LLM_PROVIDER defaults to 'ollama')."

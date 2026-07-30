@@ -89,6 +89,8 @@ git clone https://github.com/howlcipher/Career_Agent_Core.git
 cd Career_Agent_Core
 ```
 
+**Model choice and setup order.** The Ollama installer below reads `.env` when one exists and pulls exactly the models it names; with no `.env` it pulls its own defaults (`llama3.1`, `llava`, `nomic-embed-text`), which is what `.env.example` is configured for. So run it as-is for the default setup, or — if you already know you want different models — copy `.env.example` to `.env` and set them first, then run the installer. Either order works: the installer verifies its results against Ollama's installed-model list and tells you exactly what to pull if anything is missing, and the agent repeats that check at startup rather than failing later on a real job.
+
 ### Windows 10 or 11
 
 Use 64-bit PowerShell. Install a compatible Go release, then restart PowerShell so `go` is on `PATH`:
@@ -220,14 +222,16 @@ go run ./cmd/agent -no-rag
 ### 4. Choose an LLM Provider & Authenticate APIs
 The agent supports three LLM backends, selected via `LLM_PROVIDER` in your `.env` file (never commit this to Git — copy `.env.example` as a starting point). The default is **Ollama** (local, free, no API key required).
 
-**Model recommendation:** the installer's defaults (`llama3.1` + `llava`) fit modest hardware. If you have ~32 GB RAM, `qwen3:30b-instruct` and `qwen2.5vl:7b` can improve writing and visual mapping, but local CPU performance is workload- and hardware-dependent. Measure a representative run before changing models; this project's recorded CPU measurements are in minutes for long generations, not seconds. Avoid thinking variants when throughput matters because hidden reasoning can make CPU scoring much slower.
+**Model recommendation:** the installer's defaults (`llama3.1` + `llava`) fit modest hardware, and `.env.example` ships configured for exactly those — the two larger names in it are commented out. If you have ~32 GB RAM, `qwen3:30b-instruct` and `qwen2.5vl:7b` can improve writing and visual mapping, but local CPU performance is workload- and hardware-dependent. To switch, uncomment those two lines in your `.env` and re-run the installer, which reads `.env` and pulls what it names (or `ollama pull` each yourself). Measure a representative run before changing models; this project's recorded CPU measurements are in minutes for long generations, not seconds. Avoid thinking variants when throughput matters because hidden reasoning can make CPU scoring much slower.
 
 **Ollama (default)** — run the bundled installer, which detects your OS (Debian, Ubuntu, Fedora, Arch, macOS, and immutable distros like Bazzite/Silverblue via a no-root user-space install), installs Ollama, starts the server, and pulls the required models:
 ```bash
 ./scripts/install_ollama.sh              # Linux / macOS
 .\scripts\install_ollama.ps1             # Windows (PowerShell)
 ```
-Useful flags: `--user` (force no-sudo install), `--system` (force the official sudo installer), `--no-models` (skip the multi-GB model downloads). The models it pulls: `llama3.1` (text: scoring, resumes, cover letters), `llava` (vision: screenshot form mapping), and `nomic-embed-text` (embeddings: semantic search / RAG).
+Useful flags: `--user` (force no-sudo install), `--system` (force the official sudo installer), `--no-models` (skip the multi-GB model downloads). Which models it pulls: whatever `.env` names, when a `.env` exists in the repository root, and otherwise `llama3.1` (text: scoring, resumes, cover letters), `llava` (vision: screenshot form mapping), and `nomic-embed-text` (embeddings: semantic search / RAG). An environment variable set on the command line still overrides both, so `OLLAMA_MODEL=mistral ./scripts/install_ollama.sh` works. It reads only the four `OLLAMA_*` keys out of `.env` and never executes the file, so the credentials in it stay untouched and unprinted.
+
+After pulling, the installer checks Ollama's installed-model list and exits non-zero if anything it was configured to use is absent, naming the exact `ollama pull` to run — with `--no-models` the same check reports as a warning instead. The agent then repeats the check at its own startup and refuses to begin a run against a model that is not installed, so a configuration mistake costs you a second rather than being discovered per job, hours in. If you point `OLLAMA_HOST` at a server whose model list you cannot read, set `SKIP_MODEL_PREFLIGHT=1` to start anyway.
 ```bash
 LLM_PROVIDER="ollama"                     # optional, this is the default
 OLLAMA_HOST="http://localhost:11434"      # optional
@@ -238,6 +242,11 @@ OLLAMA_EMBED_MODEL="nomic-embed-text"     # optional
 # A full resume + cover letter + interview-prep generation on CPU-only hardware
 # is measured in tens of minutes, and validation-phase DOM contexts longer still.
 OLLAMA_TIMEOUT_MINUTES="120"
+# Optional escape hatch for the startup model check described above. Only set
+# this if Ollama's model list is genuinely unreadable from here (a remote or
+# firewalled OLLAMA_HOST); it trades a one-second startup error for per-job
+# model-not-found failures discovered much later.
+SKIP_MODEL_PREFLIGHT="1"
 # Optional: offload document generation to the nlp_service/ microservice instead
 # of generating in-process. Unset (the default) means no external service is
 # used or needed. Ollama only — Claude and Gemini always generate in-process.

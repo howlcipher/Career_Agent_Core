@@ -977,3 +977,73 @@ func TestRunQuarantinedPostingModelStageReportsStatusWriteFailure(t *testing.T) 
 		t.Fatalf("error = %v, want injected status write failure", err)
 	}
 }
+
+func TestIsTruthyEnv(t *testing.T) {
+	for _, raw := range []string{"1", "t", "y", "on", "true", "yes", "TRUE", " Yes ", "On"} {
+		if !isTruthyEnv(raw) {
+			t.Errorf("isTruthyEnv(%q) = false, want true", raw)
+		}
+	}
+	for _, raw := range []string{"", "0", "false", "no", "off", "maybe", "  "} {
+		if isTruthyEnv(raw) {
+			t.Errorf("isTruthyEnv(%q) = true, want false", raw)
+		}
+	}
+}
+
+func TestRunModelPreflight(t *testing.T) {
+	preflightErr := errors.New("ollama is missing qwen3:30b-instruct")
+
+	t.Run("propagates the check error so startup can abort", func(t *testing.T) {
+		called := false
+		err := runModelPreflight(context.Background(), "", func(context.Context) error {
+			called = true
+			return preflightErr
+		})
+		if !called {
+			t.Fatal("check was not called with the skip variable unset")
+		}
+		if !errors.Is(err, preflightErr) {
+			t.Fatalf("runModelPreflight() = %v, want the check's error", err)
+		}
+	})
+
+	t.Run("passes a healthy check through", func(t *testing.T) {
+		err := runModelPreflight(context.Background(), "", func(context.Context) error {
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("runModelPreflight() = %v, want nil", err)
+		}
+	})
+
+	// The escape hatch must not run the check at all: its whole purpose is a
+	// host whose /api/tags cannot be read even though generation works, so
+	// calling the check and ignoring the result would still be wrong.
+	t.Run("skip variable bypasses the check entirely", func(t *testing.T) {
+		for _, raw := range []string{"1", "true", "YES"} {
+			called := false
+			err := runModelPreflight(context.Background(), raw, func(context.Context) error {
+				called = true
+				return preflightErr
+			})
+			if err != nil {
+				t.Errorf("runModelPreflight(%q) = %v, want nil", raw, err)
+			}
+			if called {
+				t.Errorf("runModelPreflight(%q) still called the check", raw)
+			}
+		}
+	})
+
+	t.Run("a non-truthy skip value does not bypass the check", func(t *testing.T) {
+		called := false
+		err := runModelPreflight(context.Background(), "0", func(context.Context) error {
+			called = true
+			return preflightErr
+		})
+		if !called || err == nil {
+			t.Fatalf("SKIP_MODEL_PREFLIGHT=0 must not skip: called=%v err=%v", called, err)
+		}
+	})
+}
