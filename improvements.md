@@ -116,7 +116,17 @@ What this pass did change here is three **Done** rows, because a bug found this 
 - **#426** (dashboard rewrite) is the cause. It replaced an 831-line template with a 137-line app rendering six count tiles, and its Done note describes only what it added.
 - **#15** (conversion analytics) and **#34** (dashboard accessibility) are the casualties. #15's data is still computed and served every poll but renders nowhere; most of #34's markup was deleted outright.
 
-**2026-07-30 groom-pass note (post-#441 run):** this file holds **two** Pending rows, both re-verified against current code and both above the 0.5 floor, so no `⚠️` flags and nothing needs user confirmation.
+**2026-07-30 groom-pass note (post-#437 run):** this file holds **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+
+| # | Score | Re-verified how |
+| --- | --- | --- |
+| #443 | **2.0** = 2×1.0÷1 | Unchanged and now precisely counted: `gofmt -l ./cmd ./pkg` names exactly **eight** compiled files (`cmd/reconcile/main.go`, `pkg/mcp/backoff.go`, `pkg/parser/dom_test.go`, `pkg/scraper/{funnel,hackernews,scraper}.go`, `pkg/submitter/browser.go`, `pkg/util/bufferpool.go`). None was touched by this session's work, and `cmd/dashboard/` is clean |
+| #448 | **1.0** = 2×1.0÷2 | New this pass, found while running the UI linter for #437. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` returns 0, so `npm run lint` still walks the deliberately-committed `dist/` and reports dozens of warnings against minified React internals, while `npx oxlint src` is clean at 0/0. Value 2: nothing is broken; the cost is that the linter's output carries no signal. Effort 2 rather than 1 because it is worth confirming nothing depends on the current behaviour and wiring the command into a documented loop |
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload. Still unmeasured, which is the row's entire point |
+
+None outranks the open bugs. The free queue is `bugs.md` **#445** (Major, 3.5), **#446** (Minor, 4.0), **#444** (Minor, 2.5), **#447** (Minor, 2.0), then **#443** (2.0), **#440** (Minor, 1.5), and **#448**/**#442** (1.0 each). `improvements_paywall.md` was re-checked in the same pass and is unchanged: **#424** (2.0) and **#17** (1.75) are still unimplemented and still need a paid key, and **#14** remains `⚠️ below floor` at 0.4 — it stays open and must not be worked without explicit confirmation.
+
+**Prior 2026-07-30 groom-pass note (post-#441 run):** this file holds **two** Pending rows, both re-verified against current code and both above the 0.5 floor, so no `⚠️` flags and nothing needs user confirmation.
 
 | # | Score | Re-verified how |
 | --- | --- | --- |
