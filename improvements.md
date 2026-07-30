@@ -116,7 +116,20 @@ What this pass did change here is three **Done** rows, because a bug found this 
 - **#426** (dashboard rewrite) is the cause. It replaced an 831-line template with a 137-line app rendering six count tiles, and its Done note describes only what it added.
 - **#15** (conversion analytics) and **#34** (dashboard accessibility) are the casualties. #15's data is still computed and served every poll but renders nowhere; most of #34's markup was deleted outright.
 
-**2026-07-30 groom-pass note (post-#445 run):** this file holds the same **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+**2026-07-30 groom-pass note (post-#446 run):** this file now holds **five** Pending rows — the three carried forward, each re-verified against current code, plus two filed this session. All are above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+
+| # | Score | Re-verified how |
+| --- | --- | --- |
+| #455 | **4.0** = 4×1.0÷1 | New this pass, and counted rather than estimated: `grep -oh "claude-[a-z0-9.-]*"` across all three backlogs returns `claude-sonnet-4-6` **73 times**, `claude-opus-4-6-thinking` 7 times, and `claude-opus-5` only 4 — so 80 of 84 rows name a model that is not in the current lineup. Same story in the Gemini and OpenAI columns. Harmless while a human probes availability live, as `groom_backlogs.md` already instructs; not harmless the moment routing is automated off these columns, which is the question that surfaced it. Now the top row in this file |
+| #454 | **3.0** = 3×1.0÷1 | New this pass. `grep -c "2026-07-30" CHANGELOG.md` returned **0** while five bugs shipped that day across nine commits. Verified the cause is structural rather than an oversight: the Working Protocol's close-the-loop step names the backlog row, the journal, the verification, the commit and the push, and never names `CHANGELOG.md`. The 2026-07-30 section was written by hand this session, so the symptom is gone and the cause is not |
+| #443 | **2.0** = 2×1.0÷1 | Unchanged, and re-run this pass: `gofmt -l ./cmd ./pkg` still names exactly **8** compiled files and `gofmt -l .` still returns 16 including the build-ignored scripts, matching this row's detail section. `cmd/dashboard/` and `pkg/storage/` are both clean, including every file #446 touched |
+| #450 | **1.0** = 2×1.0÷2 | New this pass, from #446's live verification producing the opposite of the expected result. Measured, not reasoned: against a `delete`-mode database with an active writer, the corrected DSN fails with `SQLITE_BUSY` where the broken one succeeds, because SQLite refuses a `journal_mode` change while another connection is active and `busy_timeout` does not cover it. Both pragma orderings tested and both fail, so ordering is not the fix. Pre-existing `pkg/storage` behaviour, unreachable once the database is WAL — which it now always is |
+| #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` still returns 0, so `npm run lint` still walks the committed `dist/` |
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload (`pkg/mcp/client.go:244`, `:302`, `:532`). Still unmeasured, which is the row's entire point |
+
+**The Usability Gate in `bugs.md` remains MET (2026-07-30).** These rows compete on score alone, and for the first time one of them is genuinely competitive: **#455** (4.0) ties the top bug, **#451** (4.0). The bug still goes first on the file's usual convention. The free queue across both files is `bugs.md` **#451** (4.0), then **#455** (4.0), **#453** (3.0), **#454** (3.0), **#449** (2.5), **#452** (2.5), **#444** (2.5), **#447** (2.0), **#443** (2.0), **#440** (1.5), and **#450**/**#448**/**#442** (1.0 each).
+
+**Prior pass — 2026-07-30 groom-pass note (post-#445 run):** this file held **three** Pending rows, each re-verified against current code and all above the 0.5 floor.
 
 | # | Score | Re-verified how |
 | --- | --- | --- |
@@ -124,7 +137,7 @@ What this pass did change here is three **Done** rows, because a bug found this 
 | #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`, so `npm run lint` still walks the committed `dist/` |
 | #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload. Still unmeasured, which is the row's entire point |
 
-**The Usability Gate in `bugs.md` is now MET (2026-07-30)**, so for the first time in several sessions these rows are no longer blocked behind it and compete on score alone. They still lose: five Minor bugs remain open and the top one, **#446** (4.0), outscores every row in this file. The free queue is `bugs.md` **#446** (4.0), **#449** (2.5, new), **#444** (2.5), **#447** (2.0), then **#443** (2.0), **#440** (1.5), and **#448**/**#442** (1.0 each).
+At that pass, **the Usability Gate in `bugs.md` had just become MET (2026-07-30)**, so for the first time in several sessions these rows were no longer blocked behind it and competed on score alone. They still lost: five Minor bugs were open and the top one, **#446** (4.0), outscored every row in this file. The queue then was `bugs.md` **#446** (4.0), **#449** (2.5, new), **#444** (2.5), **#447** (2.0), then **#443** (2.0), **#440** (1.5), and **#448**/**#442** (1.0 each).
 
 `improvements_paywall.md` was re-checked in the same pass and is unchanged: **#424** (2.0) and **#17** (1.75) still need a paid key, and **#14** remains `⚠️ below floor` at 0.4 — it stays open and must not be worked without explicit confirmation.
 
@@ -157,6 +170,7 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
+| 455 | [The per-item model columns name models that no longer exist](#455-the-per-item-model-columns-name-models-that-no-longer-exist) | Pending | 4.0 = 4×1.0÷1 | claude-opus-5 | gemini-3.6-flash-high | — | Mechanical, but needs a live probe first | Found 2026-07-30 while answering a question about routing each backlog item to the model its row names. Counted across all three backlogs: **73 rows name `claude-sonnet-4-6` and 7 name `claude-opus-4-6-thinking`**, neither of which is a model in the current lineup — only 4 rows name a current one (`claude-opus-5`). The Gemini and OpenAI columns are in the same state (`gemini-3.1-pro-high`, `gpt-5.6-terra`), and one row reads literally `gemini-whatever-provider-is-configured`. This is normally harmless, because `groom_backlogs.md` already says the named models are "suggestions, not requirements" and every session probes availability live. It stops being harmless the moment anyone tries to *automate* the routing — an orchestrator reading these columns would request models that cannot be served, on 80 of 84 rows. Value 4: the columns are either load-bearing or they are decoration, and right now they are decoration that looks load-bearing. Effort 1 for the rewrite itself, but the real work is deciding whether to name concrete models at all or to switch the column to a capability tier (cheap/mechanical, standard, deep-reasoning) that does not expire |
 | 454 | [Nothing in the Working Protocol updates `CHANGELOG.md`, and it drifted a full day](#454-nothing-in-the-working-protocol-updates-changelogmd-and-it-drifted-a-full-day) | Pending | 3.0 = 3×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Process fix | Found 2026-07-30 while auditing the docs after #446. `grep -c "2026-07-30" CHANGELOG.md` returned **0**, though five bug fixes had shipped that day (#436, #437, #441, #445, #446) across nine commits. The file's most recent entry was 2026-07-29. The cause is structural rather than anyone's oversight: the Working Protocol's close-the-loop step names the backlog row, the journal, the commit and the push, and never names `CHANGELOG.md`, so a session that follows the protocol exactly still leaves it stale. The 2026-07-30 section was written by hand this session, which fixes the symptom and not the cause. Value 3: the changelog is the only artifact in the repo aimed at someone who was not in the session, and a changelog that is silently a day behind is worse than none, because its most recent entry reads as current. Effort 1: one line in the protocol's close-the-loop list |
 | 450 | [The shared DSN's `journal_mode(WAL)` can fail a connection outright, and `busy_timeout` does not cover it](#450-the-shared-dsns-journal_modewal-can-fail-a-connection-outright-and-busy_timeout-does-not-cover-it) | Pending | 1.0 = 2×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Driver semantics | Found 2026-07-30 during #446's live verification, by running the experiment that was supposed to confirm the fix and getting the opposite result. Against a database in `delete` journal mode with another process holding a write transaction, a **new** connection built from `storage.DSN` fails immediately with `database is locked (5) (SQLITE_BUSY)`, while the old pre-fix DSN succeeded — because the shared DSN asks to *change* the journal mode on connect, and SQLite refuses a journal-mode change while another connection is active regardless of any busy timeout. Both pragma orderings were measured (`journal_mode` first and `busy_timeout` first) and both fail identically, so ordering is not the answer. This is pre-existing `pkg/storage` behaviour that #446 propagated to the dashboard rather than introduced, and it is unreachable once the database is WAL — which it now always is, since both commands set it. Value 2 and Effort 2: the honest fix is to stop asking readers to set `journal_mode` at all and let the writer own it, which is a small change with a real design question attached (which connection is the writer, and what happens on a genuinely fresh database) |
 | 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Pending | 1.0 = 2×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Tooling hygiene | Found 2026-07-30 while running the UI linter for bug #437. `cmd/dashboard/ui/dist` is committed on purpose (bug #436 — it is a `go:embed` compile-time dependency), but `.oxlintrc.json` has no `ignorePatterns`, so `npm run lint` walks into `dist/` and reports dozens of warnings against minified React internals: `no-unused-expressions`, `no-this-in-sfc`, and similar, all pointing at column offsets inside a single-line bundle. `npx oxlint src` is clean — 0 warnings, 0 errors — so every warning the default script prints is noise about generated code nobody wrote. The cost is that the linter's output is useless as a signal: a real warning in `src/` would be buried, and anyone who runs the documented command learns to ignore it. One `ignorePatterns` entry |
@@ -237,6 +251,29 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 | 30 | `gpt-5.6-sol` | Unanswerable-attestation detection is safety-sensitive and benefits from deeper reasoning. |
 
 ## Details
+
+### 455. The per-item model columns name models that no longer exist
+
+**Found 2026-07-30**, while the user asked whether a session should run a cheap orchestrator and then invoke, per item, the Claude model each backlog row names.
+
+Counting the actual values across `bugs.md`, `improvements.md` and `improvements_paywall.md`:
+
+| value | rows |
+| --- | --- |
+| `claude-sonnet-4-6` | 73 |
+| `claude-opus-4-6-thinking` | 7 |
+| `claude-opus-5` | 4 |
+
+So 80 of 84 rows name a Claude model that is not in the current lineup. The other columns are in the same condition — `gemini-3.1-pro-high`, `gemini-3.6-flash-high`, `gpt-5.6-terra`, `gpt-5.6-sol` — and one row's Gemini column reads literally `gemini-whatever-provider-is-configured`.
+
+**Why this has been harmless until now, and why that is about to change.** `groom_backlogs.md` already states that the named models are "suggestions, not requirements" and instructs every session to probe availability live and walk down a fallback ladder. A human-driven session therefore never actually reads these columns as instructions. But the columns exist precisely so that work can be *routed*, and an orchestrator that took them at face value would request an unservable model on 80 of 84 rows before falling back. A column that is only correct because nobody relies on it is decoration wearing the costume of configuration.
+
+**Fix direction — and the decision matters more than the edit.** Two options:
+
+1. Rewrite the values to current model IDs. Cheap, and stale again the next time the lineup moves; this backlog has been running long enough that it has already happened at least twice.
+2. Replace the concrete model names with a capability tier the row actually means — something like *mechanical* (one-line change, obvious verification), *standard*, and *deep-reasoning* (the item's difficulty is in deciding what correct looks like, not in typing it). Tiers do not expire, they survive a provider switch, and they encode the judgment the column was reaching for anyway.
+
+Option 2 is recommended. Whoever takes it should also note that the effort column already carries part of this signal, so the two should be looked at together rather than left to disagree.
 
 ### 454. Nothing in the Working Protocol updates `CHANGELOG.md`, and it drifted a full day
 
