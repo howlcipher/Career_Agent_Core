@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -228,6 +229,91 @@ func newDashboardServer(address string, handler http.Handler) *http.Server {
 	}
 }
 
+// sameOriginViolation reports why a request must be rejected as
+// cross-origin, or "" when it is acceptable. Bug #445: the agent
+// start/stop endpoints validated nothing but the HTTP method, and a
+// cross-origin `fetch(..., {method:'POST', mode:'no-cors'})` is a CORS
+// *simple request* - no preflight is sent, the browser issues it, and the
+// server acts on it. CORS only stops the attacking page from reading the
+// response; by then the agent has already been launched and is submitting
+// real applications with real PII. Binding the listener to loopback (bug
+// #126) is no defence at all here, because the request originates from the
+// user's own browser on the same machine.
+//
+// The returned string is a human-readable description of the offending
+// header, so the caller can log it and the user can tell an attack from a
+// misconfiguration.
+func sameOriginViolation(r *http.Request) string {
+	// Primary check: the fetch-metadata header. Every current browser sends
+	// it on every request and JavaScript cannot set it, which is exactly
+	// what makes it trustworthy. "same-origin" is our own dashboard page;
+	// "none" is a user-initiated navigation (typing the URL, a bookmark).
+	// "cross-site" and "same-site" both mean another page drove this.
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		if site == "same-origin" || site == "none" {
+			return ""
+		}
+		return fmt.Sprintf("Sec-Fetch-Site: %q", site)
+	}
+
+	// Fallback for clients that do not send Sec-Fetch-Site (curl, older
+	// browsers, this project's own scripts): the Origin header, then
+	// Referer. Either one's host must match the host the request was
+	// addressed to.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		if hostMatchesRequest(origin, r.Host) {
+			return ""
+		}
+		return fmt.Sprintf("Origin: %q (request Host: %q)", origin, r.Host)
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		if hostMatchesRequest(referer, r.Host) {
+			return ""
+		}
+		return fmt.Sprintf("Referer: %q (request Host: %q)", referer, r.Host)
+	}
+
+	// No Sec-Fetch-Site, no Origin, no Referer at all. Such a request did
+	// not come from a browser page: every browser attaches at least one of
+	// the three when a page issues a request, so this shape is curl, a
+	// script, or the project's own tooling. Blocking it would break that
+	// usage without closing the browser-driven attack this guard exists for,
+	// so it is allowed through.
+	return ""
+}
+
+// hostMatchesRequest reports whether an Origin/Referer value points at the
+// same host the request was addressed to. It fails closed: anything that
+// does not parse, or that parses with no host at all (a bare "null" Origin
+// from a sandboxed iframe, or outright garbage), does not match.
+func hostMatchesRequest(headerValue, requestHost string) bool {
+	parsed, err := url.Parse(headerValue)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, requestHost)
+}
+
+// requireSameOrigin wraps a state-changing handler so a cross-origin caller
+// is rejected before the handler runs at all.
+func requireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if violation := sameOriginViolation(r); violation != "" {
+			log.Printf(
+				"Rejected cross-origin request to %s - %s",
+				r.URL.Path, violation,
+			)
+			http.Error(
+				w,
+				"Forbidden: cross-origin requests are not allowed on this endpoint",
+				http.StatusForbidden,
+			)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func main() {
 	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
@@ -261,10 +347,19 @@ func main() {
 	fileServer := http.FileServer(http.FS(subFS))
 	mux.Handle("/", fileServer)
 
+	// /api/metrics and /api/agent/status are read-only GETs: they change no
+	// state and launch no process, so a forged cross-origin request to them
+	// achieves nothing the attacker could not already do, and gating them
+	// would break scripted polling for no security gain. They are
+	// deliberately left ungated.
 	mux.HandleFunc("/api/metrics", serveMetrics)
-	mux.HandleFunc("/api/agent/start", serveAgentStart)
-	mux.HandleFunc("/api/agent/stop", serveAgentStop)
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
+
+	// These two are state-changing: start launches the agent (which submits
+	// real applications with real PII) and stop pkills it. Bug #445 - they
+	// must never be drivable by another site's page in the user's browser.
+	mux.HandleFunc("/api/agent/start", requireSameOrigin(serveAgentStart))
+	mux.HandleFunc("/api/agent/stop", requireSameOrigin(serveAgentStop))
 
 	if warning := dashboardExposureWarning(address); warning != "" {
 		log.Print(warning)

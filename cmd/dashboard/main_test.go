@@ -790,6 +790,198 @@ func TestDashboardExposureWarning(t *testing.T) {
 	}
 }
 
+// The tests below cover bug #445. The agent start/stop endpoints validated
+// nothing but the HTTP method, so a cross-origin
+// `fetch('http://127.0.0.1:8080/api/agent/start', {method:'POST',
+// mode:'no-cors'})` from *any* page open in *any* tab -- including an ad
+// iframe -- was a CORS simple request the browser sent and the server acted
+// on. CORS blocks reading the response, not the side effect: by then the
+// agent is running and submitting real applications with the user's real PII.
+// The loopback bind from bug #126 is worth nothing against this, because the
+// request comes from the user's own browser on the same machine.
+//
+// These exercise requireSameOrigin against a sentinel handler rather than
+// serveAgentStart itself, deliberately: a test that reached the real handler
+// on a POST would launch ./career_agent_bin or run pkill. The sentinel
+// records whether it was reached, so every rejection case below genuinely
+// fails if the guard is deleted -- with no guard, reached becomes true and
+// the status stays 200 instead of 403.
+func TestRequireSameOrigin(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		headers map[string]string
+		want    int
+	}{
+		{
+			name:    "Sec-Fetch-Site same-origin is our own dashboard page",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Sec-Fetch-Site": "same-origin"},
+			want:    http.StatusOK,
+		},
+		{
+			name:    "Sec-Fetch-Site none is a user-initiated navigation",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Sec-Fetch-Site": "none"},
+			want:    http.StatusOK,
+		},
+		{
+			name:    "Sec-Fetch-Site cross-site is the attack in bug #445",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Sec-Fetch-Site": "cross-site"},
+			want:    http.StatusForbidden,
+		},
+		{
+			name:    "Sec-Fetch-Site same-site still means another page drove it",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Sec-Fetch-Site": "same-site"},
+			want:    http.StatusForbidden,
+		},
+		{
+			// A browser too old to send fetch metadata still sends Origin
+			// on a cross-origin POST, so Origin is the fallback.
+			name:    "no Sec-Fetch-Site, Origin matching Host",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Origin": "http://127.0.0.1:8080"},
+			want:    http.StatusOK,
+		},
+		{
+			name:    "no Sec-Fetch-Site, Origin on a different host",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Origin": "https://evil.example.com"},
+			want:    http.StatusForbidden,
+		},
+		{
+			// Same host, different port is a different origin.
+			name:    "no Sec-Fetch-Site, Origin on a different port",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Origin": "http://127.0.0.1:9090"},
+			want:    http.StatusForbidden,
+		},
+		{
+			name:    "no Sec-Fetch-Site, no Origin, Referer matching Host",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Referer": "http://127.0.0.1:8080/index.html"},
+			want:    http.StatusOK,
+		},
+		{
+			name:    "no Sec-Fetch-Site, no Origin, Referer on a different host",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Referer": "https://evil.example.com/attack.html"},
+			want:    http.StatusForbidden,
+		},
+		{
+			// An Origin that does not parse as a URL must fail closed
+			// rather than fall through to the no-headers allowance.
+			name:    "malformed Origin that does not parse",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Origin": "://not a url"},
+			want:    http.StatusForbidden,
+		},
+		{
+			// A sandboxed iframe sends a literal "null" Origin; it parses
+			// cleanly but carries no host, so it must not match either.
+			name:    "null Origin from a sandboxed iframe",
+			host:    "127.0.0.1:8080",
+			headers: map[string]string{"Origin": "null"},
+			want:    http.StatusForbidden,
+		},
+		{
+			// curl, the project's own scripts, and anything else that is
+			// not a browser page send none of the three headers. Blocking
+			// that shape breaks scripted use without closing the
+			// browser-driven attack, so it is allowed through.
+			name: "no origin-ish headers at all is the curl case",
+			host: "127.0.0.1:8080",
+			want: http.StatusOK,
+		},
+		{
+			// Sec-Fetch-Site wins outright when present: it cannot be set
+			// by JavaScript, so a forged Origin must not rescue a
+			// cross-site request.
+			name: "cross-site Sec-Fetch-Site beats a spoofed matching Origin",
+			host: "127.0.0.1:8080",
+			headers: map[string]string{
+				"Sec-Fetch-Site": "cross-site",
+				"Origin":         "http://127.0.0.1:8080",
+			},
+			want: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reached := false
+			guarded := requireSameOrigin(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				w.WriteHeader(http.StatusOK)
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/agent/start", nil)
+			req.Host = tt.host
+			for name, value := range tt.headers {
+				req.Header.Set(name, value)
+			}
+			rec := httptest.NewRecorder()
+			guarded(rec, req)
+
+			if rec.Code != tt.want {
+				t.Errorf("status = %d, want %d", rec.Code, tt.want)
+			}
+			wantReached := tt.want == http.StatusOK
+			if reached != wantReached {
+				t.Errorf("wrapped handler reached = %v, want %v -- a rejected request must never reach the handler that launches the agent", reached, wantReached)
+			}
+		})
+	}
+}
+
+// TestAgentHandlers_RejectNonPost keeps the pre-existing method check honest
+// now that the origin guard sits in front of it. GET is safe to run against
+// the real handlers: the method check is the first statement in both, so
+// neither exec.Command is ever reached.
+func TestAgentHandlers_RejectNonPost(t *testing.T) {
+	handlers := map[string]http.HandlerFunc{
+		"/api/agent/start": serveAgentStart,
+		"/api/agent/stop":  serveAgentStop,
+	}
+	for path, handler := range handlers {
+		t.Run(path, func(t *testing.T) {
+			// Wrapped exactly as main() registers it, so this also proves
+			// the guard lets a legitimate same-origin request through to
+			// the handler rather than swallowing it.
+			guarded := requireSameOrigin(handler)
+
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Host = "127.0.0.1:8080"
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			rec := httptest.NewRecorder()
+			guarded(rec, req)
+
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("GET %s = %d, want %d", path, rec.Code, http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+// TestAgentHandlers_CrossSiteGetIsForbiddenBeforeTheMethodCheck proves the
+// ordering: the guard runs first, so a cross-origin caller cannot even
+// distinguish a wrong method from a blocked origin.
+func TestAgentHandlers_CrossSiteGetIsForbiddenBeforeTheMethodCheck(t *testing.T) {
+	guarded := requireSameOrigin(serveAgentStart)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/start", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	guarded(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-site GET = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
 func TestNewDashboardServerUsesAddressHandlerAndTimeouts(t *testing.T) {
 	handler := http.NewServeMux()
 	server := newDashboardServer("127.0.0.1:9090", handler)
