@@ -180,7 +180,22 @@ A third defect was caught in review of this session's *own* delegated implementa
 **2026-07-28 groom-pass note (session 11):** Backlogs groomed. Requeued blocked jobs and fixed a parsing bug in the zero transpiler (`/home/howlcipher/dev/zero/`). All bugs remain Resolved. The static gate is green (build, vet, tests pass). The Usability Gate is MET. There are no pending bugs.
 
 **2026-07-28 groom-pass note (session 12):** Evaluated pipeline for applications filled and submitted. Discovered that the ATS feed truncation bug (#131) was only partially addressed by retries; the true cause was an 8MB `LimitReader` artificially truncating large Lever JSON feeds (e.g., jobgether at 37MB+). Increased the limit to 128MB. Added bug #396 and marked it Done. Backlogs groomed. Usability Gate is MET.
-**2026-07-30 groom-pass note (post-#446 run):** #446 is Done and verified live against real binaries. The Usability Gate stays **MET** — `go build ./...`, `go vet ./...` and `go test ./...` are all clean, exit 0 across all 12 test-bearing packages including the 7 new DSN tests, and `gofmt -l cmd/dashboard/ pkg/storage/` is empty. The four live boxes were not re-verified this pass and rest on their existing dated evidence, except the dashboard box, which this session exercised directly: two dashboards were served against copies of the real database and both returned correct live metrics.
+**2026-07-30 groom-pass note (sixth session, post-#451 run):** #451 is Done and verified live against the real `applications.db` (Failed tile split 22 `FAILED_SCORE` + 35 `FAILED_SUBMIT`, confirming the old hardcoded caption was wrong for 22 of those 57 jobs). `go build ./...`, `go vet ./...` and `go test ./...` are all clean, and `gofmt -l cmd/dashboard/` is empty (the UI `dist/` bundle was rebuilt via `npm run build` to match). The Usability Gate stays **MET**; the four live boxes were not re-verified this pass and rest on their existing dated evidence.
+
+Six Pending bug rows remain, each re-verified against current code:
+
+| # | Severity | Score | Re-verified how | Above floor |
+| --- | --- | --- | --- | --- |
+| #453 | Minor | **3.0** = 3×1.0÷1 | Unchanged. `pkg/storage/manager.go:75` still declares `discovered_at DATETIME` with no `NOT NULL`; `:1206` reads it into `sql.NullTime` with a `time.Now()` fallback, while `pkg/storage/queue_plan.go:67` reads the same column into a bare `time.Time` and returns the scan error outright. Still unreachable — `AddToFunnel` always writes the column |
+| #452 | Minor | **2.5** = 5×1.0÷2 | Unchanged and recounted: all nine `g.Go` closures in `serveMetrics` still log-and-`return nil` (`main.go:398`, `:424`, `:444`, `:461`, `:484`, `:507`, `:534`, `:553`, `:594`), and `:628` is `_ = g.Wait()`. Line numbers moved from the last pass's `:403`-`:612` range because #451 added two new SUM columns and two new Scan targets to the first closure |
+| #449 | Minor | **2.5** = 5×1.0÷2 | **Line-count corrected, not just line-number drift.** The prior pass's note claimed "four, not three" call sites at `:628`/`:635`/`:650`/`:656`; rereading the file finds only **three** `pgrep -f`/`pkill -f career_agent_bin` identification sites (`main.go:644` in `serveAgentStart`, `:666` in `serveAgentStop`, `:672` in `serveAgentStatus`) — the fourth line the prior pass counted (`:651`, now) is `exec.Command("./career_agent_bin", ...)`, which *launches* the process and does not identify it by pattern-matching a command line. That prior count is itself an instance of this backlog's own recurring lesson: a recount is not the same as checking what the count is *of* |
+| #444 | Minor | **2.5** = 5×1.0÷2 | Unchanged; untouched this session. Fatal-quota branches still `cmd/agent/pipeline.go:268` and `:405` |
+| #447 | Minor | **2.0** = 4×1.0÷2 | Unchanged as a defect, line numbers drifted because #451 added an `explainPair` helper above this code. `App.tsx:168`/`:173` (`handleStart`/`handleStop`) are still bare `await fetch(...)` while the fetchers at `:132`/`:144` both open with `try {`; the `setInterval` at `:160` still has no `AbortController` |
+| #440 | Minor | **1.5** = 3×1.0÷2 | Unchanged. `scripts/` still holds 18 `.go` files with `server.go` the one exception to `//go:build ignore`, still no caller |
+
+Nothing is below the 0.5 floor. The free queue is now **#453, #454, #449, #452, #444, #447, #443, #440, then #450/#448/#442**, with `improvements.md`'s **#454** (3.0) tied with #453 at the top — this file's convention breaks that tie toward the bug. **#453 is the recommended next item.**
+
+**Prior — 2026-07-30 groom-pass note (post-#446 run):** #446 is Done and verified live against real binaries. The Usability Gate stays **MET** — `go build ./...`, `go vet ./...` and `go test ./...` are all clean, exit 0 across all 12 test-bearing packages including the 7 new DSN tests, and `gofmt -l cmd/dashboard/ pkg/storage/` is empty. The four live boxes were not re-verified this pass and rest on their existing dated evidence, except the dashboard box, which this session exercised directly: two dashboards were served against copies of the real database and both returned correct live metrics.
 
 Seven Pending bug rows, each re-verified against current code rather than against its own prose. Three are new this pass, filed from the parallel Claude review agent's findings **after re-reading every line it cited** — one of its claims about severity was downgraded here, and none of its three findings was taken on trust:
 
@@ -451,11 +466,13 @@ on a host with **no** agent process running at all. `ps -eo args` confirmed ther
 All three agent handlers identify the agent the same way:
 
 ```go
-// cmd/dashboard/main.go:615 and :643
+// cmd/dashboard/main.go:644 (serveAgentStart) and :672 (serveAgentStatus)
 err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
-// cmd/dashboard/main.go:637
+// cmd/dashboard/main.go:666 (serveAgentStop)
 _ = exec.Command("pkill", "-f", "career_agent_bin").Run()
 ```
+
+(Line numbers as of the 2026-07-30 sixth-session groom pass; they drift with every commit that touches earlier code in the file, most recently bug #451's.)
 
 `-f` matches against the **full command line** of every process, not the executable name. Any process whose arguments happen to contain the substring counts as "the agent". Realistic triggers, none of them contrived: `go build -o career_agent_bin ./cmd/agent`, `tail -f career_agent_bin.log`, `grep career_agent_bin ...`, or an editor holding the file open.
 
