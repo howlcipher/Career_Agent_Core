@@ -157,6 +157,8 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 
 | # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|
+| 454 | [Nothing in the Working Protocol updates `CHANGELOG.md`, and it drifted a full day](#454-nothing-in-the-working-protocol-updates-changelogmd-and-it-drifted-a-full-day) | Pending | 3.0 = 3×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Process fix | Found 2026-07-30 while auditing the docs after #446. `grep -c "2026-07-30" CHANGELOG.md` returned **0**, though five bug fixes had shipped that day (#436, #437, #441, #445, #446) across nine commits. The file's most recent entry was 2026-07-29. The cause is structural rather than anyone's oversight: the Working Protocol's close-the-loop step names the backlog row, the journal, the commit and the push, and never names `CHANGELOG.md`, so a session that follows the protocol exactly still leaves it stale. The 2026-07-30 section was written by hand this session, which fixes the symptom and not the cause. Value 3: the changelog is the only artifact in the repo aimed at someone who was not in the session, and a changelog that is silently a day behind is worse than none, because its most recent entry reads as current. Effort 1: one line in the protocol's close-the-loop list |
+| 450 | [The shared DSN's `journal_mode(WAL)` can fail a connection outright, and `busy_timeout` does not cover it](#450-the-shared-dsns-journal_modewal-can-fail-a-connection-outright-and-busy_timeout-does-not-cover-it) | Pending | 1.0 = 2×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Driver semantics | Found 2026-07-30 during #446's live verification, by running the experiment that was supposed to confirm the fix and getting the opposite result. Against a database in `delete` journal mode with another process holding a write transaction, a **new** connection built from `storage.DSN` fails immediately with `database is locked (5) (SQLITE_BUSY)`, while the old pre-fix DSN succeeded — because the shared DSN asks to *change* the journal mode on connect, and SQLite refuses a journal-mode change while another connection is active regardless of any busy timeout. Both pragma orderings were measured (`journal_mode` first and `busy_timeout` first) and both fail identically, so ordering is not the answer. This is pre-existing `pkg/storage` behaviour that #446 propagated to the dashboard rather than introduced, and it is unreachable once the database is WAL — which it now always is, since both commands set it. Value 2 and Effort 2: the honest fix is to stop asking readers to set `journal_mode` at all and let the writer own it, which is a small change with a real design question attached (which connection is the writer, and what happens on a genuinely fresh database) |
 | 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Pending | 1.0 = 2×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Tooling hygiene | Found 2026-07-30 while running the UI linter for bug #437. `cmd/dashboard/ui/dist` is committed on purpose (bug #436 — it is a `go:embed` compile-time dependency), but `.oxlintrc.json` has no `ignorePatterns`, so `npm run lint` walks into `dist/` and reports dozens of warnings against minified React internals: `no-unused-expressions`, `no-this-in-sfc`, and similar, all pointing at column offsets inside a single-line bundle. `npx oxlint src` is clean — 0 warnings, 0 errors — so every warning the default script prints is noise about generated code nobody wrote. The cost is that the linter's output is useless as a signal: a real warning in `src/` would be buried, and anyone who runs the documented command learns to ignore it. One `ignorePatterns` entry |
 | 443 | [Eight Go files are not `gofmt`-clean, and nothing in the verification loop notices](#443-eight-go-files-are-not-gofmt-clean-and-nothing-in-the-verification-loop-notices) | Pending | 2.0 = 2×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | Mechanical cleanup | Found 2026-07-30 while formatting the files touched for bug #441. `gofmt -l ./cmd ./pkg` names eight files; every diff is trailing whitespace on otherwise-blank lines, 16 lines across the eight files. Nothing is broken and `go vet` is silent, because formatting is not what vet checks — the project's stated loop is `go build` / `go vet` / `go test`, none of which reads formatting. The cost is diff noise: any future edit near one of those lines carries an unrelated whitespace change, which is exactly the kind of collateral that hid what #437 and #439 dropped. One `gofmt -w` plus adding the check to the documented loop |
 | 428 | [Expand usage of Zero transpiler for analytics and tooling](#428-expand-usage-of-zero-transpiler-for-analytics-and-tooling) | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | gpt-5.6-terra | Scripting & Tooling | The Lisp-like AI-first Zero transpiler (already used in `metrics_summary.zero`) is perfect for rapidly generating robust Go utility scripts for queue analysis and data exploration without writing boilerplate Go. |
@@ -235,6 +237,44 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 | 30 | `gpt-5.6-sol` | Unanswerable-attestation detection is safety-sensitive and benefits from deeper reasoning. |
 
 ## Details
+
+### 454. Nothing in the Working Protocol updates `CHANGELOG.md`, and it drifted a full day
+
+**Found 2026-07-30** while auditing the documentation after bug #446.
+
+`grep -c "2026-07-30" CHANGELOG.md` returned **0**. Five bug fixes had shipped that day across nine commits — #436 (fresh clones could not build), #437 (the dashboard's deleted conversion analytics), #441 (installer and `.env.example` naming different models), #445 (cross-origin start/stop), #446 (the shared DSN) — and the changelog's most recent entry was still 2026-07-29.
+
+**The cause is structural, not anybody's oversight.** The Working Protocol's close-the-loop step enumerates what a finished item must leave behind: the backlog row set to `Done`, the journal deleted, the verification run, the commit, the push. It does not name `CHANGELOG.md`. A session can follow the protocol perfectly and still leave the changelog a day stale, and five consecutive sessions did.
+
+This is a close relative of what #443 found about `gofmt`: a check nobody runs is a check that does not exist, and here the artifact nobody updates is the one aimed squarely at people who were not in the session. A changelog silently one day behind is arguably worse than no changelog, because its top entry presents itself as current.
+
+The 2026-07-30 section was written by hand this session from `git log`, which repairs the symptom and leaves the cause in place.
+
+**Fix:** add the changelog to the close-the-loop list in the Working Protocol, so an item is not Done until its user-visible change is recorded there. Worth deciding at the same time whether every item earns an entry or only user-visible ones — a row like #440 (`//go:build ignore` on an unused script) plainly does not.
+
+### 450. The shared DSN's `journal_mode(WAL)` can fail a connection outright, and `busy_timeout` does not cover it
+
+**Found 2026-07-30** during bug #446's live verification — specifically, by running the experiment that was meant to *confirm* the fix and getting the opposite result.
+
+The setup: a database in `delete` journal mode, another process holding an open write transaction, and two readers opened concurrently.
+
+```
+=== database journal_mode=delete ===
+post-fix (storage.DSN)       FAILED after 1ms   err=database is locked (5) (SQLITE_BUSY)
+pre-fix  (go-sqlite3 DSN)    ok     after 1ms   count=3
+
+=== database journal_mode=wal ===
+post-fix (storage.DSN)       ok     after 1ms   count=3
+pre-fix  (go-sqlite3 DSN)    ok     after 1ms   count=3
+```
+
+The corrected DSN loses where the broken one wins. The reason is that the shared DSN asks to *change* the journal mode on connect, and **SQLite refuses a journal-mode change while another connection is active — `busy_timeout` does not apply to it.** The pre-fix DSN "won" only because it asked for nothing, which is not a virtue; it is the defect #446 was filed about.
+
+Pragma ordering was tested as the obvious hypothesis and ruled out. Both `_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)` and `_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)` fail identically, twice each.
+
+**Scope and severity.** This is pre-existing `pkg/storage` behaviour that #446 propagated to `cmd/dashboard`; it was not introduced by that fix, and `cmd/agent` has been carrying it since #416. It is unreachable in the steady state, because the database is always WAL once either command has opened it — and after #446 both of them set it. It becomes reachable only on a genuinely fresh database being opened by two processes at the same moment.
+
+**Fix direction:** stop asking readers to set `journal_mode` at all and let the writer own it — the reader keeps `busy_timeout` and the cache/temp settings, which are per-connection anyway. That is a small change with a real question attached: which connection is the designated writer, and what should happen when a database does not exist yet and the reader is first? Answering it is most of the effort.
 
 ### 448. `npm run lint` lints the dashboard's own committed build output
 

@@ -254,9 +254,12 @@ Also re-verified this pass: the three static gate boxes (`go build`/`go vet`/`go
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
 |---|---|---|---|---|---|---|---|---|---|
+| 451 | [Two summary tiles caption a two-status count with the reason for only one of them](#451-two-summary-tiles-caption-a-two-status-count-with-the-reason-for-only-one-of-them) | Minor | Pending | 4.0 = 4×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 by the review agent running alongside #446, and confirmed by reading all three sites. The basic-counts query aggregates two statuses per tile (`cmd/dashboard/main.go:394` sums `FAILED_SCORE` **and** `FAILED_SUBMIT`; `:395` sums `MANUAL_REQUIRED` **and** `AWAITING_REVIEW`), but the tile's caption is hardcoded to one member of each pair — `App.tsx:211` renders `explain('FAILED_SUBMIT')` and `:216` renders `explain('MANUAL_REQUIRED')`. `statusReason` (`main.go:132-151`) gives each member a genuinely different meaning: "Failed to score the job against your profile" versus "Reached the application form but failed to submit", and "ATS requires an account" versus "Filled by Copilot — awaiting your review and submit". So a run whose failures are all `FAILED_SCORE` is captioned as having reached a form it never saw, and a Manual Queue holding only copilot jobs tells the user an account is required. The same file already reasons about this distinction correctly at `App.tsx:264-266`, calling the two "completely different asks" — for the detail card, not for this tile. Value 4: the number is right and the sentence under it is wrong, which is worse than no sentence. Effort 1: derive the caption from which status actually dominates the bucket, or caption the pair |
+| 452 | [`serveMetrics` swallows all nine of its query errors and answers 200 with zeros](#452-servemetrics-swallows-all-nine-of-its-query-errors-and-answers-200-with-zeros) | Minor | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 by the review agent running alongside #446. All nine `g.Go` closures in `serveMetrics` log their error and then unconditionally `return nil` (`cmd/dashboard/main.go:403`, `:417`, `:435`, `:452`, `:475`, `:502`, `:527`, `:557`, `:591`), and the group's result is explicitly discarded at `:612` with `_ = g.Wait()`. The handler therefore always responds `200 OK` carrying whatever zero values the failed scans left behind, and the single basic-counts query drives all eight top-line tiles at once. A user watching during a failure sees a confident "nothing has happened yet", not an error. **This is the mechanism #446's report described** ("its queries swallow errors into a log line and return zeros") and it was never filed on its own; #446 turned out to be about the DSN, so it is still open. Effort 2 rather than 1 because several of these are `QueryRow` calls where `sql.ErrNoRows` is a legitimate empty state that must keep rendering as zero — distinguishing "no rows" from "query failed" is the actual work |
+| 453 | [`GetQueuePlan` scans `discovered_at` into a non-nullable `time.Time` while its sibling uses `sql.NullTime`](#453-getqueueplan-scans-discovered_at-into-a-non-nullable-timetime-while-its-sibling-uses-sqlnulltime) | Minor | Pending | 3.0 = 3×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 by the review agent running alongside #446. `job_funnel.discovered_at` is declared `DATETIME` with no `NOT NULL` (`pkg/storage/manager.go:75`). `GetDiscoveredJobs` reads it into a `sql.NullTime` and falls back to `time.Now()` when it is null (`manager.go:1206-1215`), and it `continue`s past a bad row. `GetQueuePlan` reads the same column into a bare `time.Time` (`pkg/storage/queue_plan.go:64`) and `return`s the scan error (`:67`), so one null row discards the entire plan and `cmd/requeue` prints a driver error instead of a queue. Not reachable today — `AddToFunnel` always sets the column — which is why this is Minor rather than higher. Value 3: it is a latent inconsistency between two functions reading one column, with the more fragile of the two having the larger blast radius, and `queue_plan_test.go` never exercises a null. Effort 1: match the sibling |
 | 449 | [`pgrep -f career_agent_bin` matches any process whose command line merely contains that string](#449-pgrep--f-career_agent_bin-matches-any-process-whose-command-line-merely-contains-that-string) | Minor | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 during #445's live verification, by noticing `/api/agent/status` returned `{"running":true}` on a host with **no** agent process. All three agent handlers identify the agent with `pgrep -f`/`pkill -f career_agent_bin` (`cmd/dashboard/main.go:615`, `:637`, `:643`), and `-f` matches the whole command line of every process, not the executable. So `go build -o career_agent_bin ./cmd/agent`, `tail -f career_agent_bin.log`, or an editor with the file open all read as "the agent is running". Two consequences: the Start button silently returns `already_running` and does nothing, and — the worse half — Stop runs `pkill -f` against the same pattern and **kills those unrelated processes**. Reproduced live with a decoy process. Value 5 and Minor rather than Major because it needs a coincidental command line, but note the escalation argument: the failure mode is killing a process the user did not ask to kill |
 | 445 | [Any web page open in your browser can start or stop the agent](#445-any-web-page-open-in-your-browser-can-start-or-stop-the-agent) | Major | Done (2026-07-30) | 3.5 = 7×1.0÷2 | claude-opus-5 | gemini-3.1-pro-high | — | — | **Fixed 2026-07-30.** `requireSameOrigin` now wraps `/api/agent/start` and `/api/agent/stop`. It trusts `Sec-Fetch-Site` first, accepting only `same-origin` and `none` — JavaScript cannot set that header, which is what makes it sound — and falls back to host-matching `Origin`, then `Referer`, against `r.Host`. It fails closed on a value that does not parse or that carries no host, which is what catches a sandboxed iframe's literal `null` Origin. A request carrying none of the three is allowed through **on purpose**, since that shape is curl or a script rather than a browser page; that is a deliberate tradeoff, not an oversight, and it means these endpoints are still unauthenticated against a non-browser caller on the same machine. `/api/metrics` and `/api/agent/status` stay ungated as read-only GETs. **Verified live** against a real dashboard on `127.0.0.1:8099`, not by tests alone: cross-site POST to start and to stop both 403, a forged matching `Origin` does not rescue a cross-site request, an `Origin`-only cross-host POST is 403, a same-origin GET still reaches the 405 method check, and every rejection announces itself in the log. 12 new table-driven tests against a sentinel handler, so no test can launch the binary; the assertions were mutation-checked by neutering the guard and confirming exactly the 8 rejection cases fail. Original report: found by a review pass over the dashboard's data path during #437. `serveAgentStart`/`serveAgentStop` (`cmd/dashboard/main.go:514-552`) check only `r.Method`; the file contains zero `Origin`, `Referer`, `Sec-Fetch-Site` or CSRF-token checks. A cross-origin `POST` with no custom headers is a CORS "simple request" — no preflight — so any page in any tab of the same browser can launch `./career_agent_bin -daemon` or kill a run mid-application. CORS blocks the attacker *reading* the response, not the side effect, which has already happened. Bug #126's loopback-only bind does not help: the request originates on the same machine. Distinct from #414 (multi-instance corruption) — that is the consequence, this is the unauthenticated trigger |
-| 446 | [The dashboard's own database connection still uses the pragma syntax bug #416 was closed for fixing](#446-the-dashboards-own-database-connection-still-uses-the-pragma-syntax-bug-416-was-closed-for-fixing) | Minor | Pending | 4.0 = 4×1.0÷1 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 during #437's review of the dashboard data path. #416 is filed under Resolved and its text names **both** `pkg/storage/manager.go` and `cmd/dashboard/main.go`. Only the first was fixed: `manager.go:42` builds the correct `_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&...` DSN, while `main.go:247` still opens `"./applications.db?_journal_mode=WAL"` — the `go-sqlite3` syntax `modernc.org/sqlite` silently ignores. The dashboard's connection therefore runs on driver defaults, notably with no busy timeout, so it fails immediately on `SQLITE_BUSY` instead of waiting. Its queries swallow errors into a log line and return zeros, so contention with a writing agent shows up as a briefly wrong dashboard rather than an error. Effort 1: one line, matching an existing correct one |
+| 446 | [The dashboard's own database connection still uses the pragma syntax bug #416 was closed for fixing](#446-the-dashboards-own-database-connection-still-uses-the-pragma-syntax-bug-416-was-closed-for-fixing) | Minor | Done (2026-07-30) | 4.0 = 4×1.0÷1 | claude-opus-5 | gemini-3.6-flash-high | — | — | **Fixed 2026-07-30.** `pkg/storage/dsn.go` now holds `DSN(path)` and `DefaultDatabasePath` as the single source of truth; `pkg/storage/manager.go` and `cmd/dashboard/main.go` both go through it, and the dashboard keeps the result in a package-level `dashboardDSN` that `TestDashboardDSNMatchesStorage` pins to the shared builder, so the two connections cannot fork again. 7 new tests, mutation-checked: restoring the old literal fails all three dashboard assertions with the expected messages. **The live verification disproved the report's stated mechanism, which is the more useful result.** Running a pre-fix and a post-fix binary side by side against a copy of the real `applications.db` (9,710 discovered rows) while a separate process held an open write transaction produced byte-identical metrics from both, and not one lock or busy error in either log — because the database is already in WAL mode, where readers never block on a writer at all. The claim "a query that meets a write lock fails immediately" is simply not true of the deployed configuration. What the fix *does* repair was found by running each binary in an empty directory: the pre-fix dashboard, reaching a new database first, created it with `journal_mode=delete` and no `-wal` file, while the post-fix one creates it in `wal`. So the real defect was a dashboard silently downgrading a fresh database's concurrency mode, not a lost read. Separately confirmed that a live connection built by `storage.DSN` reads back `busy_timeout=5000` where the old spelling reads back `0`; that pair is now a test and its negative control. One finding filed rather than folded in — see improvement #450. Original report: found 2026-07-30 during #437's review of the dashboard data path. #416 is filed under Resolved and its text names **both** `pkg/storage/manager.go` and `cmd/dashboard/main.go`. Only the first was fixed: `manager.go:42` builds the correct `_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&...` DSN, while `main.go:247` still opens `"./applications.db?_journal_mode=WAL"` — the `go-sqlite3` syntax `modernc.org/sqlite` silently ignores. The dashboard's connection therefore runs on driver defaults, notably with no busy timeout, so it fails immediately on `SQLITE_BUSY` instead of waiting. Its queries swallow errors into a log line and return zeros, so contention with a writing agent shows up as a briefly wrong dashboard rather than an error. Effort 1: one line, matching an existing correct one |
 | 447 | [The dashboard UI silently swallows failed start/stop clicks, and slow polls can render stale metrics](#447-the-dashboard-ui-silently-swallows-failed-startstop-clicks-and-slow-polls-can-render-stale-metrics) | Minor | Pending | 2.0 = 4×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 while restoring the UI for #437. Two independent defects in the same 20 lines of `App.tsx`. (1) `handleStart`/`handleStop` `await fetch(...)` with no `try/catch`, unlike `fetchMetrics`/`checkAgent` which both have one; a rejected fetch skips the follow-up `checkAgent()` and surfaces only as an unhandled rejection in the console, so a failed click is indistinguishable from a successful one. (2) The 2-second `setInterval` has no `AbortController` and no in-flight guard, and `serveMetrics` fans out eight independent SQL queries with no latency bound, so a slow poll can resolve after a faster later one and overwrite fresh state with stale numbers. Self-correcting on the next tick, hence Minor |
 | 434 | [No path moves a job out of `AWAITING_REVIEW` or `MANUAL_REQUIRED`, so hand-off statuses are permanent dead ends](#434-no-path-moves-a-job-out-of-awaiting_review-or-manual_required-so-hand-off-statuses-are-permanent-dead-ends) | Major | Done (2026-07-29) | — | claude-sonnet-4-6 | gemini-3.1-pro-high | — | — | Added `storage.MarkHandoffApplied` and `cmd/reconcile`, which promotes ticked checklist entries to `APPLIED` (dry run by default) and refuses any row that has already moved on. Widened the tracker's candidate query and tracked-company set to include both hand-off statuses. Verified live end to end, including the safety refusal |
 | 444 | [A single 429 shuts the whole agent down, and the log blames Gemini whatever provider is configured](#444-a-single-429-shuts-the-whole-agent-down-and-the-log-blames-gemini-whatever-provider-is-configured) | Minor | Pending | 2.5 = 5×1.0÷2 | claude-sonnet-4-6 | gemini-3.6-flash-high | — | — | Found 2026-07-30 during the #441 groom pass, while checking whether any DOM-parsing path calls a paid endpoint directly (it does not). Two call sites in `cmd/agent/pipeline.go` (269, 406) treat any error containing `429` or `Quota exceeded` as a fatal daily quota, calling `deps.Cancel()` and abandoning the rest of the batch — but a 429 from Anthropic is routinely a per-minute rate limit that the surrounding retry loop already knows how to back off from. Same pass found seven log lines and comments across `pipeline.go` and `pkg/submitter/vision.go` naming Gemini for calls that route through whichever provider `LLM_PROVIDER` selects, including one promising "Gemini-1.5-Pro" while running a local `qwen2.5vl:7b` |
@@ -492,6 +495,108 @@ db, err = sql.Open("sqlite", "./applications.db?_journal_mode=WAL")
 **The general point is worth more than the one-line fix.** #416 was closed as Resolved with half its own stated scope unshipped, and it was not caught by two subsequent groom passes because the row said "Resolved" and nobody re-read what it had claimed to cover. This is the same shape as #437 and #439: *a Done note describes what was done, not what was claimed.* When a bug names N files, closing it means checking N files.
 
 **Fix:** use the same DSN as `pkg/storage`, ideally by extracting a shared connection-string builder so the two cannot drift again.
+
+**Resolved 2026-07-30 — and the live verification contradicted the paragraph above.**
+
+`pkg/storage/dsn.go` now exports `DSN(path)` and `DefaultDatabasePath`. `manager.go` and `cmd/dashboard/main.go` both call it, and `TestDashboardDSNMatchesStorage` pins the dashboard's value to the shared builder so a future edit cannot silently re-fork it.
+
+The bolded claim above — *"a query that meets a write lock fails immediately rather than waiting the 5 seconds `pkg/storage` asks for"* — **does not reproduce.** A pre-fix binary and a post-fix binary were served side by side (`127.0.0.1:8097` and `:8098`) against copies of the real `applications.db`, with a separate process holding an open write transaction against each. Both returned byte-identical metrics, and neither logged a single lock or busy error. The reason is structural: the database is in **WAL mode**, and in WAL mode readers do not block on a writer. The symptom this bug was filed to explain could not have been caused by the defect this bug describes.
+
+What the defect really did was only visible on a database that did not exist yet. Each binary was run in an empty directory and asked for `/api/metrics`, so it created `applications.db` itself:
+
+| binary | resulting `journal_mode` | `-wal` / `-shm` present |
+| --- | --- | --- |
+| pre-fix | `delete` | no |
+| post-fix | `wal` | yes |
+
+So a dashboard that reached a new database before the agent did left it in rollback-journal mode — quietly downgrading the setting the rest of the project depends on — and that is what is now fixed.
+
+The busy-timeout half is real but was independently confirmed rather than assumed: a live connection opened with `storage.DSN` reads back `busy_timeout=5000`, one opened with the old `?_journal_mode=WAL&_busy_timeout=5000` reads back `0`. Both assertions are now tests, the second as an explicit negative control — without it, `busy_timeout=5000` could just as well have been a driver default and would have proven nothing.
+
+**The lesson, which is a new one for this file.** Every previous session's lesson has been that some piece of *prose* was untrustworthy — a Done note, a code comment, a row's arithmetic, a bug report's file list. This one is sharper: the prose that was wrong was **this bug report's own explanation of its own symptom**, and it was wrong in the direction that makes a fix look more urgent than it is. The row was still worth fixing; the stated reason was not the real one. Stated as a rule: **a bug report contains two separable claims — that something is wrong, and why it matters — and verifying the first does not verify the second.** The first was confirmed by grep in seconds. The second needed two binaries and an empty directory, and it fell.
+
+### 451. Two summary tiles caption a two-status count with the reason for only one of them
+
+**Found 2026-07-30** by the Claude review agent running alongside #446, and re-confirmed here by reading all three sites rather than trusting the report.
+
+Two of the eight summary tiles count a pair of statuses but explain only one of them. The query aggregates:
+
+```go
+COALESCE(SUM(CASE WHEN status IN ('FAILED_SCORE', 'FAILED_SUBMIT') THEN 1 ELSE 0 END), 0),      // main.go:394
+COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0), // main.go:395
+```
+
+while the tiles caption:
+
+```tsx
+<span className="card-reason">{explain('FAILED_SUBMIT')}</span>    // App.tsx:211
+<span className="card-reason">{explain('MANUAL_REQUIRED')}</span>  // App.tsx:216
+```
+
+`statusReason` (`main.go:132-151`) gives the members of each pair meanings that are not interchangeable:
+
+| status | reason rendered |
+| --- | --- |
+| `FAILED_SCORE` | Failed to score the job against your profile |
+| `FAILED_SUBMIT` | Reached the application form but failed to submit |
+| `MANUAL_REQUIRED` | ATS requires an account — apply manually with the saved tailored docs |
+| `AWAITING_REVIEW` | Filled by Copilot — awaiting your review and submit |
+
+**The failure is that the number is correct and the sentence under it is wrong**, which is worse than having no sentence: a run whose failures are all `FAILED_SCORE` reports having reached a form it never loaded, and a Manual Queue holding only copilot-filled jobs tells the user to go create an ATS account when the real ask is a single click on work already done.
+
+Note that `App.tsx` already reasons about exactly this distinction correctly, at `:264-266`, where it calls the two "completely different asks" — but only for the separate "Awaiting You" detail card, not for this tile. The knowledge was in the file; the tile just did not use it.
+
+**Fix direction:** caption from the data rather than from a literal — either render the reason for whichever status actually dominates the bucket (the API would need to return the split), or caption both. There are no frontend tests under `cmd/dashboard/ui` at all, which is why nothing caught this; whoever takes it should consider whether adding the first one is in scope.
+
+### 452. `serveMetrics` swallows all nine of its query errors and answers 200 with zeros
+
+**Found 2026-07-30** by the Claude review agent running alongside #446.
+
+Every one of the nine `g.Go` closures in `serveMetrics` has the same shape:
+
+```go
+if err != nil {
+    log.Printf("Failed to query basic counts: %v", err)
+}
+return nil
+```
+
+at `cmd/dashboard/main.go:403`, `:417`, `:435`, `:452`, `:475`, `:502`, `:527`, `:557` and `:591`. The group's own result is then explicitly discarded — `_ = g.Wait()` at `:612` — and the handler encodes whatever is in the struct and returns `200 OK`.
+
+So a failed query is indistinguishable from an empty database. The first closure alone populates all eight top-line tiles, meaning a single error renders the entire funnel as zero: a confident "nothing has happened yet" rather than "metrics unavailable". The only trace is a line in the dashboard's stderr, which nobody watching a web page is reading.
+
+**This is the mechanism #446's report described** — *"its queries swallow errors into a log line and return zeros, so contention with a writing agent shows up as a briefly wrong dashboard rather than an error"* — but it was never filed as its own row. #446 turned out to be about the DSN, and fixing the DSN does not touch this. It is worth stating plainly: **the sentence that described this defect was sitting inside another bug's report, being read as background rather than as a finding.**
+
+**Fix direction:** distinguish "no rows" from "query failed". Several of these are `QueryRow` calls where `sql.ErrNoRows` is a legitimate empty state that must keep rendering as zero, so this is not a blanket `return err` — that would turn a fresh install's empty database into a 500. The likely shape is per-field: let each closure record that its field is unavailable, and have the response carry that so the UI can render "—" instead of "0".
+
+### 453. `GetQueuePlan` scans `discovered_at` into a non-nullable `time.Time` while its sibling uses `sql.NullTime`
+
+**Found 2026-07-30** by the Claude review agent running alongside #446.
+
+`job_funnel.discovered_at` is declared without a `NOT NULL` constraint (`pkg/storage/manager.go:75`):
+
+```sql
+discovered_at DATETIME,
+```
+
+Two functions read that column and disagree about whether it can be null. `GetDiscoveredJobs` assumes it can:
+
+```go
+var discoveredAt sql.NullTime                       // manager.go:1206
+...
+if discoveredAt.Valid { j.DiscoveredAt = discoveredAt.Time } else { j.DiscoveredAt = time.Now() }
+```
+
+and it `continue`s past a row that fails to scan. `GetQueuePlan` assumes it cannot:
+
+```go
+var discoveredAt time.Time                          // queue_plan.go:64
+if err := rows.Scan(...); err != nil { return nil, err }   // queue_plan.go:67
+```
+
+**Not reachable today**, because `AddToFunnel` always writes the column — which is the whole reason this is Minor. What makes it worth filing is the asymmetry: the function that is *less* tolerant of a null is also the one with the *larger* blast radius, since a single bad row discards the whole plan and `cmd/requeue` surfaces a raw driver error instead of a queue. `queue_plan_test.go` never inserts a null `discovered_at`, so nothing would catch a future writer path that omits it.
+
+**Fix:** match the sibling — `sql.NullTime` with an explicit fallback. One line and a test row.
 
 ### 447. The dashboard UI silently swallows failed start/stop clicks, and slow polls can render stale metrics
 
