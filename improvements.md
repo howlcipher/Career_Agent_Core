@@ -116,7 +116,19 @@ What this pass did change here is three **Done** rows, because a bug found this 
 - **#426** (dashboard rewrite) is the cause. It replaced an 831-line template with a 137-line app rendering six count tiles, and its Done note describes only what it added.
 - **#15** (conversion analytics) and **#34** (dashboard accessibility) are the casualties. #15's data is still computed and served every poll but renders nowhere; most of #34's markup was deleted outright.
 
-**2026-07-30 groom-pass note (post-#437 run):** this file holds **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+**2026-07-30 groom-pass note (post-#445 run):** this file holds the same **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+
+| # | Score | Re-verified how |
+| --- | --- | --- |
+| #443 | **2.0** = 2×1.0÷1 | Unchanged, and re-run this pass: `gofmt -l .` returns the same 16 files, 8 compiled and 8 build-ignored scripts, matching this row's detail section exactly. Checked deliberately because the title says "Eight" while the command prints 16 — that is the compiled/script split, not a drifted count, so the row is **correct** and was left alone. `cmd/dashboard/` is still clean, including the files #445 touched |
+| #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`, so `npm run lint` still walks the committed `dist/` |
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload. Still unmeasured, which is the row's entire point |
+
+**The Usability Gate in `bugs.md` is now MET (2026-07-30)**, so for the first time in several sessions these rows are no longer blocked behind it and compete on score alone. They still lose: five Minor bugs remain open and the top one, **#446** (4.0), outscores every row in this file. The free queue is `bugs.md` **#446** (4.0), **#449** (2.5, new), **#444** (2.5), **#447** (2.0), then **#443** (2.0), **#440** (1.5), and **#448**/**#442** (1.0 each).
+
+`improvements_paywall.md` was re-checked in the same pass and is unchanged: **#424** (2.0) and **#17** (1.75) still need a paid key, and **#14** remains `⚠️ below floor` at 0.4 — it stays open and must not be worked without explicit confirmation.
+
+**Prior 2026-07-30 groom-pass note (post-#437 run):** this file holds **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
 
 | # | Score | Re-verified how |
 | --- | --- | --- |
