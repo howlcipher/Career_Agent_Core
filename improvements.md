@@ -116,9 +116,18 @@ What this pass did change here is three **Done** rows, because a bug found this 
 - **#426** (dashboard rewrite) is the cause. It replaced an 831-line template with a 137-line app rendering six count tiles, and its Done note describes only what it added.
 - **#15** (conversion analytics) and **#34** (dashboard accessibility) are the casualties. #15's data is still computed and served every poll but renders nowhere; most of #34's markup was deleted outright.
 
+**2026-07-30 groom-pass note (post-#441 run):** this file holds **two** Pending rows, both re-verified against current code and both above the 0.5 floor, so no `⚠️` flags and nothing needs user confirmation.
+
+| # | Score | Re-verified how |
+| --- | --- | --- |
+| #443 | **2.0** = 2×1.0÷1 | New this pass, promoted from the "unfiled observation" the last two passes left sitting below. `gofmt -l .` names 16 files (8 compiled, 8 build-ignored scripts), all trailing whitespace on blank lines. Confirmed `AGENTS.md`'s Test Commands section lists only `go build`/`go vet`/`go test`, none of which reads formatting — so this drift is invisible to the only gate anyone runs, which is why it survived |
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. The offload is still opt-in and still fully guarded: `NLP_SERVICE_URL` read at `pkg/mcp/client.go:244`/`:307`, health probe at `:330-341`, and `ProcessJobApplication` at `:537-556` falling back to in-process when `session.route == nil`. `nlp_service/` and its Python tests are still present. Still unmeasured, which is the whole point of the row |
+
+Neither outranks the open bugs. The free queue is `bugs.md` **#437** (Major, 3.0), **#444** (Minor, 2.5), then **#443** (2.0), **#440** (Minor, 1.5), then **#442** (1.0).
+
 **2026-07-29 groom-pass note (late evening, post-#439 run):** this file now holds **one** Pending row, **#442** (1.0 — measure whether the NLP offload is worth keeping, or delete it), filed from bug #439's work. It is above the 0.5 floor but it does not outrank the open bugs: the free queue is `bugs.md` **#441** (Major, 7.0), **#437** (Major, 3.0), **#440** (Minor, 1.5), then #442.
 
-**Unfiled observation for the next groom pass:** `gofmt -l .` currently lists **17 tracked Go files** as unformatted (across `cmd/agent`, `cmd/reconcile`, `pkg/mcp`, `pkg/parser`, `pkg/scraper`, `pkg/submitter`, `pkg/util` and `scripts/`). It is pre-existing drift, not from this session — every file this session touched is clean — and `go build`/`go vet`/`go test` are all green regardless, so it is cosmetic. Left unfiled rather than turned into a row because the fix is a single `gofmt -w` command whose entire cost is the diff noise it creates against unrelated history; worth doing deliberately at a quiet moment, not as a surprise inside someone else's change.
+**Unfiled observation for the next groom pass — now filed as #443 (2026-07-30):** `gofmt -l .` listed **17 tracked Go files** as unformatted at the time of this note. It is now 16, because `cmd/agent/main.go` was the 17th and was formatted during bug #441's work. The reasoning below still stands — the cost is diff noise against unrelated history, so it wants a deliberate whitespace-only commit rather than a surprise inside someone else's change — which is exactly how #443 scopes it. The one thing this note got wrong is the conclusion that it therefore did not need a row: an item nobody files is an item nobody does, and the drift survived two further groom passes. Original text: *"pre-existing drift, not from this session — every file this session touched is clean — and `go build`/`go vet`/`go test` are all green regardless, so it is cosmetic."*
 
 **One Done row corrected, and it is the same correction as the three below.** **#427** (Python NLP microservice) now carries a dated regression note. Its Done row said the refactor "offload[ed] LLM calls" and nothing else; bug #439 found that the same commit deleted a working provider-agnostic in-process implementation along with the payload circuit breaker, `[API Metrics]` logging, dynamic `num_ctx`, the provider abstraction, the 120-minute Ollama timeout (reintroducing bug #6) and four prompt instructions — and left the path unable to run at all, asking a live Ollama for a model nothing in this repo installs. **That is the second rewrite in two days whose Done note described only its additions**, after #426. The rule is now recorded in `bugs.md`: the only safe review of a rewrite is a diff against what it replaced.
 
@@ -208,7 +217,7 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 
 **Filed 2026-07-30** while fixing bug #441. `cmd/agent/main.go` turned out to be unformatted before any of that session's edits — a single trailing blank line at EOF — which prompted running `gofmt -l` across the tree for the first time in a while.
 
-`gofmt -l ./cmd ./pkg` names eight files:
+`gofmt -l .` names **16** files. Eight are under `cmd/` and `pkg/`:
 
 | file | unformatted lines |
 | --- | --- |
@@ -221,11 +230,13 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 | `pkg/submitter/browser.go` | 1 |
 | `pkg/util/bufferpool.go` | 2 |
 
-Every one is the same thing: whitespace on a line that is otherwise blank. 16 lines total. Nothing is broken, the build is green, and `go vet` is silent — **because formatting is not what vet checks.** The project's documented loop in `AGENTS.md` is `go build ./...`, `go vet ./...`, `go test ./...`, and none of the three reads formatting, so this drift is invisible to the only gate anyone runs.
+The other eight are the `//go:build ignore` scripts (`assess.go`, `audit_jobs.go`, `explore_data.go`, `queue_analysis.go`, `requeue_jobs.go`, `sanitize_jobs.go`, `server.go`, `source_health.go`), which matter less — they are excluded from the module build, except `server.go`, which is bug #440.
+
+Every one is the same thing: whitespace on a line that is otherwise blank. 16 lines across the eight compiled files. Nothing is broken, the build is green, and `go vet` is silent — **because formatting is not what vet checks.** The project's documented loop in `AGENTS.md` is `go build ./...`, `go vet ./...`, `go test ./...`, and none of the three reads formatting, so this drift is invisible to the only gate anyone runs.
 
 Why it is worth 10 minutes rather than zero: an edit anywhere near one of those lines silently carries an unrelated whitespace change into the diff. This repository has now been bitten three times (#437, #438, #439) by *a diff nobody read closely enough*, and its own conclusion was that the only safe review of a rewrite is a line-by-line diff against what it replaced. Noise in that diff is not free.
 
-The work: `gofmt -w` the eight files as one whitespace-only commit — reviewable at a glance precisely because it touches nothing else — and add `gofmt -l ./cmd ./pkg` (empty output required) to the verification loop in `AGENTS.md` so the next drift is caught by the gate rather than by accident. Value 2, Effort 1: trivially small, but it makes a check exist where there was none.
+The work: `gofmt -w` all sixteen as one whitespace-only commit — reviewable at a glance precisely because it touches nothing else — and add `gofmt -l ./cmd ./pkg` (empty output required) to the verification loop in `AGENTS.md` so the next drift is caught by the gate rather than by accident. Value 2, Effort 1: trivially small, but it makes a check exist where there was none.
 
 ### 442. Measure whether the NLP offload is worth keeping
 
