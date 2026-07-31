@@ -6,6 +6,8 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 ## Ranked Backlog (best ROI first)
 
+**2026-07-31 groom-pass note (post-#469 run):** all three rows re-verified against current code, no score changes — **#424 stays 2.0**, **#17 stays 1.75**, **#14 stays 0.43 and `⚠️ below floor`**. This session's work item (improvements.md #469, per-domain circuit breakers for `cmd/agent`'s fetch/pre-flight retries) touched `cmd/agent` and `pkg/storage` only — none of CAPTCHA solving, cloud DOM-offload routing, or GPU availability, the three premises these rows depend on.
+
 **2026-07-31 groom-pass note (post-#466 run):** all three rows re-verified against current code and live state, no score changes — **#424 stays 2.0**, **#17 stays 1.75**, **#14 stays 0.43 and `⚠️ below floor`**. A repository-wide grep for `2captcha|capsolver|anticaptcha|deathbycaptcha` across every `.go` file and `go.mod` still returns 0 hits; `pkg/submitter/` still has 0 references to `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`; `lspci` still reports only the integrated `Radeon Vega Series` GPU. This session's work item (bug #466) touched only `pkg/storage`, `cmd/agent/pipeline.go`, and `cmd/requeue` — none of the three premises here.
 
 **Groom history, consolidated 2026-07-29.** Eleven consecutive groom passes between 2026-07-27 and 2026-07-28 recorded the same two findings in near-identical prose; they are collapsed here, losing no distinct fact. Across every one of those passes, **#17 held at 1.75 = 7×1.0÷4** and **#14 held at 0.43 = 3×1.0÷7, below the floor**. The re-verification was the same each time and is worth stating once properly:
