@@ -4,6 +4,18 @@
 
 This file is kept as a **reference for the Working Protocol's model-selection step** (`improvements.md` step 3): when a session picks a concrete model to satisfy a Pending row's tier, these are the IDs last confirmed to exist, with when and how they were checked. It is not authoritative going forward — always re-check live availability (`agy models`, `curl localhost:11434/api/tags`, or the current Claude/Anthropic model catalogue) before delegating, the same as the Working Protocol already requires.
 
+## Tier → model starting point
+
+A row's `Tier` names a capability level, not a model — this table is the translation a session needs to actually pick one. Re-check live availability before using any of these; treat the table as "last known good," not a requirement.
+
+| Tier | Claude Code | Antigravity (Gemini/OpenAI) | Local Ollama |
+| --- | --- | --- | --- |
+| `mechanical` | `claude-haiku-4-5` | `gemini-3.6-flash-high` / `gpt-oss-120b-medium` | the smallest/fastest tag in `curl localhost:11434/api/tags` |
+| `standard` | `claude-sonnet-5` | `gemini-3.6-flash-high`, or `gemini-3.1-pro-high` if quota allows | the host's general-purpose local model (currently `qwen3:30b-instruct`) |
+| `deep-reasoning` | `claude-opus-5` | `gemini-3.1-pro-high` | the largest available tag, only if the task's latency cost is worth it on CPU-only inference |
+
+If nothing at the row's tier is available (quota exhausted, model retired), step down one tier rather than blocking, and say so in the task journal — a `standard`-tier delegate doing `deep-reasoning` work slower beats not delegating at all.
+
 ## Why this file exists (historical)
 
 Improvement #455 (2026-07-30) found that **`claude-opus-4-6-thinking` had been sitting in seven backlog rows for four days**. It is not a model ID and never was — no `-thinking` suffix exists in any Anthropic model name, because extended thinking is a request parameter (`thinking: {type: "adaptive"}`), not part of an ID. That string could not have resolved against any endpoint.
