@@ -39,11 +39,11 @@ The note below reassessing #17's model on 2026-07-26 is left as the dated record
 
 **Recommendation to the user, unchanged and now nine passes old for #14:** #14 has scored below the ROI floor on every pass since it was filed, for a reason that will not change by waiting — it needs paid GPU compute *and* a labeled dataset that does not exist and is not being collected. It stays open per the rule that below-floor items are never closed unilaterally, but re-confirming it every pass has produced no new information for over a week. **Consider closing it, or re-scoping it to the much smaller "start capturing preference labels" precursor that would actually make it viable later.**
 
-| # | Improvement | Status | Score (V×D÷E) | Claude model | Gemini model | OpenAI model | OpenAI task-fit reason | ROI rationale |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 424 | [Cloud-Offloading for DOM Parsing](#424-cloud-offloading-for-dom-parsing) | Pending — needs paid key | 2.0 = 8×1.0÷4 | claude-sonnet-5 | gemini-3.1-pro-high | — | — | Hybrid mode using cheap/fast cloud models for heavy DOM mapping, saving local CPU cycles. Moved here from `improvements.md` on 2026-07-29: its premise is routing work to cloud APIs, which needs a paid key |
-| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | claude-sonnet-5 | gemini-3.1-pro-high | — | — | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |
-| 14 | [Paid-compute LoRA fine-tuning experiment](#14-paid-compute-lora-fine-tuning-experiment) | Pending ⚠️ below floor — needs paid compute | 0.43 = 3×1.0÷7 | claude-opus-5 | gemini-3.1-pro-high | — | — | This host has only an integrated Radeon Vega GPU, so a useful fine-tuning experiment requires paid cloud compute. One confirmed application still provides no preference-labeled training or evaluation set. Recommend deferring until labels exist |
+| # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
+|---|---|---|---|---|---|
+| 424 | [Cloud-Offloading for DOM Parsing](#424-cloud-offloading-for-dom-parsing) | Pending — needs paid key | 2.0 = 8×1.0÷4 | standard | Hybrid mode using cheap/fast cloud models for heavy DOM mapping, saving local CPU cycles. Moved here from `improvements.md` on 2026-07-29: its premise is routing work to cloud APIs, which needs a paid key |
+| 17 | [CAPTCHA & anti-bot solving](#17-captcha--anti-bot-solving) | Pending — needs paid key | 1.75 = 7×1.0÷4 | standard | The monitoring cohort found 6 of 7 fully filled forms blocked after submit. High potential value, but it still needs a paid 2captcha/capsolver key and explicit user approval |
+| 14 | [Paid-compute LoRA fine-tuning experiment](#14-paid-compute-lora-fine-tuning-experiment) | Pending ⚠️ below floor — needs paid compute | 0.43 = 3×1.0÷7 | deep-reasoning | This host has only an integrated Radeon Vega GPU, so a useful fine-tuning experiment requires paid cloud compute. One confirmed application still provides no preference-labeled training or evaluation set. Recommend deferring until labels exist |
 
 ## Details
 

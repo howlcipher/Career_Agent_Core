@@ -1,8 +1,10 @@
-# Backlog Model Allowlist
+# Backlog Model Reference (superseded as an enforced allowlist by #456)
 
-Every model ID that may appear in a model-recommendation column of `bugs.md`, `improvements.md`, or `improvements_paywall.md`. `internal/backlog/models_test.go` enforces this list under `go test ./...`; a backlog row naming anything absent from here fails the build.
+**This file is no longer mechanically enforced.** Improvement #456 (2026-07-31) replaced the three per-provider model columns (`Claude model`, `Gemini model`, `OpenAI model`) in `bugs.md`, `improvements.md`, and `improvements_paywall.md` with a single `Tier` column — *mechanical* / *standard* / *deep-reasoning* — precisely because concrete model IDs go stale and nothing was reading them mechanically until #455 found one broken for four days. A tier does not expire, so `internal/backlog/models_test.go` now validates the tier vocabulary directly (it is a fixed, closed set of three strings, hardcoded in the test) rather than checking cells against a live-catalogue file like this one.
 
-## Why this file exists
+This file is kept as a **reference for the Working Protocol's model-selection step** (`improvements.md` step 3): when a session picks a concrete model to satisfy a Pending row's tier, these are the IDs last confirmed to exist, with when and how they were checked. It is not authoritative going forward — always re-check live availability (`agy models`, `curl localhost:11434/api/tags`, or the current Claude/Anthropic model catalogue) before delegating, the same as the Working Protocol already requires.
+
+## Why this file exists (historical)
 
 Improvement #455 (2026-07-30) found that **`claude-opus-4-6-thinking` had been sitting in seven backlog rows for four days**. It is not a model ID and never was — no `-thinking` suffix exists in any Anthropic model name, because extended thinking is a request parameter (`thinking: {type: "adaptive"}`), not part of an ID. That string could not have resolved against any endpoint.
 
@@ -22,7 +24,7 @@ It deliberately does *not* judge whether a row names the *best* or *newest* mode
 
 ## Maintaining this file
 
-Add an entry only with real provenance in the second column — where the value came from and when it was checked. The test rejects an entry with an empty provenance cell, because an allowlist that accepts unsourced additions reproduces the original bug one level up.
+Add an entry only with real provenance in the second column — where the value came from and when it was checked. This is no longer machine-enforced (see the note at the top), so the discipline is on whoever edits this file: an entry with no provenance reproduces the original bug one level up, just without a test to catch it.
 
 To re-verify the Anthropic section, read the current model catalogue (the `claude-api` skill's Current Models table, or `GET /v1/models`). **Do not re-verify from memory** — that is precisely how `claude-opus-4-6-thinking` was born.
 
