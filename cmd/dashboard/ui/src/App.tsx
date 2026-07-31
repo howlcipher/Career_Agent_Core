@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './index.css';
 import './App.css';
 
@@ -127,51 +127,74 @@ function App() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [agentRunning, setAgentRunning] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const fetchMetrics = async () => {
+  // Poll responses can resolve out of order (bug #447: a slow request can
+  // finish after a later, faster one). Each poll tags itself with the
+  // sequence number current at send time, and a response is applied only if
+  // it is still the most recent request in flight when it resolves.
+  const pollSeq = useRef(0);
+
+  const fetchMetrics = async (seq: number) => {
     try {
       const res = await fetch('/api/metrics');
       if (res.ok) {
         const data = await res.json();
-        setMetrics(data);
+        if (seq === pollSeq.current) setMetrics(data);
       }
     } catch (e) {
       console.error(e);
     }
   };
 
-  const checkAgent = async () => {
+  const checkAgent = async (seq: number) => {
     try {
       const res = await fetch('/api/agent/status');
       if (res.ok) {
         const data = await res.json();
-        setAgentRunning(data.running);
+        if (seq === pollSeq.current) setAgentRunning(data.running);
       }
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (seq === pollSeq.current) setLoading(false);
     }
   };
 
+  const poll = () => {
+    const seq = ++pollSeq.current;
+    fetchMetrics(seq);
+    checkAgent(seq);
+  };
+
   useEffect(() => {
-    fetchMetrics();
-    checkAgent();
-    const int = setInterval(() => {
-      fetchMetrics();
-      checkAgent();
-    }, 2000);
+    poll();
+    const int = setInterval(poll, 2000);
     return () => clearInterval(int);
   }, []);
 
   const handleStart = async () => {
-    await fetch('/api/agent/start', { method: 'POST' });
-    checkAgent();
+    setActionError(null);
+    try {
+      const res = await fetch('/api/agent/start', { method: 'POST' });
+      if (!res.ok) setActionError('Failed to start agent — check the log');
+    } catch (e) {
+      console.error(e);
+      setActionError('Failed to start agent — check the log');
+    }
+    poll();
   };
 
   const handleStop = async () => {
-    await fetch('/api/agent/stop', { method: 'POST' });
-    checkAgent();
+    setActionError(null);
+    try {
+      const res = await fetch('/api/agent/stop', { method: 'POST' });
+      if (!res.ok) setActionError('Failed to stop agent — check the log');
+    } catch (e) {
+      console.error(e);
+      setActionError('Failed to stop agent — check the log');
+    }
+    poll();
   };
 
   if (loading) return <div>Loading...</div>;
@@ -208,6 +231,9 @@ function App() {
         <button className="btn btn-start" onClick={handleStart} disabled={agentRunning}>▶ Start Agent</button>
         <button className="btn btn-stop" onClick={handleStop} disabled={!agentRunning}>🛑 Stop Agent</button>
       </div>
+      {actionError && (
+        <p className="action-error" role="alert">{actionError}</p>
+      )}
 
       <div className="dashboard-container" aria-live="polite" aria-atomic="false">
         <div className="grid">

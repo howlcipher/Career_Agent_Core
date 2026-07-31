@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The dashboard now tells you when a start/stop click fails, and a slow poll can't overwrite fresher data
+
+* **Fix (bug #447):** `handleStart`/`handleStop` in the dashboard UI (`cmd/dashboard/ui/src/App.tsx`) had no `try/catch` around their `fetch` calls, so a failed POST (a rejected promise or a non-2xx response) looked identical to a successful one — no error, no button change, nothing but an unhandled rejection in the browser console. Both handlers now catch failures and non-2xx responses and surface a visible `role="alert"` message under the controls. Separately, the 2-second metrics poll had no guard against out-of-order responses: a slow request could resolve after a faster, later one and overwrite fresh state with stale data. Each poll now carries a sequence number, and a response is only applied if it is still the most recent request in flight.
+
 ## 2026-07-30 — A transient rate limit no longer cancels the whole batch
 
 * **Fix (bug #444):** `cmd/agent`'s scoring and tailoring retry loops treated any error containing a bare "429" as a fatal daily-quota condition and called `deps.Cancel()`, abandoning every remaining job in the batch. On Anthropic, a 429 is the ordinary per-minute rate limit the adjacent backoff branch already exists to handle — so a Claude-configured agent could lose an entire run to a condition that would have cleared in seconds. Only Gemini's own "Quota exceeded" wording (its genuine hard-quota signal) is now treated as fatal; a bare 429 is retried with backoff on every provider, including Gemini itself, since its own SDK returns 429 for the per-minute limit too. The shutdown log line, and five log lines in `pkg/submitter/vision.go`, also named "Gemini" unconditionally regardless of the configured `LLM_PROVIDER`; both now name the active provider.
