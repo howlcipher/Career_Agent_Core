@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -682,14 +683,57 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
 
+// agentLockPath is cmd/agent's single-instance lock (bug #414), reused here
+// as the source of truth for whether the agent is running.
+const agentLockPath = "applications/career_agent.lock"
+
+// agentPIDAt reports whether the agent's single-instance lock file is
+// currently held, and the PID of the process holding it when the file's
+// contents parse as one. This replaces identifying the agent via `pgrep -f
+// career_agent_bin`, which false-positived on any process whose command line
+// merely contained that substring - a `go build`, a `tail -f`, an editor with
+// the file open - and whose `pkill -f` counterpart then killed the unrelated
+// match (bug #449). A lock we can acquire ourselves means nothing holds it;
+// we release it immediately since this call is a status check, not a claim.
+func agentPIDAt(lockPath string) (pid int, running bool, err error) {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return 0, false, fmt.Errorf("open agent lock file: %w", err)
+	}
+	defer f.Close()
+
+	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); flockErr != nil {
+		// Held by another process: that is the agent. Its PID is whatever it
+		// wrote when it acquired the lock; treat unreadable or unparsed
+		// content as "running, PID unknown" rather than failing the check.
+		data, readErr := os.ReadFile(lockPath)
+		if readErr == nil {
+			if parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
+				pid = parsed
+			}
+		}
+		return pid, true, nil
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return 0, false, nil
+}
+
+func agentPID() (pid int, running bool, err error) {
+	return agentPIDAt(agentLockPath)
+}
+
 func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
-	if err == nil {
+	_, running, err := agentPID()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to check agent status: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if running {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status": "already_running"}`))
 		return
@@ -718,14 +762,31 @@ func serveAgentStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = exec.Command("pkill", "-f", "career_agent_bin").Run()
+
+	// Signal the specific PID the lock file names, not a `pkill -f` substring
+	// match: that pattern also matched a `go build`, a `tail -f`, or an editor
+	// with the binary's name open, and killed whichever one it hit (bug
+	// #449). If the PID is unknown, there is nothing safe to signal.
+	pid, running, err := agentPID()
+	if err != nil {
+		log.Printf("serveAgentStop: could not determine agent status: %v", err)
+	}
+	if running && pid > 0 {
+		if proc, findErr := os.FindProcess(pid); findErr == nil {
+			if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil {
+				log.Printf("serveAgentStop: failed to signal pid %d: %v", pid, sigErr)
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status": "stopped"}`))
 }
 
 func serveAgentStatus(w http.ResponseWriter, r *http.Request) {
-	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
-	running := err == nil
+	_, running, err := agentPID()
+	if err != nil {
+		log.Printf("serveAgentStatus: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"running": running})
 }

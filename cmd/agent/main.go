@@ -788,17 +788,49 @@ func isTruthyEnv(raw string) bool {
 	return false
 }
 
+// acquireSingleInstanceLock enforces the single-instance guarantee bug #414
+// asked for: it opens path, takes a non-blocking exclusive flock, and fails
+// if another process already holds it. The caller owns the returned file and
+// must release the lock and close it (see main's deferred unlock/close).
+//
+// It also writes the caller's own PID into the file once the lock is held.
+// cmd/dashboard reads that PID back to identify and, if needed, signal the
+// running agent, replacing `pgrep -f`/`pkill -f career_agent_bin` — a
+// substring match against any process's full command line that false-
+// positived on a `go build`, a `tail -f`, or an editor with the file open,
+// and whose `pkill` counterpart then killed whichever one it hit (bug #449).
+// The file is truncated first so a shorter PID than the previous holder's
+// does not leave trailing digits behind.
+func acquireSingleInstanceLock(path string) (*os.File, error) {
+	lockFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open lock file: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf("another instance of the agent is already running (failed to acquire %s)", path)
+	}
+	if err := lockFile.Truncate(0); err != nil {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to truncate lock file: %w", err)
+	}
+	if _, err := lockFile.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to write PID to lock file: %w", err)
+	}
+	return lockFile, nil
+}
+
 func main() {
 	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
 	}
 
-	lockFile, err := os.OpenFile("applications/career_agent.lock", os.O_CREATE|os.O_RDWR, 0666)
+	lockFile, err := acquireSingleInstanceLock("applications/career_agent.lock")
 	if err != nil {
-		log.Fatalf("Failed to open lock file: %v", err)
-	}
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		log.Fatalf("Another instance of the agent is already running (failed to acquire applications/career_agent.lock). Exiting.")
+		log.Fatalf("%v", err)
 	}
 	defer func() {
 		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
