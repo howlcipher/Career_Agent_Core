@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — A transient rate limit no longer cancels the whole batch
+
+* **Fix (bug #444):** `cmd/agent`'s scoring and tailoring retry loops treated any error containing a bare "429" as a fatal daily-quota condition and called `deps.Cancel()`, abandoning every remaining job in the batch. On Anthropic, a 429 is the ordinary per-minute rate limit the adjacent backoff branch already exists to handle — so a Claude-configured agent could lose an entire run to a condition that would have cleared in seconds. Only Gemini's own "Quota exceeded" wording (its genuine hard-quota signal) is now treated as fatal; a bare 429 is retried with backoff on every provider, including Gemini itself, since its own SDK returns 429 for the per-minute limit too. The shutdown log line, and five log lines in `pkg/submitter/vision.go`, also named "Gemini" unconditionally regardless of the configured `LLM_PROVIDER`; both now name the active provider.
+
 ## 2026-07-30 — The metrics API's per-row breakdowns stop swallowing cursor faults
 
 * **Fix (improvement #459):** `serveMetrics`'s by-source and by-variant breakdowns each looped over their query's rows without checking `rows.Err()` afterward. `Next()` returning false can mean either "the result set is exhausted" or "an error occurred while advancing the cursor," and the two are indistinguishable without an explicit check — so a fault partway through either stream (a dropped connection, a corrupted page) rendered a truncated breakdown as if it were complete, with no signal anything was missing. Found by the independent review pass on bug #452's fix, which deliberately scoped #452 to the top-level query call rather than per-row iteration. The scan loops are now `scanSourceConversions`/`scanVariantConversions`, both returning an error on `rows.Err()` that flows into #452's existing 500 path.

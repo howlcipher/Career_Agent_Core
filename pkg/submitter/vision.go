@@ -45,8 +45,30 @@ func attemptQuarantinedVisionSubmit(
 	)
 }
 
-// attemptVisionSubmit is the V3 mechanism that uses Gemini Vision to literally "look" at the screen
-// and map coordinates/selectors if standard HTML DOM pruning fails or is heavily obfuscated.
+// visionProviderName is implemented by any FormMapper that can name the
+// backend actually doing the vision call. Optional rather than part of
+// FormMapper itself, so the interface stays minimal and a mapper that
+// cannot name itself (e.g. a test double) just falls back to a generic
+// label instead of failing to compile.
+type visionProviderName interface {
+	ProviderName() string
+}
+
+// visionModelLabel names the configured vision backend for logging, instead
+// of a hardcoded "Gemini" that is wrong whenever LLM_PROVIDER selects
+// anything else -- this vision path runs on whatever provider's
+// ExtractFormMappingVision is wired in, which on this repo's default
+// configuration is a local Ollama vision model, not Gemini (bugs.md #444).
+func visionModelLabel(mapper FormMapper) string {
+	if named, ok := mapper.(visionProviderName); ok {
+		return named.ProviderName()
+	}
+	return "the configured vision model"
+}
+
+// attemptVisionSubmit is the V3 mechanism that uses the configured vision
+// model to literally "look" at the screen and map coordinates/selectors if
+// standard HTML DOM pruning fails or is heavily obfuscated.
 func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, applyURL, resumePath, coverPath string, pii *config.PII, mapper FormMapper, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Vision-Submit] Taking a full-page screenshot of %s for Visual Reasoning...", applyURL)
 
@@ -59,18 +81,19 @@ func attemptVisionSubmit(page playwright.Page, target fillTarget, companyName, a
 		return fmt.Errorf("failed to take screenshot: %w", err)
 	}
 
-	log.Println("[Vision-Submit] Transmitting screenshot to Gemini-1.5-Pro for visual mapping...")
+	providerLabel := visionModelLabel(mapper)
+	log.Printf("[Vision-Submit] Transmitting screenshot to %s for visual mapping...", providerLabel)
 
-	// Pass image byte array to Gemini
+	// Pass image byte array to the configured vision model
 	mappingJSON, err := mapper.ExtractFormMappingVision(screenshotBytes)
 	if err != nil {
-		return fmt.Errorf("gemini vision failed to map visual layout: %w", err)
+		return fmt.Errorf("vision model failed to map visual layout: %w", err)
 	}
 
-	log.Println("[Vision-Submit] Gemini successfully mapped the visual DOM structure!")
+	log.Printf("[Vision-Submit] %s successfully mapped the visual DOM structure!", providerLabel)
 
 	domain := ExtractDomain(applyURL)
-	// Save it to SQLite so we don't have to use API credits for this specific ATS again!
+	// Save it to SQLite so we don't have to re-run vision mapping for this specific ATS again!
 	if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {
 		log.Printf("[Vision-Submit] Warning: Could not cache vision mapping: %v", err)
 	}

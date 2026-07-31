@@ -40,6 +40,38 @@ type JobState struct {
 	HasToneVariant     bool
 }
 
+// genErrorClass is how a pipeline generation call should react to a
+// provider error: retry with backoff, or abandon the whole batch.
+type genErrorClass int
+
+const (
+	genErrorTerminal genErrorClass = iota
+	genErrorRetryable
+	genErrorFatalQuota
+)
+
+// classifyGenerationError distinguishes a genuine hard quota from an
+// ordinary transient condition. Only "Quota exceeded" -- Gemini's own
+// wording for an exhausted daily allotment -- is fatal. A bare "429" is not:
+// on Anthropic it is the routine per-minute rate limit the retry loop is
+// built to back off from, and even Gemini's SDK returns 429 for both the
+// per-minute and per-day cases, so the status code alone cannot tell them
+// apart (bugs.md #444).
+func classifyGenerationError(err error) genErrorClass {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "Quota exceeded"):
+		return genErrorFatalQuota
+	case strings.Contains(msg, "429"),
+		strings.Contains(msg, "connect:"),
+		strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "deadline exceeded"):
+		return genErrorRetryable
+	default:
+		return genErrorTerminal
+	}
+}
+
 type JobPipelineDeps struct {
 	NetworkGuard *security.NetworkGuard
 	Profile      *config.Profile
@@ -260,21 +292,23 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 					log.Printf("[Worker-%d] SkipScoring enabled: bypassed LLM fit evaluation for %s", workerID, job.CompanyName)
 					state.Score = 100
 				} else {
+				scoreRetryLoop:
 					for attempt := 1; attempt <= 3; attempt++ {
 						state.Score, scoreErr = deps.Client.ScoreJob(state.ScrapedData, state.ProfileConstraints, state.TailoredContext)
 						if scoreErr == nil {
 							break
 						}
-						if strings.Contains(scoreErr.Error(), "429") || strings.Contains(scoreErr.Error(), "Quota exceeded") {
-							log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded scoring job %s. Shutting down agent...", workerID, job.CompanyName)
+						switch classifyGenerationError(scoreErr) {
+						case genErrorFatalQuota:
+							log.Printf("[Worker-%d] CRITICAL: %s API daily quota exceeded scoring job %s. Shutting down agent...", workerID, deps.Client.ProviderName(), job.CompanyName)
 							deps.Cancel()
 							stopWorker = true
 							return
-						} else if strings.Contains(scoreErr.Error(), "connect:") || strings.Contains(scoreErr.Error(), "no route to host") || strings.Contains(scoreErr.Error(), "deadline exceeded") {
-							log.Printf("[Worker-%d] Network error scoring job %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
+						case genErrorRetryable:
+							log.Printf("[Worker-%d] Rate limit or network error scoring job %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
 							time.Sleep(mcp.ExponentialBackoff(attempt))
-						} else {
-							break
+						default:
+							break scoreRetryLoop
 						}
 					}
 				}
@@ -397,20 +431,22 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 
 			var resume, coverLetter, interviewPrep string
 			var processErr error
+		processRetryLoop:
 			for attempt := 1; attempt <= 3; attempt++ {
 				resume, coverLetter, interviewPrep, processErr = deps.Client.ProcessJobApplication(state.ScrapedData, state.ProfileConstraints, state.TailoredContext)
 				if processErr == nil {
 					break
 				}
-				if strings.Contains(processErr.Error(), "429") || strings.Contains(processErr.Error(), "Quota exceeded") {
-					log.Printf("[Worker-%d] CRITICAL: Gemini API Daily Quota Exceeded processing job %s. Shutting down agent...", workerID, job.CompanyName)
+				switch classifyGenerationError(processErr) {
+				case genErrorFatalQuota:
+					log.Printf("[Worker-%d] CRITICAL: %s API daily quota exceeded processing job %s. Shutting down agent...", workerID, deps.Client.ProviderName(), job.CompanyName)
 					deps.Cancel()
 					return "", "", fmt.Errorf("quota exceeded")
-				} else if strings.Contains(processErr.Error(), "connect:") || strings.Contains(processErr.Error(), "no route to host") || strings.Contains(processErr.Error(), "deadline exceeded") {
-					log.Printf("[Worker-%d] Network error processing application %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
+				case genErrorRetryable:
+					log.Printf("[Worker-%d] Rate limit or network error processing application %s (attempt %d/3). Sleeping with backoff...", workerID, job.CompanyName, attempt)
 					time.Sleep(mcp.ExponentialBackoff(attempt))
-				} else {
-					break
+				default:
+					break processRetryLoop
 				}
 			}
 

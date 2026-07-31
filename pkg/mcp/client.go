@@ -70,6 +70,13 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+// ProviderName returns the active backend's name ("ollama", "claude" or
+// "gemini"), for logging that must describe what is actually configured
+// rather than a hardcoded literal (bugs.md #444).
+func (c *Client) ProviderName() string {
+	return c.provider.Name()
+}
+
 // generate runs a single generation request against the configured provider
 // with the provider's own timeout.
 func (c *Client) generate(req genRequest) (string, error) {
