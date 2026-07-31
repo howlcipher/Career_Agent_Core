@@ -416,6 +416,8 @@ A job that ends in a terminal failure status stays there forever. The agent only
 
 **Transient failures (a timeout, a flaky fetch) are retried automatically, but not forever.** A retryable error — a preflight network check, a job-page fetch, the RAG embedding/retrieval call, or the post-score freshness re-check — returns the job to `DISCOVERED` with an exponential backoff (2, 4, 8, 16 minutes) before it is eligible to be picked up again, so one flaky domain can no longer monopolize the worker and starve the rest of the queue. After 5 such failures the job stops retrying and moves to a genuinely terminal `RETRY_EXHAUSTED` status instead, so it does not compete with the rest of the backlog forever.
 
+On top of that per-job backoff, a per-domain circuit breaker tracks consecutive preflight/fetch failures across *every* job from the same domain. Once a domain crosses 5 consecutive failures its circuit opens for a 2-minute cooldown: further jobs from that domain are deferred back to `DISCOVERED` immediately (logged as `Circuit open for <domain>; skipping ...`) instead of each one separately burning a full request timeout finding out again. A deferral like this does **not** spend the job's own retry budget — only a genuine observed failure counts against `RETRY_EXHAUSTED` — and after the cooldown, one probe request is allowed through to test whether the domain has recovered before the circuit closes again.
+
 `cmd/requeue` is the recovery tool. Start by looking at what actually failed and why:
 
 ```bash

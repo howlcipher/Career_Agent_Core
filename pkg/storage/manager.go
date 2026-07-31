@@ -1202,6 +1202,29 @@ func UpdateFunnelStatusRetryable(url string) error {
 	return err
 }
 
+// DeferFunnelStatus returns url to DISCOVERED with next_eligible_at pushed
+// out by cooldown, without touching retry_count. This is deliberately
+// distinct from UpdateFunnelStatusRetryable: a caller that skipped an
+// attempt entirely (e.g. improvements.md #469's per-domain circuit breaker
+// declining to even try a domain it already knows is failing) has not
+// observed a new failure for this specific job, so charging it against
+// MaxRetryAttempts would let a busy domain exhaust jobs that were never
+// actually attempted -- the same starvation shape bugs.md #466 fixed, one
+// layer up. Rows deferred this way keep whatever retry_count they already
+// had and can still reach RETRY_EXHAUSTED, but only from genuine fetch
+// failures.
+func DeferFunnelStatus(url string, cooldown time.Duration) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		"UPDATE job_funnel SET status = 'DISCOVERED', next_eligible_at = ?, last_updated = ? WHERE url = ?",
+		now.Add(cooldown), now, url)
+	return err
+}
+
 func SaveFormMapping(domain, mappingJson string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")

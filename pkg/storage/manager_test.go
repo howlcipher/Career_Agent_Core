@@ -2046,6 +2046,56 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 	}
 }
 
+// TestDeferFunnelStatus_DoesNotSpendRetryBudget is improvements.md #469's
+// review finding: a circuit breaker skipping an attempt entirely (never
+// contacting the domain) must not be charged against MaxRetryAttempts the
+// way a genuine observed failure is, or a busy domain's breaker being open
+// could exhaust jobs that were never actually tried -- the same starvation
+// shape bugs.md #466 fixed, one layer up.
+func TestDeferFunnelStatus_DoesNotSpendRetryBudget(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "https://example.com/deferred-job"
+	if _, err := AddToFunnel("Deferred Co", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel failed: %v", err)
+	}
+
+	// Give the row some existing retry history first, so this test can also
+	// confirm DeferFunnelStatus leaves retry_count exactly as it found it,
+	// not just at zero.
+	if err := UpdateFunnelStatusRetryable(url); err != nil {
+		t.Fatalf("UpdateFunnelStatusRetryable failed: %v", err)
+	}
+
+	readRow := func() (status string, retryCount int, nextEligible sql.NullTime) {
+		if err := db.QueryRow(
+			"SELECT status, retry_count, next_eligible_at FROM job_funnel WHERE url = ?", url,
+		).Scan(&status, &retryCount, &nextEligible); err != nil {
+			t.Fatalf("failed to read back job_funnel row: %v", err)
+		}
+		return
+	}
+	_, retryCountBefore, _ := readRow()
+
+	before := time.Now().UTC()
+	cooldown := 90 * time.Second
+	if err := DeferFunnelStatus(url, cooldown); err != nil {
+		t.Fatalf("DeferFunnelStatus failed: %v", err)
+	}
+
+	status, retryCount, nextEligible := readRow()
+	if status != "DISCOVERED" {
+		t.Errorf("status = %q, want DISCOVERED", status)
+	}
+	if retryCount != retryCountBefore {
+		t.Errorf("retry_count = %d, want unchanged at %d -- a skipped attempt must not spend retry budget", retryCount, retryCountBefore)
+	}
+	if !nextEligible.Valid || nextEligible.Time.Sub(before) < cooldown {
+		t.Errorf("next_eligible_at = %v, want at least %v after %v", nextEligible, cooldown, before)
+	}
+}
+
 // TestGetDiscoveredJobs_SkipsRowsNotYetEligible covers bugs.md #466's second
 // requirement: a backed-off row must not reappear before its delay elapses,
 // but later queue rows must still make progress in the meantime, and the
