@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1144,5 +1145,114 @@ func TestServeMetrics_EmptyTable_StillReturns200(t *testing.T) {
 	}
 	if m.Discovered != 0 || m.Applied != 0 {
 		t.Errorf("expected all-zero counts on an empty table, got %+v", m)
+	}
+}
+
+// fakeConversionRows is a hand-rolled conversionRows for exercising the
+// mid-stream cursor-fault path directly. A real driver cannot be made to
+// return a cursor error from Next() on demand against an in-memory sqlite
+// database (bug #452's precedent -- dropping the table -- only reaches the
+// top-level query failure, never a fault after rows have already started
+// streaming), so this fake stands in for "the row(s) before the fault
+// scanned fine, then the cursor broke" -- the exact ambiguity Next()
+// returning false cannot resolve on its own per database/sql's contract.
+type fakeConversionRows struct {
+	values  [][]any
+	i       int
+	failErr error
+}
+
+func (f *fakeConversionRows) Next() bool {
+	if f.i >= len(f.values) {
+		return false
+	}
+	f.i++
+	return true
+}
+
+func (f *fakeConversionRows) Scan(dest ...any) error {
+	row := f.values[f.i-1]
+	for i, d := range dest {
+		switch v := d.(type) {
+		case *string:
+			*v = row[i].(string)
+		case *int:
+			*v = row[i].(int)
+		default:
+			return fmt.Errorf("fakeConversionRows: unsupported scan dest type %T", d)
+		}
+	}
+	return nil
+}
+
+func (f *fakeConversionRows) Err() error {
+	if f.i >= len(f.values) {
+		return f.failErr
+	}
+	return nil
+}
+
+// TestScanSourceConversions_PropagatesRowsErr and its variant counterpart
+// below pin bug #459: a cursor fault partway through the by-source or
+// by-variant result stream must surface as an error, not as a silently
+// truncated breakdown that renders as if it were complete. Mutation check:
+// deleting scanSourceConversions'/scanVariantConversions's rows.Err() check
+// makes these fail, since the loop above it already appended the one row
+// that scanned fine before Next() returned false.
+func TestScanSourceConversions_PropagatesRowsErr(t *testing.T) {
+	rows := &fakeConversionRows{
+		values:  [][]any{{"Greenhouse", 3, 1, 1, 1}},
+		failErr: errors.New("cursor error: connection reset"),
+	}
+
+	got, err := scanSourceConversions(rows)
+	if err == nil {
+		t.Fatalf("expected an error from a mid-stream cursor fault, got nil with breakdown %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected no partial breakdown on a cursor fault, got %+v", got)
+	}
+}
+
+func TestScanSourceConversions_NoErrorOnCleanExhaustion(t *testing.T) {
+	rows := &fakeConversionRows{
+		values: [][]any{{"Greenhouse", 4, 2, 1, 1}},
+	}
+
+	got, err := scanSourceConversions(rows)
+	if err != nil {
+		t.Fatalf("unexpected error on clean exhaustion: %v", err)
+	}
+	if len(got) != 1 || got[0].Source != "Greenhouse" || got[0].InterviewRate != "50.0%" {
+		t.Errorf("unexpected result: %+v", got)
+	}
+}
+
+func TestScanVariantConversions_PropagatesRowsErr(t *testing.T) {
+	rows := &fakeConversionRows{
+		values:  [][]any{{"formal", 2, 1, 0, 1}},
+		failErr: errors.New("cursor error: connection reset"),
+	}
+
+	got, err := scanVariantConversions(rows)
+	if err == nil {
+		t.Fatalf("expected an error from a mid-stream cursor fault, got nil with breakdown %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected no partial breakdown on a cursor fault, got %+v", got)
+	}
+}
+
+func TestScanVariantConversions_NoErrorOnCleanExhaustion(t *testing.T) {
+	rows := &fakeConversionRows{
+		values: [][]any{{"formal", 4, 1, 1, 2}},
+	}
+
+	got, err := scanVariantConversions(rows)
+	if err != nil {
+		t.Fatalf("unexpected error on clean exhaustion: %v", err)
+	}
+	if len(got) != 1 || got[0].Variant != "formal" || got[0].InterviewRate != "25.0%" {
+		t.Errorf("unexpected result: %+v", got)
 	}
 }

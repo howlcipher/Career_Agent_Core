@@ -113,6 +113,62 @@ type SourceConversionStat struct {
 	InterviewRate string `json:"interview_rate_pct"`
 }
 
+// conversionRows is the subset of *sql.Rows that scanSourceConversions and
+// scanVariantConversions need, factored out so a hand-rolled fake can stand
+// in for tests that need Next() to fail mid-stream rather than exhaust
+// normally -- a shape *sql.Rows itself cannot be made to produce on demand
+// against a real driver.
+type conversionRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// scanSourceConversions drains rows into SourceConversionStat, computing
+// each row's interview rate. Next() returning false can mean either "rows
+// exhausted" or "a cursor error occurred" -- database/sql cannot tell the
+// caller apart without an explicit Err() check, so a fault partway through
+// the result set must not be mistaken for a complete, if short, breakdown.
+func scanSourceConversions(rows conversionRows) ([]SourceConversionStat, error) {
+	var bySource []SourceConversionStat
+	for rows.Next() {
+		var s SourceConversionStat
+		if err := rows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			log.Printf("Failed to scan conversion-by-source row: %v", err)
+			continue
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+		}
+		bySource = append(bySource, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan conversion stats by source: %w", err)
+	}
+	return bySource, nil
+}
+
+// scanVariantConversions mirrors scanSourceConversions for the by-variant
+// breakdown; see its doc comment for why the Err() check is required.
+func scanVariantConversions(rows conversionRows) ([]VariantConversionStat, error) {
+	var byVariant []VariantConversionStat
+	for rows.Next() {
+		var s VariantConversionStat
+		if err := rows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			log.Printf("Failed to scan conversion-by-variant row: %v", err)
+			continue
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+		}
+		byVariant = append(byVariant, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan conversion stats by variant: %w", err)
+	}
+	return byVariant, nil
+}
+
 // formatDuration renders how long a job sat in the pipeline (discovered_at
 // to the terminal status's last_updated/applied_at) as a short human string.
 // discovered_at predates last_updated by anywhere from minutes to several
@@ -574,17 +630,9 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		defer sourceRows.Close()
 
-		var bySource []SourceConversionStat
-		for sourceRows.Next() {
-			var s SourceConversionStat
-			if err := sourceRows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
-				log.Printf("Failed to scan conversion-by-source row: %v", err)
-				continue
-			}
-			if s.TotalApplied > 0 {
-				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
-			}
-			bySource = append(bySource, s)
+		bySource, err := scanSourceConversions(sourceRows)
+		if err != nil {
+			return err
 		}
 		m.BySource = bySource
 		return nil
@@ -607,17 +655,9 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		defer variantRows.Close()
 
-		var byVariant []VariantConversionStat
-		for variantRows.Next() {
-			var s VariantConversionStat
-			if err := variantRows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
-				log.Printf("Failed to scan conversion-by-variant row: %v", err)
-				continue
-			}
-			if s.TotalApplied > 0 {
-				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
-			}
-			byVariant = append(byVariant, s)
+		byVariant, err := scanVariantConversions(variantRows)
+		if err != nil {
+			return err
 		}
 		m.ByVariant = byVariant
 		return nil
