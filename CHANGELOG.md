@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The dashboard UI gets a test framework, and its two trickiest state-machine bugs get real coverage
+
+* **Improvement (#463):** `cmd/dashboard/ui` had no test runner at all — no `vitest`, no `@testing-library/react`, nothing beyond `tsc`/`oxlint`/`vite build`. The poll sequence-number guard (bug #447) and the start/stop `actionError` states could only ever be checked by hand against a live running instance. Added `vitest` + `@testing-library/react` + `@testing-library/jest-dom` + `jsdom`, a `test` script, and six real tests in `src/App.test.tsx` covering: a stale, slower `/api/metrics` and `/api/agent/status` response resolving after a fresher one must not overwrite it; a failed or thrown start/stop `fetch` surfaces the expected `role="alert"` message; a subsequent successful click clears a prior error. Mutation-checked — reverting the metrics sequence guard alone makes the corresponding test fail with the exact stale-data symptom it exists to catch.
+
 ## 2026-07-30 — The dashboard now tells you when a start/stop click fails, and a slow poll can't overwrite fresher data
 
 * **Fix (bug #447):** `handleStart`/`handleStop` in the dashboard UI (`cmd/dashboard/ui/src/App.tsx`) had no `try/catch` around their `fetch` calls, so a failed POST (a rejected promise or a non-2xx response) looked identical to a successful one — no error, no button change, nothing but an unhandled rejection in the browser console. Both handlers now catch failures and non-2xx responses and surface a visible `role="alert"` message under the controls. Separately, the 2-second metrics poll had no guard against out-of-order responses: a slow request could resolve after a faster, later one and overwrite fresh state with stale data. Each poll now carries a sequence number, and a response is only applied if it is still the most recent request in flight.
