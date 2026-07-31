@@ -106,6 +106,10 @@ type MockPage struct {
 	screenshotFunc       func() ([]byte, error)
 	// evaluateFunc backs page-level JS probes (bugs.md #99/#101).
 	evaluateFunc func(expression string) (interface{}, error)
+	// closed records whether Close was called on this specific page, so a
+	// test can assert a crashed page was actually released rather than just
+	// abandoned in favor of a new one (bugs.md #467's recovery path).
+	closed bool
 }
 
 func (m *MockPage) Evaluate(expression string, arg ...interface{}) (interface{}, error) {
@@ -165,7 +169,10 @@ func (m *MockPage) Goto(url string, options ...playwright.PageGotoOptions) (play
 func (m *MockPage) Route(url any, handler func(playwright.Route), times ...int) error { return nil }
 func (m *MockPage) SetDefaultTimeout(timeout float64)                                 {}
 func (m *MockPage) AddInitScript(script playwright.Script) error                      { return nil }
-func (m *MockPage) Close(options ...playwright.PageCloseOptions) error                { return nil }
+func (m *MockPage) Close(options ...playwright.PageCloseOptions) error {
+	m.closed = true
+	return nil
+}
 func (m *MockPage) Screenshot(options ...playwright.PageScreenshotOptions) ([]byte, error) {
 	if m.screenshotFunc != nil {
 		return m.screenshotFunc()
@@ -3938,5 +3945,191 @@ func TestPendingSecurityCodeAfter_GivesUpWithinBudget(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 400*time.Millisecond {
 		t.Errorf("gave up after %v, expected to respect the budget", elapsed)
+	}
+}
+
+func TestIsTargetClosedErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"exact playwright wording", errors.New("target closed"), true},
+		{"full playwright sentence", errors.New("Target page, context or browser has been closed"), true},
+		{"wrapped", fmt.Errorf("failed to click submit: %w", errors.New("target closed")), true},
+		{"browser crash wording", errors.New("browser has been closed"), true},
+		{"unrelated timeout", errors.New("Timeout 30000ms exceeded"), false},
+		{"unrelated validation error", errors.New("required field"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTargetClosedErr(tt.err); got != tt.want {
+				t.Errorf("isTargetClosedErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// bugs.md #467. Reproduces the live-log failure mode: a submit-path click
+// fails with Playwright's "target closed" wording after a crashed browser
+// target, mid-attempt. AttemptSubmit must recreate the browser context once
+// and continue the job on the fresh page rather than writing the whole
+// attempt off -- proven here by asserting the browser context is created a
+// second time and that the final error comes from the *second* page's
+// (different, non-target-closed) failure, not the first page's crash.
+func TestAttemptSubmit_RecoversFromTargetClosedOnce(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	const applyURL = "https://www.linkedin.com/jobs/view/123"
+	benignContent := "<html><body><div>Great opportunity at Example Corp</div></body></html>"
+
+	newPageDouble := func(clickErr error) *MockPage {
+		mp := &MockPage{
+			urlValue:     applyURL,
+			contentValue: benignContent,
+		}
+		mp.locatorFunc = func(selector string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == "button.jobs-apply-button" {
+				return &MockLocator{
+					countFunc: func() (int, error) { return 1, nil },
+					clickFunc: func(...playwright.LocatorClickOptions) error { return clickErr },
+				}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+		return mp
+	}
+
+	firstPage := newPageDouble(errors.New("target closed: Target page, context or browser has been closed"))
+	secondPage := newPageDouble(nil) // click succeeds on the recreated page
+
+	contextCalls := 0
+	pageCalls := 0
+	var contextCloseCalls int
+	mockBrowser := &MockBrowser{
+		newContextFunc: func(...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+			contextCalls++
+			return &MockContext{
+				newPageFunc: func() (playwright.Page, error) {
+					pageCalls++
+					if pageCalls == 1 {
+						return firstPage, nil
+					}
+					return secondPage, nil
+				},
+				closeFunc: func(...playwright.BrowserContextCloseOptions) error {
+					contextCloseCalls++
+					return nil
+				},
+			}, nil
+		},
+	}
+
+	generateDocsCalls := 0
+	err := AttemptSubmit(
+		mockBrowser,
+		security.NewQuarantineLayer(),
+		nil,
+		&mockJudge{},
+		"Recovery Corp",
+		applyURL,
+		func() (string, string, error) {
+			generateDocsCalls++
+			return "resume.pdf", "", nil
+		},
+		&config.PII{},
+		"",
+		true,
+		false,
+		false,
+	)
+
+	if contextCalls != 2 {
+		t.Errorf("browser context creations = %d, want 2 (initial + one recovery)", contextCalls)
+	}
+	if pageCalls != 2 {
+		t.Errorf("page creations = %d, want 2 (initial + one recovery)", pageCalls)
+	}
+	if generateDocsCalls != 1 {
+		t.Errorf("document-generation calls = %d, want 1 (must not repeat after recovery)", generateDocsCalls)
+	}
+	// The recreated page's Click succeeds, so the error that surfaces must be
+	// handleLinkedIn's fixed follow-on error, never the first page's
+	// target-closed error -- proving the recovered page's attempt actually ran.
+	wantErr := "linkedin easy apply modal interaction not fully implemented"
+	if err == nil || err.Error() != wantErr {
+		t.Errorf("err = %v, want %q", err, wantErr)
+	}
+	// Both the crashed context and its page must actually be released, not
+	// just abandoned in favor of the new one.
+	if !firstPage.closed {
+		t.Errorf("the crashed first page was never closed during recovery")
+	}
+	if contextCloseCalls < 1 {
+		t.Errorf("browser context close calls = %d, want at least 1 (the crashed context must be released)", contextCloseCalls)
+	}
+}
+
+// A target-closed failure on the recreated page too must not loop forever:
+// maxTargetRecoveryAttempts caps recovery at one recreation per job.
+func TestAttemptSubmit_TargetClosedRecoveryIsBounded(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	const applyURL = "https://www.linkedin.com/jobs/view/456"
+	benignContent := "<html><body><div>Great opportunity at Example Corp</div></body></html>"
+	targetClosedErr := errors.New("target closed: Target page, context or browser has been closed")
+
+	newPageDouble := func() *MockPage {
+		mp := &MockPage{
+			urlValue:     applyURL,
+			contentValue: benignContent,
+		}
+		mp.locatorFunc = func(selector string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == "button.jobs-apply-button" {
+				return &MockLocator{
+					countFunc: func() (int, error) { return 1, nil },
+					clickFunc: func(...playwright.LocatorClickOptions) error { return targetClosedErr },
+				}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+		return mp
+	}
+
+	contextCalls := 0
+	mockBrowser := &MockBrowser{
+		newContextFunc: func(...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+			contextCalls++
+			return &MockContext{
+				newPageFunc: func() (playwright.Page, error) {
+					return newPageDouble(), nil
+				},
+				closeFunc: func(...playwright.BrowserContextCloseOptions) error { return nil },
+			}, nil
+		},
+	}
+
+	err := AttemptSubmit(
+		mockBrowser,
+		security.NewQuarantineLayer(),
+		nil,
+		&mockJudge{},
+		"Always Crashing Corp",
+		applyURL,
+		func() (string, string, error) { return "resume.pdf", "", nil },
+		&config.PII{},
+		"",
+		true,
+		false,
+		false,
+	)
+
+	// Initial context + exactly one recovery, never more.
+	if contextCalls != 2 {
+		t.Errorf("browser context creations = %d, want 2 (initial + capped single recovery)", contextCalls)
+	}
+	if !errors.Is(err, targetClosedErr) {
+		t.Errorf("err = %v, want the exhausted target-closed error surfaced once the recovery budget runs out", err)
 	}
 }
