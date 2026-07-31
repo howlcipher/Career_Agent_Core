@@ -4,7 +4,9 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**Still MET 2026-07-31 (twenty-fifth session, post-#470 run).** No bug was fixed or filed this session — the work item, `improvements.md` #470 (wiring `cmd/requeue`'s `countForStatus` in as real `-status` pre-flight validation), touched `pkg/storage/manager.go` and `cmd/requeue/main.go`, neither of which surfaced a new defect. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. This file remains empty of Pending rows.
+**Still MET 2026-07-31 (twenty-sixth session, post-#462 run).** No bug was fixed or filed this session — the work item, `improvements.md` #462 (deduplicating the RAG embedding retry loop's inline four-condition check into a call to `classifyGenerationError`), touched only `cmd/agent/pipeline.go` and was a pure internal refactor with no behavior change, verified by re-running `TestClassifyGenerationError` uncached against the new code. It surfaced no new defect. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. This file remains empty of Pending rows.
+
+**Prior — Still MET 2026-07-31 (twenty-fifth session, post-#470 run).** No bug was fixed or filed this session — the work item, `improvements.md` #470 (wiring `cmd/requeue`'s `countForStatus` in as real `-status` pre-flight validation), touched `pkg/storage/manager.go` and `cmd/requeue/main.go`, neither of which surfaced a new defect. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. This file remains empty of Pending rows.
 
 **Prior — Still MET 2026-07-31 (twenty-fourth session, groom pass after #468 run).** No bug was fixed or filed this session — the work item, `improvements.md` #468, touched `pkg/storage`, `cmd/agent/pipeline.go`, and `cmd/dashboard`, none of which surfaced a new defect. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. This file remains empty of Pending rows.
 
