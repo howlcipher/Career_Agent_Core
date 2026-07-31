@@ -19,6 +19,8 @@ agent_run_batch.pid
 /dashboard
 /career-agent
 /agent
+career_agent_bin
+dashboard_bin
 
 Omni_CoverLetter.pdf
 
