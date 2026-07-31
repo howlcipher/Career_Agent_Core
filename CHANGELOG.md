@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-31 — The queue no longer gets stuck retrying the same handful of jobs forever
+
+* **Fix (bug #466):** a live continuously-running daemon repeatedly processed the same ~15 job_funnel rows across many cycles, starving a 10k-row backlog. Retryable failures (a preflight network check, a job-page fetch, the RAG embedding/retrieval call, a post-score freshness re-check) simply reset a job's status back to `DISCOVERED`, and the scheduler pulls every `DISCOVERED` row with no attempt count or cooldown — so a transient failure was retried on the very next cycle and could dominate the worker indefinitely. Retryable failures now back off exponentially (2, 4, 8, 16 minutes) before becoming eligible again, and after 5 attempts a job moves to a new terminal `RETRY_EXHAUSTED` status instead of retrying forever. `cmd/requeue -status RETRY_EXHAUSTED -confirm` gives such a job a fresh retry budget once you believe the cause is fixed, same as it already does for `BLOCKED_CAPTCHA`/`FAILED_SUBMIT`/`APPLIED`.
+
 ## 2026-07-30 — The dashboard now warns you when it can't tell if its numbers are current
 
 * **Improvement (#460):** `App.tsx`'s metrics poll silently kept the last-good numbers on screen when `/api/metrics` failed, with no banner, timestamp, or other cue that the data might be stale — a real `500` (visible in the network tab since bug #452) was otherwise invisible to anyone just watching the dashboard. A single missed poll now stays silent (expected noise), but two consecutive failures show a non-alarming `role="status"` message ("Metrics may be out of date — the last N polls failed"), which clears again the moment a poll succeeds.
