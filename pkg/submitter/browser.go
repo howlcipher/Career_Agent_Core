@@ -1279,6 +1279,45 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		}
 		urlBeforeClick := page.URL()
 		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
+
+		// improvements.md #471: a crashed browser target here would otherwise
+		// fall straight into the cache-invalidation/Vision path below,
+		// discarding a good learned mapping over a transient browser crash
+		// rather than the form actually being wrong. Recover the same way
+		// bug #467 does for the generic retry loop, before treating this as
+		// a fill failure.
+		cachedMappingRecoveries := 0
+		for dynErr != nil && isTargetClosedErr(dynErr) && cachedMappingRecoveries < maxTargetRecoveryAttempts {
+			cachedMappingRecoveries++
+			log.Printf("[Auto-Submit] Browser target closed for %s during cached-mapping fill (%v); recreating the browser context (recovery %d/%d)",
+				companyName, dynErr, cachedMappingRecoveries, maxTargetRecoveryAttempts)
+			page.Close()
+			session.Close()
+			newSession, newPage, recErr := newSubmitPage(browser, applyURL)
+			if recErr != nil {
+				log.Printf("[Auto-Submit] Could not recover browser target for %s: %v", companyName, recErr)
+				break
+			}
+			session, page = newSession, newPage
+			defer session.Close()
+			defer page.Close()
+
+			if reason := DeadRedirectReason(applyURL, page.URL()); reason != "" {
+				return fmt.Errorf("job posting is dead or expired: %s", reason)
+			}
+			if recoveredContent, cErr := page.Content(); cErr == nil {
+				if isDeadJobPage(recoveredContent) {
+					return fmt.Errorf("job posting is dead or expired")
+				}
+				if isCaptchaBlocked(page, recoveredContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
+			}
+			cachedTarget = resolveFillTarget(page)
+			urlBeforeClick = page.URL()
+			dynErr = handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
+		}
+
 		if isSubmitGated(dynErr) {
 			// The cached mapping filled the form correctly; only the click was
 			// withheld. Invalidating it here would discard a working blueprint.

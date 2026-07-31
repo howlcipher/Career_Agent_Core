@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -4131,5 +4132,188 @@ func TestAttemptSubmit_TargetClosedRecoveryIsBounded(t *testing.T) {
 	}
 	if !errors.Is(err, targetClosedErr) {
 		t.Errorf("err = %v, want the exhausted target-closed error surfaced once the recovery budget runs out", err)
+	}
+}
+
+// improvements.md #471. The cached-mapping fast path (storage.GetFormMapping
+// hits) is a separate code path from the generic retry loop bug #467 fixed,
+// and previously treated a target-closed error here as an ordinary fill
+// failure -- invalidating a perfectly good learned mapping and falling back
+// to Vision over a transient browser crash. Proven here by asserting the
+// mapping survives a recovered target-closed failure and the submission
+// still completes on the recreated page.
+func TestAttemptSubmit_CachedMappingRecoversFromTargetClosedOnce(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer storage.CloseDB()
+
+	const applyURL = "https://apply.examplecorp.com/jobs/999"
+	domain := ExtractDomain(applyURL)
+	mappingJSON := `{"fields":{"submit_button":"button.submit"}}`
+	if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {
+		t.Fatalf("failed to seed cached form mapping: %v", err)
+	}
+
+	benignContent := "<html><body><div>Great opportunity at Example Corp</div></body></html>"
+	successContent := "<html><body><div>Great opportunity at Example Corp</div><div>Application submitted, thank you!</div></body></html>"
+
+	newSubmitLocator := func(clickErr error) func(selector string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+		return func(selector string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == "button.submit" {
+				return &MockLocator{
+					countFunc: func() (int, error) { return 1, nil },
+					clickFunc: func(...playwright.LocatorClickOptions) error { return clickErr },
+				}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+	}
+
+	firstPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: benignContent,
+		locatorFunc:  newSubmitLocator(errors.New("target closed: Target page, context or browser has been closed")),
+	}
+	secondPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: successContent,
+		locatorFunc:  newSubmitLocator(nil),
+	}
+
+	contextCalls := 0
+	pageCalls := 0
+	var contextCloseCalls int
+	mockBrowser := &MockBrowser{
+		newContextFunc: func(...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+			contextCalls++
+			return &MockContext{
+				newPageFunc: func() (playwright.Page, error) {
+					pageCalls++
+					if pageCalls == 1 {
+						return firstPage, nil
+					}
+					return secondPage, nil
+				},
+				closeFunc: func(...playwright.BrowserContextCloseOptions) error {
+					contextCloseCalls++
+					return nil
+				},
+			}, nil
+		},
+	}
+
+	err := AttemptSubmit(
+		mockBrowser,
+		security.NewQuarantineLayer(),
+		nil,
+		&mockJudge{},
+		"Cached Mapping Corp",
+		applyURL,
+		func() (string, string, error) { return "resume.pdf", "", nil },
+		&config.PII{},
+		"",
+		true,
+		false,
+		true,
+	)
+
+	if err != nil {
+		t.Errorf("err = %v, want nil (submission confirmed on the recovered page)", err)
+	}
+	if contextCalls != 2 {
+		t.Errorf("browser context creations = %d, want 2 (initial + one recovery)", contextCalls)
+	}
+	if pageCalls != 2 {
+		t.Errorf("page creations = %d, want 2 (initial + one recovery)", pageCalls)
+	}
+	if !firstPage.closed {
+		t.Errorf("the crashed first page was never closed during recovery")
+	}
+	if contextCloseCalls < 1 {
+		t.Errorf("browser context close calls = %d, want at least 1 (the crashed context must be released)", contextCloseCalls)
+	}
+
+	survived, getErr := storage.GetFormMapping(domain)
+	if getErr != nil || survived != mappingJSON {
+		t.Errorf("cached mapping for %s was invalidated despite the target-closed failure recovering successfully (GetFormMapping returned %q, %v)", domain, survived, getErr)
+	}
+}
+
+// A target-closed failure on the recreated page too must not loop forever in
+// the cached-mapping fast path either: maxTargetRecoveryAttempts caps
+// recovery at one recreation, after which the ordinary cache-invalidation
+// path (mapping deleted, falling back to a plain error since no mapper is
+// given) takes over exactly as it did before #471.
+func TestAttemptSubmit_CachedMappingTargetClosedRecoveryIsBounded(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer storage.CloseDB()
+
+	const applyURL = "https://apply.alwayscrashing.com/jobs/1"
+	domain := ExtractDomain(applyURL)
+	mappingJSON := `{"fields":{"submit_button":"button.submit"}}`
+	if err := storage.SaveFormMapping(domain, mappingJSON); err != nil {
+		t.Fatalf("failed to seed cached form mapping: %v", err)
+	}
+
+	benignContent := "<html><body><div>Great opportunity at Example Corp</div></body></html>"
+	targetClosedErr := errors.New("target closed: Target page, context or browser has been closed")
+
+	newPageDouble := func() *MockPage {
+		mp := &MockPage{urlValue: applyURL, contentValue: benignContent}
+		mp.locatorFunc = func(selector string, _ ...playwright.PageLocatorOptions) playwright.Locator {
+			if selector == "button.submit" {
+				return &MockLocator{
+					countFunc: func() (int, error) { return 1, nil },
+					clickFunc: func(...playwright.LocatorClickOptions) error { return targetClosedErr },
+				}
+			}
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		}
+		return mp
+	}
+
+	contextCalls := 0
+	mockBrowser := &MockBrowser{
+		newContextFunc: func(...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+			contextCalls++
+			return &MockContext{
+				newPageFunc: func() (playwright.Page, error) { return newPageDouble(), nil },
+				closeFunc:   func(...playwright.BrowserContextCloseOptions) error { return nil },
+			}, nil
+		},
+	}
+
+	err := AttemptSubmit(
+		mockBrowser,
+		security.NewQuarantineLayer(),
+		nil,
+		&mockJudge{},
+		"Always Crashing Corp",
+		applyURL,
+		func() (string, string, error) { return "resume.pdf", "", nil },
+		&config.PII{},
+		"",
+		true,
+		false,
+		true,
+	)
+
+	if contextCalls != 2 {
+		t.Errorf("browser context creations = %d, want 2 (initial + capped single recovery)", contextCalls)
+	}
+	if !errors.Is(err, targetClosedErr) {
+		t.Errorf("err = %v, want the exhausted target-closed error wrapped by the cache-invalidation path", err)
+	}
+	if _, getErr := storage.GetFormMapping(domain); getErr == nil {
+		t.Errorf("cached mapping for %s should have been invalidated once recovery was exhausted and the fill genuinely failed", domain)
 	}
 }
