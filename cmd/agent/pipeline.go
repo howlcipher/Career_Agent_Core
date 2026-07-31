@@ -271,7 +271,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						if embErr == nil {
 							break
 						}
-						if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+						if classifyGenerationError(embErr) == genErrorRetryable {
 							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping with backoff...", workerID, attempt)
 							time.Sleep(mcp.ExponentialBackoff(attempt))
 						} else {
