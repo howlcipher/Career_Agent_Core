@@ -73,14 +73,15 @@ func classifyGenerationError(err error) genErrorClass {
 }
 
 type JobPipelineDeps struct {
-	NetworkGuard *security.NetworkGuard
-	Profile      *config.Profile
-	PIIData      *config.PII
-	Client       *mcp.Client
-	Filter       *security.QuarantineLayer
-	Submitter    *submitter.Pipeline
-	RAGEnabled   bool
-	Cancel       context.CancelFunc
+	NetworkGuard   *security.NetworkGuard
+	Profile        *config.Profile
+	PIIData        *config.PII
+	Client         *mcp.Client
+	Filter         *security.QuarantineLayer
+	Submitter      *submitter.Pipeline
+	RAGEnabled     bool
+	Cancel         context.CancelFunc
+	CircuitBreaker *domainCircuitBreaker
 }
 
 func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
@@ -92,7 +93,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 
 		if scraper.IsKnownJunkJobURL(job.URL) {
 			log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
-			if err := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); err != nil {
+			if err := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); err != nil {
 				log.Printf("[Worker-%d] Failed to mark known-junk URL invalid: %v", workerID, err)
 			}
 			return StateEnd, nil
@@ -100,7 +101,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		if err := deps.NetworkGuard.ValidateURL(ctx, job.URL); err != nil {
 			if errors.Is(err, security.ErrUnsafeNetworkTarget) {
 				log.Printf("[Worker-%d] Unsafe job URL blocked.", workerID)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark unsafe URL invalid: %v", workerID, statusErr)
 				}
 			} else {
@@ -113,15 +114,31 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			return StateEnd, nil
 		}
 
-		if checkErr := checkJobAlive(ctx, job.URL); checkErr != nil {
+		preflightDomain := getATSProvider(job.URL)
+		if deps.CircuitBreaker != nil && !deps.CircuitBreaker.allow(preflightDomain) {
+			log.Printf("[Worker-%d] Circuit open for %s; skipping pre-flight check and returning job to the queue.", workerID, preflightDomain)
+			if statusErr := storage.DeferFunnelStatus(job.URL, circuitBreakerCooldown); statusErr != nil {
+				log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+			}
+			return StateEnd, nil
+		}
+		checkErr := checkJobAlive(ctx, job.URL)
+		if deps.CircuitBreaker != nil {
+			if checkErr == nil || errors.Is(checkErr, errDeadRedirect) {
+				deps.CircuitBreaker.recordSuccess(preflightDomain)
+			} else {
+				deps.CircuitBreaker.recordFailure(preflightDomain)
+			}
+		}
+		if checkErr != nil {
 			if errors.Is(checkErr, errDeadRedirect) {
 				log.Printf("[Worker-%d] Pre-flight check failed: Job posting is no longer available for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
 				}
 			} else {
 				log.Printf("[Worker-%d] Pre-flight check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 				}
 			}
@@ -147,9 +164,34 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		workerID := state.WorkerID
 
 		if job.Description == "" {
+			fetchDomain := getATSProvider(job.URL)
+			if deps.CircuitBreaker != nil && !deps.CircuitBreaker.allow(fetchDomain) {
+				log.Printf("[Worker-%d] Circuit open for %s; skipping job page fetch and returning job to the queue.", workerID, fetchDomain)
+				if statusErr := storage.DeferFunnelStatus(job.URL, circuitBreakerCooldown); statusErr != nil {
+					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+				}
+				return StateEnd, nil
+			}
+
 			log.Printf("[Worker-%d] Fetching job description for %s...", workerID, job.CompanyName)
 			httpClient := deps.NetworkGuard.HTTPClient(10 * time.Second)
 			fetchResult, fetchErr := fetchJobPage(ctx, httpClient, job.URL, nil)
+
+			if deps.CircuitBreaker != nil {
+				// fetchResult.statusCode is only ever set once a response
+				// actually came back from the server (main.go sets it
+				// immediately after a successful client.Do, before branching
+				// on the status code) -- so its presence, not fetchErr or
+				// disposition, is what actually distinguishes "the domain is
+				// reachable" (200, 404/410, weak content, even a stray
+				// 401/403) from "the retry loop exhausted on a genuine
+				// transport-level failure" (statusCode never set).
+				if fetchErr == nil || fetchResult.statusCode != 0 {
+					deps.CircuitBreaker.recordSuccess(fetchDomain)
+				} else {
+					deps.CircuitBreaker.recordFailure(fetchDomain)
+				}
+			}
 
 			if errors.Is(fetchErr, errJobPageWeakContent) && isRawJobPageCaptchaBlocked(job.URL, fetchResult.html, fetchResult.description) {
 				log.Printf("[Worker-%d] Security/Captcha block detected for %s. Skipping job to save API tokens.", workerID, job.CompanyName)
@@ -162,12 +204,12 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				switch fetchResult.disposition {
 				case jobPageTerminal:
 					log.Printf("[Worker-%d] Job posting is no longer available for %s: %v", workerID, job.CompanyName, fetchErr)
-					if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+					if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 						log.Printf("[Worker-%d] Failed to mark unavailable job invalid: %v", workerID, statusErr)
 					}
 				default:
 					log.Printf("[Worker-%d] Job page fetch is retryable for %s: %v", workerID, job.CompanyName, fetchErr)
-					if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+					if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 						log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 					}
 				}
@@ -229,7 +271,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						if embErr == nil {
 							break
 						}
-						if strings.Contains(embErr.Error(), "connect:") || strings.Contains(embErr.Error(), "no route to host") || strings.Contains(embErr.Error(), "429") || strings.Contains(embErr.Error(), "deadline exceeded") {
+						if classifyGenerationError(embErr) == genErrorRetryable {
 							log.Printf("[Worker-%d] Network or Rate Limit error getting embedding (attempt %d/3). Sleeping with backoff...", workerID, attempt)
 							time.Sleep(mcp.ExponentialBackoff(attempt))
 						} else {
@@ -241,7 +283,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
 						if retrieveErr != nil {
 							log.Printf("[Worker-%d] Failed to retrieve grounded career context: %v", workerID, retrieveErr)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+							if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 								log.Printf("[Worker-%d] Failed to return job after RAG retrieval error: %v", workerID, statusErr)
 							}
 							skipJob = true
@@ -255,7 +297,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						state.TailoredContext = sb.String()
 					} else {
 						log.Printf("[RAG] Embedding failed after retries: %v", embErr)
-						if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+						if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 							log.Printf("[Worker-%d] Failed to return job after RAG embedding error: %v", workerID, statusErr)
 						}
 						skipJob = true
@@ -360,13 +402,30 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		job := state.Job
 		workerID := state.WorkerID
 
+		freshnessDomain := getATSProvider(job.URL)
+		if deps.CircuitBreaker != nil && !deps.CircuitBreaker.allow(freshnessDomain) {
+			log.Printf("[Worker-%d] Circuit open for %s; skipping post-score freshness check and returning job to the queue.", workerID, freshnessDomain)
+			if statusErr := storage.DeferFunnelStatus(job.URL, circuitBreakerCooldown); statusErr != nil {
+				log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+			}
+			return StateEnd, nil
+		}
+
 		log.Printf("[Worker-%d] Revalidating posting freshness for %s before document generation...", workerID, job.CompanyName)
 		freshnessStart := time.Now()
-		if checkErr := checkJobAlive(ctx, job.URL); checkErr != nil {
+		checkErr := checkJobAlive(ctx, job.URL)
+		if deps.CircuitBreaker != nil {
+			if checkErr == nil || errors.Is(checkErr, errDeadRedirect) {
+				deps.CircuitBreaker.recordSuccess(freshnessDomain)
+			} else {
+				deps.CircuitBreaker.recordFailure(freshnessDomain)
+			}
+		}
+		if checkErr != nil {
 			log.Printf("[Worker-%d] Post-score freshness check took %s", workerID, time.Since(freshnessStart))
 			if errors.Is(checkErr, errDeadRedirect) {
 				log.Printf("[Worker-%d] Post-score check failed: Job posting expired during scoring for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
 				}
 				_ = storage.RecordAttempt(storage.ApplicationAttempt{
@@ -379,7 +438,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				})
 			} else {
 				log.Printf("[Worker-%d] Post-score check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 				}
 			}

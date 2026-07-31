@@ -36,6 +36,9 @@ interface Metrics {
   awaiting_review: number;
   blocked_captcha: number;
   invalid_url: number;
+  invalid_url_malformed: number;
+  invalid_url_expired: number;
+  retry_exhausted: number;
   last_applied_company?: string;
   last_applied_title?: string;
   last_applied_url?: string;
@@ -237,6 +240,20 @@ function App() {
     return reasons.join('; ');
   };
 
+  // explainInvalidURL is explainPair's counterpart for INVALID_URL
+  // (improvements.md #468): unlike Failed/Manual, this is one status split by
+  // a persisted sub-reason rather than two statuses, so it can't reuse the
+  // legend lookup — a live measurement against applications.db found ~88% of
+  // this bucket is a real posting that expired, not the "never a real
+  // posting" case the single old caption implied for the whole count.
+  const explainInvalidURL = (malformed: number, expired: number) => {
+    const parts = [];
+    if (malformed > 0) parts.push(`${malformed} never a real posting (board index, marketing page, or blocked URL)`);
+    if (expired > 0) parts.push(`${expired} a real posting that has since expired`);
+    if (parts.length === 0) return explain('INVALID_URL');
+    return parts.join('; ');
+  };
+
   return (
     <main>
       <h1>🚀 Career Agent Live Metrics</h1>
@@ -302,7 +319,14 @@ function App() {
           <div className="card invalid">
             <h2>{metrics?.invalid_url || 0}</h2>
             <p>Not A Posting</p>
-            <span className="card-reason">{explain('INVALID_URL')}</span>
+            <span className="card-reason">
+              {explainInvalidURL(metrics?.invalid_url_malformed ?? 0, metrics?.invalid_url_expired ?? 0)}
+            </span>
+          </div>
+          <div className="card retry-exhausted">
+            <h2>{metrics?.retry_exhausted || 0}</h2>
+            <p>Retry Exhausted</p>
+            <span className="card-reason">{explain('RETRY_EXHAUSTED')}</span>
           </div>
           {/* interview_rate_pct is omitempty on the Go side: absent until at
               least one application has been tracked to an outcome, which is

@@ -62,7 +62,7 @@ func main() {
 	statsOnly := flag.Bool("stats", false, "report per-source outcome counts and exit without changing anything")
 	sourceList := flag.String("source", "", "comma-separated source names to target (see -list-sources); required unless combined with -stats and omitted (then all known sources are reported)")
 	pattern := flag.String("pattern", "", "raw SQL LIKE pattern to target instead of a named -source (e.g. '%example.com%')")
-	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED)")
+	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, APPLIED, or RETRY_EXHAUSTED); requeuing also resets retry_count/next_eligible_at, so a RETRY_EXHAUSTED row gets a fresh retry budget (bugs.md #466)")
 	confirm := flag.Bool("confirm", false, "actually apply the requeue; without this, only a dry-run count is printed")
 	planMode := flag.Bool("plan", false, "print a detailed dry-run queue plan for each candidate row")
 	clearDedup := flag.Bool("clear-dedup", false, "also delete matching applied_jobs rows (needed for FAILED_SUBMIT requeues, not BLOCKED_CAPTCHA)")
@@ -100,7 +100,24 @@ func main() {
 		log.Fatal("no -source or -pattern given; use -stats to just report, or -list-sources to see valid names")
 	}
 
+	// Pre-flight validation of -status (improvements.md #470): a typo'd
+	// value used to sail through RequeueByURLPattern's raw SQL WHERE clause,
+	// matching zero rows and printing "requeued 0 row(s)" as if it had
+	// succeeded. countForStatus's switch already knows the valid set; a
+	// zero-value stat is enough to exercise it, since the switch only
+	// inspects fromStatus, never the stat's fields.
+	if _, err := countForStatus(storage.SourceOutcomeStat{}, *fromStatus); err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	for name, p := range patterns {
+		stat, err := storage.SourceOutcomeBreakdown(p)
+		if err != nil {
+			log.Printf("[%s] pre-flight stat query failed: %v", name, err)
+			continue
+		}
+		count, _ := countForStatus(stat, *fromStatus) // already validated above
+		fmt.Printf("[%s] %d row(s) currently %s\n", name, count, *fromStatus)
 
 		if *planMode || !*confirm {
 			plan, err := storage.GetQueuePlan(p, *fromStatus, *clearDedup)
@@ -165,7 +182,11 @@ func main() {
 // from BLOCKED_CAPTCHA/FAILED_SUBMIT: those recover jobs already known to
 // have failed, while requeuing APPLIED deliberately risks a real duplicate
 // submission for jobs that turn out to have been genuine successes, so
-// -clear-dedup should be used deliberately here, not routinely.
+// -clear-dedup should be used deliberately here, not routinely. Also used
+// as main()'s pre-flight validation of -status (improvements.md #470):
+// called with a zero-value stat before anything else, its error path is
+// what turns a typo'd -status into a loud failure instead of a silent
+// zero-row requeue.
 func countForStatus(stat storage.SourceOutcomeStat, fromStatus string) (int, error) {
 	switch fromStatus {
 	case "BLOCKED_CAPTCHA":
@@ -174,8 +195,10 @@ func countForStatus(stat storage.SourceOutcomeStat, fromStatus string) (int, err
 		return stat.Failed, nil
 	case "APPLIED":
 		return stat.Applied, nil
+	case "RETRY_EXHAUSTED":
+		return stat.RetryExhausted, nil
 	default:
-		return 0, fmt.Errorf("-status must be BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED, got %q", fromStatus)
+		return 0, fmt.Errorf("-status must be BLOCKED_CAPTCHA, FAILED_SUBMIT, APPLIED, or RETRY_EXHAUSTED, got %q", fromStatus)
 	}
 }
 

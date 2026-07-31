@@ -76,7 +76,10 @@ func InitDBWithPath(path string) error {
 		applied_at DATETIME,
 		last_updated DATETIME,
 		fit_similarity REAL,
-		tone_variant TEXT
+		tone_variant TEXT,
+		retry_count INTEGER DEFAULT 0,
+		next_eligible_at DATETIME,
+		status_reason TEXT
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +136,12 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateURLSchemes(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelRetry(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelStatusReason(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -251,6 +260,93 @@ func migrateJobFunnelToneVariant() error {
 	return err
 }
 
+// migrateJobFunnelRetry adds job_funnel.retry_count and .next_eligible_at
+// (bugs.md #466) to a database created before those columns existed, same
+// idempotent pattern as the other job_funnel migrations above. Both columns
+// back UpdateFunnelStatusRetryable and GetDiscoveredJobs's eligibility
+// filter: without them a retryable failure had no way to record how many
+// times it had already been retried or when it should next be picked up
+// again, so the continuous scheduler reselected the same rows every cycle.
+func migrateJobFunnelRetry() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasRetryCount := false
+	hasNextEligibleAt := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		switch name {
+		case "retry_count":
+			hasRetryCount = true
+		case "next_eligible_at":
+			hasNextEligibleAt = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if !hasRetryCount {
+		if _, err := db.Exec("ALTER TABLE job_funnel ADD COLUMN retry_count INTEGER DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	if !hasNextEligibleAt {
+		if _, err := db.Exec("ALTER TABLE job_funnel ADD COLUMN next_eligible_at DATETIME"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateJobFunnelStatusReason adds job_funnel.status_reason (improvements.md
+// #468) to a database created before that column existed, same idempotent
+// pattern as the other job_funnel migrations above. It backs
+// UpdateFunnelStatusInvalid: without it, every INVALID_URL row collapsed to
+// one status with no persisted reason, even though the code already
+// distinguishes "never a real posting" (known-junk URL, unsafe network
+// target) from "was a real posting, now expired" (dead redirect, terminal
+// fetch status) at the point each row is written.
+func migrateJobFunnelStatusReason() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasStatusReason := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "status_reason" {
+			hasStatusReason = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasStatusReason {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN status_reason TEXT")
+	return err
+}
+
 // mergeStatusRank ranks job_funnel statuses for mergeStatuses' scheme-dedup
 // merges: the higher-ranked status wins and survives the merge.
 //
@@ -264,8 +360,8 @@ func migrateJobFunnelToneVariant() error {
 //     to the default case and rank below DISCOVERED, so merging a dedup pair
 //     could resurrect a job that had been deliberately closed.
 //   - INVALID_URL sits above the "we tried and it failed" statuses
-//     (FAILED_SUBMIT, BLOCKED_CAPTCHA, etc.) because the URL is not a
-//     posting at all — there is nothing to retry.
+//     (FAILED_SUBMIT, BLOCKED_CAPTCHA, RETRY_EXHAUSTED, etc.) because the
+//     URL is not a posting at all — there is nothing to retry.
 //   - The two QUARANTINED_* statuses rank above every non-outcome status so
 //     a merge can never reopen a security closure, but deliberately below
 //     APPLIED/REJECTED/INTERVIEW_REQUESTED: those are real observed
@@ -286,20 +382,22 @@ func mergeStatusRank(s string) int {
 		return 5
 	case "FAILED_SUBMIT":
 		return 6
-	case "INVALID_URL":
+	case "RETRY_EXHAUSTED":
 		return 7
-	case "MANUAL_REQUIRED", "AWAITING_REVIEW":
+	case "INVALID_URL":
 		return 8
-	case "PROCESSED_MANUAL":
+	case "MANUAL_REQUIRED", "AWAITING_REVIEW":
 		return 9
-	case "QUARANTINED_PROMPT_INJECTION", "QUARANTINED_RAG_CONTEXT":
+	case "PROCESSED_MANUAL":
 		return 10
-	case "APPLIED":
+	case "QUARANTINED_PROMPT_INJECTION", "QUARANTINED_RAG_CONTEXT":
 		return 11
-	case "REJECTED":
+	case "APPLIED":
 		return 12
-	case "INTERVIEW_REQUESTED":
+	case "REJECTED":
 		return 13
+	case "INTERVIEW_REQUESTED":
+		return 14
 	default:
 		// Unknown status: loses to everything. This is exactly how bug
 		// #433 happened — a status the codebase writes but this switch
@@ -1080,12 +1178,119 @@ func UpdateFunnelStatus(url, status string) error {
 	return err
 }
 
+// InvalidURLReasonMalformed and InvalidURLReasonExpired classify why a row
+// was marked INVALID_URL (improvements.md #468). The row's own live-database
+// measurement found the two causes are not a small edge case: of a 1,214-row
+// INVALID_URL sample, ~88% were InvalidURLReasonExpired (a real posting
+// checkJobAlive/fetchJobPage correctly caught as dead or gone by the time the
+// agent fetched it -- ordinary job-market churn) and ~12% were
+// InvalidURLReasonMalformed (a known-junk URL pattern or unsafe network
+// target that was never a real posting). Collapsing both into one status
+// with one caption misdescribed the majority of the bucket.
+const (
+	InvalidURLReasonMalformed = "malformed"
+	InvalidURLReasonExpired   = "expired"
+)
+
+// UpdateFunnelStatusInvalid marks url INVALID_URL and records why, using the
+// InvalidURLReason* constants above. See their doc comment for the split
+// this backs.
+func UpdateFunnelStatusInvalid(url, reason string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+	_, err := db.Exec(
+		"UPDATE job_funnel SET status = 'INVALID_URL', status_reason = ?, last_updated = ? WHERE url = ?",
+		reason, time.Now().UTC(), url)
+	return err
+}
+
 func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	url = NormalizeURL(url)
 	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now().UTC(), url)
+	return err
+}
+
+// MaxRetryAttempts caps how many times a retryable failure may return a
+// job_funnel row to DISCOVERED before UpdateFunnelStatusRetryable moves it
+// to the terminal RETRY_EXHAUSTED status (bugs.md #466).
+const MaxRetryAttempts = 5
+
+// RetryBackoffBase is the first retry's delay; each subsequent retry doubles
+// it (2, 4, 8, 16 minutes for retry_count 1-4) so a chronically failing row
+// competes less and less for worker time before it is exhausted.
+const RetryBackoffBase = 2 * time.Minute
+
+// UpdateFunnelStatusRetryable records a retryable failure for url. Bugs.md
+// #466: the live daemon's continuous scheduler re-selects every DISCOVERED
+// row with no attempt count or cooldown, so a transient failure that simply
+// reset status back to DISCOVERED was retried immediately on the very next
+// cycle and could monopolize the worker while newer rows waited indefinitely
+// behind it in a 10k-row backlog.
+//
+// This increments the row's retry_count. While under MaxRetryAttempts, the
+// row goes back to DISCOVERED with next_eligible_at pushed out by an
+// exponential backoff, so GetDiscoveredJobs will not reselect it until the
+// delay elapses. Once retry_count reaches MaxRetryAttempts, the row moves to
+// RETRY_EXHAUSTED instead — a terminal status distinct from DISCOVERED so a
+// chronically failing job stops competing with the rest of the queue and
+// (per mergeStatusRank's own warning comment) has an explicit rank so
+// URL-scheme dedup cannot silently resurrect it. The row remains queryable
+// by status for manual investigation (e.g. `cmd/requeue`, which resets
+// retry_count/next_eligible_at on a deliberate requeue); the dashboard UI
+// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468.
+func UpdateFunnelStatusRetryable(url string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+
+	var retryCount int
+	if err := db.QueryRow("SELECT retry_count FROM job_funnel WHERE url = ?", url).Scan(&retryCount); err != nil {
+		return fmt.Errorf("failed to read retry_count for %s: %w", url, err)
+	}
+	retryCount++
+	now := time.Now().UTC()
+
+	if retryCount >= MaxRetryAttempts {
+		_, err := db.Exec(
+			"UPDATE job_funnel SET status = 'RETRY_EXHAUSTED', retry_count = ?, last_updated = ? WHERE url = ?",
+			retryCount, now, url)
+		return err
+	}
+
+	backoff := RetryBackoffBase * time.Duration(1<<uint(retryCount-1))
+	nextEligible := now.Add(backoff)
+	_, err := db.Exec(
+		"UPDATE job_funnel SET status = 'DISCOVERED', retry_count = ?, next_eligible_at = ?, last_updated = ? WHERE url = ?",
+		retryCount, nextEligible, now, url)
+	return err
+}
+
+// DeferFunnelStatus returns url to DISCOVERED with next_eligible_at pushed
+// out by cooldown, without touching retry_count. This is deliberately
+// distinct from UpdateFunnelStatusRetryable: a caller that skipped an
+// attempt entirely (e.g. improvements.md #469's per-domain circuit breaker
+// declining to even try a domain it already knows is failing) has not
+// observed a new failure for this specific job, so charging it against
+// MaxRetryAttempts would let a busy domain exhaust jobs that were never
+// actually attempted -- the same starvation shape bugs.md #466 fixed, one
+// layer up. Rows deferred this way keep whatever retry_count they already
+// had and can still reach RETRY_EXHAUSTED, but only from genuine fetch
+// failures.
+func DeferFunnelStatus(url string, cooldown time.Duration) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		"UPDATE job_funnel SET status = 'DISCOVERED', next_eligible_at = ?, last_updated = ? WHERE url = ?",
+		now.Add(cooldown), now, url)
 	return err
 }
 
@@ -1193,8 +1398,12 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	// breezy.hr excluded entirely (0 APPLIED / 48 FAILED_SUBMIT, worst-performing source).
+	// next_eligible_at IS NULL covers every row that has never been retried
+	// (the overwhelming majority); rows UpdateFunnelStatusRetryable has
+	// backed off are excluded until their delay elapses (bugs.md #466).
 	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at FROM job_funnel
-		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'`)
+		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
+		AND (next_eligible_at IS NULL OR next_eligible_at <= ?)`, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -1290,11 +1499,12 @@ func UpdateFitSimilarity(url string, score float32) error {
 // (2026-07-23): grouping job_funnel by outcome status per platform is what
 // actually revealed those CAPTCHA false positives, rather than guesswork.
 type SourceOutcomeStat struct {
-	Total   int
-	Applied int
-	Captcha int
-	Failed  int
-	Manual  int
+	Total          int
+	Applied        int
+	Captcha        int
+	Failed         int
+	Manual         int
+	RetryExhausted int
 }
 
 // SourceOutcomeBreakdown reports outcome counts for job_funnel rows whose
@@ -1309,10 +1519,11 @@ func SourceOutcomeBreakdown(urlPattern string) (SourceOutcomeStat, error) {
 		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'FAILED_SUBMIT' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'RETRY_EXHAUSTED' THEN 1 ELSE 0 END), 0)
 		FROM job_funnel
-		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','AWAITING_REVIEW','PROCESSED_MANUAL')`,
-		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual)
+		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','AWAITING_REVIEW','PROCESSED_MANUAL','RETRY_EXHAUSTED')`,
+		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual, &s.RetryExhausted)
 	return s, err
 }
 
@@ -1480,11 +1691,19 @@ func GetConversionStatsByVariant() ([]VariantConversionStat, error) {
 // forever (confirmed live 2026-07-23: this exact gap kept bugs #45/#46's
 // fix from producing a fresh APPLIED until 830 stale BLOCKED_CAPTCHA rows
 // were manually reset). Returns the number of rows changed.
+//
+// Also resets retry_count and next_eligible_at (bugs.md #466). Without
+// this, requeuing a row that had already accumulated retries under its old
+// status (including RETRY_EXHAUSTED itself, which an operator can requeue
+// like any other terminal status) would inherit a stale, already-high
+// retry_count: its very next transient failure could push it straight back
+// past MaxRetryAttempts and re-exhaust it after a single attempt, instead
+// of giving it the fresh retry budget a deliberate manual requeue implies.
 func RequeueByURLPattern(urlPattern, fromStatus string) (int64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
-	result, err := db.Exec(`UPDATE job_funnel SET status = 'DISCOVERED' WHERE status = ? AND url LIKE ?`, fromStatus, urlPattern)
+	result, err := db.Exec(`UPDATE job_funnel SET status = 'DISCOVERED', retry_count = 0, next_eligible_at = NULL WHERE status = ? AND url LIKE ?`, fromStatus, urlPattern)
 	if err != nil {
 		return 0, err
 	}

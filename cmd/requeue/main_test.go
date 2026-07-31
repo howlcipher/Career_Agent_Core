@@ -7,7 +7,7 @@ import (
 )
 
 func TestCountForStatus(t *testing.T) {
-	stat := storage.SourceOutcomeStat{Total: 100, Applied: 39, Captcha: 5, Failed: 10, Manual: 2}
+	stat := storage.SourceOutcomeStat{Total: 100, Applied: 39, Captcha: 5, Failed: 10, Manual: 2, RetryExhausted: 7}
 
 	tests := []struct {
 		status  string
@@ -17,6 +17,7 @@ func TestCountForStatus(t *testing.T) {
 		{status: "BLOCKED_CAPTCHA", want: 5},
 		{status: "FAILED_SUBMIT", want: 10},
 		{status: "APPLIED", want: 39},
+		{status: "RETRY_EXHAUSTED", want: 7},
 		{status: "NOT_A_REAL_STATUS", wantErr: true},
 	}
 

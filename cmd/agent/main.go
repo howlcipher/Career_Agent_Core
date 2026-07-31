@@ -1033,6 +1033,7 @@ func main() {
 
 	filter := security.NewQuarantineLayer()
 	networkGuard := security.NewNetworkGuard()
+	circuitBreaker := newDomainCircuitBreaker()
 
 	// TARGET_JOB_URL restricts this run to a specific set of already-
 	// DISCOVERED jobs and skips fresh FunnelEngine discovery, for verifying
@@ -1068,14 +1069,15 @@ func main() {
 			go func(workerID int) {
 				defer wg.Done()
 				pipelineDeps := JobPipelineDeps{
-					NetworkGuard: networkGuard,
-					Profile:      prof,
-					PIIData:      piiData,
-					Client:       client,
-					Filter:       filter,
-					Submitter:    pipeline,
-					RAGEnabled:   ragEnabled,
-					Cancel:       cancel,
+					NetworkGuard:   networkGuard,
+					Profile:        prof,
+					PIIData:        piiData,
+					Client:         client,
+					Filter:         filter,
+					Submitter:      pipeline,
+					RAGEnabled:     ragEnabled,
+					Cancel:         cancel,
+					CircuitBreaker: circuitBreaker,
 				}
 				jobGraph := buildJobPipeline(pipelineDeps)
 				for job := range jobChan {

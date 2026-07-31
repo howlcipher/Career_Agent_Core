@@ -40,10 +40,23 @@ type Metrics struct {
 	// ManualRequiredOnly and AwaitingReview split the ManualRequired total the
 	// same way (bug #451) — the two statuses are "create an ATS account" and
 	// "click submit on a form already filled", not interchangeable asks.
-	ManualRequiredOnly        int    `json:"manual_required_only"`
-	AwaitingReview            int    `json:"awaiting_review"`
-	BlockedCaptcha            int    `json:"blocked_captcha"`
-	InvalidURL                int    `json:"invalid_url"`
+	ManualRequiredOnly int `json:"manual_required_only"`
+	AwaitingReview     int `json:"awaiting_review"`
+	BlockedCaptcha     int `json:"blocked_captcha"`
+	InvalidURL         int `json:"invalid_url"`
+	// InvalidURLMalformed and InvalidURLExpired split the InvalidURL total
+	// (improvements.md #468) the same way bug #451 split Failed and
+	// ManualRequired: a live measurement against applications.db found ~88%
+	// of INVALID_URL rows are real postings checkJobAlive correctly caught as
+	// expired, not the malformed/never-a-posting shape the old single caption
+	// described.
+	InvalidURLMalformed int `json:"invalid_url_malformed"`
+	InvalidURLExpired   int `json:"invalid_url_expired"`
+	// RetryExhausted counts job_funnel rows that spent MaxRetryAttempts
+	// (bugs.md #466) without succeeding. It had no dashboard presence at all
+	// before improvements.md #468 — the count silently dropped out of every
+	// bucket's total.
+	RetryExhausted            int    `json:"retry_exhausted"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -212,6 +225,8 @@ func statusReason(status string) string {
 		return "Filled by Copilot — awaiting your review and submit"
 	case "INVALID_URL":
 		return "Not a real posting (board index, marketing page, or expired-redirect URL)"
+	case "RETRY_EXHAUSTED":
+		return "Failed the same retryable error 5 times in a row — requeue with cmd/requeue -status RETRY_EXHAUSTED -confirm"
 	default:
 		return status
 	}
@@ -232,6 +247,7 @@ var explainedStatuses = []string{
 	"FAILED_SUBMIT",
 	"MANUAL_REQUIRED",
 	"AWAITING_REVIEW",
+	"RETRY_EXHAUSTED",
 }
 
 // statusLegend renders explainedStatuses into the map the UI reads.
@@ -253,7 +269,13 @@ var db *sql.DB
 // pins it to that derivation: bug #446 was this command quietly keeping a DSN
 // literal of its own, which then failed to follow pkg/storage when bug #416
 // corrected the pragma syntax.
-var dashboardDSN = storage.DSN(storage.DefaultDatabasePath)
+//
+// It uses ReaderDSN, not DSN: this connection only ever queries the database,
+// it never owns schema setup (cmd/agent's storage.InitDB does, via the
+// separate writer DSN), and asking to change journal_mode from a read-only
+// connection is exactly what bug #450 found could fail outright against a
+// genuinely fresh database with a writer's transaction already open.
+var dashboardDSN = storage.ReaderDSN(storage.DefaultDatabasePath)
 
 const defaultDashboardAddress = "127.0.0.1:8080"
 
@@ -409,7 +431,8 @@ func main() {
 	// pkg/storage, but it must not keep its own DSN: bug #446 was this line
 	// carrying the mattn/go-sqlite3 pragma spelling that modernc.org/sqlite
 	// ignores, which left this read-only connection with no busy timeout while
-	// cmd/agent held write locks. storage.DSN is the single source of truth.
+	// cmd/agent held write locks. storage.ReaderDSN is the single source of
+	// truth for this connection's pragmas (bug #450).
 	db, err = sql.Open("sqlite", dashboardDSN)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
@@ -465,12 +488,16 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			COALESCE(SUM(CASE WHEN status = 'MANUAL_REQUIRED' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'AWAITING_REVIEW' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' THEN 1 ELSE 0 END), 0)
-		FROM job_funnel`).Scan(
+			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' AND status_reason = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'INVALID_URL' AND status_reason = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'RETRY_EXHAUSTED' THEN 1 ELSE 0 END), 0)
+		FROM job_funnel`, storage.InvalidURLReasonMalformed, storage.InvalidURLReasonExpired).Scan(
 			&m.Discovered, &m.Processing, &m.Skipped, &m.Applied,
 			&m.Failed, &m.FailedScore, &m.FailedSubmit,
 			&m.ManualRequired, &m.ManualRequiredOnly, &m.AwaitingReview,
 			&m.BlockedCaptcha, &m.InvalidURL,
+			&m.InvalidURLMalformed, &m.InvalidURLExpired, &m.RetryExhausted,
 		)
 		if err != nil {
 			return fmt.Errorf("query basic counts: %w", err)

@@ -1098,12 +1098,46 @@ func resolveFillTarget(page playwright.Page) fillTarget {
 	return pageTarget{page}
 }
 
-// AttemptSubmit scaffolds the architecture for headless browser auto-submission.
-// Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
-// an automated submitter requires custom DOM-parsing logic per platform.
-func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, copilotMode, autoSubmitClick bool) error {
-	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
+// targetClosedPhrases match Playwright's wording when the tab/context an
+// action was issued against no longer exists -- either a genuine renderer
+// crash (bugs.md #467: the same live session that reported this also logged
+// a Chromium headless crash) or a target closed mid-action. Every later
+// Playwright call against the same page/frame fails the same way until a new
+// page exists, so this must be checked before treating the failure as an
+// ordinary fill/click error.
+var targetClosedPhrases = []string{
+	"target closed",
+	"target page, context or browser has been closed",
+	"browser has been closed",
+}
 
+// isTargetClosedErr reports whether err is Playwright's target-closed or
+// browser-crashed error rather than an ordinary fill or validation failure.
+func isTargetClosedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, phrase := range targetClosedPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxTargetRecoveryAttempts bounds how many times AttemptSubmit will
+// recreate a crashed browser context for a single job (bugs.md #467). A
+// posting that crashes the browser deterministically must still fail and
+// free the worker for the next job rather than retry forever.
+const maxTargetRecoveryAttempts = 1
+
+// newSubmitPage creates a fresh proxy-guarded browser context/page and
+// navigates it to applyURL, replaying the setup AttemptSubmit needs both for
+// its initial page and, bounded by maxTargetRecoveryAttempts, to recover
+// from a crashed target (bugs.md #467) -- without re-running the document
+// generation that happens later and is the expensive part of a job attempt.
+func newSubmitPage(browser playwright.Browser, applyURL string) (*secureBrowserSession, playwright.Page, error) {
 	session, err := newSecureBrowserSession(
 		browser,
 		playwright.BrowserNewContextOptions{
@@ -1111,18 +1145,19 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		},
 	)
 	if err != nil {
-		return fmt.Errorf("could not create context: %w", err)
+		return nil, nil, fmt.Errorf("could not create context: %w", err)
 	}
-	defer session.Close()
 
 	page, err := session.context.NewPage()
 	if err != nil {
-		return fmt.Errorf("could not create page: %w", err)
+		session.Close()
+		return nil, nil, fmt.Errorf("could not create page: %w", err)
 	}
-	defer page.Close()
 
 	if err := installSafeBrowserRoutes(page, session.guard); err != nil {
-		return err
+		page.Close()
+		session.Close()
+		return nil, nil, err
 	}
 
 	// Set a strict 45-second global timeout for all page operations (navigation, clicks, fills).
@@ -1147,13 +1182,31 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		if _, err = page.Goto(applyURL, playwright.PageGotoOptions{
 			WaitUntil: playwright.WaitUntilStateDomcontentloaded,
 		}); err != nil {
-			return fmt.Errorf("could not navigate to apply URL after retries: %w", err)
+			page.Close()
+			session.Close()
+			return nil, nil, fmt.Errorf("could not navigate to apply URL after retries: %w", err)
 		}
 	}
 
 	// Wait for a brief moment to let bot-protection scripts (like Cloudflare) reveal themselves
 	page.WaitForTimeout(2000)
 	dismissCookieBanner(page)
+
+	return session, page, nil
+}
+
+// AttemptSubmit scaffolds the architecture for headless browser auto-submission.
+// Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
+// an automated submitter requires custom DOM-parsing logic per platform.
+func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, copilotMode, autoSubmitClick bool) error {
+	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
+
+	session, page, err := newSubmitPage(browser, applyURL)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	defer page.Close()
 
 	// Check for obvious dead ends. Expired postings frequently redirect
 	// to a company's main careers page or an error URL.
@@ -1226,6 +1279,45 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		}
 		urlBeforeClick := page.URL()
 		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
+
+		// improvements.md #471: a crashed browser target here would otherwise
+		// fall straight into the cache-invalidation/Vision path below,
+		// discarding a good learned mapping over a transient browser crash
+		// rather than the form actually being wrong. Recover the same way
+		// bug #467 does for the generic retry loop, before treating this as
+		// a fill failure.
+		cachedMappingRecoveries := 0
+		for dynErr != nil && isTargetClosedErr(dynErr) && cachedMappingRecoveries < maxTargetRecoveryAttempts {
+			cachedMappingRecoveries++
+			log.Printf("[Auto-Submit] Browser target closed for %s during cached-mapping fill (%v); recreating the browser context (recovery %d/%d)",
+				companyName, dynErr, cachedMappingRecoveries, maxTargetRecoveryAttempts)
+			page.Close()
+			session.Close()
+			newSession, newPage, recErr := newSubmitPage(browser, applyURL)
+			if recErr != nil {
+				log.Printf("[Auto-Submit] Could not recover browser target for %s: %v", companyName, recErr)
+				break
+			}
+			session, page = newSession, newPage
+			defer session.Close()
+			defer page.Close()
+
+			if reason := DeadRedirectReason(applyURL, page.URL()); reason != "" {
+				return fmt.Errorf("job posting is dead or expired: %s", reason)
+			}
+			if recoveredContent, cErr := page.Content(); cErr == nil {
+				if isDeadJobPage(recoveredContent) {
+					return fmt.Errorf("job posting is dead or expired")
+				}
+				if isCaptchaBlocked(page, recoveredContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
+			}
+			cachedTarget = resolveFillTarget(page)
+			urlBeforeClick = page.URL()
+			dynErr = handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
+		}
+
 		if isSubmitGated(dynErr) {
 			// The cached mapping filled the form correctly; only the click was
 			// withheld. Invalidating it here would discard a working blueprint.
@@ -1277,6 +1369,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	// bugs.md #100: what the previous attempt actually wrote, so a field that
 	// lands and is still rejected can be diagnosed. Keyed by the model's selector.
 	lastApplied := map[string]string{}
+	// bugs.md #467: how many times the browser context has been recreated
+	// after a crashed target for this job, capped at maxTargetRecoveryAttempts.
+	targetRecoveries := 0
 	for attempt := 1; attempt <= 3; attempt++ {
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
@@ -1753,6 +1848,46 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			} else {
 				execErr = fmt.Errorf("could not find submit button to retry submission")
 			}
+		}
+
+		// bugs.md #467: a crashed browser target (Playwright reports "target
+		// closed"; the same live session also logged a Chromium headless
+		// crash) leaves every later call against page/target failing the same
+		// way. Recreate the context/page once rather than writing the whole
+		// job off -- the expensive part, document generation, already
+		// happened above and is untouched; only navigation and the fill
+		// attempt are redone, and the recreation does not consume one of the
+		// three validation-retry attempts.
+		if execErr != nil && isTargetClosedErr(execErr) && targetRecoveries < maxTargetRecoveryAttempts {
+			targetRecoveries++
+			log.Printf("[Auto-Submit] Browser target closed for %s (%v); recreating the browser context (recovery %d/%d)",
+				companyName, execErr, targetRecoveries, maxTargetRecoveryAttempts)
+			page.Close()
+			session.Close()
+			newSession, newPage, recErr := newSubmitPage(browser, applyURL)
+			if recErr != nil {
+				log.Printf("[Auto-Submit] Could not recover browser target for %s: %v", companyName, recErr)
+				return execErr
+			}
+			session, page = newSession, newPage
+			defer session.Close()
+			defer page.Close()
+
+			if reason := DeadRedirectReason(applyURL, page.URL()); reason != "" {
+				return fmt.Errorf("job posting is dead or expired: %s", reason)
+			}
+			if recoveredContent, cErr := page.Content(); cErr == nil {
+				if isDeadJobPage(recoveredContent) {
+					return fmt.Errorf("job posting is dead or expired")
+				}
+				if isCaptchaBlocked(page, recoveredContent) {
+					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
+				}
+			}
+			execErr = nil
+			initialAttemptComplete = false
+			attempt--
+			continue
 		}
 
 		if isSubmitGated(execErr) {
