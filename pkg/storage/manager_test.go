@@ -1243,12 +1243,14 @@ func TestSourceOutcomeBreakdown(t *testing.T) {
 	UpdateFunnelStatus("https://jobs.lever.co/c", "FAILED_SUBMIT")
 	AddToFunnel("D", "T", "https://boards.greenhouse.io/d", "DISCOVERED")
 	UpdateFunnelStatus("https://boards.greenhouse.io/d", "APPLIED")
+	AddToFunnel("E", "T", "https://jobs.lever.co/e", "DISCOVERED")
+	UpdateFunnelStatus("https://jobs.lever.co/e", "RETRY_EXHAUSTED")
 
 	stat, err := SourceOutcomeBreakdown("%lever.co%")
 	if err != nil {
 		t.Fatalf("SourceOutcomeBreakdown failed: %v", err)
 	}
-	if stat.Total != 3 || stat.Applied != 1 || stat.Captcha != 1 || stat.Failed != 1 {
+	if stat.Total != 4 || stat.Applied != 1 || stat.Captcha != 1 || stat.Failed != 1 || stat.RetryExhausted != 1 {
 		t.Errorf("unexpected stat for lever.co pattern: %+v", stat)
 	}
 

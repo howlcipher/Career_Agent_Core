@@ -1499,11 +1499,12 @@ func UpdateFitSimilarity(url string, score float32) error {
 // (2026-07-23): grouping job_funnel by outcome status per platform is what
 // actually revealed those CAPTCHA false positives, rather than guesswork.
 type SourceOutcomeStat struct {
-	Total   int
-	Applied int
-	Captcha int
-	Failed  int
-	Manual  int
+	Total          int
+	Applied        int
+	Captcha        int
+	Failed         int
+	Manual         int
+	RetryExhausted int
 }
 
 // SourceOutcomeBreakdown reports outcome counts for job_funnel rows whose
@@ -1518,10 +1519,11 @@ func SourceOutcomeBreakdown(urlPattern string) (SourceOutcomeStat, error) {
 		COALESCE(SUM(CASE WHEN status = 'APPLIED' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'BLOCKED_CAPTCHA' THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status = 'FAILED_SUBMIT' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0)
+		COALESCE(SUM(CASE WHEN status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status = 'RETRY_EXHAUSTED' THEN 1 ELSE 0 END), 0)
 		FROM job_funnel
-		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','AWAITING_REVIEW','PROCESSED_MANUAL')`,
-		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual)
+		WHERE url LIKE ? AND status IN ('APPLIED','BLOCKED_CAPTCHA','FAILED_SUBMIT','MANUAL_REQUIRED','AWAITING_REVIEW','PROCESSED_MANUAL','RETRY_EXHAUSTED')`,
+		urlPattern).Scan(&s.Total, &s.Applied, &s.Captcha, &s.Failed, &s.Manual, &s.RetryExhausted)
 	return s, err
 }
 
