@@ -3,6 +3,9 @@ package scraper
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
+	"golang.org/x/sync/errgroup"
 	"html"
 	"log"
 	"net/http"
@@ -11,9 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
-	"github.com/howlcipher/Career_Agent_Core/pkg/util"
-	"golang.org/x/sync/errgroup"
 )
 
 // hnAlgoliaBaseURL is the public, unauthenticated Hacker News search API

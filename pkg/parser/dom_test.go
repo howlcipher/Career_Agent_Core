@@ -250,7 +250,7 @@ func TestStripPresentationalAttrs_KeepsAriaInvalid(t *testing.T) {
 	}
 }
 
-// bugs.md #413: Greenhouse applies aria-invalid to the parent <fieldset> or 
+// bugs.md #413: Greenhouse applies aria-invalid to the parent <fieldset> or
 // uses a class like "field_with_errors" on a container for radio groups.
 func TestPruneDOMToInvalidFields_ChecksAncestorsForInvalidMarkers(t *testing.T) {
 	// First test: aria-invalid on fieldset

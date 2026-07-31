@@ -26,11 +26,11 @@ func ExponentialBackoff(attempt int) time.Duration {
 
 	// Calculate +/- 20% jitter
 	jitter := backoff * 0.2
-	
+
 	// r will be between -jitter and +jitter
 	r := (rand.Float64() * 2 * jitter) - jitter
 
 	finalDuration := backoff + r
-	
+
 	return time.Duration(finalDuration * float64(time.Second))
 }

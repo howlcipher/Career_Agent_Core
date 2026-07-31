@@ -38,12 +38,12 @@ func PutBuffer(b *bytes.Buffer) {
 func ReadAll(r io.Reader) ([]byte, error) {
 	b := GetBuffer()
 	defer PutBuffer(b)
-	
+
 	_, err := b.ReadFrom(r)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Copy the bytes so the caller owns them and we can reuse the buffer safely.
 	res := make([]byte, b.Len())
 	copy(res, b.Bytes())
