@@ -4,7 +4,9 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**Still MET 2026-07-31 (twenty-third session, #467 run).** #467 (Minor, browser target closure) is Done — `AttemptSubmit` recreates the browser context once, capped, on a target-closed Playwright error, mutation-checked and independently reviewed. **This closes the last open Pending row in this file — zero bugs remain open here of any severity**, same as the eighteenth session's #440 close. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. With this file empty, the next session goes straight to `improvements.md`'s ranked table.
+**Still MET 2026-07-31 (twenty-fourth session, groom pass after #468 run).** No bug was fixed or filed this session — the work item, `improvements.md` #468, touched `pkg/storage`, `cmd/agent/pipeline.go`, and `cmd/dashboard`, none of which surfaced a new defect. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. This file remains empty of Pending rows.
+
+**Prior — Still MET 2026-07-31 (twenty-third session, #467 run).** #467 (Minor, browser target closure) is Done — `AttemptSubmit` recreates the browser context once, capped, on a target-closed Playwright error, mutation-checked and independently reviewed. **This closes the last open Pending row in this file — zero bugs remain open here of any severity**, same as the eighteenth session's #440 close. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. With this file empty, the next session goes straight to `improvements.md`'s ranked table.
 
 **Prior — Re-MET 2026-07-31 (twenty-first session, #466 run).** #466 is Done — the queue starvation the 2026-07-30 live-daemon audit found is fixed and verified with mutation-checked tests. That was the sole open Major; #467 (browser target closure, Minor) remained open but did not gate this box. `improvements.md`'s Pending rows are fair game for normal ROI-ranked selection again.
 
