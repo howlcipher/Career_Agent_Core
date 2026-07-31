@@ -13,6 +13,7 @@ career_agent.log
 career_agent-*.log
 career_agent_live.log
 agent_run_batch.log
+dashboard.log
 agent_run_batch.pid
 
 # Compiled binaries
