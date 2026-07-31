@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-31 — The dashboard can no longer be refused a connection outright by a fresh, contended database
+
+* **Improvement (#450):** `cmd/dashboard` opened with the same DSN as the writer (`storage.DSN`, used by `cmd/agent` and every other command via `storage.InitDBWithPath`), which asks SQLite to set `journal_mode(WAL)` on every connect. Against a genuinely fresh database with another connection holding an open write transaction, that request is refused outright (`SQLITE_BUSY`) rather than merely delayed — `busy_timeout` does not cover a mode-change refusal, only a lock wait. New `storage.ReaderDSN` carries every other pragma (`synchronous`, `busy_timeout`, `cache_size`, `temp_store`) but drops `journal_mode`, since a read-only connection has no business changing it and finds it already WAL once the writer has opened once; `cmd/dashboard` now opens with it. The writer DSN is unchanged.
+
 ## 2026-07-31 — `cmd/requeue -status` now rejects a typo instead of silently requeuing nothing
 
 * **Improvement (#470):** a typo'd `-status` value (e.g. `-status BLOKCED_CAPTCHA -confirm`) used to sail past `RequeueByURLPattern`'s raw SQL `WHERE` clause, match zero rows, and print `requeued 0 row(s)` as if the operation had succeeded — indistinguishable from "this source genuinely has nothing left in that status." `main()` now validates `-status` against the known set (`BLOCKED_CAPTCHA`, `FAILED_SUBMIT`, `APPLIED`, `RETRY_EXHAUSTED`) before touching the database, failing loudly with the exact bad value on a typo, and prints each source's current count for the requested status before acting — closing a gap in the `-confirm`-without-`-plan` path that previously gave no feedback at all before writing.

@@ -269,7 +269,13 @@ var db *sql.DB
 // pins it to that derivation: bug #446 was this command quietly keeping a DSN
 // literal of its own, which then failed to follow pkg/storage when bug #416
 // corrected the pragma syntax.
-var dashboardDSN = storage.DSN(storage.DefaultDatabasePath)
+//
+// It uses ReaderDSN, not DSN: this connection only ever queries the database,
+// it never owns schema setup (cmd/agent's storage.InitDB does, via the
+// separate writer DSN), and asking to change journal_mode from a read-only
+// connection is exactly what bug #450 found could fail outright against a
+// genuinely fresh database with a writer's transaction already open.
+var dashboardDSN = storage.ReaderDSN(storage.DefaultDatabasePath)
 
 const defaultDashboardAddress = "127.0.0.1:8080"
 
@@ -425,7 +431,8 @@ func main() {
 	// pkg/storage, but it must not keep its own DSN: bug #446 was this line
 	// carrying the mattn/go-sqlite3 pragma spelling that modernc.org/sqlite
 	// ignores, which left this read-only connection with no busy timeout while
-	// cmd/agent held write locks. storage.DSN is the single source of truth.
+	// cmd/agent held write locks. storage.ReaderDSN is the single source of
+	// truth for this connection's pragmas (bug #450).
 	db, err = sql.Open("sqlite", dashboardDSN)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)

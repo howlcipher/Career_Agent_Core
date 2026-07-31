@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"strings"
@@ -111,5 +112,121 @@ func TestGoSqlite3PragmaSpellingIsSilentlyIgnored(t *testing.T) {
 	}
 	if busyTimeout != 0 {
 		t.Errorf("busy_timeout = %d, want 0 (the driver default, i.e. the parameter ignored)", busyTimeout)
+	}
+}
+
+func TestReaderDSNAppendsPragmasToBarePathWithoutJournalMode(t *testing.T) {
+	got := ReaderDSN("./applications.db")
+
+	path, query, found := strings.Cut(got, "?")
+	if !found {
+		t.Fatalf("ReaderDSN(%q) = %q, want a query string", "./applications.db", got)
+	}
+	if path != "./applications.db" {
+		t.Errorf("ReaderDSN kept path %q, want %q", path, "./applications.db")
+	}
+
+	for _, want := range []string{
+		"_pragma=synchronous(NORMAL)",
+		"_pragma=busy_timeout(5000)",
+		"_pragma=cache_size(-20000)",
+		"_pragma=temp_store(MEMORY)",
+	} {
+		if !strings.Contains(query, want) {
+			t.Errorf("ReaderDSN query %q is missing %q", query, want)
+		}
+	}
+
+	// The one pragma a reader must never carry. Bug #450: asking to change
+	// journal_mode from a connection that never owns schema setup is what
+	// let a genuinely fresh database refuse a second connection outright
+	// while a writer's transaction was open, and busy_timeout does not cover
+	// that refusal.
+	if strings.Contains(query, "_pragma=journal_mode(") {
+		t.Errorf("ReaderDSN query %q must not set journal_mode", query)
+	}
+}
+
+func TestReaderDSNNeverUsesTheGoSqlite3PragmaSpelling(t *testing.T) {
+	for _, path := range []string{DefaultDatabasePath, ":memory:", "/tmp/x.db"} {
+		got := ReaderDSN(path)
+		for _, forbidden := range []string{"_journal_mode=", "_busy_timeout=", "_synchronous=", "_cache_size="} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("ReaderDSN(%q) = %q contains go-sqlite3 spelling %q", path, got, forbidden)
+			}
+		}
+	}
+}
+
+func TestReaderDSNLeavesAnExplicitQueryStringAlone(t *testing.T) {
+	custom := "./applications.db?_pragma=busy_timeout(1)"
+	if got := ReaderDSN(custom); got != custom {
+		t.Errorf("ReaderDSN(%q) = %q, want it returned unchanged", custom, got)
+	}
+}
+
+// This reproduces bug #450's own experiment: a genuinely fresh, default
+// (non-WAL) database with another connection holding an open write
+// transaction. A second connection using the full writer DSN (which asks to
+// change journal_mode) is refused outright — not merely delayed past
+// busy_timeout — while ReaderDSN, which never asks to change journal_mode,
+// succeeds against the exact same locked file.
+//
+// This is mutation-checkable: point the "reader" half at DSN instead of
+// ReaderDSN and it fails with the same busy error the writer half produces.
+func TestReaderDSNOpensAgainstAFreshDatabaseWithAnActiveWriterTransaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "contended.db")
+	ctx := context.Background()
+
+	// Create the file in SQLite's default (non-WAL) journal mode by opening
+	// it with no pragmas at all, then hold an open write transaction on a
+	// single reserved connection - the same shape as "another process
+	// holding an open write transaction" in the original report.
+	writerHandle, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open writer handle: %v", err)
+	}
+	defer writerHandle.Close()
+
+	writerConn, err := writerHandle.Conn(ctx)
+	if err != nil {
+		t.Fatalf("reserve writer connection: %v", err)
+	}
+	defer writerConn.Close()
+
+	if _, err := writerConn.ExecContext(ctx, "CREATE TABLE t (x INTEGER)"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := writerConn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatalf("begin immediate: %v", err)
+	}
+	defer writerConn.ExecContext(ctx, "ROLLBACK")
+
+	// A second connection using the full writer DSN asks SQLite to change
+	// journal_mode while writerConn's transaction is open, and that request
+	// is refused outright.
+	contendedHandle, err := sql.Open("sqlite", DSN(path))
+	if err != nil {
+		t.Fatalf("sql.Open with DSN: %v", err)
+	}
+	defer contendedHandle.Close()
+	contendedHandle.SetMaxOpenConns(1)
+	if err := contendedHandle.PingContext(ctx); err == nil {
+		t.Fatal("DSN connection succeeded against a locked fresh database; " +
+			"if SQLite (or the driver) stopped refusing a journal_mode change " +
+			"here, bug #450's premise needs re-reading and this negative " +
+			"control no longer proves ReaderDSN's fix does anything")
+	}
+
+	// ReaderDSN never asks to change journal_mode, so it is not exposed to
+	// that refusal and opens cleanly against the same locked file.
+	readerHandle, err := sql.Open("sqlite", ReaderDSN(path))
+	if err != nil {
+		t.Fatalf("sql.Open with ReaderDSN: %v", err)
+	}
+	defer readerHandle.Close()
+	readerHandle.SetMaxOpenConns(1)
+	if err := readerHandle.PingContext(ctx); err != nil {
+		t.Fatalf("ReaderDSN connection failed against a locked fresh database: %v", err)
 	}
 }
