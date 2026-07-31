@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func setupTestDB(t *testing.T) {
@@ -654,6 +655,7 @@ func TestMergeStatusRank_NoKnownStatusIsUnranked(t *testing.T) {
 		"BLOCKED_CAPTCHA",
 		"FAILED_SCORE",
 		"FAILED_SUBMIT",
+		"RETRY_EXHAUSTED",
 		"INVALID_URL",
 		"MANUAL_REQUIRED",
 		"AWAITING_REVIEW",
@@ -1394,6 +1396,98 @@ func TestMigrateJobFunnelToneVariant(t *testing.T) {
 	}
 }
 
+// TestMigrateJobFunnelRetry covers bugs.md #466's schema migration on a
+// database created before retry_count/next_eligible_at existed. Critically,
+// it also checks that a pre-existing row backfills retry_count to 0, not
+// NULL: UpdateFunnelStatusRetryable does a bare `SELECT retry_count` into an
+// int, which would fail with a scan error on a NULL value for every row
+// that predates this migration if SQLite's ADD COLUMN ... DEFAULT did not
+// backfill existing rows the way it backfills new ones.
+func TestMigrateJobFunnelRetry(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME,
+		last_updated DATETIME,
+		fit_similarity REAL,
+		tone_variant TEXT
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to recreate old-schema job_funnel: %v", err)
+	}
+	// A row that predates this migration, inserted before retry_count or
+	// next_eligible_at existed at all.
+	preExistingURL := "https://a.com/pre-existing"
+	if _, err := db.Exec(
+		"INSERT INTO job_funnel (company_name, job_title, url, status) VALUES (?, ?, ?, ?)",
+		"A", "T", preExistingURL, "DISCOVERED",
+	); err != nil {
+		t.Fatalf("failed to insert pre-migration row: %v", err)
+	}
+
+	if err := migrateJobFunnelRetry(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		t.Fatalf("failed to inspect schema: %v", err)
+	}
+	hasRetryCount, hasNextEligibleAt := false, false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "retry_count" {
+			hasRetryCount = true
+		}
+		if name == "next_eligible_at" {
+			hasNextEligibleAt = true
+		}
+	}
+	rows.Close()
+	if !hasRetryCount {
+		t.Fatal("expected retry_count column to exist after migration")
+	}
+	if !hasNextEligibleAt {
+		t.Fatal("expected next_eligible_at column to exist after migration")
+	}
+
+	// The real-world scenario the migration exists for: does a row that
+	// predates the migration actually work with UpdateFunnelStatusRetryable,
+	// or does its backfilled retry_count come back NULL and break the scan?
+	if err := UpdateFunnelStatusRetryable(preExistingURL); err != nil {
+		t.Fatalf("UpdateFunnelStatusRetryable on a pre-migration row failed: %v (retry_count likely backfilled to NULL instead of 0)", err)
+	}
+	var retryCount int
+	var nextEligible sql.NullTime
+	db.QueryRow("SELECT retry_count, next_eligible_at FROM job_funnel WHERE url = ?", preExistingURL).
+		Scan(&retryCount, &nextEligible)
+	if retryCount != 1 {
+		t.Errorf("retry_count = %d after one retryable failure on a pre-migration row, want 1", retryCount)
+	}
+	if !nextEligible.Valid {
+		t.Error("next_eligible_at is NULL after a retryable failure, want a future backoff time")
+	}
+
+	if err := migrateJobFunnelRetry(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
 func TestUpdateToneVariant(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
@@ -1503,6 +1597,52 @@ func TestRequeueByURLPattern(t *testing.T) {
 	db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", "https://jobs.lever.co/b").Scan(&leverFailedStatus)
 	if leverFailedStatus != "FAILED_SUBMIT" {
 		t.Errorf("a matching URL pattern but non-matching status must not be requeued, got status %q", leverFailedStatus)
+	}
+}
+
+// TestRequeueByURLPattern_ResetsRetryBudget covers bugs.md #466: requeuing a
+// RETRY_EXHAUSTED row (an operator's deliberate "give this another chance"
+// action, e.g. after shipping a fix) must reset retry_count and
+// next_eligible_at, or the very next transient failure would push the
+// inherited stale retry_count straight back past MaxRetryAttempts and
+// re-exhaust the row after a single attempt instead of a fresh budget.
+func TestRequeueByURLPattern_ResetsRetryBudget(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "https://jobs.lever.co/exhausted"
+	AddToFunnel("A", "T", url, "DISCOVERED")
+	for i := 0; i < MaxRetryAttempts; i++ {
+		if err := UpdateFunnelStatusRetryable(url); err != nil {
+			t.Fatalf("UpdateFunnelStatusRetryable failed: %v", err)
+		}
+	}
+	var status string
+	var retryCount int
+	db.QueryRow("SELECT status, retry_count FROM job_funnel WHERE url = ?", url).Scan(&status, &retryCount)
+	if status != "RETRY_EXHAUSTED" || retryCount != MaxRetryAttempts {
+		t.Fatalf("setup failed: status=%q retry_count=%d, want RETRY_EXHAUSTED/%d", status, retryCount, MaxRetryAttempts)
+	}
+
+	n, err := RequeueByURLPattern("%lever.co%", "RETRY_EXHAUSTED")
+	if err != nil {
+		t.Fatalf("RequeueByURLPattern failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 row requeued, got %d", n)
+	}
+
+	var nextEligible sql.NullTime
+	db.QueryRow("SELECT status, retry_count, next_eligible_at FROM job_funnel WHERE url = ?", url).
+		Scan(&status, &retryCount, &nextEligible)
+	if status != "DISCOVERED" {
+		t.Errorf("status = %q, want DISCOVERED", status)
+	}
+	if retryCount != 0 {
+		t.Errorf("retry_count = %d after requeue, want 0 (a fresh retry budget)", retryCount)
+	}
+	if nextEligible.Valid {
+		t.Errorf("next_eligible_at = %v after requeue, want NULL", nextEligible.Time)
 	}
 }
 
@@ -1819,5 +1959,132 @@ func TestMigrateURLSchemes(t *testing.T) {
 	// 5. Test idempotency
 	if err := migrateURLSchemes(); err != nil {
 		t.Fatalf("Second migration failed: %v", err)
+	}
+}
+
+// TestUpdateFunnelStatusRetryable_BacksOffThenExhausts covers bugs.md #466:
+// a retryable failure must not make its row immediately reselectable, and a
+// row that keeps failing must eventually stop competing with the rest of
+// the queue instead of retrying forever.
+func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "https://example.com/flaky-job"
+	if _, err := AddToFunnel("Flaky Co", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel failed: %v", err)
+	}
+
+	readRow := func() (status string, retryCount int, nextEligible sql.NullTime) {
+		if err := db.QueryRow(
+			"SELECT status, retry_count, next_eligible_at FROM job_funnel WHERE url = ?", url,
+		).Scan(&status, &retryCount, &nextEligible); err != nil {
+			t.Fatalf("failed to read back job_funnel row: %v", err)
+		}
+		return
+	}
+
+	before := time.Now().UTC()
+	if err := UpdateFunnelStatusRetryable(url); err != nil {
+		t.Fatalf("UpdateFunnelStatusRetryable (1st) failed: %v", err)
+	}
+	status, retryCount, nextEligible := readRow()
+	if status != "DISCOVERED" {
+		t.Errorf("after 1 retryable failure: status = %q, want DISCOVERED (still under MaxRetryAttempts)", status)
+	}
+	if retryCount != 1 {
+		t.Errorf("after 1 retryable failure: retry_count = %d, want 1", retryCount)
+	}
+	if !nextEligible.Valid || !nextEligible.Time.After(before) {
+		t.Fatalf("after 1 retryable failure: next_eligible_at = %v, want a time after %v (this is the whole fix -- without it, the row is immediately reselectable)", nextEligible, before)
+	}
+	firstBackoff := nextEligible.Time.Sub(before)
+
+	if err := UpdateFunnelStatusRetryable(url); err != nil {
+		t.Fatalf("UpdateFunnelStatusRetryable (2nd) failed: %v", err)
+	}
+	_, retryCount, nextEligible2 := readRow()
+	if retryCount != 2 {
+		t.Errorf("after 2 retryable failures: retry_count = %d, want 2", retryCount)
+	}
+	secondBackoff := nextEligible2.Time.Sub(before)
+	if secondBackoff <= firstBackoff {
+		t.Errorf("expected the 2nd failure's backoff (%v) to exceed the 1st's (%v) -- backoff must grow, not stay flat or shrink", secondBackoff, firstBackoff)
+	}
+
+	// Drive it to MaxRetryAttempts. Calls 3 and 4 stay retryable; call 5
+	// (the MaxRetryAttempts'th) must flip it to the terminal status.
+	for i := 3; i < MaxRetryAttempts; i++ {
+		if err := UpdateFunnelStatusRetryable(url); err != nil {
+			t.Fatalf("UpdateFunnelStatusRetryable (call %d) failed: %v", i, err)
+		}
+	}
+	status, retryCount, _ = readRow()
+	if status != "DISCOVERED" {
+		t.Fatalf("after %d retryable failures: status = %q, want still DISCOVERED (one call short of MaxRetryAttempts=%d)", MaxRetryAttempts-1, status, MaxRetryAttempts)
+	}
+	if retryCount != MaxRetryAttempts-1 {
+		t.Fatalf("after %d retryable failures: retry_count = %d, want %d", MaxRetryAttempts-1, retryCount, MaxRetryAttempts-1)
+	}
+
+	if err := UpdateFunnelStatusRetryable(url); err != nil {
+		t.Fatalf("UpdateFunnelStatusRetryable (exhausting call) failed: %v", err)
+	}
+	status, retryCount, _ = readRow()
+	if status != "RETRY_EXHAUSTED" {
+		t.Errorf("after %d retryable failures: status = %q, want RETRY_EXHAUSTED", MaxRetryAttempts, status)
+	}
+	if retryCount != MaxRetryAttempts {
+		t.Errorf("after %d retryable failures: retry_count = %d, want %d", MaxRetryAttempts, retryCount, MaxRetryAttempts)
+	}
+
+	// RETRY_EXHAUSTED must never be silently outranked -- mergeStatusRank's
+	// own comment says any new status needs an explicit case, or URL-scheme
+	// dedup could resurrect an exhausted row as DISCOVERED again.
+	if rank := mergeStatusRank("RETRY_EXHAUSTED"); rank == 0 {
+		t.Errorf("mergeStatusRank(\"RETRY_EXHAUSTED\") = 0, want a nonzero rank")
+	}
+}
+
+// TestGetDiscoveredJobs_SkipsRowsNotYetEligible covers bugs.md #466's second
+// requirement: a backed-off row must not reappear before its delay elapses,
+// but later queue rows must still make progress in the meantime, and the
+// backed-off row must reappear once its delay has genuinely passed rather
+// than being lost.
+func TestGetDiscoveredJobs_SkipsRowsNotYetEligible(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	backedOffURL := "https://example.com/backed-off"
+	readyURL := "https://example.com/ready"
+	AddToFunnel("Backed Off Co", "Engineer", backedOffURL, "DISCOVERED")
+	AddToFunnel("Ready Co", "Engineer", readyURL, "DISCOVERED")
+
+	// Simulate a retryable failure that backed this row off into the future.
+	future := time.Now().UTC().Add(10 * time.Minute)
+	if _, err := db.Exec("UPDATE job_funnel SET next_eligible_at = ? WHERE url = ?", future, backedOffURL); err != nil {
+		t.Fatalf("failed to set next_eligible_at: %v", err)
+	}
+
+	jobs, err := GetDiscoveredJobs()
+	if err != nil {
+		t.Fatalf("GetDiscoveredJobs failed: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].URL != readyURL {
+		t.Fatalf("expected only %q while %q is backed off, got %v", readyURL, backedOffURL, jobs)
+	}
+
+	// Once the backoff has elapsed, the row must make progress again --
+	// backed off is not the same as abandoned.
+	past := time.Now().UTC().Add(-1 * time.Minute)
+	if _, err := db.Exec("UPDATE job_funnel SET next_eligible_at = ? WHERE url = ?", past, backedOffURL); err != nil {
+		t.Fatalf("failed to set next_eligible_at: %v", err)
+	}
+	jobs, err = GetDiscoveredJobs()
+	if err != nil {
+		t.Fatalf("GetDiscoveredJobs failed: %v", err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("expected both jobs once the backoff elapsed, got %v", jobs)
 	}
 }

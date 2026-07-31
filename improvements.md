@@ -312,6 +312,8 @@ All three rows below carry a dated correction pointing at bugs #436/#437/#438. *
 
 **Fix direction:** reject malformed and low-content records before they enter the normal queue, terminalize them after a bounded number of attempts, and add dashboard counts for deferred, invalid, weak-content, and retry-exhausted rows. This is separate from bug #466 because it improves admission quality and operator visibility after the retry scheduler is corrected.
 
+**2026-07-31 note:** bug #466 (the retry scheduler correction this row was waiting on) is now Done — the "retry-exhausted" status this row should surface exists as the literal `RETRY_EXHAUSTED` job_funnel status, with a fresh retry budget available via `cmd/requeue -status RETRY_EXHAUSTED -confirm`. `#466`'s own review pass confirmed the dashboard (`cmd/dashboard/main.go`'s `serveMetrics`/`statusReason`/`explainedStatuses`) has no tile, card, or legend entry for it today — the count silently drops out of every bucket's total. This row is now fully unblocked and its dashboard half is a real, live gap, not just anticipated.
+
 ### 464. `scripts/server.go`'s transpiled body is not `gofmt`-clean, and the documented `gofmt -l` loop can't catch it
 
 **Found 2026-07-30** while fixing bug #440 (`scripts/server.go` was the only file in `scripts/` without `//go:build ignore`, so it was the one script `go build ./...` and `go vet ./...` compiled).

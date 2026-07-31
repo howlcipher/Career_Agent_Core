@@ -414,6 +414,8 @@ This is the mode to use when bot protection is the binding constraint. The proje
 
 A job that ends in a terminal failure status stays there forever. The agent only ever pulls `DISCOVERED` rows, so upgrading the agent does **not** retry anything already marked `BLOCKED_CAPTCHA` or `FAILED_SUBMIT` — a fix can be entirely correct and still produce no new applications, because nothing is left to exercise it.
 
+**Transient failures (a timeout, a flaky fetch) are retried automatically, but not forever.** A retryable error — a preflight network check, a job-page fetch, the RAG embedding/retrieval call, or the post-score freshness re-check — returns the job to `DISCOVERED` with an exponential backoff (2, 4, 8, 16 minutes) before it is eligible to be picked up again, so one flaky domain can no longer monopolize the worker and starve the rest of the queue. After 5 such failures the job stops retrying and moves to a genuinely terminal `RETRY_EXHAUSTED` status instead, so it does not compete with the rest of the backlog forever.
+
 `cmd/requeue` is the recovery tool. Start by looking at what actually failed and why:
 
 ```bash
@@ -428,7 +430,7 @@ go run ./cmd/requeue -source greenhouse -status BLOCKED_CAPTCHA
 go run ./cmd/requeue -source greenhouse -status BLOCKED_CAPTCHA -confirm
 ```
 
-`-status` accepts `BLOCKED_CAPTCHA` (the default), `FAILED_SUBMIT`, or `APPLIED`, and `-plan` prints a detailed per-row dry run. Add `-clear-dedup` for `FAILED_SUBMIT` re-queues, where tailored documents were already generated and the duplicate check would otherwise skip the job again; it is not needed for `BLOCKED_CAPTCHA`. Re-queue narrowly rather than resetting an entire source — a source's failures usually have several different causes, and only one of them is the one you fixed.
+`-status` accepts `BLOCKED_CAPTCHA` (the default), `FAILED_SUBMIT`, `APPLIED`, or `RETRY_EXHAUSTED`, and `-plan` prints a detailed per-row dry run. Requeuing a `RETRY_EXHAUSTED` row also resets its retry count and backoff timer, so it gets a genuinely fresh attempt budget rather than immediately re-exhausting on the next transient failure. Add `-clear-dedup` for `FAILED_SUBMIT` re-queues, where tailored documents were already generated and the duplicate check would otherwise skip the job again; it is not needed for `BLOCKED_CAPTCHA`. Re-queue narrowly rather than resetting an entire source — a source's failures usually have several different causes, and only one of them is the one you fixed.
 
 > **A running agent will not notice.** The queue is read once at startup into an in-memory channel, so neither a code change nor a direct database status change affects a process that is already running. Stop the agent, then start a freshly built binary.
 

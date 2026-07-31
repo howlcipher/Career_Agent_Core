@@ -121,7 +121,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				}
 			} else {
 				log.Printf("[Worker-%d] Pre-flight check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 				}
 			}
@@ -167,7 +167,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 					}
 				default:
 					log.Printf("[Worker-%d] Job page fetch is retryable for %s: %v", workerID, job.CompanyName, fetchErr)
-					if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+					if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 						log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 					}
 				}
@@ -241,7 +241,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						topChunks, retrieveErr := parser.RetrieveTopK(jobEmb, 5)
 						if retrieveErr != nil {
 							log.Printf("[Worker-%d] Failed to retrieve grounded career context: %v", workerID, retrieveErr)
-							if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+							if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 								log.Printf("[Worker-%d] Failed to return job after RAG retrieval error: %v", workerID, statusErr)
 							}
 							skipJob = true
@@ -255,7 +255,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 						state.TailoredContext = sb.String()
 					} else {
 						log.Printf("[RAG] Embedding failed after retries: %v", embErr)
-						if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+						if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 							log.Printf("[Worker-%d] Failed to return job after RAG embedding error: %v", workerID, statusErr)
 						}
 						skipJob = true
@@ -379,7 +379,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				})
 			} else {
 				log.Printf("[Worker-%d] Post-score check retryable error for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "DISCOVERED"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
 				}
 			}

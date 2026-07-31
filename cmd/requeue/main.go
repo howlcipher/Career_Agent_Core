@@ -62,7 +62,7 @@ func main() {
 	statsOnly := flag.Bool("stats", false, "report per-source outcome counts and exit without changing anything")
 	sourceList := flag.String("source", "", "comma-separated source names to target (see -list-sources); required unless combined with -stats and omitted (then all known sources are reported)")
 	pattern := flag.String("pattern", "", "raw SQL LIKE pattern to target instead of a named -source (e.g. '%example.com%')")
-	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, or APPLIED)")
+	fromStatus := flag.String("status", "BLOCKED_CAPTCHA", "job_funnel status to requeue from (BLOCKED_CAPTCHA, FAILED_SUBMIT, APPLIED, or RETRY_EXHAUSTED); requeuing also resets retry_count/next_eligible_at, so a RETRY_EXHAUSTED row gets a fresh retry budget (bugs.md #466)")
 	confirm := flag.Bool("confirm", false, "actually apply the requeue; without this, only a dry-run count is printed")
 	planMode := flag.Bool("plan", false, "print a detailed dry-run queue plan for each candidate row")
 	clearDedup := flag.Bool("clear-dedup", false, "also delete matching applied_jobs rows (needed for FAILED_SUBMIT requeues, not BLOCKED_CAPTCHA)")
