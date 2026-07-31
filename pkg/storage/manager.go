@@ -78,7 +78,8 @@ func InitDBWithPath(path string) error {
 		fit_similarity REAL,
 		tone_variant TEXT,
 		retry_count INTEGER DEFAULT 0,
-		next_eligible_at DATETIME
+		next_eligible_at DATETIME,
+		status_reason TEXT
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,6 +139,9 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateJobFunnelRetry(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelStatusReason(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -302,6 +306,45 @@ func migrateJobFunnelRetry() error {
 		}
 	}
 	return nil
+}
+
+// migrateJobFunnelStatusReason adds job_funnel.status_reason (improvements.md
+// #468) to a database created before that column existed, same idempotent
+// pattern as the other job_funnel migrations above. It backs
+// UpdateFunnelStatusInvalid: without it, every INVALID_URL row collapsed to
+// one status with no persisted reason, even though the code already
+// distinguishes "never a real posting" (known-junk URL, unsafe network
+// target) from "was a real posting, now expired" (dead redirect, terminal
+// fetch status) at the point each row is written.
+func migrateJobFunnelStatusReason() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasStatusReason := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "status_reason" {
+			hasStatusReason = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasStatusReason {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN status_reason TEXT")
+	return err
 }
 
 // mergeStatusRank ranks job_funnel statuses for mergeStatuses' scheme-dedup
@@ -1135,6 +1178,34 @@ func UpdateFunnelStatus(url, status string) error {
 	return err
 }
 
+// InvalidURLReasonMalformed and InvalidURLReasonExpired classify why a row
+// was marked INVALID_URL (improvements.md #468). The row's own live-database
+// measurement found the two causes are not a small edge case: of a 1,214-row
+// INVALID_URL sample, ~88% were InvalidURLReasonExpired (a real posting
+// checkJobAlive/fetchJobPage correctly caught as dead or gone by the time the
+// agent fetched it -- ordinary job-market churn) and ~12% were
+// InvalidURLReasonMalformed (a known-junk URL pattern or unsafe network
+// target that was never a real posting). Collapsing both into one status
+// with one caption misdescribed the majority of the bucket.
+const (
+	InvalidURLReasonMalformed = "malformed"
+	InvalidURLReasonExpired   = "expired"
+)
+
+// UpdateFunnelStatusInvalid marks url INVALID_URL and records why, using the
+// InvalidURLReason* constants above. See their doc comment for the split
+// this backs.
+func UpdateFunnelStatusInvalid(url, reason string) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+	_, err := db.Exec(
+		"UPDATE job_funnel SET status = 'INVALID_URL', status_reason = ?, last_updated = ? WHERE url = ?",
+		reason, time.Now().UTC(), url)
+	return err
+}
+
 func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
@@ -1170,10 +1241,8 @@ const RetryBackoffBase = 2 * time.Minute
 // (per mergeStatusRank's own warning comment) has an explicit rank so
 // URL-scheme dedup cannot silently resurrect it. The row remains queryable
 // by status for manual investigation (e.g. `cmd/requeue`, which resets
-// retry_count/next_eligible_at on a deliberate requeue), but the dashboard
-// UI does not yet surface RETRY_EXHAUSTED on any tile or card — filed
-// separately as improvements.md's dashboard-visibility follow-up rather
-// than folded into this fix.
+// retry_count/next_eligible_at on a deliberate requeue); the dashboard UI
+// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468.
 func UpdateFunnelStatusRetryable(url string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")

@@ -193,6 +193,11 @@ h1 {
 .card.invalid:hover::before { box-shadow: 0 0 15px var(--neon-teal); }
 .card.invalid:hover h2 { color: var(--neon-teal); }
 
+.card.retry-exhausted::before { background: var(--neon-red); }
+.card.retry-exhausted:hover { border-color: rgba(255, 51, 102, 0.4); box-shadow: 0 10px 30px rgba(255, 51, 102, 0.15); }
+.card.retry-exhausted:hover::before { box-shadow: 0 0 15px var(--neon-red); }
+.card.retry-exhausted:hover h2 { color: var(--neon-red); }
+
 /* "Last <event>" detail cards. These carry the reason strings the API serves
    for the most recent row in each terminal state; the counts above cannot
    convey which specific job is waiting on the user, or why. */

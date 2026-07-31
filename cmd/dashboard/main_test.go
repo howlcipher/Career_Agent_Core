@@ -31,6 +31,7 @@ func setupTestDB(t *testing.T) {
 		company_name TEXT,
 		job_title TEXT,
 		status TEXT,
+		status_reason TEXT,
 		last_updated DATETIME,
 		discovered_at DATETIME,
 		tone_variant TEXT
@@ -166,6 +167,60 @@ func TestServeMetrics_Counts_SplitsFailedAndManualPairs(t *testing.T) {
 					m.ManualRequired, m.ManualRequiredOnly, m.AwaitingReview, tc.wantManualRequired, tc.wantManualRequiredOnly, tc.wantAwaitingReview)
 			}
 		})
+	}
+}
+
+// TestServeMetrics_Counts_SplitsInvalidURLByReason is a regression test for
+// improvements.md #468: a live measurement against applications.db found
+// ~88% of INVALID_URL rows are a real posting checkJobAlive correctly caught
+// as expired, not the "never a real posting" shape the old single caption
+// implied for the whole bucket. InvalidURL must keep counting both, while
+// InvalidURLMalformed/InvalidURLExpired split by the persisted status_reason
+// -- including a row with no status_reason at all (written before this
+// column existed), which must count toward the total but neither sub-bucket.
+func TestServeMetrics_Counts_SplitsInvalidURLByReason(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, status, status_reason) VALUES (?, ?, ?)",
+		"https://jobs.lever.co/company", "INVALID_URL", "malformed")
+	db.Exec("INSERT INTO job_funnel (url, status, status_reason) VALUES (?, ?, ?)",
+		"https://jobs.greenhouse.io/expired-1", "INVALID_URL", "expired")
+	db.Exec("INSERT INTO job_funnel (url, status, status_reason) VALUES (?, ?, ?)",
+		"https://jobs.greenhouse.io/expired-2", "INVALID_URL", "expired")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)",
+		"https://jobs.greenhouse.io/legacy-no-reason", "INVALID_URL")
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.InvalidURL != 4 {
+		t.Errorf("InvalidURL = %d, want 4 (all rows regardless of reason)", m.InvalidURL)
+	}
+	if m.InvalidURLMalformed != 1 {
+		t.Errorf("InvalidURLMalformed = %d, want 1", m.InvalidURLMalformed)
+	}
+	if m.InvalidURLExpired != 2 {
+		t.Errorf("InvalidURLExpired = %d, want 2", m.InvalidURLExpired)
+	}
+}
+
+// TestServeMetrics_Counts_RetryExhausted is a regression test for
+// improvements.md #468: RETRY_EXHAUSTED (bugs.md #466) had zero dashboard
+// presence -- absent from every count and the legend -- so a chronically
+// failing row silently dropped out of every bucket's total.
+func TestServeMetrics_Counts_RetryExhausted(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://exhausted-1.example.com", "RETRY_EXHAUSTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://exhausted-2.example.com", "RETRY_EXHAUSTED")
+	db.Exec("INSERT INTO job_funnel (url, status) VALUES (?, ?)", "https://still-discovered.example.com", "DISCOVERED")
+
+	m := fetchMetricsFromTestServer(t)
+
+	if m.RetryExhausted != 2 {
+		t.Errorf("RetryExhausted = %d, want 2", m.RetryExhausted)
+	}
+	if reason, ok := m.StatusLegend["RETRY_EXHAUSTED"]; !ok || reason == "" || reason == "RETRY_EXHAUSTED" {
+		t.Errorf("StatusLegend[RETRY_EXHAUSTED] = %q, ok=%v, want a human-readable explanation", reason, ok)
 	}
 }
 
@@ -761,6 +816,7 @@ func TestExplainedStatuses_CoverEveryStatusReasonArm(t *testing.T) {
 		"MANUAL_REQUIRED",
 		"AWAITING_REVIEW",
 		"INVALID_URL",
+		"RETRY_EXHAUSTED",
 	}
 	legend := statusLegend()
 	for _, status := range arms {

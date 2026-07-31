@@ -1488,6 +1488,119 @@ func TestMigrateJobFunnelRetry(t *testing.T) {
 	}
 }
 
+// TestMigrateJobFunnelStatusReason mirrors TestMigrateJobFunnelRetry above
+// for improvements.md #468's status_reason column: an idempotent
+// ALTER TABLE that a database created before the column existed needs to
+// pick up before UpdateFunnelStatusInvalid can write to it.
+func TestMigrateJobFunnelStatusReason(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT,
+		fit_score INTEGER,
+		discovered_at DATETIME,
+		applied_at DATETIME,
+		last_updated DATETIME,
+		fit_similarity REAL,
+		tone_variant TEXT,
+		retry_count INTEGER DEFAULT 0,
+		next_eligible_at DATETIME
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to recreate old-schema job_funnel: %v", err)
+	}
+	preExistingURL := "https://a.com/pre-existing-invalid"
+	if _, err := db.Exec(
+		"INSERT INTO job_funnel (company_name, job_title, url, status) VALUES (?, ?, ?, ?)",
+		"A", "T", preExistingURL, "DISCOVERED",
+	); err != nil {
+		t.Fatalf("failed to insert pre-migration row: %v", err)
+	}
+
+	if err := migrateJobFunnelStatusReason(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		t.Fatalf("failed to inspect schema: %v", err)
+	}
+	hasStatusReason := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "status_reason" {
+			hasStatusReason = true
+		}
+	}
+	rows.Close()
+	if !hasStatusReason {
+		t.Fatal("expected status_reason column to exist after migration")
+	}
+
+	if err := UpdateFunnelStatusInvalid(preExistingURL, InvalidURLReasonExpired); err != nil {
+		t.Fatalf("UpdateFunnelStatusInvalid on a pre-migration row failed: %v", err)
+	}
+	var status, reason string
+	db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", preExistingURL).
+		Scan(&status, &reason)
+	if status != "INVALID_URL" {
+		t.Errorf("status = %q, want INVALID_URL", status)
+	}
+	if reason != InvalidURLReasonExpired {
+		t.Errorf("status_reason = %q, want %q", reason, InvalidURLReasonExpired)
+	}
+
+	if err := migrateJobFunnelStatusReason(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+// TestUpdateFunnelStatusInvalid_RecordsReason confirms both reason
+// constants persist correctly, independent of the migration path above.
+func TestUpdateFunnelStatusInvalid_RecordsReason(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	malformedURL := "https://a.com/junk-board-index"
+	expiredURL := "https://a.com/dead-redirect"
+	AddToFunnel("A", "T", malformedURL, "DISCOVERED")
+	AddToFunnel("A", "T", expiredURL, "DISCOVERED")
+
+	if err := UpdateFunnelStatusInvalid(malformedURL, InvalidURLReasonMalformed); err != nil {
+		t.Fatalf("UpdateFunnelStatusInvalid(malformed) failed: %v", err)
+	}
+	if err := UpdateFunnelStatusInvalid(expiredURL, InvalidURLReasonExpired); err != nil {
+		t.Fatalf("UpdateFunnelStatusInvalid(expired) failed: %v", err)
+	}
+
+	readReason := func(url string) (status, reason string) {
+		if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", url).
+			Scan(&status, &reason); err != nil {
+			t.Fatalf("failed to read back job_funnel row for %s: %v", url, err)
+		}
+		return
+	}
+
+	if status, reason := readReason(malformedURL); status != "INVALID_URL" || reason != InvalidURLReasonMalformed {
+		t.Errorf("malformed row: status=%q status_reason=%q, want INVALID_URL/%q", status, reason, InvalidURLReasonMalformed)
+	}
+	if status, reason := readReason(expiredURL); status != "INVALID_URL" || reason != InvalidURLReasonExpired {
+		t.Errorf("expired row: status=%q status_reason=%q, want INVALID_URL/%q", status, reason, InvalidURLReasonExpired)
+	}
+}
+
 func TestUpdateToneVariant(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

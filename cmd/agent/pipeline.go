@@ -93,7 +93,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 
 		if scraper.IsKnownJunkJobURL(job.URL) {
 			log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
-			if err := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); err != nil {
+			if err := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); err != nil {
 				log.Printf("[Worker-%d] Failed to mark known-junk URL invalid: %v", workerID, err)
 			}
 			return StateEnd, nil
@@ -101,7 +101,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		if err := deps.NetworkGuard.ValidateURL(ctx, job.URL); err != nil {
 			if errors.Is(err, security.ErrUnsafeNetworkTarget) {
 				log.Printf("[Worker-%d] Unsafe job URL blocked.", workerID)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark unsafe URL invalid: %v", workerID, statusErr)
 				}
 			} else {
@@ -133,7 +133,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		if checkErr != nil {
 			if errors.Is(checkErr, errDeadRedirect) {
 				log.Printf("[Worker-%d] Pre-flight check failed: Job posting is no longer available for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
 				}
 			} else {
@@ -204,7 +204,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				switch fetchResult.disposition {
 				case jobPageTerminal:
 					log.Printf("[Worker-%d] Job posting is no longer available for %s: %v", workerID, job.CompanyName, fetchErr)
-					if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+					if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 						log.Printf("[Worker-%d] Failed to mark unavailable job invalid: %v", workerID, statusErr)
 					}
 				default:
@@ -425,7 +425,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			log.Printf("[Worker-%d] Post-score freshness check took %s", workerID, time.Since(freshnessStart))
 			if errors.Is(checkErr, errDeadRedirect) {
 				log.Printf("[Worker-%d] Post-score check failed: Job posting expired during scoring for %s: %v", workerID, job.CompanyName, checkErr)
-				if statusErr := storage.UpdateFunnelStatus(job.URL, "INVALID_URL"); statusErr != nil {
+				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonExpired); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark dead job invalid: %v", workerID, statusErr)
 				}
 				_ = storage.RecordAttempt(storage.ApplicationAttempt{
