@@ -355,7 +355,7 @@ func companyFromURL(link string) string {
 			seg = path[:idx]
 			path = path[idx+1:]
 		}
-		
+
 		lower := strings.ToLower(seg)
 		if genericPathSegments[lower] || localeSegmentRe.MatchString(lower) {
 			continue

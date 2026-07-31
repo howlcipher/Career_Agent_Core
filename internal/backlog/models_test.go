@@ -270,12 +270,30 @@ func TestPendingBacklogRowsNameRealModels(t *testing.T) {
 	// made itemRowRE or the Status match stop firing would otherwise leave this
 	// test passing loudly while checking nothing — which is the exact shape of
 	// the failure it exists to prevent.
-	if checked < 20 {
+	//
+	// The floor used to be a hardcoded historical snapshot (44 cells, then a
+	// bound of 20) taken the day this test was written. That is exactly the
+	// kind of unchecked number improvement #455 warned about: it stopped being
+	// evidence for "the parser still works" and quietly became evidence for
+	// "the backlog hasn't shrunk since 2026-07-30" instead — closing improvement
+	// #460 dropped the real count from 20 to 18 and tripped it for a reason that
+	// had nothing to do with parsing. The floor is now derived independently,
+	// via a plain substring scan that does not share any code path with
+	// itemRowRE/splitRow/backlogHeaderRE above, so a regression in those still
+	// gets caught (checked would fall to 0 while this count would not) without
+	// the test being sensitive to ordinary backlog progress.
+	independentPendingRows := 0
+	for _, file := range backlogFiles {
+		independentPendingRows += strings.Count(readRepoFile(t, file), "| Pending")
+	}
+	if checked < independentPendingRows {
 		t.Errorf(
-			"only %d Pending model cells were checked across %v; there were 44 when this bound was "+
-				"set. A number this low means the parser stopped matching rows, not that the backlog "+
-				"emptied — fix the parser rather than lowering this bound",
-			checked, backlogFiles,
+			"only %d Pending model cells were checked across %v, fewer than the %d Pending rows "+
+				"those files currently contain (counted independently of the table parser above). "+
+				"Every currently Pending row names at least one real model, so a shortfall here means "+
+				"the parser stopped matching cells it should have found, not that the backlog emptied — "+
+				"fix the parser rather than this floor",
+			checked, backlogFiles, independentPendingRows,
 		)
 	}
 }

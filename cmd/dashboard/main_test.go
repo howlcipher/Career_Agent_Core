@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1087,5 +1088,171 @@ func TestNewDashboardServerUsesAddressHandlerAndTimeouts(t *testing.T) {
 	}
 	if server.IdleTimeout != 60*time.Second {
 		t.Fatalf("IdleTimeout = %v, want 60s", server.IdleTimeout)
+	}
+}
+
+// TestServeMetrics_QueryFailure_Returns500NotZeroedJSON is the regression
+// test for bug #452: every g.Go closure in serveMetrics used to log its
+// error and unconditionally return nil, and the errgroup's result was
+// discarded (`_ = g.Wait()`), so a genuine query failure -- not an empty
+// table, a real failure -- always answered 200 OK carrying whatever
+// zero/stale values the failed scans left behind. A user watching the
+// dashboard during an outage saw a confident "nothing has happened yet"
+// instead of an error.
+func TestServeMetrics_QueryFailure_Returns500NotZeroedJSON(t *testing.T) {
+	setupTestDB(t)
+
+	// Drop the table the basic-counts query depends on so the query
+	// genuinely fails (e.g. "no such table"), which is a different failure
+	// shape than sql.ErrNoRows on an empty-but-present table.
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("failed to drop table: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	serveMetrics(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on a genuine query failure, got %d with body %q", rec.Code, rec.Body.String())
+	}
+
+	// The bug's exact failure shape was a 200 response carrying a fully
+	// decodable, all-zero Metrics -- confirm the response is not that shape.
+	var m Metrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err == nil {
+		t.Errorf("expected a non-JSON error body, got a decodable Metrics: %+v", m)
+	}
+}
+
+// TestServeMetrics_EmptyTable_StillReturns200 pins the legitimate-empty-state
+// side of bug #452's fix: an empty (but present) table must still answer 200
+// with zero values, not be mistaken for the query-failure case above.
+func TestServeMetrics_EmptyTable_StillReturns200(t *testing.T) {
+	setupTestDB(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	serveMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on an empty-but-present table, got %d with body %q", rec.Code, rec.Body.String())
+	}
+
+	var m Metrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("expected a decodable Metrics body, got error: %v (body %q)", err, rec.Body.String())
+	}
+	if m.Discovered != 0 || m.Applied != 0 {
+		t.Errorf("expected all-zero counts on an empty table, got %+v", m)
+	}
+}
+
+// fakeConversionRows is a hand-rolled conversionRows for exercising the
+// mid-stream cursor-fault path directly. A real driver cannot be made to
+// return a cursor error from Next() on demand against an in-memory sqlite
+// database (bug #452's precedent -- dropping the table -- only reaches the
+// top-level query failure, never a fault after rows have already started
+// streaming), so this fake stands in for "the row(s) before the fault
+// scanned fine, then the cursor broke" -- the exact ambiguity Next()
+// returning false cannot resolve on its own per database/sql's contract.
+type fakeConversionRows struct {
+	values  [][]any
+	i       int
+	failErr error
+}
+
+func (f *fakeConversionRows) Next() bool {
+	if f.i >= len(f.values) {
+		return false
+	}
+	f.i++
+	return true
+}
+
+func (f *fakeConversionRows) Scan(dest ...any) error {
+	row := f.values[f.i-1]
+	for i, d := range dest {
+		switch v := d.(type) {
+		case *string:
+			*v = row[i].(string)
+		case *int:
+			*v = row[i].(int)
+		default:
+			return fmt.Errorf("fakeConversionRows: unsupported scan dest type %T", d)
+		}
+	}
+	return nil
+}
+
+func (f *fakeConversionRows) Err() error {
+	if f.i >= len(f.values) {
+		return f.failErr
+	}
+	return nil
+}
+
+// TestScanSourceConversions_PropagatesRowsErr and its variant counterpart
+// below pin bug #459: a cursor fault partway through the by-source or
+// by-variant result stream must surface as an error, not as a silently
+// truncated breakdown that renders as if it were complete. Mutation check:
+// deleting scanSourceConversions'/scanVariantConversions's rows.Err() check
+// makes these fail, since the loop above it already appended the one row
+// that scanned fine before Next() returned false.
+func TestScanSourceConversions_PropagatesRowsErr(t *testing.T) {
+	rows := &fakeConversionRows{
+		values:  [][]any{{"Greenhouse", 3, 1, 1, 1}},
+		failErr: errors.New("cursor error: connection reset"),
+	}
+
+	got, err := scanSourceConversions(rows)
+	if err == nil {
+		t.Fatalf("expected an error from a mid-stream cursor fault, got nil with breakdown %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected no partial breakdown on a cursor fault, got %+v", got)
+	}
+}
+
+func TestScanSourceConversions_NoErrorOnCleanExhaustion(t *testing.T) {
+	rows := &fakeConversionRows{
+		values: [][]any{{"Greenhouse", 4, 2, 1, 1}},
+	}
+
+	got, err := scanSourceConversions(rows)
+	if err != nil {
+		t.Fatalf("unexpected error on clean exhaustion: %v", err)
+	}
+	if len(got) != 1 || got[0].Source != "Greenhouse" || got[0].InterviewRate != "50.0%" {
+		t.Errorf("unexpected result: %+v", got)
+	}
+}
+
+func TestScanVariantConversions_PropagatesRowsErr(t *testing.T) {
+	rows := &fakeConversionRows{
+		values:  [][]any{{"formal", 2, 1, 0, 1}},
+		failErr: errors.New("cursor error: connection reset"),
+	}
+
+	got, err := scanVariantConversions(rows)
+	if err == nil {
+		t.Fatalf("expected an error from a mid-stream cursor fault, got nil with breakdown %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected no partial breakdown on a cursor fault, got %+v", got)
+	}
+}
+
+func TestScanVariantConversions_NoErrorOnCleanExhaustion(t *testing.T) {
+	rows := &fakeConversionRows{
+		values: [][]any{{"formal", 4, 1, 1, 2}},
+	}
+
+	got, err := scanVariantConversions(rows)
+	if err != nil {
+		t.Fatalf("unexpected error on clean exhaustion: %v", err)
+	}
+	if len(got) != 1 || got[0].Variant != "formal" || got[0].InterviewRate != "25.0%" {
+		t.Errorf("unexpected result: %+v", got)
 	}
 }

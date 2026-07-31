@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -111,6 +112,62 @@ type SourceConversionStat struct {
 	Rejections    int    `json:"rejections"`
 	Pending       int    `json:"pending"`
 	InterviewRate string `json:"interview_rate_pct"`
+}
+
+// conversionRows is the subset of *sql.Rows that scanSourceConversions and
+// scanVariantConversions need, factored out so a hand-rolled fake can stand
+// in for tests that need Next() to fail mid-stream rather than exhaust
+// normally -- a shape *sql.Rows itself cannot be made to produce on demand
+// against a real driver.
+type conversionRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+// scanSourceConversions drains rows into SourceConversionStat, computing
+// each row's interview rate. Next() returning false can mean either "rows
+// exhausted" or "a cursor error occurred" -- database/sql cannot tell the
+// caller apart without an explicit Err() check, so a fault partway through
+// the result set must not be mistaken for a complete, if short, breakdown.
+func scanSourceConversions(rows conversionRows) ([]SourceConversionStat, error) {
+	var bySource []SourceConversionStat
+	for rows.Next() {
+		var s SourceConversionStat
+		if err := rows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			log.Printf("Failed to scan conversion-by-source row: %v", err)
+			continue
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+		}
+		bySource = append(bySource, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan conversion stats by source: %w", err)
+	}
+	return bySource, nil
+}
+
+// scanVariantConversions mirrors scanSourceConversions for the by-variant
+// breakdown; see its doc comment for why the Err() check is required.
+func scanVariantConversions(rows conversionRows) ([]VariantConversionStat, error) {
+	var byVariant []VariantConversionStat
+	for rows.Next() {
+		var s VariantConversionStat
+		if err := rows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
+			log.Printf("Failed to scan conversion-by-variant row: %v", err)
+			continue
+		}
+		if s.TotalApplied > 0 {
+			s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
+		}
+		byVariant = append(byVariant, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan conversion stats by variant: %w", err)
+	}
+	return byVariant, nil
 }
 
 // formatDuration renders how long a job sat in the pipeline (discovered_at
@@ -416,7 +473,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			&m.BlockedCaptcha, &m.InvalidURL,
 		)
 		if err != nil {
-			log.Printf("Failed to query basic counts: %v", err)
+			return fmt.Errorf("query basic counts: %w", err)
 		}
 		return nil
 	})
@@ -430,7 +487,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			ORDER BY aj.applied_at DESC LIMIT 1`).
 			Scan(&m.LastAppliedCompany, &m.LastAppliedTitle, &m.LastAppliedURL, &lastAppliedAt, &lastAppliedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last applied job: %v", err)
+			return fmt.Errorf("query last applied job: %w", err)
 		}
 		if lastAppliedAt.Valid {
 			m.LastAppliedAt = lastAppliedAt.Time.Local().Format("Jan 2, 2006 3:04 PM MST")
@@ -448,7 +505,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status = 'PROCESSING' ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&currentCompany, &currentTitle, &currentSince)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query currently processing job: %v", err)
+			return fmt.Errorf("query currently processing job: %w", err)
 		}
 		m.CurrentCompany = currentCompany.String
 		m.CurrentTitle = currentTitle.String
@@ -465,7 +522,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last skipped job: %v", err)
+			return fmt.Errorf("query last skipped job: %w", err)
 		}
 		m.LastSkippedCompany = skippedCompany.String
 		m.LastSkippedTitle = skippedTitle.String
@@ -488,7 +545,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status IN ('FAILED_SCORE', 'FAILED_SUBMIT') ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&failedCompany, &failedTitle, &failedStatus, &failedAt, &failedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last failed job: %v", err)
+			return fmt.Errorf("query last failed job: %w", err)
 		}
 		m.LastFailedCompany = failedCompany.String
 		m.LastFailedTitle = failedTitle.String
@@ -515,7 +572,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			WHERE status IN ('MANUAL_REQUIRED', 'AWAITING_REVIEW') ORDER BY last_updated DESC LIMIT 1`).
 			Scan(&manualCompany, &manualTitle, &manualStatus, &manualAt, &manualDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("Failed to query last manual-required job: %v", err)
+			return fmt.Errorf("query last manual-required job: %w", err)
 		}
 		m.LastManualCompany = manualCompany.String
 		m.LastManualTitle = manualTitle.String
@@ -540,7 +597,7 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			FROM job_funnel WHERE status IN ('APPLIED','REJECTED','INTERVIEW_REQUESTED')`).
 			Scan(&m.TotalApplied, &interviews, &rejections)
 		if err != nil {
-			log.Printf("Failed to query conversion stats: %v", err)
+			return fmt.Errorf("query conversion stats: %w", err)
 		}
 		m.Interviews = interviews
 		m.Rejections = rejections
@@ -570,22 +627,13 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			HAVING COUNT(*) > 0
 			ORDER BY COUNT(*) DESC`)
 		if err != nil {
-			log.Printf("Failed to query conversion stats by source: %v", err)
-			return nil
+			return fmt.Errorf("query conversion stats by source: %w", err)
 		}
 		defer sourceRows.Close()
 
-		var bySource []SourceConversionStat
-		for sourceRows.Next() {
-			var s SourceConversionStat
-			if err := sourceRows.Scan(&s.Source, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
-				log.Printf("Failed to scan conversion-by-source row: %v", err)
-				continue
-			}
-			if s.TotalApplied > 0 {
-				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
-			}
-			bySource = append(bySource, s)
+		bySource, err := scanSourceConversions(sourceRows)
+		if err != nil {
+			return err
 		}
 		m.BySource = bySource
 		return nil
@@ -604,28 +652,28 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			HAVING COUNT(*) > 0
 			ORDER BY COUNT(*) DESC`)
 		if err != nil {
-			log.Printf("Failed to query conversion stats by variant: %v", err)
-			return nil
+			return fmt.Errorf("query conversion stats by variant: %w", err)
 		}
 		defer variantRows.Close()
 
-		var byVariant []VariantConversionStat
-		for variantRows.Next() {
-			var s VariantConversionStat
-			if err := variantRows.Scan(&s.Variant, &s.TotalApplied, &s.Interviews, &s.Rejections, &s.Pending); err != nil {
-				log.Printf("Failed to scan conversion-by-variant row: %v", err)
-				continue
-			}
-			if s.TotalApplied > 0 {
-				s.InterviewRate = fmt.Sprintf("%.1f%%", float64(s.Interviews)/float64(s.TotalApplied)*100)
-			}
-			byVariant = append(byVariant, s)
+		byVariant, err := scanVariantConversions(variantRows)
+		if err != nil {
+			return err
 		}
 		m.ByVariant = byVariant
 		return nil
 	})
 
-	_ = g.Wait()
+	// A real query failure must not answer 200 with whatever zero/stale
+	// values the failed scans left behind (bug #452) -- that reads as a
+	// confident "nothing has happened yet" to a user watching the
+	// dashboard. sql.ErrNoRows is filtered out above at each call site
+	// because an empty table is a legitimate state, not a failure.
+	if err := g.Wait(); err != nil {
+		log.Printf("serveMetrics: %v", err)
+		http.Error(w, "failed to load metrics", http.StatusInternalServerError)
+		return
+	}
 
 	m.StatusLegend = statusLegend()
 
@@ -635,20 +683,71 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
 
+// agentLockPath is cmd/agent's single-instance lock (bug #414), reused here
+// as the source of truth for whether the agent is running.
+const agentLockPath = "applications/career_agent.lock"
+
+// agentPIDAt reports whether the agent's single-instance lock file is
+// currently held, and the PID of the process holding it when the file's
+// contents parse as one. This replaces identifying the agent via `pgrep -f
+// career_agent_bin`, which false-positived on any process whose command line
+// merely contained that substring - a `go build`, a `tail -f`, an editor with
+// the file open - and whose `pkill -f` counterpart then killed the unrelated
+// match (bug #449). A lock we can acquire ourselves means nothing holds it;
+// we release it immediately since this call is a status check, not a claim.
+func agentPIDAt(lockPath string) (pid int, running bool, err error) {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return 0, false, fmt.Errorf("open agent lock file: %w", err)
+	}
+	defer f.Close()
+
+	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); flockErr != nil {
+		// Held by another process: that is the agent. Its PID is whatever it
+		// wrote when it acquired the lock; treat unreadable or unparsed
+		// content as "running, PID unknown" rather than failing the check.
+		data, readErr := os.ReadFile(lockPath)
+		if readErr == nil {
+			if parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
+				pid = parsed
+			}
+		}
+		return pid, true, nil
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return 0, false, nil
+}
+
+func agentPID() (pid int, running bool, err error) {
+	return agentPIDAt(agentLockPath)
+}
+
 func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
-	if err == nil {
+	_, running, err := agentPID()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to check agent status: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if running {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status": "already_running"}`))
 		return
 	}
 
-	cmd := exec.Command("./career_agent_bin", "-daemon", "-cycle-limit", "5")
+	// Keep the dashboard-launched agent actively draining its backlog while
+	// retaining a short pause between source-refresh cycles to avoid a tight
+	// retry loop when an upstream job board is unavailable.
+	cmd := exec.Command(
+		"./career_agent_bin",
+		"-daemon",
+		"-cycle-limit", "15",
+		"-cycle-interval", "1m",
+	)
 	if err := cmd.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start agent: %v", err), http.StatusInternalServerError)
 		return
@@ -663,14 +762,31 @@ func serveAgentStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_ = exec.Command("pkill", "-f", "career_agent_bin").Run()
+
+	// Signal the specific PID the lock file names, not a `pkill -f` substring
+	// match: that pattern also matched a `go build`, a `tail -f`, or an editor
+	// with the binary's name open, and killed whichever one it hit (bug
+	// #449). If the PID is unknown, there is nothing safe to signal.
+	pid, running, err := agentPID()
+	if err != nil {
+		log.Printf("serveAgentStop: could not determine agent status: %v", err)
+	}
+	if running && pid > 0 {
+		if proc, findErr := os.FindProcess(pid); findErr == nil {
+			if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil {
+				log.Printf("serveAgentStop: failed to signal pid %d: %v", pid, sigErr)
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status": "stopped"}`))
 }
 
 func serveAgentStatus(w http.ResponseWriter, r *http.Request) {
-	err := exec.Command("pgrep", "-f", "career_agent_bin").Run()
-	running := err == nil
+	_, running, err := agentPID()
+	if err != nil {
+		log.Printf("serveAgentStatus: %v", err)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"running": running})
 }

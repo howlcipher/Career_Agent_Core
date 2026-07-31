@@ -1931,7 +1931,7 @@ func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PI
 				}
 			}
 		}
-		
+
 		fillPreMappedATSSelectors(target, pii, "ashby")
 	}
 

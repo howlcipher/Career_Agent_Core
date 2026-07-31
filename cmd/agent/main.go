@@ -49,9 +49,13 @@ const (
 	careerRAGDimensionProbe      = "dimension probe"
 	defaultDaemonCycleLimit      = 15
 	defaultDaemonCycleInterval   = 6 * time.Hour
+	defaultDiscoveryInterval     = 6 * time.Hour
 )
 
-var errJobPageWeakContent = errors.New("job page has too little visible text")
+var (
+	errJobPageWeakContent = errors.New("job page has too little visible text")
+	errNoEligibleJobs     = errors.New("no eligible jobs in the backlog")
+)
 
 const promptInjectionQuarantineStatus = "QUARANTINED_PROMPT_INJECTION"
 
@@ -559,7 +563,14 @@ func runAgentSchedule(
 		if ctx.Err() != nil {
 			return nil
 		}
-		if cycleErr != nil {
+		if cycleErr == nil {
+			log.Printf(
+				"[Agent] [DAEMON MODE] Cycle %d completed with work; continuing immediately.",
+				cycleNumber,
+			)
+			continue
+		}
+		if !errors.Is(cycleErr, errNoEligibleJobs) {
 			log.Printf(
 				"[Agent] [DAEMON MODE] Cycle %d completed with errors: %v",
 				cycleNumber,
@@ -568,7 +579,7 @@ func runAgentSchedule(
 		}
 
 		log.Printf(
-			"[Agent] [DAEMON MODE] Cycle %d complete; next cycle starts in %s.",
+			"[Agent] [DAEMON MODE] Cycle %d has no eligible work; retrying in %s.",
 			cycleNumber,
 			cycleInterval,
 		)
@@ -579,6 +590,118 @@ func runAgentSchedule(
 			return fmt.Errorf("wait for next daemon cycle: %w", err)
 		}
 	}
+}
+
+// runDaemonDiscoveryLoop refreshes the backlog independently of queue
+// consumption. Discovery can be slow when search providers throttle requests;
+// keeping it separate prevents that work from blocking already-discovered jobs.
+func runDaemonDiscoveryLoop(
+	ctx context.Context,
+	discoveryInterval time.Duration,
+	discover func(context.Context) error,
+	wait agentCycleWaitFunc,
+) {
+	if ctx == nil || discover == nil || discoveryInterval <= 0 {
+		return
+	}
+	if wait == nil {
+		wait = waitForNextAgentCycle
+	}
+
+	for cycleNumber := 1; ; cycleNumber++ {
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf("[Agent] [DISCOVERY] Starting refresh %d.", cycleNumber)
+		if err := discover(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("[Agent] [DISCOVERY] Refresh %d completed with errors: %v", cycleNumber, err)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		log.Printf(
+			"[Agent] [DISCOVERY] Refresh %d complete; next refresh starts in %s.",
+			cycleNumber,
+			discoveryInterval,
+		)
+		if err := wait(ctx, discoveryInterval); err != nil {
+			return
+		}
+	}
+}
+
+// runAgentQueueCycle drains only the already-discovered backlog. In daemon
+// mode this runs independently from discovery, so a slow source refresh cannot
+// delay the next bounded batch of application work.
+func runAgentQueueCycle(
+	ctx context.Context,
+	cycleLimit int,
+	deps agentCycleDependencies,
+) error {
+	if ctx == nil {
+		return errors.New("agent cycle context is nil")
+	}
+	if cycleLimit < 0 {
+		return errors.New("agent cycle limit cannot be negative")
+	}
+	if deps.loadDiscovered == nil || deps.processJobs == nil {
+		return errors.New("agent queue dependencies are incomplete")
+	}
+
+	discoveredJobs, err := deps.loadDiscovered()
+	if err != nil {
+		return err
+	}
+
+	candidates := make([]scraper.Job, 0, min(len(discoveredJobs), 2000))
+	for _, discovered := range discoveredJobs {
+		if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
+			continue
+		}
+		if cycleLimit > 0 && len(candidates) >= cycleLimit {
+			break
+		}
+		candidates = append(candidates, scraper.Job{
+			CompanyName: discovered.CompanyName,
+			Title:       discovered.JobTitle,
+			URL:         discovered.URL,
+			Salary:      deps.targetCompensation,
+			Remote:      true,
+		})
+	}
+
+	if len(candidates) == 0 {
+		if len(deps.targetJobURLs) > 0 {
+			log.Println("[Agent] TARGET_JOB_URL set: no matching discovered jobs remain.")
+		} else {
+			log.Println("[Agent] No eligible discovered jobs remain in the backlog.")
+		}
+		return errNoEligibleJobs
+	}
+
+	jobs := make(chan scraper.Job, min(len(candidates), 2000))
+	go func() {
+		defer close(jobs)
+		for _, candidate := range candidates {
+			select {
+			case jobs <- candidate:
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		if len(deps.targetJobURLs) > 0 {
+			log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", len(candidates))
+		} else {
+			log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", len(candidates))
+		}
+	}()
+
+	deps.processJobs(ctx, jobs)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func runAgentCycle(
@@ -598,55 +721,8 @@ func runAgentCycle(
 		return errors.New("agent cycle dependencies are incomplete")
 	}
 
-	// Bug #399: Decouple discovery from queue consumption so newly discovered jobs
-	// are persisted to the database and ranked properly on the next cycle,
-	// rather than bypassing Bayesian smoothing by being appended to the channel tail.
-	jobs := make(chan scraper.Job, 2000)
-	discoveredJobs, loadErr := deps.loadDiscovered()
-
-	var producerWg sync.WaitGroup
-	if loadErr == nil {
-		producerWg.Add(1)
-		go func() {
-			defer producerWg.Done()
-			matched := 0
-			for _, discovered := range discoveredJobs {
-				if len(deps.targetJobURLs) > 0 && !deps.targetJobURLs[discovered.URL] {
-					continue
-				}
-
-				// Respect cycle limit during injection to prevent channel thrashing
-				if cycleLimit > 0 && matched >= cycleLimit {
-					break
-				}
-
-				matched++
-				candidate := scraper.Job{
-					CompanyName: discovered.CompanyName,
-					Title:       discovered.JobTitle,
-					URL:         discovered.URL,
-					Salary:      deps.targetCompensation,
-					Remote:      true,
-				}
-				select {
-				case jobs <- candidate:
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			if len(deps.targetJobURLs) > 0 {
-				log.Printf("[Agent] TARGET_JOB_URL set: loaded %d matching job(s) into the queue.", matched)
-			} else {
-				log.Printf("[Agent] Loaded %d previously discovered jobs from backlog into the queue.", matched)
-			}
-		}()
-	}
-
 	discoveryErr := make(chan error, 1)
-	producerWg.Add(1)
 	go func() {
-		defer producerWg.Done()
 		if len(deps.targetJobURLs) > 0 {
 			discoveryErr <- nil
 			return
@@ -656,12 +732,7 @@ func runAgentCycle(
 		discoveryErr <- deps.discoverJobs(ctx, nil)
 	}()
 
-	go func() {
-		producerWg.Wait()
-		close(jobs)
-	}()
-
-	deps.processJobs(ctx, jobs)
+	queueErr := runAgentQueueCycle(ctx, cycleLimit, deps)
 	discoverErr := <-discoveryErr
 	if cycleLimit > 0 {
 		log.Printf(
@@ -673,7 +744,10 @@ func runAgentCycle(
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return errors.Join(loadErr, discoverErr)
+	if errors.Is(queueErr, errNoEligibleJobs) {
+		return discoverErr
+	}
+	return errors.Join(queueErr, discoverErr)
 }
 
 // skipModelPreflightEnv disables the startup check that every configured local
@@ -714,17 +788,49 @@ func isTruthyEnv(raw string) bool {
 	return false
 }
 
+// acquireSingleInstanceLock enforces the single-instance guarantee bug #414
+// asked for: it opens path, takes a non-blocking exclusive flock, and fails
+// if another process already holds it. The caller owns the returned file and
+// must release the lock and close it (see main's deferred unlock/close).
+//
+// It also writes the caller's own PID into the file once the lock is held.
+// cmd/dashboard reads that PID back to identify and, if needed, signal the
+// running agent, replacing `pgrep -f`/`pkill -f career_agent_bin` — a
+// substring match against any process's full command line that false-
+// positived on a `go build`, a `tail -f`, or an editor with the file open,
+// and whose `pkill` counterpart then killed whichever one it hit (bug #449).
+// The file is truncated first so a shorter PID than the previous holder's
+// does not leave trailing digits behind.
+func acquireSingleInstanceLock(path string) (*os.File, error) {
+	lockFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open lock file: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lockFile.Close()
+		return nil, fmt.Errorf("another instance of the agent is already running (failed to acquire %s)", path)
+	}
+	if err := lockFile.Truncate(0); err != nil {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to truncate lock file: %w", err)
+	}
+	if _, err := lockFile.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+		return nil, fmt.Errorf("failed to write PID to lock file: %w", err)
+	}
+	return lockFile, nil
+}
+
 func main() {
 	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
 		log.Fatalf("Startup aborted because private paths could not be secured: %v", err)
 	}
 
-	lockFile, err := os.OpenFile("applications/career_agent.lock", os.O_CREATE|os.O_RDWR, 0666)
+	lockFile, err := acquireSingleInstanceLock("applications/career_agent.lock")
 	if err != nil {
-		log.Fatalf("Failed to open lock file: %v", err)
-	}
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		log.Fatalf("Another instance of the agent is already running (failed to acquire applications/career_agent.lock). Exiting.")
+		log.Fatalf("%v", err)
 	}
 	defer func() {
 		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
@@ -736,6 +842,16 @@ func main() {
 		"cycle-limit",
 		defaultDaemonCycleLimit,
 		"maximum jobs processed per daemon cycle",
+	)
+	daemonCycleInterval := flag.Duration(
+		"cycle-interval",
+		defaultDaemonCycleInterval,
+		"idle retry delay when no eligible jobs remain (for example, 1m or 6h)",
+	)
+	discoveryInterval := flag.Duration(
+		"discovery-interval",
+		defaultDiscoveryInterval,
+		"delay between discovery refreshes in daemon mode (for example, 6h)",
 	)
 	careerProfileFlag := flag.String(
 		"profile",
@@ -781,10 +897,20 @@ func main() {
 				"Daemon configuration error: -cycle-limit must be greater than zero",
 			)
 		}
+		if *daemonCycleInterval <= 0 {
+			log.Fatalf(
+				"Daemon configuration error: -cycle-interval must be greater than zero",
+			)
+		}
+		if *discoveryInterval <= 0 {
+			log.Fatalf(
+				"Daemon configuration error: -discovery-interval must be greater than zero",
+			)
+		}
 		log.Printf(
 			"[Agent] [DAEMON MODE] Agent will process at most %d jobs every %s.",
 			*daemonCycleLimit,
-			defaultDaemonCycleInterval,
+			*daemonCycleInterval,
 		)
 	}
 
@@ -983,12 +1109,25 @@ func main() {
 		targetJobURLs:      targetJobURLs,
 		targetCompensation: prof.TargetComp,
 	}
+	if *daemonMode && len(targetJobURLs) == 0 {
+		go runDaemonDiscoveryLoop(
+			ctx,
+			*discoveryInterval,
+			func(discoveryCtx context.Context) error {
+				return cycleDeps.discoverJobs(discoveryCtx, nil)
+			},
+			nil,
+		)
+	}
 	if err := runAgentSchedule(
 		ctx,
 		*daemonMode,
 		*daemonCycleLimit,
-		defaultDaemonCycleInterval,
+		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
+			if *daemonMode {
+				return runAgentQueueCycle(cycleCtx, limit, cycleDeps)
+			}
 			return runAgentCycle(cycleCtx, limit, cycleDeps)
 		},
 		nil,

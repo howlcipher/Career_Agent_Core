@@ -3,6 +3,9 @@ package scraper
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/util"
+	"golang.org/x/sync/errgroup"
 	"log"
 	"math/rand"
 	"net/http"
@@ -10,9 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/howlcipher/Career_Agent_Core/pkg/security"
-	"github.com/howlcipher/Career_Agent_Core/pkg/util"
-	"golang.org/x/sync/errgroup"
 )
 
 var remoteOKBaseURL = "https://remoteok.com/api"
@@ -176,7 +176,7 @@ func (e *Engine) FetchJobs() ([]Job, error) {
 					Description: roJob.Description,
 				})
 			}
-			
+
 			mu.Lock()
 			allJobs = append(allJobs, localJobs...)
 			mu.Unlock()

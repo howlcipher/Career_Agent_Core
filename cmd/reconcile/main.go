@@ -49,8 +49,8 @@ type entry struct {
 
 // entryPattern matches the checklist format the three logger functions write:
 //
-//	- [ ] **Acme Corp** - SRE: [Apply Here](https://example.com/1)
-//	- [x] **Acme Corp** - SRE: [Apply Here](https://example.com/1) — docs in `path/`
+//   - [ ] **Acme Corp** - SRE: [Apply Here](https://example.com/1)
+//   - [x] **Acme Corp** - SRE: [Apply Here](https://example.com/1) — docs in `path/`
 //
 // Company and title are non-greedy so a title containing " - " or a company
 // containing "**"-adjacent punctuation cannot swallow the rest of the line,

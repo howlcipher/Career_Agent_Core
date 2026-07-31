@@ -300,12 +300,21 @@ go run ./cmd/agent --daemon
 
 # Override the per-cycle job cap
 go run ./cmd/agent --daemon -cycle-limit 10
+
+# Keep draining the known backlog continuously. The one-minute delay applies
+# only when no eligible jobs remain; discovery refreshes every six hours.
+go run ./cmd/agent --daemon -cycle-limit 15 -cycle-interval 1m -discovery-interval 6h
 ```
 
 Batch mode reads the queue and discovery sources once, processes the complete
-result, and exits. Daemon mode repeats that same fresh cycle every six hours.
-`-cycle-limit` must be greater than zero in daemon mode and defaults to 15;
-it is ignored in batch mode. `SIGINT` and `SIGTERM` stop the daemon instead of
+result, and exits. Daemon mode repeats that same fresh cycle every six hours by
+default. In daemon mode, processing and discovery run independently: use
+`-cycle-interval` to choose the idle retry delay when the backlog is empty and
+`-discovery-interval` to choose the source-refresh cadence; both must be
+greater than zero. `-cycle-limit` must be greater than zero in daemon mode and
+defaults to 15; it is ignored in batch mode. The dashboard starts its agent
+with a 15-job cap and a one-minute processing interval while discovery remains
+on the six-hour default. `SIGINT` and `SIGTERM` stop the daemon instead of
 leaving it asleep until the next cycle.
 
 > **⚠️ For daemon or repeatedly-restarted runs, build a binary instead of using `go run`.** `go run` does not exec into the binary it compiles — it stays alive as a thin wrapper around a separately-spawned child process (visible in `ps` as something like `/tmp/go-build.../b001/exe/main`). Killing the `go run` PID does **not** kill that child, which keeps running orphaned, still sharing `applications.db` and the log file. A real session accumulated five concurrent orphaned agents this way over a few hours. `go run` is fine for a one-off batch run; for `--daemon` or any run you expect to restart, build an explicit binary so the PID you launch is the PID doing the work:
@@ -321,11 +330,11 @@ In a second terminal, start the UI dashboard:
 go run ./cmd/dashboard
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion analytics: an overall interview rate plus two breakdown tables, one for conversion by ATS platform and one for conversion by cover-letter tone variant. Both tables stay hidden until at least one application has been tracked to an outcome. It can run before or after the agent; it shows data once the database exists.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The dashboard reads the local `applications.db` and shows live funnel counts, current work, recent outcomes, and conversion analytics: an overall interview rate plus two breakdown tables, one for conversion by ATS platform and one for conversion by cover-letter tone variant. Both tables stay hidden until at least one application has been tracked to an outcome. It can run before or after the agent; it shows data once the database exists. A single missed poll of `/api/metrics` (2-second interval) stays silent, but if two in a row fail, a passive "Metrics may be out of date" notice appears above the counts and clears again once a poll succeeds — the numbers shown are always the last real ones fetched, never a fabricated zero.
 
 Either command may be the one that creates `applications.db`, so both build their connection string from the same helper (`storage.DSN` in `pkg/storage/dsn.go`) and both therefore configure WAL mode and a five-second busy timeout. This matters because `modernc.org/sqlite`, the pure Go driver this project uses, reads pragmas as `_pragma=name(value)` and *silently ignores* the `mattn/go-sqlite3` spelling (`?_journal_mode=WAL`) rather than rejecting it — a connection carrying the wrong form looks configured and is not. Starting the dashboard first used to leave a new database in rollback-journal mode for exactly that reason.
 
-The dashboard frontend is a Vite/React app at `cmd/dashboard/ui`, and `cmd/dashboard/main.go` embeds its build output directly with `//go:embed ui/dist`. `dist/` is committed to git on purpose — it's a compile-time dependency, and a clone without it fails `go build ./...`. Anyone changing `cmd/dashboard/ui/src` must run `npm run build` in `cmd/dashboard/ui` and commit the regenerated `dist/` alongside their source change, or the built dashboard will silently keep serving the old bundle.
+The dashboard frontend is a Vite/React app at `cmd/dashboard/ui`, and `cmd/dashboard/main.go` embeds its build output directly with `//go:embed ui/dist`. `dist/` is committed to git on purpose — it's a compile-time dependency, and a clone without it fails `go build ./...`. Anyone changing `cmd/dashboard/ui/src` must run `npm run build` in `cmd/dashboard/ui` and commit the regenerated `dist/` alongside their source change, or the built dashboard will silently keep serving the old bundle. Run `npm run test` (`vitest`) first — it covers the poll sequence-number guard, the start/stop error states, and the poll-failure indicator, the pieces of `App.tsx` logic most likely to regress silently since they only misbehave under timing or a failed request, not on every render.
 
 The dashboard listens only on `127.0.0.1:8080` by default. To choose a different loopback port:
 

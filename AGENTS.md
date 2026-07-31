@@ -36,9 +36,10 @@ This is a Go project. Standard verification loop, in order:
 go build ./...
 go vet ./...
 go test ./...
+gofmt -l ./cmd ./pkg ./internal
 ```
 
-There is no Makefile; run these directly from the repo root. `go test ./...` is fast enough to run in full every time — there is no "changed tests only" fast path here the way the library has.
+There is no Makefile; run these directly from the repo root. `go test ./...` is fast enough to run in full every time — there is no "changed tests only" fast path here the way the library has. `gofmt -l` should print nothing; any file it names is not gofmt-clean, and none of the first three commands will catch that (improvement #443 — eight files sat un-formatted for days because nothing in the loop read formatting). Run `gofmt -w <file>...` on anything it lists before committing.
 
 **`go test ./...` also checks the backlog documents, not just the code.** `internal/backlog` validates that every model named in a Pending row of `bugs.md`, `improvements.md`, or `improvements_paywall.md` appears in `documentation/model_allowlist.md`, and `pkg/config` asserts that `.env.example` and `scripts/install_ollama.sh` agree on which Ollama models exist. Both exist because the facts they check were previously "true by convention" — and both conventions had already been silently broken for days before anyone noticed (improvement #455, bug #441). If a documentation edit turns the suite red, that is the check working; fix the document or update the allowlist with real provenance, and do not weaken the test to make it pass.
 

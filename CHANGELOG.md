@@ -1,5 +1,29 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The dashboard now warns you when it can't tell if its numbers are current
+
+* **Improvement (#460):** `App.tsx`'s metrics poll silently kept the last-good numbers on screen when `/api/metrics` failed, with no banner, timestamp, or other cue that the data might be stale — a real `500` (visible in the network tab since bug #452) was otherwise invisible to anyone just watching the dashboard. A single missed poll now stays silent (expected noise), but two consecutive failures show a non-alarming `role="status"` message ("Metrics may be out of date — the last N polls failed"), which clears again the moment a poll succeeds.
+
+## 2026-07-30 — The dashboard UI gets a test framework, and its two trickiest state-machine bugs get real coverage
+
+* **Improvement (#463):** `cmd/dashboard/ui` had no test runner at all — no `vitest`, no `@testing-library/react`, nothing beyond `tsc`/`oxlint`/`vite build`. The poll sequence-number guard (bug #447) and the start/stop `actionError` states could only ever be checked by hand against a live running instance. Added `vitest` + `@testing-library/react` + `@testing-library/jest-dom` + `jsdom`, a `test` script, and six real tests in `src/App.test.tsx` covering: a stale, slower `/api/metrics` and `/api/agent/status` response resolving after a fresher one must not overwrite it; a failed or thrown start/stop `fetch` surfaces the expected `role="alert"` message; a subsequent successful click clears a prior error. Mutation-checked — reverting the metrics sequence guard alone makes the corresponding test fail with the exact stale-data symptom it exists to catch.
+
+## 2026-07-30 — The dashboard now tells you when a start/stop click fails, and a slow poll can't overwrite fresher data
+
+* **Fix (bug #447):** `handleStart`/`handleStop` in the dashboard UI (`cmd/dashboard/ui/src/App.tsx`) had no `try/catch` around their `fetch` calls, so a failed POST (a rejected promise or a non-2xx response) looked identical to a successful one — no error, no button change, nothing but an unhandled rejection in the browser console. Both handlers now catch failures and non-2xx responses and surface a visible `role="alert"` message under the controls. Separately, the 2-second metrics poll had no guard against out-of-order responses: a slow request could resolve after a faster, later one and overwrite fresh state with stale data. Each poll now carries a sequence number, and a response is only applied if it is still the most recent request in flight.
+
+## 2026-07-30 — A transient rate limit no longer cancels the whole batch
+
+* **Fix (bug #444):** `cmd/agent`'s scoring and tailoring retry loops treated any error containing a bare "429" as a fatal daily-quota condition and called `deps.Cancel()`, abandoning every remaining job in the batch. On Anthropic, a 429 is the ordinary per-minute rate limit the adjacent backoff branch already exists to handle — so a Claude-configured agent could lose an entire run to a condition that would have cleared in seconds. Only Gemini's own "Quota exceeded" wording (its genuine hard-quota signal) is now treated as fatal; a bare 429 is retried with backoff on every provider, including Gemini itself, since its own SDK returns 429 for the per-minute limit too. The shutdown log line, and five log lines in `pkg/submitter/vision.go`, also named "Gemini" unconditionally regardless of the configured `LLM_PROVIDER`; both now name the active provider.
+
+## 2026-07-30 — The metrics API's per-row breakdowns stop swallowing cursor faults
+
+* **Fix (improvement #459):** `serveMetrics`'s by-source and by-variant breakdowns each looped over their query's rows without checking `rows.Err()` afterward. `Next()` returning false can mean either "the result set is exhausted" or "an error occurred while advancing the cursor," and the two are indistinguishable without an explicit check — so a fault partway through either stream (a dropped connection, a corrupted page) rendered a truncated breakdown as if it were complete, with no signal anything was missing. Found by the independent review pass on bug #452's fix, which deliberately scoped #452 to the top-level query call rather than per-row iteration. The scan loops are now `scanSourceConversions`/`scanVariantConversions`, both returning an error on `rows.Err()` that flows into #452's existing 500 path.
+
+## 2026-07-30 — The metrics API stops lying on a real query failure
+
+* **Fix (bug #452):** `cmd/dashboard`'s `/api/metrics` handler ran nine independent queries in parallel and logged each one's error but always answered `200 OK` with whatever zero/stale values the failed queries left behind — a genuine database failure (a locked file, a dropped table, a dead connection) looked identical to "nothing has happened yet." The handler now returns a real `500` when a query genuinely fails, while a legitimately empty table (`sql.ErrNoRows`) still renders as zero exactly as before.
+
 ## 2026-07-30 — The Working Protocol now keeps this changelog current
 
 * **Fix (improvement #454):** the Working Protocol's close-the-loop step (step 7 in `improvements.md`, shared by `bugs.md`) named the backlog row, the task journal, the build/vet/test run, the commit, and the push — but never this file. A session could follow the protocol exactly and still leave the changelog stale; five bug fixes shipped on 2026-07-30 alone (#436, #437, #441, #445, #446) before this file's most recent entry was updated by hand rather than by the protocol. Step 7 now requires a dated entry here in the same commit for any user-visible change, explicitly excluding internal refactors, backlog-only edits, and ignored/unused scripts.

@@ -43,20 +43,20 @@ Verified 2026-07-30 against the Anthropic model catalogue. Excludes `claude-myth
 
 ## google
 
-**Not verified against a vendor catalogue.** These are the values already in use across the backlogs; they are listed so the check can distinguish "a value this project has been using" from "a value someone just invented", which is the failure #455 actually represents. Confirming them against `agy models` is open work — see `improvements.md` #458.
+Verified 2026-07-30 against Antigravity's live model catalogue (`agy models`), resolving #458.
 
 | model ID | provenance |
 | --- | --- |
-| `gemini-3.6-flash-high` | In use in backlog rows since 2026-07-26; not vendor-verified (#458) |
-| `gemini-3.1-pro-high` | In use in backlog rows since 2026-07-26; not vendor-verified (#458) |
+| `gemini-3.6-flash-high` | Confirmed live via `agy models`, 2026-07-30 |
+| `gemini-3.1-pro-high` | Confirmed live via `agy models`, 2026-07-30 |
 
 ## openai
 
-**Not verified against a vendor catalogue**, same caveat as above. Recorded from the dated groom notes that introduced each one. See `improvements.md` #458.
+**Partially verified 2026-07-30, resolving #458 as far as this machine's tooling allows.** This machine has no `OPENAI_API_KEY` (per `AGENTS.md`'s constraint that paid keys are never assumed present), so there is no direct OpenAI catalogue to check against. `agy models` — the only live catalogue reachable here — lists exactly one OpenAI-column value; the other three remain unverified because no reachable catalogue names them, not because they were skipped.
 
 | model ID | provenance |
 | --- | --- |
-| `gpt-5.6-terra` | In use in backlog rows since 2026-07-26; not vendor-verified (#458) |
-| `gpt-5.6-sol` | Named by the 2026-07-27 post-#122 groom note as the model that ran that pass; not vendor-verified (#458) |
-| `gpt-5.6-luna` | In use in backlog rows since 2026-07-26; not vendor-verified (#458) |
-| `gpt-oss-120b-medium` | Named by the 2026-07-26 application-sweep note as locally available; not vendor-verified (#458) |
+| `gpt-oss-120b-medium` | Confirmed live via `agy models`, 2026-07-30 |
+| `gpt-5.6-terra` | In use in backlog rows since 2026-07-26; still not vendor-verified — absent from `agy models`' output and no OpenAI API key is present on this machine to check directly (2026-07-30) |
+| `gpt-5.6-sol` | Named by the 2026-07-27 post-#122 groom note as the model that ran that pass inline (direct OpenAI use, not via Antigravity); still not vendor-verified for the same reason (2026-07-30) |
+| `gpt-5.6-luna` | In use in backlog rows since 2026-07-26; still not vendor-verified — absent from `agy models`' output and no OpenAI API key is present on this machine to check directly (2026-07-30) |
