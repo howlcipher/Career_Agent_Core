@@ -129,6 +129,13 @@ function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // #460: a single missed poll is expected noise (a request can legitimately
+  // drop once), but a *run* of them means the numbers on screen may be
+  // stale with nothing telling the user that. Counts consecutive failures;
+  // any success resets it to 0. Only rendered once it crosses a small
+  // threshold, so a lone miss stays silent.
+  const [pollFailures, setPollFailures] = useState<number>(0);
+
   // Poll responses can resolve out of order (bug #447: a slow request can
   // finish after a later, faster one). Each poll tags itself with the
   // sequence number current at send time, and a response is applied only if
@@ -140,10 +147,16 @@ function App() {
       const res = await fetch('/api/metrics');
       if (res.ok) {
         const data = await res.json();
-        if (seq === pollSeq.current) setMetrics(data);
+        if (seq === pollSeq.current) {
+          setMetrics(data);
+          setPollFailures(0);
+        }
+      } else if (seq === pollSeq.current) {
+        setPollFailures((n) => n + 1);
       }
     } catch (e) {
       console.error(e);
+      if (seq === pollSeq.current) setPollFailures((n) => n + 1);
     }
   };
 
@@ -233,6 +246,14 @@ function App() {
       </div>
       {actionError && (
         <p className="action-error" role="alert">{actionError}</p>
+      )}
+      {/* #460: role="status" rather than "alert" — persistent staleness is
+          worth a passive announcement, not an interruption, and the numbers
+          below are still the last real ones fetched, not an error state. */}
+      {pollFailures >= 2 && (
+        <p className="poll-warning" role="status">
+          Metrics may be out of date — the last {pollFailures} polls failed
+        </p>
       )}
 
       <div className="dashboard-container" aria-live="polite" aria-atomic="false">

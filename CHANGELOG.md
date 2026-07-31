@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-07-30 — The dashboard now warns you when it can't tell if its numbers are current
+
+* **Improvement (#460):** `App.tsx`'s metrics poll silently kept the last-good numbers on screen when `/api/metrics` failed, with no banner, timestamp, or other cue that the data might be stale — a real `500` (visible in the network tab since bug #452) was otherwise invisible to anyone just watching the dashboard. A single missed poll now stays silent (expected noise), but two consecutive failures show a non-alarming `role="status"` message ("Metrics may be out of date — the last N polls failed"), which clears again the moment a poll succeeds.
+
 ## 2026-07-30 — The dashboard UI gets a test framework, and its two trickiest state-machine bugs get real coverage
 
 * **Improvement (#463):** `cmd/dashboard/ui` had no test runner at all — no `vitest`, no `@testing-library/react`, nothing beyond `tsc`/`oxlint`/`vite build`. The poll sequence-number guard (bug #447) and the start/stop `actionError` states could only ever be checked by hand against a live running instance. Added `vitest` + `@testing-library/react` + `@testing-library/jest-dom` + `jsdom`, a `test` script, and six real tests in `src/App.test.tsx` covering: a stale, slower `/api/metrics` and `/api/agent/status` response resolving after a fresher one must not overwrite it; a failed or thrown start/stop `fetch` surfaces the expected `role="alert"` message; a subsequent successful click clears a prior error. Mutation-checked — reverting the metrics sequence guard alone makes the corresponding test fail with the exact stale-data symptom it exists to catch.

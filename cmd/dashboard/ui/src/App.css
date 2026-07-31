@@ -14,6 +14,13 @@
   font-size: 0.9rem;
 }
 
+.poll-warning {
+  text-align: center;
+  color: #e0b34d;
+  margin: -20px auto 20px;
+  font-size: 0.9rem;
+}
+
 .btn {
   padding: 12px 28px;
   border: none;

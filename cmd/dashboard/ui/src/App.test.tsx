@@ -247,3 +247,70 @@ describe('start/stop action error states', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to stop agent — check the log');
   });
 });
+
+describe('poll failure indicator (improvement #460)', () => {
+  it('stays silent after a single transient /api/metrics miss', async () => {
+    vi.useFakeTimers();
+    try {
+      let metricsCalls = 0;
+      installFetch((input) => {
+        const url = String(input);
+        if (url === '/api/metrics') {
+          metricsCalls += 1;
+          // First poll fails, every later poll succeeds.
+          return Promise.resolve(jsonResponse(baseMetrics, metricsCalls > 1));
+        }
+        if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      render(<App />);
+      await flush();
+      expect(screen.queryByRole('status', { name: /out of date/i })).not.toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await flush();
+      expect(metricsCalls).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText(/metrics may be out of date/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a non-alarming indicator after two consecutive poll failures, and clears it on recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      let metricsCalls = 0;
+      let shouldSucceed = false;
+      installFetch((input) => {
+        const url = String(input);
+        if (url === '/api/metrics') {
+          metricsCalls += 1;
+          return Promise.resolve(jsonResponse(baseMetrics, shouldSucceed));
+        }
+        if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+
+      render(<App />);
+      await flush();
+      expect(screen.queryByText(/metrics may be out of date/i)).not.toBeInTheDocument();
+
+      // Second consecutive failure crosses the threshold.
+      await vi.advanceTimersByTimeAsync(2000);
+      await flush();
+      expect(metricsCalls).toBe(2);
+      const indicator = screen.getByText(/metrics may be out of date/i);
+      expect(indicator).toBeInTheDocument();
+      expect(indicator.getAttribute('role')).toBe('status');
+
+      // A subsequent successful poll must clear it, not just stop growing it.
+      shouldSucceed = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      await flush();
+      expect(screen.queryByText(/metrics may be out of date/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
