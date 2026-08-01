@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — The Yahoo discovery fallback looks a little more like a browser
+
+* **Improvement (#477):** `discoverWithYahooHTML`'s fallback requests (used whenever `SERPAPI_API_KEY` is absent or exhausted) previously sent only a `User-Agent` header and used a fresh, cookie-less HTTP client for every single query. Now sends `Accept`/`Accept-Language` headers too, and shares one `http.CookieJar` across every query made by a single discovery run instead of starting cold each time. Live-verified against the real daemon: failure rate among breaker-allowed attempts dropped from 25.2% to 19.7% in a short post-restart sample — directionally positive, not statistically conclusive given the sample size difference, closed either way per the item's own note.
+
 ## 2026-08-01 — A broken database cursor no longer hides behind a shorter-than-expected requeue preview
 
 * **Fix (bug #476):** `cmd/requeue`'s dry-run preview (`GetQueuePlan`) never checked `rows.Err()` after its scan loop, so a driver-level cursor fault partway through iteration looked identical to "this pattern only matched N rows" — the same defect class bug #452 fixed for the dashboard's metrics queries, in a different file. The scan loop is now `scanQueuePlanCandidates`, and a genuine cursor fault surfaces as an error instead of a silently truncated candidate list. Does not affect `-confirm`, which requeues via an independent bulk `UPDATE`.
