@@ -106,6 +106,9 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				}
 			} else {
 				log.Printf("[Worker-%d] Job URL could not be resolved safely; leaving it retryable: %v", workerID, err)
+				if statusErr := storage.UpdateFunnelStatusRetryable(job.URL); statusErr != nil {
+					log.Printf("[Worker-%d] Failed to return job to the discovery queue: %v", workerID, statusErr)
+				}
 			}
 			return StateEnd, nil
 		}
