@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielthedm/promptsec"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/parser"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
@@ -31,25 +30,6 @@ import (
 // already addressed. Doubled for headroom against that CPU contention.
 const fillActionTimeoutMs = 30000
 
-// toStoredThreats converts promptsec's threat type to storage's own mirror,
-// so pkg/storage doesn't need to depend on the security package's
-// third-party dependency just to log what was found.
-func toStoredThreats(threats []promptsec.Threat) []storage.PromptInjectionThreat {
-	out := make([]storage.PromptInjectionThreat, 0, len(threats))
-	for _, t := range threats {
-		out = append(out, storage.PromptInjectionThreat{
-			Type:     string(t.Type),
-			Severity: t.Severity,
-			Message:  t.Message,
-			Guard:    t.Guard,
-			Match:    t.Match,
-			Start:    t.Start,
-			End:      t.End,
-		})
-	}
-	return out
-}
-
 func quarantineCareerPageDOM(
 	filter *security.QuarantineLayer,
 	applyURL string,
@@ -64,7 +44,7 @@ func quarantineCareerPageDOM(
 		auditErr := storage.LogPromptInjectionDetections(
 			applyURL,
 			companyName,
-			toStoredThreats(detection.Threats),
+			storage.ThreatsToStored(detection.Threats),
 		)
 		if auditErr != nil {
 			log.Printf(
