@@ -447,3 +447,14 @@ go run ./cmd/rankjobs -limit 0       # backfill everything missing, no cap
 ```
 
 It is a separate CLI rather than something folded into `cmd/agent`'s own startup on purpose: it shares the same local Ollama instance a live `cmd/agent` run may already be using, so the bounded `-limit` keeps it from competing unboundedly against a run already in progress.
+
+### Benchmarking which local model suits a task
+
+`cmd/modelbench` measures how the Ollama models actually installed on this machine perform on a small set of bounded, objectively-validated tasks, so a model-routing decision can be made from evidence instead of assuming the largest model is automatically the best one:
+
+```bash
+go run ./cmd/modelbench -list                              # see what's installed
+go run ./cmd/modelbench -models qwen3:4b-instruct -reps 2   # benchmark one model
+```
+
+Like `cmd/rankjobs`, it shares the same local Ollama instance the agent uses, and it refuses to start while `cmd/agent`'s single-instance lock is held so it never competes with a live application attempt. See [`documentation/model_benchmark.md`](documentation/model_benchmark.md) for the full task set, how to interpret cold/warm timing and schema failures, and the current routing hypothesis.
