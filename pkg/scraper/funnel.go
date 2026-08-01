@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +28,13 @@ var (
 type FunnelEngine struct {
 	TargetATS []string
 	Roles     []string
+
+	// yahooClient is shared across every discoverWithYahooHTML call made by
+	// this engine instance (one per DiscoverJobs run, see NewFunnelEngine's
+	// call site) so its cookie jar accumulates across queries instead of
+	// starting fresh per request (improvement #477).
+	yahooClientOnce sync.Once
+	yahooClient     *http.Client
 }
 
 func NewFunnelEngine(roles []string) *FunnelEngine {
@@ -206,6 +215,17 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 	return fallbackRole
 }
 
+// newYahooHTTPClient builds the client discoverWithYahooHTML uses for every
+// query made by one FunnelEngine instance. It carries a cookie jar so Yahoo
+// sees a returning session across queries instead of a fresh, cookie-less
+// client every request (improvement #477).
+func newYahooHTTPClient() *http.Client {
+	client := newHTTPClient(10 * time.Second)
+	jar, _ := cookiejar.New(nil) // cookiejar.New never actually errors with a nil PublicSuffixList.
+	client.Jar = jar
+	return client
+}
+
 func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role string, jobChan chan<- Job) {
 	if !yahooBreaker.allow() {
 		log.Printf("[FunnelEngine] Yahoo fallback circuit open; skipping query %q during cooldown", query)
@@ -214,7 +234,10 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 
-	client := newHTTPClient(10 * time.Second)
+	f.yahooClientOnce.Do(func() {
+		f.yahooClient = newYahooHTTPClient()
+	})
+	client := f.yahooClient
 	searchURL := fmt.Sprintf("%s?p=%s", yahooBaseURL, url.QueryEscape(query))
 
 	var html string
@@ -226,6 +249,8 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			return
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 		resp, err := client.Do(req)
 		if err != nil {
