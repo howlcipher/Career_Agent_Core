@@ -33,6 +33,7 @@ This session is the orchestrator. To preserve Claude session limits, keep select
 ## 4. Close the loop
 
 - Verify the change end to end, run `go build ./...`, `go vet ./...`, `go test ./...`, commit as `<type>(<scope>): <description>`, set the item's Status to `Done (YYYY-MM-DD)` with a Done note, delete this task's journal in the final commit, and push.
+- **Keep the Done note short, per the Working Protocol's step 8.** Write the full fix account (mutation-check, live verification, what was tried and rejected) into `documentation/backlog_history/<file>_done_details.md`, and leave only a one-line pointer in the row's `ROI rationale` cell and its `### N.` Details subsection. These files got restructured 2026-08-01 specifically because closed items' full narratives were the majority of the file's size — don't recreate that.
 - Record findings discovered during the work as new rows plus detail sections in `improvements.md` or `bugs.md`.
 - If this run checked a Usability Gate box, or all boxes are now checked, update the gate's Status line in `bugs.md` (including flipping it to `MET (YYYY-MM-DD)` with a verification note if every box is now checked).
 - Housekeeping: delete any journals whose items are no longer outstanding.
