@@ -207,6 +207,11 @@ func extractJobTitleFromResult(resultTitle, fallbackRole string) string {
 }
 
 func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role string, jobChan chan<- Job) {
+	if !yahooBreaker.allow() {
+		log.Printf("[FunnelEngine] Yahoo fallback circuit open; skipping query %q during cooldown", query)
+		return
+	}
+
 	log.Printf("[FunnelEngine] Fallback searching Yahoo HTML for: %s", query)
 
 	client := newHTTPClient(10 * time.Second)
@@ -230,6 +235,9 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 				continue
 			}
 			log.Printf("[FunnelEngine] Yahoo fallback final failure for query %q: %v", query, err)
+			if ctx.Err() == nil {
+				yahooBreaker.recordFailure()
+			}
 			return
 		}
 
@@ -241,6 +249,9 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 				continue
 			}
 			log.Printf("[FunnelEngine] Yahoo fallback final failure with status %d for query %q", resp.StatusCode, query)
+			if ctx.Err() == nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+				yahooBreaker.recordFailure()
+			}
 			return
 		}
 
@@ -253,10 +264,14 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 				continue
 			}
 			log.Printf("[FunnelEngine] Yahoo fallback final read failure for query %q: %v", query, err)
+			if ctx.Err() == nil {
+				yahooBreaker.recordFailure()
+			}
 			return
 		}
 
 		html = string(b)
+		yahooBreaker.recordSuccess()
 		break
 	}
 

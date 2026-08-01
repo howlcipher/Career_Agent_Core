@@ -17,6 +17,7 @@ func TestDiscoverWithYahooHTML_RetryTransientErrors(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	dbDir := t.TempDir()
 	dbPath := filepath.Join(dbDir, "applications.db")
@@ -66,6 +67,7 @@ func TestDiscoverWithYahooHTML_ExhaustsRetries(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	dbDir := t.TempDir()
 	dbPath := filepath.Join(dbDir, "applications.db")
@@ -108,6 +110,7 @@ func TestDiscoverWithYahooHTML_NonRetryableResponse(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	dbDir := t.TempDir()
 	dbPath := filepath.Join(dbDir, "applications.db")
@@ -142,6 +145,7 @@ func TestDiscoverWithYahooHTML_Cancellation(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	dbDir := t.TempDir()
 	dbPath := filepath.Join(dbDir, "applications.db")
@@ -176,5 +180,144 @@ func TestDiscoverWithYahooHTML_Cancellation(t *testing.T) {
 	// We want to ensure it doesn't loop 3 times.
 	if atomic.LoadInt32(&attempts) > 1 {
 		t.Fatalf("Expected at most 1 attempt due to cancellation, got %d", attempts)
+	}
+	if yahooBreaker.consecutiveFailures != 0 {
+		t.Fatalf("a caller-side context cancellation must not count as a source failure, got %d consecutive failures", yahooBreaker.consecutiveFailures)
+	}
+}
+
+// TestDiscoverWithYahooHTML_TransportErrorTripsBreaker proves a genuine
+// transport error (connection refused, not a caller-side context
+// cancellation) is actually wired into the breaker -- distinct from
+// TestDiscoverWithYahooHTML_Cancellation, which proves the opposite case
+// (a cancellation must NOT count).
+func TestDiscoverWithYahooHTML_TransportErrorTripsBreaker(t *testing.T) {
+	oldSleep := SleepFunc
+	SleepFunc = func(time.Duration) {}
+	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
+
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "applications.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("InitDBWithPath failed: %v", err)
+	}
+	defer os.Remove(dbPath)
+
+	mockYahoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	closedURL := mockYahoo.URL
+	mockYahoo.Close() // further connections to closedURL are refused: a real transport error
+
+	origYahoo := yahooBaseURL
+	yahooBaseURL = closedURL
+	defer func() { yahooBaseURL = origYahoo }()
+
+	engine := NewFunnelEngine([]string{"backend"})
+	jobChan := make(chan Job, 10)
+
+	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
+	close(jobChan)
+
+	if yahooBreaker.consecutiveFailures != 1 {
+		t.Fatalf("a real transport error must count as a source failure, got %d consecutive failures", yahooBreaker.consecutiveFailures)
+	}
+}
+
+// TestDiscoverWithYahooHTML_BodyReadErrorTripsBreaker proves the body-read
+// failure path (util.ReadAll returning an error after a 200 status) is also
+// wired into the breaker, by hijacking the connection and closing it before
+// the advertised Content-Length is satisfied.
+func TestDiscoverWithYahooHTML_BodyReadErrorTripsBreaker(t *testing.T) {
+	oldSleep := SleepFunc
+	SleepFunc = func(time.Duration) {}
+	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
+
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "applications.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("InitDBWithPath failed: %v", err)
+	}
+	defer os.Remove(dbPath)
+
+	mockYahoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Advertise more body than is actually sent, then close mid-body so
+		// the client's read fails with io.ErrUnexpectedEOF.
+		buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer mockYahoo.Close()
+
+	origYahoo := yahooBaseURL
+	yahooBaseURL = mockYahoo.URL
+	defer func() { yahooBaseURL = origYahoo }()
+
+	engine := NewFunnelEngine([]string{"backend"})
+	jobChan := make(chan Job, 10)
+
+	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
+	close(jobChan)
+
+	if yahooBreaker.consecutiveFailures != 1 {
+		t.Fatalf("a body-read error must count as a source failure, got %d consecutive failures", yahooBreaker.consecutiveFailures)
+	}
+}
+
+// TestDiscoverWithYahooHTML_CircuitOpensAfterSustainedFailures is bug #475's
+// acceptance criterion: a sustained failure streak, not a single transient
+// blip, must eventually stop spending requests on Yahoo at all.
+func TestDiscoverWithYahooHTML_CircuitOpensAfterSustainedFailures(t *testing.T) {
+	oldSleep := SleepFunc
+	SleepFunc = func(time.Duration) {}
+	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
+
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "applications.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("InitDBWithPath failed: %v", err)
+	}
+	defer os.Remove(dbPath)
+
+	var requests int32
+	mockYahoo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer mockYahoo.Close()
+
+	origYahoo := yahooBaseURL
+	yahooBaseURL = mockYahoo.URL
+	defer func() { yahooBaseURL = origYahoo }()
+
+	engine := NewFunnelEngine([]string{"backend"})
+	jobChan := make(chan Job, 10)
+
+	// Each exhausted query is one consecutive failure toward the breaker's
+	// threshold; drive it past the threshold with distinct queries.
+	for i := 0; i < yahooCircuitFailureThreshold; i++ {
+		engine.discoverWithYahooHTML(context.Background(), "query", "backend", jobChan)
+	}
+	if yahooBreaker.allow() {
+		t.Fatal("circuit should be open after a sustained failure streak")
+	}
+
+	requestsBeforeOpenQuery := atomic.LoadInt32(&requests)
+	engine.discoverWithYahooHTML(context.Background(), "query", "backend", jobChan)
+	close(jobChan)
+
+	if got := atomic.LoadInt32(&requests); got != requestsBeforeOpenQuery {
+		t.Fatalf("a query while the circuit is open must not spend any HTTP requests, got %d more", got-requestsBeforeOpenQuery)
 	}
 }
