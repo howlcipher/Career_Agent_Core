@@ -1,0 +1,435 @@
+# improvements.md — Archived Groom-Pass / Status History
+
+Superseded dated status paragraphs moved out of `improvements.md` during the 2026-08-01 backlog-size restructure (see `documentation/task_journals/2026-08-01_optimize-backlog-access.md`). `improvements.md` now carries only the single current status paragraph (the one that sat immediately before the ranked table, which turned out to be the true most-recent note — this file's groom notes were not consistently prepended at the top the way `bugs.md`'s were). This file is the full historical record, kept for audit, not read on a normal work session.
+
+## Ranked Backlog — prior groom-pass paragraphs (in original file order)
+
+**Groom pass, 2026-08-01 (session thirty-seven, post-#481 run):** `bugs.md`'s #481 is Done (see that file's own row and gate note), so this session's work item was there, not here. This file's Pending rows were all re-verified against current code rather than their own prose: **#448** (1.0) unchanged — `cmd/dashboard/ui/.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) unchanged — `NLP_SERVICE_URL` (`pkg/mcp/client.go:251`) still gates the same unmeasured opt-in offload; **#472**/**#473** (0.75 each) unchanged — `pkg/submitter/browser.go:1716`'s post-security-code resubmit click still returns `ErrNeedsEmailVerification` directly with no `isTargetClosedErr` check, `pkg/submitter/vision.go` still defines none of its own; **#479** (0.5) unchanged — `cmd/agent/pipeline.go`'s DNS-failure branch (now also calling `UpdateFunnelStatusRetryable` per #478, but still the same generic backoff ladder with no fast-fail path) is unchanged in the respect this row is about. One new row filed this pass from #481's live verification: **#483** (0.67, mechanical — two zombie `career_agent_bin` processes observed during the live restart, not confirmed to be a real problem, worth a cheap confirm-or-document pass). `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-checked structurally (no cloud-offload DOM path, no `2captcha`/`capsolver` dependency, `lspci` still shows only the integrated Radeon Vega) and unchanged. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue's outright top is now `bugs.md`'s #480 (1.67, Minor) — see that file's groom note** — ahead of this file's own #448/#442 tie (1.0), #472/#473 (0.75), #483 (0.67), and #479 (0.5).
+
+
+
+**Groom pass, 2026-08-01 (session thirty-five, post-#464 run):** `bugs.md` remains empty of Pending rows (gate still MET), so this file's Pending rows are still the free queue. This session's work item, **#464** (`scripts/server.go`'s transpiled body was not `gofmt`-clean), is now Done — `gofmt -w scripts/server.go` applied, `gofmt -l scripts/server.go` now prints nothing, no behavior change (the file is `//go:build ignore`, excluded from the build since #440), no `CHANGELOG.md` entry needed per the Working Protocol's own carve-out for such scripts, no ADR references it. Every other Pending row was re-verified against current code this pass, all unchanged: **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` (`pkg/mcp/client.go:251`) still gates the same unmeasured opt-in offload; **#472**/**#473** (0.75 each) — `pkg/submitter/browser.go:1716`'s post-security-code resubmit click still returns `ErrNeedsEmailVerification` directly with no `isTargetClosedErr` check, and `pkg/submitter/vision.go` still defines no `isTargetClosedErr` of its own; **#479** (0.5) — `cmd/agent/pipeline.go:142-144`'s pre-flight retryable-error branch still routes every retryable error, including a permanent DNS failure, through the same generic `storage.UpdateFunnelStatusRetryable` backoff ladder with no fast-fail path. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged this pass: no cloud-offload DOM path (the two `grep` hits for "cloud" in `pkg/submitter/browser.go` are Cloudflare bot-protection detection, unrelated), no `2captcha`/`capsolver` dependency, `lspci` still shows only the integrated Radeon Vega. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a two-way tie at 1.0 — #448, #442 — at the outright top**, ahead of #472/#473 (0.75) and #479 (0.5).
+
+
+
+**Prior — Groom pass, 2026-08-01 (session thirty-four, post-#474 run):** `bugs.md`'s #478 is Done (see that file's gate note), so the Usability Gate is MET again and this file's Pending rows are the free queue. This session's work item, **#474** (ADRs have no process ensuring they get updated when the decision they describe changes), is now Done — Working Protocol step 7 gained an ADR-check requirement alongside its existing `CHANGELOG.md` one, scoped the same way (only when the change touches what an existing ADR describes). The prior (#478-fixing) session already filed **#479** (0.5, at the floor — a permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status, found live-verifying #478) as a row in this file rather than `bugs.md`, since it's a refinement of retry classification, not a new defect — re-confirmed this pass, unchanged. Every other Pending row was re-verified against current code this pass, all unchanged since the thirty-second session: **#448** (1.0) — `.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#472**/**#473** (0.75 each) — `pkg/submitter/browser.go`'s post-security-code resubmit click still returns `ErrNeedsEmailVerification` directly on a click failure with no `isTargetClosedErr` check, and `pkg/submitter/vision.go` still defines no `isTargetClosedErr` of its own. **#479** (0.5) sits exactly at the ROI floor, not below it, so no `⚠️` flag. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged this pass: no cloud-offload DOM path (the one `grep` hit for "cloud" in `pkg/submitter/browser.go` is Cloudflare bot-protection detection, unrelated), no `2captcha`/`capsolver` dependency, `lspci` still shows only the integrated Radeon Vega. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a three-way tie at 1.0 — #448, #442, #464 — at the outright top**, ahead of #472/#473 (0.75) and #479 (0.5).
+
+
+
+**Prior — Groom pass, 2026-08-01 (session thirty-two, post-#477 run):** **#477** is Done — see its row and detail section for the fix, mutation-checked tests, independent Claude review, and the live before/after Yahoo failure-rate sample. Live-verifying it against the real running daemon surfaced a new Major, `bugs.md` **#478** (a DNS resolution failure never moves a job out of `DISCOVERED`, spinning the daemon at ~1 cycle/sec) — filed there, not here, since it is a bug in `cmd/agent/pipeline.go`, not an improvement. Every other Pending row in this file was re-verified against current code this pass, all unchanged since the thirty-first session: **#474** (1.0) — `docs/adrs/ADR-003-SQLite-Concurrency.md`'s dated 2026-07-31 note still describes the specific stale-ADR instance being corrected in the past tense, confirming the general process gap this row asks for is still open; **#472**/**#473** (0.75 each) — `pkg/submitter/browser.go`'s post-security-code resubmit click still returns `ErrNeedsEmailVerification` directly on a click failure with no `isTargetClosedErr` check, and `pkg/submitter/vision.go` still defines no `isTargetClosedErr` of its own; **#448** (1.0) — `.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged this pass: no cloud-offload DOM path, no `2captcha`/`capsolver` dependency, `lspci` still shows only the integrated Radeon Vega. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **`bugs.md` now holds #478 (Major, 3.0) Pending, reopening the Usability Gate's zero-Blocker/Major box and outranking every row in this file per this backlog's own header rule — #478 is the recommended next item, ahead of this file's four-way 1.0 tie (#474, #448, #442, #464).**
+
+
+
+**Prior — Groom pass, 2026-07-31 (session thirty-one, post-#475 run):** `bugs.md`'s **#475** is Done — the Usability Gate is re-MET, and this file's Pending rows are the free queue again for the first time since the gate reopened. Filed one new row from this session's own fix: **#477** (1.5, standard — the more-realistic-headers/cookie-jar half of #475's root-cause analysis that the breaker itself didn't need and #475 explicitly declined to fold in). Every other Pending row was re-verified against current code this pass, all unchanged since the twenty-ninth session's audit (this session's diff never touched any of their files): **#474** (1.0), **#472**/**#473** (0.75 each), **#448** (1.0), **#442** (1.0), **#464** (1.0). `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) unchanged, not re-checked this pass (no diff touched their premises). `bugs.md` now holds only **#476** (Minor, 2.0) Pending, which does not gate the Usability Gate and does not outrank this file's rows on its own merit — but per this backlog's own header rule bugs still generally outrank improvements of similar effort, so #476 remains the recommended next item ahead of **#477** (1.5). `go build ./...`, `go vet ./...`, `go test ./...` (including `-race` on `pkg/scraper`) and `gofmt -l ./cmd ./pkg ./internal` all re-run clean.
+
+
+
+**Prior — Full `/groom_backlogs` audit, 2026-07-31 (twenty-ninth session, no improvement worked this pass):** every Pending row in this file was re-verified against current code and is unchanged from the prior pass — **#474** (1.0), **#472**/**#473** (0.75 each), **#448** (1.0), **#442** (1.0), **#464** (1.0). `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75) and below-floor **#14** (0.43) also unchanged (repository-wide greps for CAPTCHA-solver names and cloud-model calls in `pkg/parser` both still 0 hits; `lspci` still shows only the integrated Radeon Vega). This pass's fresh audit (daemon cadence diff review, `pkg/storage`/`pkg/tracker` sweep) found one documentation correction (a stale "one-time snapshot" operational note in `bugs.md`, now fixed for daemon mode — see that file) and one new Minor bug, `bugs.md` **#476** (`GetQueuePlan` missing `rows.Err()`), neither of which touches this file's own rows. **`bugs.md` still outranks this entire file while the Usability Gate is unmet** — #475 (Major) and now #476 (Minor) are both ahead of every row below. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean.
+
+
+
+**Prior — Groom pass, 2026-07-31 (live-log audit, no improvement worked this pass):** a scheduled scan of the continuously running daemon's live `career_agent.log` found a new Major bug, filed as `bugs.md` **#475** (Yahoo fallback still fails 77.8% of discovery queries — 4,269 of 5,490 — despite bug #130's retry/backoff fix, steady at ~45-49 failures/minute across the full 8+ hour log window rather than in a burst). Per this file's own header rule and `bugs.md`'s "while the Usability Gate is unmet, bugs outrank *everything* in `improvements.md`", **#475 is now the outright top of the combined free queue, ahead of every row below** — no improvement should be picked next until it is resolved or explicitly deferred. Every Pending row here was still re-verified against current code this pass, all unchanged: **#474** (1.0) — the specific stale-ADR instance was corrected in #450's own commit, but no process exists to catch the *next* one, confirmed by reading `docs/adrs/ADR-003-SQLite-Concurrency.md`'s dated 2026-07-31 note describing exactly that fix in the past tense; **#472** (0.75) and **#473** (0.75) — `pkg/submitter/browser.go:1697`'s post-security-code resubmit click still falls straight through to `ErrNeedsEmailVerification` on any `clickErr != nil` with no `isTargetClosedErr` check, and `pkg/submitter/vision.go` still defines no `isTargetClosedErr` of its own; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` (`pkg/mcp/client.go:251`) still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged this pass: no cloud-offload DOM path, no `2captcha`/`capsolver` dependency, `lspci` still shows only the integrated Radeon Vega. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean — this pass found a live-behavior gap, not a code or doc defect in this file. **The free queue here stays a four-way tie at 1.0 — #474, #448, #442, #464 — but none of them is the actual next item; `bugs.md` #475 is.**
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#450 run):** **#450** is Done this session — `storage.ReaderDSN` now carries every pragma `storage.DSN` does except `journal_mode`, and `cmd/dashboard` opens with it instead of `DSN`; the writer (`storage.InitDBWithPath`, used by every other command) is unchanged. See the row's detail section for the mutation-checked reproduction test and the live verification against the real database with the production agent daemon running concurrently. Every other Pending row was re-verified against current code this pass, all unchanged: **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload at `pkg/mcp/client.go:251`; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#472** (0.75) — `pkg/submitter/browser.go`'s post-security-code resubmit click still falls straight through to `ErrNeedsEmailVerification` on a click failure with no `execErr`/`isTargetClosedErr` check; **#473** (0.75) — `pkg/submitter/vision.go` still has no `isTargetClosedErr` of its own. No row crossed the 0.5 floor. Fixing #450 exposed a stale note in `docs/adrs/ADR-003-SQLite-Concurrency.md` (it still described bug #446 as open, months after that shipped) — corrected in the same commit, and the process gap that let it drift filed as **#474** (1.0), a same-shape sibling of #454's `CHANGELOG.md` gap for a different doc. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) unchanged, not re-checked this pass (no diff touched their premises). `documentation/task_journals/` holds only `TEMPLATE.md` — this session's own #450 journal was deleted in its closing commit. `go build ./...`, `go vet ./...`, `go test ./...` (including `-race` on `pkg/storage`) and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a four-way tie at 1.0 — #474, #448, #442, #464 — at the outright top**, ahead of #472/#473 (0.75).
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#462 run):** **#462** is Done this session — the RAG embedding retry loop's inline four-condition `strings.Contains` chain now calls `classifyGenerationError(embErr) == genErrorRetryable` instead of duplicating its logic; pure internal refactor, no behavior change, verified against the existing `TestClassifyGenerationError` suite re-run uncached. Every other Pending row was re-verified against current code this pass, all unchanged: **#472** (0.75) — `pkg/submitter/browser.go`'s post-security-code resubmit click (`:1697`'s `if clickErr := visible.Click(...); clickErr == nil`) still falls straight through to `ErrNeedsEmailVerification` on a click failure with no `execErr`/`isTargetClosedErr` check, confirmed by reading the click's surrounding branch directly; **#473** (0.75) — `pkg/submitter/vision.go` still has no `isTargetClosedErr` of its own, confirmed only `browser.go` defines and calls it; **#450** (1.0) — `pkg/storage/dsn.go:23` still orders `journal_mode(WAL)` ahead of `busy_timeout(5000)` in one shared pragma string; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns` key; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload (`pkg/mcp/client.go:251`), and `scripts/verify_tailoring.go` still exists to make the measurement cheap; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged this pass: no cloud-offload DOM path (`grep -rl` for it returns nothing), no `2captcha`/`capsolver` integration, `lspci` still shows only the integrated Radeon Vega. `documentation/task_journals/` holds only `TEMPLATE.md` — this session's own #462 journal was deleted in its closing commit. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a four-way tie at 1.0 — #450, #448, #442, #464 — at the outright top**, ahead of #472/#473 (0.75).
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#470 run):** **#470** is Done this session — `countForStatus` is now wired into `cmd/requeue`'s `main()` as real pre-flight `-status` validation, fixing the reported silent-zero-rows-requeued gap. Re-verification before implementing found the row's own fix direction was incomplete: `countForStatus`'s switch didn't cover `RETRY_EXHAUSTED`, which bug #466 had already made a valid, documented `-status` value — wiring it in unmodified would have turned a real, already-shipped use case into a hard failure. Scope widened to add a `RetryExhausted` field to `storage.SourceOutcomeStat` and its backing query before wiring the switch in, so all four valid statuses validate correctly. Live-verified in a scratch directory against a throwaway `applications.db` (not the production one): a typo'd `-status` now exits 1 with no DB write, where it previously exited 0 reporting "requeued 0 row(s)". Every other Pending row was re-verified against current code this pass, all unchanged: **#472** (0.75), **#473** (0.75), **#450** (1.0), **#448** (1.0), **#442** (1.0), **#464** (1.0), **#462** (1.0) — same anchors as the prior pass's note below, none of which this session's diff (`pkg/storage/manager.go`, `cmd/requeue/main.go`) touched. No row crossed the 0.5 floor. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged by direct grep/`lspci` this pass. `documentation/task_journals/` holds only `TEMPLATE.md`. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a five-way tie at 1.0 — #450, #448, #442, #464, #462 — at the outright top**, ahead of #472/#473 (0.75).
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#468 run):** **#468** is Done this session — see its detail section for what shipped (an `INVALID_URL` malformed/expired split and a new `RETRY_EXHAUSTED` dashboard tile), what was deliberately re-scoped out on re-verification (pre-admission content filtering was already a non-issue, bounded by bug #466's retry budget and covered by an existing test), and the one minor cosmetic gap an independent review pass found and the session accepted rather than fixed (a mixed reasoned/legacy-NULL `INVALID_URL` bucket undercounts in the caption vs. the tile total — self-resolving as new writes always set a reason now). Every other Pending row was re-verified against current code this pass, all unchanged: **#472** (0.75) — the post-security-code resubmit click's terminal return (`pkg/submitter/browser.go:1716`) still returns `ErrNeedsEmailVerification` directly rather than setting `execErr`; **#473** (0.75) — `pkg/submitter/vision.go` still has no `isTargetClosedErr` of its own (confirmed only `pkg/submitter/browser.go` defines and calls it); **#470** (1.0) — `countForStatus` (`cmd/requeue/main.go:169`) still called only from its own test; **#450** (1.0) — `pkg/storage/dsn.go`'s pragma string still orders `journal_mode(WAL)` ahead of `busy_timeout`; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has 0 `ignorePatterns` occurrences; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload at `pkg/mcp/client.go`; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#462** (1.0) — `cmd/agent/pipeline.go:274` still duplicates `classifyGenerationError`'s four conditions inline (this session's own edits to the same file, five call sites earlier in `StateInit`/`StateDiscovery`/`StateTailoring`, did not touch this line or shift it). No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged by direct grep/`lspci` this pass — this session's diff (`pkg/storage`, `cmd/agent/pipeline.go`, `cmd/dashboard`) never touched CAPTCHA solving, cloud DOM-offload routing, or GPU availability. `documentation/task_journals/` holds only `TEMPLATE.md`, nothing to clean (this session's own #468 journal was deleted in its closing commit). `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now a six-way tie at 1.0 — #470, #450, #448, #442, #464, #462 — at the outright top**, ahead of #472/#473 (0.75).
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#471 run):** **#471** is Done this session (extending bug #467's target-closed browser recovery to the cached-form-mapping fast path, the dominant submit path once an ATS domain is already learned) — see its detail section for the fix and its two new tests. **#472 and #473 are the same theme's remaining siblings, and their Decay now drops from 1.0 to 0.5** now that #471, the highest-value item in the theme, has shipped: **#472** re-scores to 3×0.5÷2 = **0.75** and **#473** to 3×0.5÷2 = **0.75**, both re-ranking below the six-way 1.0 tier but still above the 0.5 floor, no `⚠️` flag needed. Every other Pending row was re-verified against current code this pass, all unchanged: **#468** (1.67) — `RETRY_EXHAUSTED` still has no dashboard tile/card/legend entry (confirmed: `grep -rn RETRY_EXHAUSTED cmd/dashboard/` returns nothing); **#470** (1.0) — `countForStatus` (`cmd/requeue/main.go:169`) still called only from its own test; **#472** (0.75) — `AttemptSubmit`'s post-security-code resubmit click (`pkg/submitter/browser.go:1716`) still returns `ErrNeedsEmailVerification` directly rather than setting `execErr`; **#473** (0.75) — `pkg/submitter/vision.go` still has no `isTargetClosedErr` detection of its own; **#450** (1.0) — `pkg/storage/dsn.go`'s pragma string still orders `journal_mode(WAL)` ahead of `busy_timeout`; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#462** (1.0) — unchanged, `cmd/agent/pipeline.go:274` still duplicates `classifyGenerationError`'s four conditions inline. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged — this session's diff (`pkg/submitter`) never touched CAPTCHA solving, cloud DOM-offload routing, or GPU availability. `documentation/task_journals/` holds only `TEMPLATE.md`, nothing to clean. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **#468 (1.67) is now the outright top of the free queue**, ahead of the six-way 1.0 tier.
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#467 run):** `bugs.md`'s #467 (bounded browser-context recovery on Playwright target closure) is Done this session — see that file's own row for the fix. It filed three follow-up rows here rather than expanding its own scope: **#471** (2.5, standard — extend the recovery to the cached-form-mapping fast path, likely the most common submit path in steady state), **#472** (1.5, standard — extend it to the security-code resubmit click), **#473** (1.5, standard — extend it to the Vision submission paths). **#471 is now the outright top of the free queue**, ahead of **#468** (1.67). Every other Pending row was re-verified against current code this pass, all unchanged: **#468** (1.67) — `RETRY_EXHAUSTED` still has no dashboard tile/card/legend entry; **#470** (1.0) — `countForStatus` (`cmd/requeue/main.go:169`) still called only from its own test; **#450** (1.0) — `pkg/storage/dsn.go`'s pragma string still orders `journal_mode(WAL)` ahead of `busy_timeout`; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#462** (1.0) — unchanged, `cmd/agent/pipeline.go:274`. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) re-confirmed unchanged — this session's diff (`pkg/submitter`) never touched CAPTCHA solving, cloud DOM-offload routing, or GPU availability. This session's own task journal was deleted in its closing commit. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean.
+
+
+
+**Prior — Groom pass, 2026-07-31 (post-#469 run):** #469 (per-domain circuit breakers for repeated fetch/pre-flight timeouts) is Done — see its row for what shipped and the three real defects an independent review pass caught and fixed before commit. Every other Pending row was re-verified against current code this pass, all unchanged: **#468** (1.67) — `RETRY_EXHAUSTED` still has no dashboard tile/card/legend entry, confirmed still true after #469 (which touched retry *scheduling*, not the dashboard); **#470** (1.0) — `countForStatus` (`cmd/requeue/main.go:169`) is still called only from its own test, not from `main()`; **#450** (1.0) — `pkg/storage/dsn.go`'s pragma string still orders `journal_mode(WAL)` ahead of `busy_timeout`; **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`; **#442** (1.0) — `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload; **#464** (1.0) — `gofmt -l scripts/server.go` still names the file; **#462** (1.0) — unchanged as a defect, but its cited line drifted from `cmd/agent/pipeline.go:232` to `:274` because #469's own edits added code above it in the same file (corrected in its row). No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424** (2.0), **#17** (1.75), and below-floor **#14** (0.43) were re-confirmed unchanged — this session's diff (`cmd/agent`, `pkg/storage`) never touched CAPTCHA solving, cloud DOM-offload routing, or GPU availability, the three premises those rows depend on. No journals were outstanding to clean (this session's own #469 journal was deleted in its closing commit). `go build ./...`, `go vet ./...`, `go test ./...` (including `-race` on `cmd/agent`/`pkg/storage`) and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **#468 (1.67) is now the outright top of the free queue**, ahead of the six-way 1.0 tier (#470, #450, #448, #442, #464, #462).
+
+
+
+**2026-07-26 application-sweep note:** three evidence-backed improvements were added below. Model names were re-checked live; new and still-Pending rows now use models actually available on this machine rather than the obsolete `Opus 5` / `Gemini 3 Pro` labels.
+
+
+
+**2026-07-26 post-#119 groom-pass note:** all six Pending rows were re-verified against current code and re-scored. #36's SerpApi/Yahoo documentation defect shipped with bug #119, so that subclaim was removed; its remaining broken setup, daemon, payload, timeout, performance, and security documentation still justify the same 5.0 score. #34 still lacks the named accessibility semantics and loads Google Fonts. #35 still uses fixed source tiers despite the monitoring journal's post-fill CAPTCHA evidence; its exploration-preserving design remains worthwhile but large, so 1.0 is unchanged. #14 still lacks a useful preference-labeled outcome set, while this host still lacks practical local training hardware. #27 still has no external MCP consumer or protocol server. #30's two motivating work-attestation fields are now configured, so Value drops from 2 to 1 and its score from 0.40 to 0.20. Below-floor rows are now sorted by score and remain user-decision items, not autonomous work.
+
+
+
+**2026-07-27 post-#124 groom-pass note:** all six Pending rows were re-verified against current code and every score was recomputed. #36 remains 5×1.0÷1 = 5.0: `pii.yaml.template` is absent and the README still contradicts code on daemon behavior, payload limits, timeouts, and measured local performance. #34 remains 4×1.0÷2 = 2.0: the embedded dashboard still loads Google Fonts and lacks the named landmark, live-region, table, and reduced-motion semantics. #35 remains 5×1.0÷5 = 1.0: outcome-count reporting primitives exist, but queue order still uses the fixed `sourcePriorityCASE` with no rolling score, recency decay, or exploration floor. #14 remains 3×1.0÷7 = 0.43: no training pipeline or preference-labeled dataset exists, and the live host still exposes only its integrated Radeon Vega GPU. #27 remains 2×0.5÷3 = 0.33: `pkg/mcp` is still an internal LLM-provider client, with no protocol server or named external consumer. #30 remains 1×1.0÷5 = 0.20: metadata-only configuration checks confirm both motivating work-attestation answers are configured, while the early detector's false-positive risk remains. The three below-floor items stay open for user confirmation, re-scope, or closure.
+
+
+
+**2026-07-27 post-#126 groom-pass note:** all six Pending rows were re-verified and recomputed with no rank or score change. #36 remains 5×1.0÷1 = 5.0 because the setup template is still absent and the daemon, payload, timeout, performance, and security documentation still drifts from executable behavior. #34 remains 4×1.0÷2 = 2.0: #126 hardened the listener but did not remove Google Fonts or add the missing landmark, live-region, table, and reduced-motion semantics. #35 remains 5×1.0÷5 = 1.0 because queueing still uses fixed source tiers without outcome scoring, recency decay, or an exploration floor. #14 remains 3×1.0÷7 = 0.43, #27 remains 2×0.5÷3 = 0.33, and #30 remains 1×1.0÷5 = 0.20. Metadata-only checks still find #30's two motivating attestations configured. Those three below-floor rows remain user decisions: defer or re-scope #14, close #27 absent a named external client, and close #30 until a newly observed unanswered category exists.
+
+
+
+**2026-07-27 post-#127 groom-pass note:** the five remaining free Pending rows were re-verified and recomputed. #36 remains 5×1.0÷1 = 5.0: `pii.yaml.template` is absent and the daemon, payload, timeout, performance, and security documentation still contradicts code. #34 remains 4×1.0÷2 = 2.0: Google Fonts and the missing landmark, live-region, table, and reduced-motion semantics remain. #35 remains 5×1.0÷5 = 1.0: queueing still uses fixed source tiers without rolling outcomes, recency decay, or an exploration floor. #27 remains 2×0.5÷3 = 0.33 and #30 remains 1×1.0÷5 = 0.20; both stay below floor with the same close recommendations. Improvement #14 moved intact to `improvements_paywall.md` because live hardware still exposes only an integrated Radeon Vega GPU and a useful experiment therefore requires paid compute; its 0.43 score and below-floor status are unchanged.
+
+
+
+**2026-07-27 post-#123 groom-pass note:** all five free Pending rows were re-verified and recomputed with no rank change. #36 remains 5×1.0÷1 = 5.0: bug #123 added accurate pre-score fetch documentation, but `pii.yaml.template` is still absent and the daemon, payload, timeout, performance, and remaining security claims still contradict executable behavior. #34 remains 4×1.0÷2 = 2.0 because the dashboard still loads Google Fonts and lacks the named main landmark, live region, caption/header scope, and reduced-motion override. #35 remains 5×1.0÷5 = 1.0 because queueing still uses fixed `sourcePriorityCASE` tiers without rolling outcome scoring, recency decay, or an exploration floor. #27 remains 2×0.5÷3 = 0.33 because no external Model Context Protocol consumer or server exists. #30 remains 1×1.0÷5 = 0.20: metadata-only checks confirm both motivating work attestations remain configured, while the early detector's false-positive risk is unchanged. #27 and #30 stay below floor with close recommendations.
+
+
+
+**2026-07-27 post-#129 groom-pass note:** all five free Pending rows were re-verified and recomputed with no rank change. #36 remains 5×1.0÷1 = 5.0: #129 corrected career-profile setup, but `pii.yaml.template` is still absent and the daemon, payload-size, timeout, measured-performance, quarantine, and “true IP resolution” claims still contradict code. #34 remains 4×1.0÷2 = 2.0: the dashboard still loads Google Fonts and lacks a main landmark, live region, table caption/header scope, and reduced-motion override. #35 remains 5×1.0÷5 = 1.0: queueing still uses fixed `sourcePriorityCASE` tiers without rolling outcomes, recency decay, or an exploration floor. #27 remains 2×0.5÷3 = 0.33: `pkg/mcp` is still only an internal LLM-provider abstraction, with no protocol server or named external consumer. #30 remains 1×1.0÷5 = 0.20: metadata-only checks confirm both motivating attestations remain configured, and no new unanswered category is documented. #27 and #30 remain below floor; close both unless a real external MCP client or newly unanswered attestation appears.
+
+
+
+**2026-07-27 post-#121 groom-pass note:** all five free Pending rows were re-verified and recomputed. #36 remains 5×1.0÷1 = 5.0: #121 corrected the pre-model quarantine documentation, but the missing PII template and stale daemon, payload-size, timeout, measured-performance, and SSRF claims remain. #34 remains 4×1.0÷2 = 2.0 because Google Fonts and the missing landmark, live-region, table, and reduced-motion semantics remain. #35 remains 5×1.0÷5 = 1.0 because queueing still uses fixed source tiers with no rolling outcome score, recency decay, or exploration floor. #27 remains 2×0.5÷3 = 0.33 because no protocol server or external client exists. Live boolean-only inspection conflicts with the prior #30 notes: authorization and sponsorship answers are now blank. Using live evidence, #30 returns to Value 2 with Decay 1.0 and Effort 5, scoring **0.40**. It stays below floor because safe early control-level detection remains a substantial false-positive-sensitive refactor. Re-scope #30 to a narrower server-rendered control detector or configure the answers; close #27 absent a real MCP consumer.
+
+
+
+**2026-07-27 post-#120 groom-pass note:** all five free Pending rows were re-verified and recomputed. #36 remains 5×1.0÷1 = 5.0: #120 corrected executable daemon behavior and its README instructions, but clean setup still names a missing PII template and the payload-size, timeout, measured-performance, historical daemon, and SSRF claims remain stale. #34 remains 4×1.0÷2 = 2.0 because Google Fonts and every named accessibility gap remain. #35 rises from 5×1.0÷5 = 1.0 to **6×1.0÷5 = 1.2**: the new 15-job daemon cap makes static queue order more consequential across a backlog of thousands, while the code still has no rolling outcome score, recency decay, or exploration floor. #27 remains 2×0.5÷3 = 0.33. The prior post-#121 note says both motivating #30 answers are blank, but correct live boolean-only inspection against `authorized_to_work_us`, `requires_sponsorship`, and `visa_status` now shows them configured. Live evidence wins, so #30 returns to 1×1.0÷5 = **0.20** and the earlier blank-state note is a correction candidate. Close #27 and #30 absent a real external MCP consumer or a newly observed unanswered attestation. This pass ran inline on the current OpenAI GPT-5 coding model because the user reported the Claude and Gemini sessions at their limits; the table columns remain future task-fit recommendations.
+
+
+
+**2026-07-27 post-#122 groom-pass note:** all five free Pending rows were re-verified and recomputed with no rank change. #36 remains 5×1.0÷1 = 5.0: #122 closes the current resolver-bound SSRF gap, but `pii.yaml.template` is still absent and the README still contradicts code on payload size, provider timeouts, and measured local performance; the historical changelog claims also remain inaccurate. #34 remains 4×1.0÷2 = 2.0: the dashboard has zero main landmarks, live regions, captions, scoped headers, or reduced-motion rules and still loads Google Fonts. #35 remains 6×1.0÷5 = 1.2 because queueing still uses fixed `sourcePriorityCASE` tiers without rolling outcomes, recency decay, or an exploration floor. #27 remains 2×0.5÷3 = 0.33 because no protocol server or external MCP consumer exists. #30 remains 1×1.0÷5 = 0.20 because boolean-only live inspection confirms all three accepted work-attestation keys are configured and no new unanswered category is documented. #27 and #30 stay below floor; close them absent a real external client or newly unanswered attestation. This pass ran inline on OpenAI `gpt-5.6-sol` because the user reported Claude and Gemini session limits.
+
+
+
+**2026-07-27 queue-policy note:** the live `cmd/requeue -stats` report provides enough evidence to split the queue-policy work into three testable layers. Current terminal outcomes are Greenhouse 1/118 confirmed applications, Lever 0/72 with 34 CAPTCHA blocks, Workday 0/26 with 19 manual-required outcomes, Breezy 0/48 failures, and Applytojob 0/24. These are outcome facts, not permission to rewrite statuses: old failures include stale postings and already-fixed defects, and the running agent takes a startup snapshot. #38 is the read-only planning layer, #39 is the recent source-health measurement layer, and #35 consumes those signals for ranking. Bug #112's HTTP/HTTPS duplicate merge remains a prerequisite for trustworthy counts.
+
+
+
+**2026-07-28 groom-pass note:** all seven free Pending rows were re-verified against current code and recomputed with no rank change. #38 (2.5), #37 (2.5), #39 (2.0), #34 (2.0), and #35 (1.2) are above the 0.5 floor. #27 (0.33) and #30 (0.20) remain below floor; they stay open as user decisions.
+
+
+
+**2026-07-28 groom-pass note (session 2):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions.
+
+
+
+**2026-07-28 groom-pass note (session 3):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The agent is prioritizing Gemini models at user's request.
+
+
+
+**2026-07-28 groom-pass note (session 4):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #96 (score 2.5), which will be worked next using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 5):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #37 (score 2.5), which will be worked next using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 6):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #39 (score 2.0), which will be worked next using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 7):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. The highest ranking item is #35 (score 1.2), which will be worked next using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 8):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, so the agent will return to `bugs.md` to work on bug #131 using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 9):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, so the agent will return to `bugs.md` to work on bug #125 using a Gemini model.
+
+
+
+**2026-07-28 groom-pass note (session 10):** all free Pending rows were re-verified against current code and recomputed with no rank change. The items #27 and #30 remain below floor and stay open as user decisions. There are no free above-floor improvement items left to work on, and there are no pending bugs.
+
+
+
+**2026-07-28 groom-pass note (session 11):** all free Pending rows were re-verified against current code. There are no free above-floor improvement items left to work on. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 12):** Evaluated project for application submission blockers. Discovered and fixed a bug where `fetchATSFeed` was dropping Lever feeds larger than 8MB. All free Pending rows were re-verified. There are no free above-floor improvement items left to work on. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 13):** Researched similar open-source AI job applier tools (e.g. AIHawk, ApplyPilot). Identified and implemented two critical missing capabilities to unify the project toward "applications filled and submitted" at scale: (1) Added `SkipScoring` to bypass local LLM bottlenecks (~10min/job) via keyword-based fast track. (2) Enhanced Playwright stealth injection (`window.chrome`, `plugins`, `languages`) to bypass naive bot protections causing CAPTCHA blocks. Backlogs groomed. Usability Gate is MET.
+
+
+
+**2026-07-28 groom-pass note (session 14):** Investigated data manipulation/queue logic. Identified a critical flaw where newly discovered jobs completely bypassed Bayesian smoothing because they were injected unranked into the execution channel tail, while cycle limits caused massive CPU channel-thrashing. Decoupled discovery from pipeline execution (bug #399). All free Pending rows were re-verified. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 15):** Item #404 completed and verified. All free Pending rows (#403, #407) were re-verified against current code and recomputed with no rank change. No items fell below the 0.5 floor. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 15):** Investigated system learning and caching capabilities. Found that the Learner Module cache was being incorrectly wiped when ATS forms omitted optional standard fields (Bug A, #401) and identified a related vulnerability to transient timeouts (Bug B). Fixed Bug A. Also identified that `AvgInferenceMs` was tracked but completely ignored during Bayesian smoothing; implemented an explicit speed penalty (Bug #400) to penalize massively slow LLM/vision endpoints, allowing the queue to naturally prioritize faster applications. Backlogs groomed. Usability Gate is MET.
+
+**2026-07-28 groom-pass note (session 16):** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after multi-agent optimization sweep. Verified that 403, 404, 405, 406, and 407 are accurately scoped pending improvements that target massive GC reductions and IO-bound concurrency blockers, all scoring well above the 0.5 ROI floor. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 17):** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after implementing concurrent HTTP execution for discovery scrapers (improvement 406). The decay factor on improvement 407 (also a concurrency optimization) halves its score from 2.6 to 1.33, remaining above the ROI floor. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 19):** Usability Gate is MET (0 pending bugs, static tests pass). Completed implementation of improvement 410 (AI Processing Optimizations) by splitting `ProcessJobApplication` into concurrent goroutines with targeted prompts, injecting dynamic `num_ctx` limits for large inputs, and adding `"keep_alive": "30m"` to prevent cold-start penalties when models unload between navigation gaps. Groomed `improvements.md`. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note (session 18):** Usability Gate is MET (0 pending bugs, static tests pass). Completed evaluation and prototyping of `go-rod` (improvement 403). Confirmed 68% binary size reduction and instantaneous startup compared to Playwright. Created a migration plan in the details. Groomed `improvements.md`. Task journals are clean.
+
+
+
+**2026-07-28 groom-pass note:** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` after correcting #411 effort score and completing #409 (Frontend Rendering Speed Optimizations). Removed V3 gimmick references from Github Pages. Task journals are clean.
+
+**2026-07-29 groom-pass note:** Added two new improvements (418, 419) found by research subagent.
+
+**2026-07-29 groom-pass note (session 2):** Completed improvement 420 (Pre-Mapped ATS Selectors) to bypass LLM parsing on standard Greenhouse, Lever, and Ashby forms. Usability Gate is MET.
+
+**2026-07-29 groom-pass note (session 3):** Completed improvement 425 (Memory Profiling & sync.Pool Implementation) by adding a buffer pool to pkg/util and replacing io.ReadAll with util.ReadAll across HTTP response readers to reduce GC overhead. Usability Gate is MET.
+
+**2026-07-29 groom-pass note (session 4):** Usability Gate is MET (0 pending bugs, static tests pass). Groomed `improvements.md` and `improvements_paywall.md`. Re-verified all free Pending rows against current code and recomputed scores with no rank changes. No items fell below the 0.5 floor. Task journals are clean.
+
+**2026-07-29 groom-pass note (session 5):** Completed improvement 422 (Vector-Based Job Matchmaking) by adding a continuous background goroutine in cmd/agent/main.go. Usability Gate is MET.
+
+
+
+**2026-07-29 groom-pass note (session 6, post-#423):** Usability Gate is MET; build, vet and the full test suite pass clean. Completed **#423 (Human-in-the-Loop Copilot Mode)**, which had a table row but no Details section — that section is now written, from the current code rather than from the row's one-line summary.
+
+
+
+Two backlog-hygiene corrections came out of the pass:
+
+
+
+- **#424 moved to `improvements_paywall.md`.** It was mis-filed. Its stated premise is routing DOM parsing to cloud models (the row itself named Gemini Flash and Claude Haiku), which needs a paid API key — and this file is reserved for work that is 100% free to build autonomously, precisely so `/work_next_item` can never pick up key-gated work by accident. Moved unchanged at its existing 2.0 score.
+
+- **Bug #432 filed and fixed**, and **#433 filed**, both found by reading the submit path while implementing #423. See `bugs.md`.
+
+
+
+**With #424 correctly reclassified, this file now has zero Pending rows.** All remaining Pending work across the free backlogs is in `bugs.md`: **#434** (Major, 2.33 — hand-off statuses are permanent dead ends, so applications the user sends by hand are never recorded and their outcome emails match nothing), **#435** (Minor, 1.5) and **#433** (Minor, 1.25). #434 is the next autonomous item, and it is the one that matters most for Copilot Mode being worth using: without it, every application the user personally submits is invisible to the funnel and to the email tracker.
+
+
+
+**A review pass over this session's own work found four defects the test suite could not.** Three were fixed before push (the recovery paths treating gate sentinels as fill failures; the source-health ranker being poisoned by copilot attempts; documentation promising a pre-filled form the user would never receive), and three were filed as #433/#434/#435. Worth noting that the ranking defect was introduced *by this session*, in a judgement call made two hours earlier that folding `AWAITING_REVIEW` into `ManualCount` was display-only — it is a penalty term feeding `ComputeSourceScores`. Live evidence beat the assumption, which is the grounding protocol working as intended.
+
+**2026-07-29 groom-pass note (evening, post-#435 run):** **this file still has zero Pending rows**, so nothing here needed re-scoring or a floor check. The whole free queue is in `bugs.md`: **#439** (Major, 4.0) and **#437** (Major, 3.0), both filed this session; #439 is the next autonomous item.
+
+
+
+What this pass did change here is three **Done** rows, because a bug found this session proved their Done notes no longer describe the code:
+
+
+
+- **#426** (dashboard rewrite) is the cause. It replaced an 831-line template with a 137-line app rendering six count tiles, and its Done note describes only what it added.
+
+- **#15** (conversion analytics) and **#34** (dashboard accessibility) are the casualties. #15's data is still computed and served every poll but renders nowhere; most of #34's markup was deleted outright.
+
+
+
+**2026-07-30 groom-pass note (model-accuracy pass):** every Pending row in all three files was re-verified against current code and re-scored. **#455 shipped during this pass** and is now Done; **#456** was filed from it. This file holds **six** Pending rows, all above the 0.5 floor — no `⚠️` flags, nothing here needs user confirmation except #456, which is explicitly a user decision.
+
+
+
+**The pass's finding, and it corrects a row this backlog filed yesterday.** #455 asserted that `claude-sonnet-4-6` "is not a model in the current lineup" and counted 80 stale rows on that basis. Checked against the authoritative Anthropic model catalogue rather than from memory, **that claim is false** — `claude-sonnet-4-6` is current and active, the previous-generation Sonnet, still served. The row that would actually have failed was `claude-opus-4-6-thinking`, which is **not a model ID at all**: no `-thinking` suffix exists anywhere in the lineup, because thinking is a request parameter (`thinking: {type: "adaptive"}`) and on the current Opus is on by default. So the real blast radius was **7 rows, not 80**, and the original report never identified the reason those 7 were broken.
+
+
+
+Stated as a rule, because it is a new shape for this backlog: **a number is evidence for the thing you counted, not for the thing you concluded.** #455 counted precisely — 73, 7, 4 — and the precision made the conclusion feel verified, when the load-bearing claim ("not in the current lineup") had never been checked against a catalogue at all. Every previous lesson here has been *do not trust prose*; this one is *do not let arithmetic launder an unchecked premise*.
+
+
+
+**2026-07-30 groom-pass note (ninth session, post-#452 run):** `bugs.md`'s #452 is Done, mutation-checked and independently reviewed. The independent review pass found no defect in the fix itself but surfaced two follow-ups, filed here rather than folded in since neither was in #452's own scope: **#459** (3.0 — the by-source/by-variant closures never check `rows.Err()` after their scan loops, so a mid-stream cursor fault renders a silently truncated breakdown) and **#460** (1.33 — `App.tsx` now has a real 500 to react to for the first time, but no visible indicator anywhere in the UI that a poll failed, so a persistent failure is indistinguishable from a healthy, unchanging dashboard). Neither is below the 0.5 floor.
+
+
+
+**2026-07-30 groom-pass note (tenth session, post-#459 run):** #459 is Done — outright top of the combined free queue (3.0, ahead of every open bug), so it was worked directly rather than delegated, consistent with this session's instruction to prioritize Claude models and honor per-item model tags. The two scan loops are now `scanSourceConversions`/`scanVariantConversions`, both returning on `rows.Err()`; a hand-rolled `conversionRows` fake makes the mid-stream-fault case reproducible in a unit test (a real driver cannot be made to fail `Next()` on demand against in-memory sqlite), and the fix is mutation-checked. Remaining Pending rows in this file were not re-verified this pass — this was a single-item work session, not a full groom. The next-highest free item is now `bugs.md` **#449** (2.5) or **#444** (2.5), ahead of this file's **#458** (2.0) and **#443** (2.0).
+
+
+
+**2026-07-30 groom-pass note (thirteenth session, post-#449 run):** `bugs.md`'s #449 (`pgrep -f`/`pkill -f career_agent_bin` misidentifying the agent) is Done — see that file's own note for the fix and its live verification. This session's own scope was narrow (`cmd/agent/main.go` and `cmd/dashboard/main.go`) and did not touch any file this backlog's Pending rows cite, so all seven were spot-checked rather than fully re-read: **#443** (2.0, `gofmt -l ./cmd ./pkg` still names exactly the same 8 files), **#458** (2.0, unchanged), **#448** (1.0, `.oxlintrc.json` still has 0 `ignorePatterns` occurrences), **#450** (1.0, `pkg/storage/dsn.go`'s pragma string still orders `journal_mode` ahead of `busy_timeout`), **#442** (1.0, `NLP_SERVICE_URL` still gates the same three sites, `pkg/mcp/client.go:244/302/532`), **#460** (1.33, `App.tsx`'s `fetchMetrics` still only calls `setMetrics` inside `if (res.ok)`), **#456** (1.5, user-decision row, untouched). No item fell below the 0.5 floor. `bugs.md`'s three remaining free Pending rows (**#444** 2.5, **#447** 2.0, **#440** 1.5) were also spot-checked this session and are unchanged — see that file's own note. No new bug or improvement was found this session; the fix was a narrow, self-contained process-identification change with no review pass.
+
+
+
+**2026-07-30 groom-pass note (twentieth session, post-#460 run):** #460 is Done — see this file's own row (#460) and `bugs.md`'s twentieth-session note for the fix, its mutation check, and its live verification. This session also found and fixed **`bugs.md` #465** (`internal/backlog`'s Pending-cell floor was a stale hardcoded snapshot that ordinary backlog progress — closing #460 itself — was enough to trip; re-derived independently instead of raised). This file's remaining free Pending rows were re-verified against current code and are unchanged: **#456** (1.5, user decision, unchanged), **#450** (1.0, `pkg/storage/dsn.go:23` still orders `journal_mode(WAL)` ahead of `busy_timeout(5000)`), **#448** (1.0, `.oxlintrc.json` still has no `ignorePatterns`), **#442** (1.0, `NLP_SERVICE_URL` still gates the same unmeasured opt-in offload), **#464** (1.0, `gofmt -l scripts/server.go` still names the file), **#462** (1.0, `pipeline.go`'s embedding retry loop still hand-writes `classifyGenerationError`'s logic instead of calling it). No row crossed the 0.5 floor. `bugs.md` holds zero other Pending rows. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **The free queue is now #456 (1.5, user decision) at the top, then a five-way tie at 1.0: #450, #448, #442, #464, #462** — any of the five is the next autonomous pick.
+
+
+
+**2026-07-30 groom-pass note (twelfth session, post-#461 run and full re-verification):** `bugs.md`'s #461 (git-tracked `career_agent_bin` binary) is Done — it had overtaken #459 as the top of the combined free queue at 3.0 the moment it was filed, and was fixed the same session it was worked. All seven remaining free Pending rows in this file were re-verified against current code this pass and every one still reproduces exactly as described — no rank or score change: **#443** (2.0, `gofmt -l ./cmd ./pkg` still names the same 8 files), **#458** (2.0, model allowlist still unverified against Gemini/OpenAI catalogues), **#448** (1.0, `.oxlintrc.json` still has no `ignorePatterns`), **#450** (1.0, `pkg/storage/dsn.go`'s shared DSN still asks every reader to set `journal_mode`), **#442** (1.0, NLP offload still unmeasured beyond the original single-job comparison), **#460** (1.33, `App.tsx`'s `fetchMetrics` still only calls `setMetrics` inside `if (res.ok)`, no visible failure indicator), **#456** (1.5, user-decision row, untouched). `bugs.md`'s four remaining Pending rows were also re-verified in the same pass; see that file's own groom note. No item is below the 0.5 floor. Nothing in either backlog needs new filing from this session — the fix was a narrow, self-contained repo-hygiene change.
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #454 | **3.0** = 3×1.0÷1 | Unchanged. `grep -c "2026-07-30" CHANGELOG.md` now returns 1, not 0 — but that is the hand-written section from the last pass, so the symptom is patched and the cause is untouched: the Working Protocol's close-the-loop step still names the row, journal, verification, commit and push, and still never names `CHANGELOG.md` |
+
+| #443 | **2.0** = 2×1.0÷1 | Unchanged, re-run this pass: `gofmt -l ./cmd ./pkg` still names exactly **8** compiled files, the same 8 as the last two passes. Nothing this session touched Go source |
+
+| #456 | **1.5** = 3×1.0÷2 | New this pass, from #455's work. Value 3 for retiring a recurring maintenance cost rather than paying it again; Effort 2 because it changes the table schema in three files and needs a call on whether any provider column survives. **User decision** |
+
+| #450 | **1.0** = 2×1.0÷2 | Unchanged. `pkg/storage/dsn.go:23` still ships `journal_mode(WAL)` ahead of `busy_timeout(5000)` in one shared pragma string, which is the exact construction #446's live verification measured failing against a `delete`-mode database with an active writer |
+
+| #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` still returns 0 |
+
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates the opt-in offload at `pkg/mcp/client.go:244`, `:302`, `:532` — the same three anchors the row cites. Still unmeasured, which is the row's entire point |
+
+
+
+**2026-07-30 groom-pass note (eighth session, post-#454 run):** **#454 is now Done** — the Working Protocol's close-the-loop step (step 7) now requires a dated `CHANGELOG.md` entry in the same commit for any user-visible change, closing the row that had been the outright top of the free queue. Every remaining Pending row in this file was re-verified against current code with no change: #443 (`gofmt -l ./cmd ./pkg` still names the same 8 files), #456 (unchanged, still a user decision), #450, #448, #442 all reproduce exactly as described. **#443 is now the outright top of this file's queue** at 2.0. Two unrelated line-number drifts were found and corrected in `bugs.md` while spot-checking code for this pass, not from this file's own rows: #449's table row cited stale `pgrep`/`pkill` line numbers (`:615`/`:637`/`:643`, actually `:644`/`:666`/`:672` — the detail section already had it right, only the table row had drifted) and #452's row and detail section both cited the nine `g.Go` error-log lines and `g.Wait()` at their old positions (`:403…:591`/`:612`), which have all since shifted by 16 lines to `:419…:607`/`:628`. Neither defect's substance changed, only the anchors — the same drift class the gate's Status line has flagged twice before. The Usability Gate stays MET; build, vet and the full test suite are clean.
+
+
+
+**Prior — 2026-07-30 groom-pass note (seventh session, post-bug-#453 run):** re-verified every Pending row in this file against current code; none changed — this session's fix touched only `pkg/storage/queue_plan.go` and its test, nothing this file's rows cite. `bugs.md`'s #453 (the row that had tied this file's #454 at the top of the combined queue) is now Done, mutation-checked. **#454 is now the outright top of the free queue** with no tie. The Usability Gate stays MET; build, vet and the full test suite are clean.
+
+
+
+**Prior — 2026-07-30 groom-pass note (sixth session):** re-verified every Pending row above against current code; none changed. **#458 had never appeared in a scored table row** (filed after the last snapshot) — added below, with a real finding rather than a re-guess:
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #458 | **2.0** = 2×1.0÷1 | This session ran `agy models` live for an unrelated delegation-availability check and it happens to answer half of this row for free: both Gemini values already in the allowlist, `gemini-3.6-flash-high` and `gemini-3.1-pro-high`, are confirmed present in Antigravity's live catalogue right now, and `gpt-oss-120b-medium` (the one OpenAI-column value routed through Antigravity rather than a direct OpenAI key) is confirmed too. `gpt-5.6-terra`/`gpt-5.6-sol`/`gpt-5.6-luna` remain unverified — this environment has no OpenAI API key, so there is no catalogue to check them against. **Not closed**, because closing means editing `model_allowlist.md`'s provenance and this is a groom pass, not a work pass — recorded here so whoever takes #458 next does not need to re-run `agy models` to get the Gemini half |
+
+
+
+Whoever works #458 next can go straight to `documentation/model_allowlist.md`'s `google` section and change both entries' provenance from "not vendor-verified" to "confirmed live via `agy models`, 2026-07-30", then decide what to do about the three still-unverifiable OpenAI IDs (drop them, or leave the caveat standing until a key exists to check them).
+
+
+
+**Addendum — #457 shipped later the same session, and it is the more important half of #455.** #455 fixed the wrong values; **#457 fixed the reason nobody caught them for four days**, by replacing the prose instruction with `internal/backlog` — four tests that `go test ./...` already runs, validating every Pending row's model columns against a provenance-carrying allowlist. A thirteenth instruction to "re-verify carefully" would have been the same intervention that had already failed twelve times.
+
+
+
+**The check found more on its first run than the entire groom pass that preceded it.** Not 7 bad cells but **248**, once formatting was normalised: pre-2026-07-26 display names (`Opus 5`, `Gemini 3 Pro`, `Sonnet 5`, `Fable 5`) that name a model to a human and route nowhere. Every one is on a closed row, so they are held flat by a ratchet rather than rewritten — a closed row's model column is a record, not a routing value. The count is now 237 and may only shrink. **#458** was filed for the one gap #455 correctly declined to guess at: the Gemini and OpenAI columns have still never been checked against a vendor catalogue, and the allowlist says so in each entry's provenance rather than pretending otherwise.
+
+
+
+**The free queue across both files**, with the Usability Gate MET so these compete on score alone: `bugs.md` **#451** (4.0), **#453** (3.0), **#454** (3.0), **#452** (2.5), **#449** (2.5), **#444** (2.5), **#458** (2.0), **#447** (2.0), **#443** (2.0), **#456** (1.5), **#440** (1.5), then **#450**/**#448**/**#442** (1.0 each). **#451 is the next autonomous item** — it goes first on both score and the file's bug-before-improvement convention. **#456 must not be taken autonomously** despite being above the floor: it changes the table schema in three files and the choice of what replaces the columns is the user's.
+
+
+
+`improvements_paywall.md` was re-checked in the same pass and is otherwise unchanged: **#424** (2.0) and **#17** (1.75) still need a paid key, and **#14** remains `⚠️ below floor` at 0.43 — it stays open and must not be worked without explicit confirmation. Its Claude column was the third and last home of the non-existent `claude-opus-4-6-thinking` and now reads `claude-opus-5`.
+
+
+
+**Bugs re-verified the same pass; all seven still reproduce, and two carry line-number drift worth recording.** #451 confirmed (`cmd/dashboard/main.go:394-395` aggregate two statuses each, `App.tsx:211/216` caption one). #452 confirmed and its arithmetic checked: there are exactly **9** `g.Go(func() error` closures and the group's result is still discarded at `:612` — but the row's cited line numbers have drifted by 2-18 lines (actual: 405, 425, 442, 465, 488, 515, 534, 558, 575, 592, 609). #453 confirmed (`pkg/storage/queue_plan.go:64` still scans into a bare `time.Time`). #449 confirmed, **with drift**: the row cites `:615/:637/:643`, actual is `:628/:635/:650/:656` — four `pgrep`/`pkill -f career_agent_bin` call sites, not three. #447, #444 (the two fatal-429 sites are `pipeline.go:268` and `:405`, off by one from the row; the 7 Gemini-naming log lines still count 7) and #440 (`scripts/server.go` still opens with `package main`, no `//go:build ignore`) all confirmed unchanged.
+
+
+
+**Prior pass — 2026-07-30 groom-pass note (post-#446 run):** this file then held **five** Pending rows — the three carried forward, each re-verified against current code, plus two filed this session. All are above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #455 | **4.0** = 4×1.0÷1 | New this pass, and counted rather than estimated: `grep -oh "claude-[a-z0-9.-]*"` across all three backlogs returns `claude-sonnet-4-6` **73 times**, `claude-opus-4-6-thinking` 7 times, and `claude-opus-5` only 4 — so 80 of 84 rows name a model that is not in the current lineup. Same story in the Gemini and OpenAI columns. Harmless while a human probes availability live, as `groom_backlogs.md` already instructs; not harmless the moment routing is automated off these columns, which is the question that surfaced it. Now the top row in this file |
+
+| #454 | **3.0** = 3×1.0÷1 | New this pass. `grep -c "2026-07-30" CHANGELOG.md` returned **0** while five bugs shipped that day across nine commits. Verified the cause is structural rather than an oversight: the Working Protocol's close-the-loop step names the backlog row, the journal, the verification, the commit and the push, and never names `CHANGELOG.md`. The 2026-07-30 section was written by hand this session, so the symptom is gone and the cause is not |
+
+| #443 | **2.0** = 2×1.0÷1 | Unchanged, and re-run this pass: `gofmt -l ./cmd ./pkg` still names exactly **8** compiled files and `gofmt -l .` still returns 16 including the build-ignored scripts, matching this row's detail section. `cmd/dashboard/` and `pkg/storage/` are both clean, including every file #446 touched |
+
+| #450 | **1.0** = 2×1.0÷2 | New this pass, from #446's live verification producing the opposite of the expected result. Measured, not reasoned: against a `delete`-mode database with an active writer, the corrected DSN fails with `SQLITE_BUSY` where the broken one succeeds, because SQLite refuses a `journal_mode` change while another connection is active and `busy_timeout` does not cover it. Both pragma orderings tested and both fail, so ordering is not the fix. Pre-existing `pkg/storage` behaviour, unreachable once the database is WAL — which it now always is |
+
+| #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` still returns 0, so `npm run lint` still walks the committed `dist/` |
+
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload (`pkg/mcp/client.go:244`, `:302`, `:532`). Still unmeasured, which is the row's entire point |
+
+
+
+**The Usability Gate in `bugs.md` remains MET (2026-07-30).** These rows compete on score alone, and for the first time one of them is genuinely competitive: **#455** (4.0) ties the top bug, **#451** (4.0). The bug still goes first on the file's usual convention. The free queue across both files is `bugs.md` **#451** (4.0), then **#455** (4.0), **#453** (3.0), **#454** (3.0), **#449** (2.5), **#452** (2.5), **#444** (2.5), **#447** (2.0), **#443** (2.0), **#440** (1.5), and **#450**/**#448**/**#442** (1.0 each).
+
+
+
+**Prior pass — 2026-07-30 groom-pass note (post-#445 run):** this file held **three** Pending rows, each re-verified against current code and all above the 0.5 floor.
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #443 | **2.0** = 2×1.0÷1 | Unchanged, and re-run this pass: `gofmt -l .` returns the same 16 files, 8 compiled and 8 build-ignored scripts, matching this row's detail section exactly. Checked deliberately because the title says "Eight" while the command prints 16 — that is the compiled/script split, not a drifted count, so the row is **correct** and was left alone. `cmd/dashboard/` is still clean, including the files #445 touched |
+
+| #448 | **1.0** = 2×1.0÷2 | Unchanged; nothing this session touched the UI toolchain. `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`, so `npm run lint` still walks the committed `dist/` |
+
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload. Still unmeasured, which is the row's entire point |
+
+
+
+At that pass, **the Usability Gate in `bugs.md` had just become MET (2026-07-30)**, so for the first time in several sessions these rows were no longer blocked behind it and competed on score alone. They still lost: five Minor bugs were open and the top one, **#446** (4.0), outscored every row in this file. The queue then was `bugs.md` **#446** (4.0), **#449** (2.5, new), **#444** (2.5), **#447** (2.0), then **#443** (2.0), **#440** (1.5), and **#448**/**#442** (1.0 each).
+
+
+
+`improvements_paywall.md` was re-checked in the same pass and is unchanged: **#424** (2.0) and **#17** (1.75) still need a paid key, and **#14** remains `⚠️ below floor` at 0.4 — it stays open and must not be worked without explicit confirmation.
+
+
+
+**Prior 2026-07-30 groom-pass note (post-#437 run):** this file holds **three** Pending rows, each re-verified against current code and all above the 0.5 floor, so no `⚠️` flags and nothing here needs user confirmation.
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #443 | **2.0** = 2×1.0÷1 | Unchanged and now precisely counted: `gofmt -l ./cmd ./pkg` names exactly **eight** compiled files (`cmd/reconcile/main.go`, `pkg/mcp/backoff.go`, `pkg/parser/dom_test.go`, `pkg/scraper/{funnel,hackernews,scraper}.go`, `pkg/submitter/browser.go`, `pkg/util/bufferpool.go`). None was touched by this session's work, and `cmd/dashboard/` is clean |
+
+| #448 | **1.0** = 2×1.0÷2 | New this pass, found while running the UI linter for #437. `grep -c ignorePatterns cmd/dashboard/ui/.oxlintrc.json` returns 0, so `npm run lint` still walks the deliberately-committed `dist/` and reports dozens of warnings against minified React internals, while `npx oxlint src` is clean at 0/0. Value 2: nothing is broken; the cost is that the linter's output carries no signal. Effort 2 rather than 1 because it is worth confirming nothing depends on the current behaviour and wiring the command into a documented loop |
+
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. `nlp_service/` is still present and `NLP_SERVICE_URL` still gates an opt-in, health-checked, fallback-guarded offload. Still unmeasured, which is the row's entire point |
+
+
+
+None outranks the open bugs. The free queue is `bugs.md` **#445** (Major, 3.5), **#446** (Minor, 4.0), **#444** (Minor, 2.5), **#447** (Minor, 2.0), then **#443** (2.0), **#440** (Minor, 1.5), and **#448**/**#442** (1.0 each). `improvements_paywall.md` was re-checked in the same pass and is unchanged: **#424** (2.0) and **#17** (1.75) are still unimplemented and still need a paid key, and **#14** remains `⚠️ below floor` at 0.4 — it stays open and must not be worked without explicit confirmation.
+
+
+
+**Prior 2026-07-30 groom-pass note (post-#441 run):** this file holds **two** Pending rows, both re-verified against current code and both above the 0.5 floor, so no `⚠️` flags and nothing needs user confirmation.
+
+
+
+| # | Score | Re-verified how |
+
+| --- | --- | --- |
+
+| #443 | **2.0** = 2×1.0÷1 | New this pass, promoted from the "unfiled observation" the last two passes left sitting below. `gofmt -l .` names 16 files (8 compiled, 8 build-ignored scripts), all trailing whitespace on blank lines. Confirmed `AGENTS.md`'s Test Commands section lists only `go build`/`go vet`/`go test`, none of which reads formatting — so this drift is invisible to the only gate anyone runs, which is why it survived |
+
+| #442 | **1.0** = 2×1.0÷2 | Unchanged. The offload is still opt-in and still fully guarded: `NLP_SERVICE_URL` read at `pkg/mcp/client.go:244`/`:307`, health probe at `:330-341`, and `ProcessJobApplication` at `:537-556` falling back to in-process when `session.route == nil`. `nlp_service/` and its Python tests are still present. Still unmeasured, which is the whole point of the row |
+
+
+
+Neither outranks the open bugs. The free queue is `bugs.md` **#437** (Major, 3.0), **#444** (Minor, 2.5), then **#443** (2.0), **#440** (Minor, 1.5), then **#442** (1.0).
+
+
+
+**2026-07-29 groom-pass note (late evening, post-#439 run):** this file now holds **one** Pending row, **#442** (1.0 — measure whether the NLP offload is worth keeping, or delete it), filed from bug #439's work. It is above the 0.5 floor but it does not outrank the open bugs: the free queue is `bugs.md` **#441** (Major, 7.0), **#437** (Major, 3.0), **#440** (Minor, 1.5), then #442.
+
+
+
+**Unfiled observation for the next groom pass — now filed as #443 (2026-07-30):** `gofmt -l .` listed **17 tracked Go files** as unformatted at the time of this note. It is now 16, because `cmd/agent/main.go` was the 17th and was formatted during bug #441's work. The reasoning below still stands — the cost is diff noise against unrelated history, so it wants a deliberate whitespace-only commit rather than a surprise inside someone else's change — which is exactly how #443 scopes it. The one thing this note got wrong is the conclusion that it therefore did not need a row: an item nobody files is an item nobody does, and the drift survived two further groom passes. Original text: *"pre-existing drift, not from this session — every file this session touched is clean — and `go build`/`go vet`/`go test` are all green regardless, so it is cosmetic."*
+
+
+
+**One Done row corrected, and it is the same correction as the three below.** **#427** (Python NLP microservice) now carries a dated regression note. Its Done row said the refactor "offload[ed] LLM calls" and nothing else; bug #439 found that the same commit deleted a working provider-agnostic in-process implementation along with the payload circuit breaker, `[API Metrics]` logging, dynamic `num_ctx`, the provider abstraction, the 120-minute Ollama timeout (reintroducing bug #6) and four prompt instructions — and left the path unable to run at all, asking a live Ollama for a model nothing in this repo installs. **That is the second rewrite in two days whose Done note described only its additions**, after #426. The rule is now recorded in `bugs.md`: the only safe review of a rewrite is a diff against what it replaced.
+
+
+
+All three rows below carry a dated correction pointing at bugs #436/#437/#438. **A Done row is a claim about the current code, not a historical record of a commit** — when something later invalidates it, the row is wrong and has to be corrected, exactly as `improvements.md` #10 had to be when it became bug #120. This is the second time that has happened in this backlog, so it is worth treating as a pattern rather than an incident: **after any rewrite, re-read the Done notes of every item whose surface it touched.**
+
+
+
+**2026-08-01 groom-pass note (post-#478 run):** `bugs.md`'s #478 is Done — see its row for the fix, the mutation-check, and the live before/after cycle-rate account. **`bugs.md` is back to zero Pending rows and the Usability Gate is MET again.** This fix's own fix-direction note deliberately deferred one refinement rather than folding it in — filed this pass as **#479** (0.5, standard): a permanent "no such host" DNS failure now gets the same generic 2/4/8/16-minute backoff as a transient timeout before reaching `RETRY_EXHAUSTED`, when it could fail fast on the first attempt via Go's own `net.DNSError.IsNotFound` signal. Re-verified all six prior Pending rows against current code rather than their own prose this pass, all unchanged: **#474** (1.0) — still no ADR-touch process, `ADR-003` itself remains corrected from #450's own session. **#472**/**#473** (0.75 each) — `pkg/submitter/browser.go`'s emailed-code resubmit click (now `:1690-1706`) still returns directly via `ErrNeedsEmailVerification` without reaching `isTargetClosedErr`, and `pkg/submitter/vision.go` still has zero target-closed references. **#448** (1.0) — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns`; `npm run lint` still walks into `dist/` and prints dozens of warnings against the minified bundle, confirmed by re-running it live. **#442** (1.0) — `NLP_SERVICE_URL` (`pkg/mcp/client.go:251`) still gates the same unmeasured opt-in offload. **#464** (1.0) — `gofmt -l scripts/server.go` still names the file. No row crossed the 0.5 floor in either direction (**#479** lands exactly at the floor, not below it). `improvements_paywall.md`'s **#424**, **#17**, and below-floor **#14** re-checked structurally (no `2captcha`/`capsolver` reference anywhere in `pkg/`/`cmd/`, `lspci` still shows only the integrated Radeon Vega) and unchanged. No journals were outstanding to clean (the #478 journal is deleted in its own closing commit). `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **#474 (1.0) is the new outright top of the combined free queue**, now that #477 is Done and #478/#479 (Major bug and its own low-value follow-up) are Done/filed respectively.
+
+
+
+**Prior — 2026-08-01 groom-pass note (post-#476 run):** `bugs.md`'s #476 is Done — see its row for the fix and mutation-check account. **`bugs.md` now holds zero Pending rows of any severity**, so this file's five Pending rows are the entire free queue. All five were re-verified against current code rather than their own prose this pass: **#477** (1.5) unchanged — `pkg/scraper/funnel.go:228`/`:572` still set only a `User-Agent` header, no `Accept`/`Accept-Language`/cookie jar. **#474** (1.0) unchanged — no process exists that ties an ADR touch to the change it documents; `docs/adrs/ADR-003-SQLite-Concurrency.md` itself was corrected as a side effect of #450's own session (see its dated 2026-07-31 note removing the stale #446 reference), which is exactly the manual, easy-to-forget path this row wants replaced with a process. **#448** (1.0) unchanged — `cmd/dashboard/ui/.oxlintrc.json` still has no `ignorePatterns` key. **#442** (1.0) unchanged — `NLP_SERVICE_URL` (`pkg/mcp/client.go:251`) still gates the same unmeasured opt-in offload. **#464** (1.0) unchanged — `gofmt -l scripts/server.go` still names the file. **#472** and **#473** (0.75 each) unchanged — confirmed live by reading `pkg/submitter/browser.go:1690-1716`: the emailed-security-code resubmit click still returns directly via `ErrNeedsEmailVerification` on a failed or unconfirmed click rather than setting `execErr`, so it still cannot reach the `isTargetClosedErr(execErr)` recovery check at `:1861`; `pkg/submitter/vision.go` still has zero references to target-closed detection or browser-context recreation. No row crossed the 0.5 floor in either direction. `improvements_paywall.md`'s **#424**, **#17**, and below-floor **#14** re-checked structurally (no cloud-offload DOM path, no `2captcha`/`capsolver` integration anywhere in the tree, `lspci` still shows only the integrated Radeon Vega) and unchanged. No journals were outstanding to clean (the #476 journal was deleted in its own closing commit). `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean. **#477 (1.5) is the new outright top of the combined free queue**, now that `bugs.md` is empty.

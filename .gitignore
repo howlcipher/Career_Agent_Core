@@ -31,3 +31,8 @@ Omni_CoverLetter.pdf
 __pycache__/
 nlp_service/venv/
 .pytest_cache/
+
+# cmd/modelbench's JSON reports (improvement #484). The tool never writes
+# here by default -- this just makes the documented convention (-out
+# benchmark_results/...) safe if someone follows it.
+/benchmark_results/
