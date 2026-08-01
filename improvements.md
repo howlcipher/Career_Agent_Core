@@ -38,10 +38,21 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-01 groom-pass note (user-directed local-model utilization plan, post-#484 run):** user-directed session to plan and begin resource-aware local-model utilization for this laptop (Ryzen 5 5600U, 32 GB RAM, integrated Vega, one Ollama instance shared with Chromium/SQLite). Explicitly authorized regardless of the Usability Gate's state per the user's own instruction — the gate is in fact still MET (bugs.md's #481 run), unaffected by this session's work. Live Ollama inventory checked via `/api/tags`: `qwen3:4b-instruct`, `qwen3:30b-instruct`, `qwen2.5vl:7b` (vision), `nomic-embed-text` (embedding); `/api/ps` was idle at audit time. Six candidate items were evaluated against existing code and backlog rows to avoid duplicating model-preflight (#441, Done), capability tiers (#456, Done — a different "tier" than local-model capability, backlog-scoring tiers), NLP-offload measurement (#442, unchanged, cross-referenced below), `keep_alive`/context sizing (#410, Done), and concurrent generation (already fanned out in `pkg/mcp/client.go`). **Implemented this session: #484** (the benchmark/routing-evidence harness — `cmd/modelbench` + `internal/modelbench`), the foundational measurement infrastructure the other candidates depend on. **Filed as Pending, not implemented:** **#486** (0.83, safe local-model delegation harness), **#487** (0.75, lightweight 4B log triage), **#485** (0.67, resource-aware inference admission control), **#488** (0.4, ⚠️ below floor, user decision — OpenClaw read-only sidecar evaluation). **Deliberately not filed as a backlog row:** a disk-budget safeguard item (candidate E in the user's brief) — live measurement this session (`df -h /var/home`: 236G total, 96G free, 60% used; `du -sh ~/.ollama/models`: 26G) shows healthy headroom with no growth-pattern evidence to justify one; re-evaluate if a future session's live check looks different. A concrete medium-capability (12B-16B) model evaluation was folded into #484's own documentation (`documentation/model_benchmark.md`) as a described-but-not-installed follow-up rather than a separate row, since the current inventory has nothing between 4B and 30B to benchmark yet. `#442` was cross-referenced rather than merged: it measures in-process-vs-offloaded routing of the *same* model call, a different question from #484's which-model-for-which-task-class. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all clean, including the new `internal/modelbench`/`cmd/modelbench` packages. **#486 (0.83) is now the outright top of the combined free queue.**
+**2026-08-01 mission-alignment audit (backlog-only — nothing implemented).** User-directed audit re-verifying the project against its actual mission — a confirmed, submitted, verified application, not a row processed, scored, or a form opened — via code inspection and safe read-only aggregate queries against a copy of `applications.db` and the sanitized `applications/prompt_injection_detections.csv` log. The audit's dominant finding, **bugs.md #489** (Major, reopens the Usability Gate — see that file), is that `promptsec.Moderate()` still quarantines ~51% of everything ever discovered, disproportionately on Lever/Greenhouse; while the gate is unmet, `bugs.md` outranks every row in this file regardless of score. Ten new Pending rows filed here from the audit's evaluation of the mission brief's own candidate list: **#491** (1.5, mission metrics + dashboard surface), **#492** (0.75, first-attempt SLA / bounded fresh-queue admission, building on #481/#482 with measured p50=4.8-day/p90=11.7-day discovery-to-first-attempt evidence), **#493** (1.0, rank by expected confirmed-application yield — schema + formula work, explicitly sequenced after #489/#494/#499), **#494** (1.2, append-only funnel/attempt stage ledger, backed by a measured 535/538=99.4% `OTHER_FAILURE` collapse in `application_attempts.terminal_class`), **#495** (1.25, no-progress/dominant-failure-reason watchdog — the exact class of problem this manual audit had to find by hand), **#496** (1.25, ATS capability/health registry — reuses the existing but entirely dead `career_sites` table rather than a new one), **#497** (0.5, user-approved application-answer memory, deprioritized on real observed volume — only 26 `MANUAL_REQUIRED` rows exist today), **#498** (1.0, company/role-family duplicate cooldown, no confirmed harm found — 2 real `APPLIED` rows total), **#499** (1.33, persist `discovery_source` at `AddToFunnel` time, an enabler for #493/#496), **#500** (3.0, add a missing index on `job_funnel(discovered_at)`, used by every ranking/`GetDiscoveredJobs` call and now this audit's own metrics queries). **#500 (3.0) is the highest-scoring Pending row in the combined free queue**, but `bugs.md`'s gate reopening means it is not next up regardless — work `bugs.md` top-down first. Rejected/merged during the audit: Candidate J (document-tailoring bottleneck) — no new measured-bottleneck evidence beyond the existing single noisy sample #442 already cites, so no new row; email-outcome-to-source learning — real gap, but with essentially zero terminal outcome data yet (2 `APPLIED`, 0 `REJECTED`/`INTERVIEW_REQUESTED` observed) there is nothing to learn from, same reasoning `improvements_paywall.md` #14 already uses to stay deferred; a database-growth/retention row — today's `applications.db` is 5.6 MB and the elevated 2026-08-01 row count is best explained by #489's own false-positive volume plus a first full day of continuous-daemon operation, not a distinct retention problem — revisit if growth persists after #489 ships. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all re-run clean; no production code was touched this session.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
+| 500 | [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at) | Pending | **3.0** = 3×1.0÷1 | mechanical | Found 2026-08-01, mission-alignment audit. `job_funnel` indexes only `status` and `company_name` (`pkg/storage/manager.go:117,119`); `discovered_at` — read by every `RankJobs`/`GetDiscoveredJobs` age computation and now #491's mission-metrics queries — has none. Cheap, low-risk, one migration line |
+| 505 | [`storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice](#505-storedpromptinjectionthreats-and-tostoredthreats-are-the-same-field-for-field-conversion-written-twice) | Pending | **2.0** = 2×1.0÷1 | mechanical | Found 2026-08-01 closing bugs.md #489. `cmd/agent/main.go:124` (`storedPromptInjectionThreats`) and `pkg/submitter/browser.go:37` (`toStoredThreats`) both convert `[]promptsec.Threat` to `[]storage.PromptInjectionThreat` with the identical 7-field mapping. Cheap, low-risk: export one from `pkg/security` or `pkg/storage` and have both callers use it |
+| 491 | [Define authoritative mission metrics and surface them on the dashboard](#491-define-authoritative-mission-metrics-and-surface-them-on-the-dashboard) | Pending | **1.5** = 6×1.0÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate A). `serveMetrics` (`cmd/dashboard/main.go:474-703`) has no confirmed-apps-per-day/week, no aggregate discovery-to-first-attempt latency, no time-since-last-confirmed-application, and no never-attempted count — only funnel status counts and two conversion tables. This audit's own queries prove the metrics are computable today (e.g. p50 discovery-to-first-attempt = 4.8 days from a 538-row `application_attempts` join). Depends on bugs.md #490 (`job_funnel.applied_at`) for a clean confirmed-apps-per-day source |
+| 499 | [Persist `discovery_source` at `AddToFunnel` time](#499-persist-discovery_source-at-addtofunnel-time) | Pending | **1.33** = 4×1.0÷3 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate I). `AddToFunnel` (`pkg/storage/manager.go:1141`) has no source parameter — RemoteOK, Hacker News, ATS feeds, SerpApi, and Yahoo HTML fallback are indistinguishable downstream; "source" is reconstructed later purely from destination hostname (`getATSProvider`), which the seeded candidate's own framing correctly notes conflates discovery channel with ATS provider. Enabler for #493 and #496, not independently mission-moving |
+| 495 | [No-progress / dominant-failure-reason watchdog](#495-no-progress--dominant-failure-reason-watchdog) | Pending | **1.25** = 5×1.0÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate E). Confirmed no staleness/dominant-reason detection exists in `runAgentSchedule` or `runDaemonDiscoveryLoop` (`cmd/agent/main.go`) beyond the existing poll-failure banner (#447/#460) and per-domain circuit breakers (#469/#475), both narrower failure-triggered mechanisms. This audit itself is the proof of value: bugs.md #489 (51% of the funnel quarantined) was only found by a manual database audit, exactly the class of condition this item would surface automatically |
+| 496 | [ATS capability and automation-success registry](#496-ats-capability-and-automation-success-registry) | Pending | **1.25** = 5×1.0÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate F). `career_sites` (`pkg/storage/manager.go:62-67`) is created and indexed but has zero rows and zero other code references — entirely dead. `GetSourceHealthSummaries` (`pkg/storage/attempts.go:86-160`) is the only live per-domain signal, and `form_mappings` carries no success/staleness metadata. Downgraded from the seeded brief's suggested `deep-reasoning` to `standard`: the schema already exists, this is population and wiring, not new design |
+| 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Pending | **1.2** = 6×1.0÷5 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate D). `application_attempts.terminal_class` (`pkg/storage/attempts.go`) collapses to `OTHER_FAILURE` for 535/538 (99.4%) of all recorded attempts — confirmed live: `cmd/agent/pipeline.go:543-556`'s classification switch only special-cases 4 of the many errors `AttemptSubmit` can return (including `ErrPromptInjectionDetected`, which is why bugs.md #489 has almost no attempt-level telemetry). `job_funnel.status` is also overwritten in place with no history. Complements bugs.md #480 |
+| 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending | 1.0 = 6×1.0÷6 | deep-reasoning | Found 2026-08-01, mission-alignment audit (seeded candidate C). `RankJobs` (`pkg/storage/ranking.go:110-178`) already combines Bayesian-smoothed source health, fit similarity, `exp(-0.02×ageDays)` freshness, and a 20% exploration floor, but the schema has no `discovery_source`/`ats_provider`/`submission_strategy`/`first_attempt_at`/`confirmed_at` columns to rank on. Explicitly sequenced after #489 (fixing the 51%-quarantine problem matters more than re-ranking the smaller inventory left after it), #494, and #499 |
+| 498 | [Company and role-family duplicate/cooldown protection](#498-company-and-role-family-duplicatecooldown-protection) | Pending | 1.0 = 3×1.0÷3 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate H). Only exact-URL dedup (`applied_jobs`, plus #112's scheme normalization) and #128's directory-collision fix exist; no company/role-family cooldown. Classified as an improvement, not a bug, per the brief's own rule — this audit found zero evidence of harmful duplicates (2 real `APPLIED` rows total, no repeats observed) |
+| 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | Found 2026-08-01, mission-alignment audit (seeded candidate G). Confirmed no unanswered-question logging or extensible answer store exists — #29 (Done) is a hardcoded Go struct (`pkg/config/pii.go`), not data-driven. Value held to 3 on real observed volume: only 26 `MANUAL_REQUIRED` rows exist today (0.2% of the funnel), dwarfed by bugs.md #489's 5,983. At the floor, not below it |
+| 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate B). #481 (Done) stops aged rows from being outscored forever but sets no proactive first-attempt deadline; this audit's own join of `job_funnel`↔`application_attempts` measured p50 = 4.8 days and p90 = 11.7 days from discovery to first attempt, with nothing under 6 hours (538-row sample). No periodic sweep or per-source admission cap exists anywhere in the codebase today. Decay 0.5: same theme as #481/#482, already shipped/filed this session |
 | 484 | [Local-model benchmark and routing-evidence harness](#484-local-model-benchmark-and-routing-evidence-harness) | Done (2026-08-01) | 2.33 = 7×1.0÷3 | standard | See `documentation/backlog_history/improvements_done_details.md` item #484 for the full account. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Pending | **0.83** = 5×1.0÷6 | deep-reasoning | A repository-owned two-phase (propose, then approved edit) contract letting `/work_next_item` delegate bounded work to a local model while Claude stays the orchestrator — would reduce Claude session usage for mechanical/standard-tier subtasks, the user's own stated optimization goal. Effort 6: designing the brief/response schema, tool budget, and prohibition list, plus a real approval gate, is architecture work, not a script. Not implemented this session per explicit instruction |
 | 477 | [Yahoo fallback requests carry no realistic browser headers or cookie jar](#477-yahoo-fallback-requests-carry-no-realistic-browser-headers-or-cookie-jar) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #477 for the full account. |
@@ -134,6 +145,186 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 23 | [Static master cover letter, reused across every application](#23-static-master-cover-letter-reused-across-every-application) | Done (2026-07-24) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #23 for the full account. |
 
 ## Details
+
+### 500. Add a missing index on `job_funnel(discovered_at)`
+
+**Filed 2026-08-01**, mission-alignment audit, additional audit area ("database indexes needed by mission metrics").
+
+`job_funnel` has indexes only on `status` (`idx_job_funnel_status`, `pkg/storage/manager.go:117`) and `company_name` (`idx_job_funnel_company_name`, `:119`). `discovered_at` has no index despite being read on every row by `RankJobs`'s age computation, `GetDiscoveredJobs`'s `ORDER BY`, and #491's proposed mission-metrics queries (oldest-eligible-posting, age-bucket distributions — both used live by this audit itself). `job_funnel` grew from roughly 3,000 rows to 11,731 in the course of one day of continuous-daemon operation during this audit, so this stops being free the longer it waits.
+
+**Proposed direction:** `CREATE INDEX IF NOT EXISTS idx_job_funnel_discovered_at ON job_funnel(discovered_at)`, added the same way `idx_job_funnel_status`/`idx_job_funnel_company_name` already are, in the same startup migration block. Consider a composite `(status, discovered_at)` instead, since the hot query path always filters `status = 'DISCOVERED'` before ordering by age — decide at implementation time by checking `EXPLAIN QUERY PLAN` on the real `GetDiscoveredJobs` query both ways.
+
+**Acceptance criteria:** `EXPLAIN QUERY PLAN` on `GetDiscoveredJobs`'s query shows the new index in use instead of a full table scan.
+
+**Automated tests:** a test asserting the index exists after `InitDB` (mirroring however `idx_job_funnel_status` is already tested, if it is).
+
+**Safe live verification:** run `EXPLAIN QUERY PLAN` against a read-only copy of the real `applications.db` before and after, confirming the scan strategy changes.
+
+**Boundaries:** schema/migration-only; no ranking logic changes.
+
+### 505. `storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice
+
+**Found 2026-08-01** while closing bugs.md #489, auditing every place `promptsec.Threat` values get converted for storage.
+
+`cmd/agent/main.go:124-147` (`storedPromptInjectionThreats`) and `pkg/submitter/browser.go:37-51` (`toStoredThreats`) both take `[]promptsec.Threat` and build `[]storage.PromptInjectionThreat` with the identical field mapping (`Type`, `Severity`, `Message`, `Guard`, `Match`, `Start`, `End`). Neither is currently broken — bugs.md #489's audit specifically confirmed `toStoredThreats` copies `Match` faithfully — this is pure duplication, not a defect.
+
+**Proposed direction:** export one version (either from `pkg/security`, next to `PromptInjectionError`, or `pkg/storage`, next to `PromptInjectionThreat`) and have both call sites use it. Small enough to be a single sitting.
+
+**Acceptance criteria:** one conversion function, two call sites, `go test ./...` unchanged in behavior (existing tests for both current call sites still pass against the shared function).
+
+**Boundaries:** pure refactor — no behavior change, no new fields.
+
+### 491. Define authoritative mission metrics and surface them on the dashboard
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate A).
+
+`serveMetrics` (`cmd/dashboard/main.go:474-703`) currently reports funnel status counts, single-most-recent-row processing times, and two conversion-rate tables (by ATS, by tone variant). It has no aggregate confirmed-applications-per-day/week, no aggregate discovery-to-first-attempt latency, no median time-to-confirmation, no oldest-currently-eligible-fresh-posting figure, and no count of eligible jobs that have never received a first attempt — every number it shows is either a raw status count or a single most-recent-row snapshot, not an aggregate outcome trend.
+
+**This audit's own safe read-only queries prove each of these is computable from the existing schema today**, once bugs.md #490 is fixed: total `APPLIED` count and (post-#490) `applied_at` gives confirmed-apps-per-day/week; a `job_funnel`↔`application_attempts` join on `url` gives discovery-to-first-attempt latency (this audit measured p50 = 4.8 days, p90 = 11.7 days, n=538); `MAX(julianday('now')-julianday(discovered_at))` over `DISCOVERED` rows gives the oldest-eligible-posting figure (185 rows, all 10-30 days old today, driven by bugs.md #482's breezy.hr exclusion); a `NOT EXISTS` join against `application_attempts` gives the never-attempted count (185/185 today — the entire current queue).
+
+**Proposed direction (per the brief: a small authoritative set, not an analytics wishlist):** confirmed applications per day/week; median discovery-to-first-attempt time; percentage of jobs attempted before a configurable freshness deadline (ties to #492); confirmed submissions ÷ submit attempts; automatic-completion rate (auto-submit vs. `AWAITING_REVIEW`/`MANUAL_REQUIRED`); time since last confirmed application; oldest currently-eligible fresh posting; count of eligible-never-attempted jobs. Do not add every metric this audit's brief listed as "candidate metrics" — pick the subset that maps onto the mission's own stated success criteria (a confirmed, submitted, verified application) and skip the rest (e.g. interview-requests-per-confirmed-application has no denominator yet — 2 `APPLIED` rows, 0 observed interview outcomes).
+
+**Acceptance criteria:** `/api/metrics` exposes the chosen metric set with correct values against a seeded test database covering multiple days/statuses; the dashboard renders them; a metric with no denominator yet (e.g. interview rate) degrades to a clear "not enough data" state rather than a fabricated zero, matching the existing pattern for the ATS/variant conversion tables (README: "Both tables stay hidden until at least one application has been tracked to an outcome").
+
+**Automated tests:** Go tests for each new aggregate query against a seeded SQLite fixture with known dates/statuses; a `vitest` test asserting the new dashboard tiles render the seeded values.
+
+**Safe live verification:** compare `/api/metrics`'s new fields against this audit's own hand-run queries on a read-only copy of the real `applications.db` (same baseline numbers as this row's evidence).
+
+**Boundaries:** dashboard/query work only; does not change ranking, discovery, or submission behavior. Depends on bugs.md #490 for a clean `job_funnel.applied_at` source — can ship with the `applied_jobs.applied_at` join as an interim source if #490 isn't done first, noting the known 22-orphan-row caveat this audit found.
+
+### 499. Persist `discovery_source` at `AddToFunnel` time
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate I).
+
+`AddToFunnel(company, title, url, status string)` (`pkg/storage/manager.go:1141`) has no source parameter. All five live discovery call sites — `discoverWithRemoteOK`, `discoverWithHackerNews`, `discoverWithATSFeeds`, SerpApi, and `discoverWithYahooHTML` (`pkg/scraper/funnel.go`, `atsfeeds.go`, `hackernews.go`) — call it identically, so discovery channel is lost the moment a row is written. Everything downstream that looks like a "source" (`application_attempts.source`, the dashboard's by-ATS breakdown) is reconstructed later purely from destination hostname via `getATSProvider` (`cmd/agent/main.go:327-337`). The seeded brief's own framing is confirmed by this audit's data: `jobs.ashbyhq.com` accounts for 622/1,441 (43%) of all `RETRY_EXHAUSTED` rows, and there is currently no way to tell whether that traffic arrived via a clean structured feed or the noisier Yahoo HTML fallback — a genuinely different quality signal the current schema cannot distinguish.
+
+**Proposed direction:** add a `discovery_source TEXT` column to `job_funnel`, thread a source identifier (`remoteok`, `hackernews`, `atsfeed:<board>`, `serpapi`, `yahoo`) through `AddToFunnel` and its five call sites.
+
+**Acceptance criteria:** every newly-discovered row has a non-null `discovery_source` matching the channel that found it; existing rows stay `NULL` (no backfill attempted — the information doesn't exist retroactively).
+
+**Automated tests:** a test per discovery source asserting the persisted `discovery_source` value; a migration test confirming existing rows are unaffected.
+
+**Safe live verification:** after shipping, a read-only aggregate query grouping fresh `DISCOVERED`/terminal rows by `discovery_source` to confirm the column is actually populating in a live run.
+
+**Boundaries:** schema/plumbing only — does not change ranking behavior by itself. Enabler for #493 (ranking objective) and #496 (capability registry); neither strictly requires it to ship first, but both are more useful once it exists.
+
+### 495. No-progress / dominant-failure-reason watchdog
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate E).
+
+Confirmed no mechanism detects "the daemon is alive and processing but producing no confirmed applications" or "one failure reason has dominated several cycles." `runAgentSchedule` (`cmd/agent/main.go:518-593`) only distinguishes "cycle had work" from "no eligible jobs" for scheduling purposes; `runDaemonDiscoveryLoop` (`:598-631`) just logs per-refresh errors. The existing poll-failure banner (#447/#460) and per-domain circuit breakers (#469/#475) are both narrower, failure-triggered mechanisms — neither tracks time-since-last-confirmed-application or a dominant status/reason across cycles.
+
+**This audit is itself the evidence for this item's value:** bugs.md #489 (51% of the entire funnel quarantined, mission-critical) was only found because a human ran a manual multi-hour database audit — exactly the shape of condition ("a high percentage of jobs terminate at one stage," per the seeded brief) a watchdog should have surfaced automatically, and much sooner than a week after #394's incomplete fix.
+
+**Proposed direction, per the brief:** track eligible-fresh-queue-nonempty + cycles-continuing + no-confirmed-application-for-N-hours; a dominant terminal status or (post-bugs.md #480 broadening / #494) dominant `status_reason` across recent cycles. Emit one deduplicated actionable alert (log line + dashboard status, no email/SMS infrastructure exists to page through); create a sanitized diagnostic snapshot; never auto-relax user constraints; never auto-requeue at volume. A coarser first version can ship using only existing status counts (no dependency on #480/#494), with reason-level detail added once those land.
+
+**Acceptance criteria:** a seeded test fixture with N cycles of a dominant failure status triggers exactly one alert, not one per cycle; a fixture with healthy variety triggers none; a fixture with an empty eligible queue (nothing to attempt) triggers none.
+
+**Automated tests:** table-driven tests over the trigger conditions above.
+
+**Safe live verification:** run the watchdog against a read-only copy of the real `applications.db`'s history and confirm it would have flagged the #489 condition (QUARANTINED_PROMPT_INJECTION dominant on 2026-08-01) had it existed.
+
+**Boundaries:** detection and alerting only — no automatic recovery action (source suppression, requeue, constraint relaxation) is in this item's scope; evaluate those separately per the brief's own caution against unlimited watchdog authority.
+
+### 496. ATS capability and automation-success registry
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate F).
+
+`career_sites` (`pkg/storage/manager.go:62-67`, columns `id, domain, ats_provider, last_scanned`) is created and indexed (`:120`) but has zero rows and zero other references anywhere in the Go codebase — entirely dead code. The only live per-domain signal is `GetSourceHealthSummaries` (`pkg/storage/attempts.go:86-160`), which aggregates `application_attempts` by hostname (attempt counts, outcome-class counts, avg inference time, a Sparse/Medium/High confidence tier) — but is limited by the same narrow attempt-recording gap #494 documents (only 538 of 11,731 funnel rows ever reach `application_attempts`). `form_mappings` (`:84-89`) stores only the raw selector JSON and a creation timestamp — no success/failure counters, no staleness tracking.
+
+**Proposed direction:** populate the existing `career_sites` table (last-successful-form-reach, account-required flag, known-confirmation-strategy, cached-mapping-health) instead of designing a new one, and extend `form_mappings` with basic success/failure counters and a last-validated timestamp. Use this to choose the safest handler and deprioritize known manual-only paths, without permanently blacklisting a provider on one failure. **Downgraded from the seeded brief's suggested `deep-reasoning` tier to `standard`**: the hard design question (what to track) is already answered by the existing dead schema and `GetSourceHealthSummaries`'s shape — this is population and wiring, not new architecture.
+
+**Acceptance criteria:** `career_sites` gains real rows from live discovery/attempt activity; `form_mappings` success/failure counters increment correctly on real outcomes; a query using the registry to pick a handler prefers one with recent success over one with none, given otherwise-equal candidates.
+
+**Automated tests:** tests for the new write paths (attempt outcome → `career_sites`/`form_mappings` update) and for the handler-selection logic reading them.
+
+**Safe live verification:** after shipping, confirm `career_sites` has non-zero rows via a read-only count query against a copy of the real database.
+
+**Boundaries:** does not merge with #493 (ranking formula) even though the brief allows it — kept separate here since this item's own schema-reuse scope is small enough to ship independently; #493 can consume this registry's data once both exist.
+
+### 494. Append-only funnel/attempt stage ledger
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate D).
+
+`application_attempts` (`id, source, url, terminal_class, started_at, ended_at, model_call_count, inference_ms`) records one row per completed `AttemptSubmit` call — no retry number, no handler/strategy field, no explicit browser-automation/submission-attempted/confirmation-observed flags. **Live-verified, quantified evidence this is already failing at its own job:** of 538 recorded attempts, 535 (99.4%) carry `terminal_class = OTHER_FAILURE`. Root cause confirmed in code: `cmd/agent/pipeline.go:543-556`'s classification `switch` only special-cases four sentinel errors (`ErrAwaitingHumanReview`/`ErrSubmitClickDisabled`, `ErrCaptchaBlocked`, `ErrAuthWall`/`ErrNeedsUnprovidedAttestation`/manual-review, `ErrUncommittableField`) — every other error `AttemptSubmit` can return, including `security.ErrPromptInjectionDetected` (the root cause of bugs.md #489), collapses into the same catch-all bucket. Separately, `job_funnel.status` is overwritten in place on every transition with no history retained anywhere — there is no way to reconstruct what states a row passed through before reaching its current one.
+
+**Proposed direction, per the brief:** a SQLite-backed append-only event/stage ledger (job/attempt id, prior state, new state, pipeline stage, normalized reason code, timestamp, stage duration, retry number, strategy/handler, model-call/browser-automation/submission-attempted/confirmation-observed flags) — explicitly not a duplicate of raw logs, and explicitly never storing job descriptions, personal data, prompts, generated documents, application answers, email bodies, DOM, or screenshots (same boundary `LogPromptInjectionDetections` already respects by omitting job description text). Needs a real decision on migration size, retention, indexes, and dashboard-query cost before implementation, per the brief.
+
+**Acceptance criteria:** a job's full stage history (not just terminal outcome) is reconstructable from the ledger; the existing `OTHER_FAILURE` catch-all resolves into distinguishable reason codes for at least prompt-injection quarantine, browser-crash recovery exhaustion, and generic fill failure (the three most plausible current contributors, per this audit's own pipeline.go reading).
+
+**Automated tests:** tests asserting each pipeline stage transition writes a ledger row with the correct prior/new state and reason code; a retention/pruning test if one is implemented.
+
+**Safe live verification:** after shipping, confirm the `OTHER_FAILURE`-equivalent bucket's share of ledger entries drops materially from the 99.4% baseline measured this audit.
+
+**Boundaries:** complements, does not replace, bugs.md #480 (which is scoped narrowly to `RETRY_EXHAUSTED`'s missing `status_reason` and should ship on its own regardless of this item's timeline).
+
+### 493. Rank by expected confirmed-application yield
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate C).
+
+`RankJobs` (`pkg/storage/ranking.go:110-178`) already combines Bayesian-smoothed per-hostname source health (`ComputeSourceScores`), a bad-outcome `PenaltyFactor`, `fit_similarity`, the confirmed `exp(-0.02×ageDays)` freshness multiplier, bugs.md #481's 10-day urgency override, and a 20% exploration floor with sparse-source reserved slots — a real, working approximation of the brief's conceptual objective already. What it cannot rank on: the schema has no `discovery_source`, `ats_provider` (as distinct from destination hostname), `submission_strategy`, `first_attempt_at`, or `confirmed_at` columns (all confirmed absent from `job_funnel`'s current CREATE TABLE). Interview-outcome data correctly is **not** used anywhere in ranking today — with only 2 `APPLIED` rows and 0 observed interview outcomes, that's trivially satisfying the brief's own "no interview outcomes until sample size is sufficient" constraint, not a gap.
+
+**Proposed direction:** once #499 (`discovery_source`) and #496 (capability registry) exist, extend `RankJobs`'s objective to weight by them — estimated probability of reaching a submit-ready form and probability of confirmation, alongside the existing fit/freshness/source-health signals — while preserving the existing Bayesian smoothing, exploration floor, and deterministic tie-breaking. **Explicitly sequenced after bugs.md #489, #494, and #499**: re-ranking the queue matters far less than not discarding 51% of it before ranking ever runs, and there is no `discovery_source`/attempt-stage data yet to rank on.
+
+**Acceptance criteria:** a new ranking formula preserves strict user constraints (salary/remote/etc.) and the existing exploration floor; a regression test corpus of synthetic jobs across discovery sources/ATS providers/outcomes shows the new ordering favoring higher-yield combinations without starving any single source below the floor.
+
+**Automated tests:** extend the existing `RankJobs`/`ranking.go` test suite with cases for the new signals; a starvation-prevention test mirroring whatever already guards the exploration floor.
+
+**Safe live verification:** compare the top-N of a live `GetQueuePlan` dry run before/after against the current baseline, checking no eligible source drops to zero share.
+
+**Boundaries:** does not touch strict eligibility filtering (salary/remote/blocklist), which stays exactly as it is today.
+
+### 498. Company and role-family duplicate/cooldown protection
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate H).
+
+Confirmed the only deduplication today is exact-URL (`applied_jobs`/`HasApplied`), plus bug #112's http/https scheme normalization and bug #128's per-role documents-directory fix (which only prevents an artifact-directory collision, not a duplicate application). No mechanism prevents multiple applications to substantially similar roles at the same company within a time window, and no employer blocklist exists beyond whatever the user encodes by hand. **Classified as an improvement, not a bug, per the brief's own rule** ("bug if current behavior has produced harmful duplicates; otherwise free improvement") — this audit found zero evidence of harmful duplicates: only 2 real `APPLIED` rows exist in the entire database's history, and they are for different postings.
+
+**Proposed direction:** normalized company identity + role family + seniority + location/remote classification; a configurable company cooldown and configurable similar-role cooldown; explicit user override; a visible skip reason (mirroring the dashboard's existing per-tile reason pattern from bugs.md #451); no fuzzy merging when confidence is low, so a genuinely distinct role at the same company is never silently skipped.
+
+**Acceptance criteria:** two postings for the same normalized role family at the same company within the cooldown window: the second is skipped with a visible reason; two postings at different companies, or different role families at the same company, are both processed normally.
+
+**Automated tests:** table-driven tests over the normalization/cooldown logic covering same-company/same-family, same-company/different-family, and different-company cases.
+
+**Safe live verification:** given the current near-zero volume of real applications, live verification is limited to confirming the skip logic fires correctly against synthetic fixtures rather than observed real duplicates — note this limitation explicitly when the item is worked.
+
+**Boundaries:** must never block a legitimately distinct posting; no change to the existing employer blocklist mechanism.
+
+### 497. User-approved application-answer memory
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate G).
+
+Confirmed no unanswered-question logging, answer map, or per-question memory exists anywhere in the codebase. Improvement #29 ("Hard-code every repeatable application fact," Done) implemented a fixed Go struct (`config.PII`, `pkg/config/pii.go`) — adding a new fact type requires a code change, not a data-driven registration; there is no mechanism today that logs a question the model couldn't answer for later review.
+
+**Value held to 3, not the brief's implied higher priority**, on real observed volume: only 26 `MANUAL_REQUIRED` rows exist in the live database today (0.2% of the funnel) — dwarfed by bugs.md #489's 5,983 quarantined rows and this file's own #492's multi-day first-attempt latency. The underlying capability gap is real, but the current bottleneck on confirmed applications is overwhelmingly upstream of where this item would help.
+
+**Proposed direction, per the brief:** a local, user-approved answer store — normalized question identity, original example wording, explicit user-approved answer, answer type, scope (global/ATS-specific/company-specific/role-specific), sensitivity classification, timestamps, revocation, source of approval, deterministic reuse before any LLM call. **Never** auto-infer or auto-approve legal attestations, protected-class questions, salary expectations, relocation commitments, or anything absent from user-controlled data — stop and request approval for anything sensitive or ambiguous.
+
+**Acceptance criteria:** a previously-approved question is answered deterministically from the store without an LLM call on a repeat encounter; a novel or sensitive question always stops for explicit approval, never auto-answered.
+
+**Automated tests:** tests covering exact-match reuse, scope resolution (global vs. company-specific), revocation, and the sensitive-question refusal path (mirroring the existing legal-attestation refusal behavior from improvement #30, Done).
+
+**Safe live verification:** confirm no sensitive-category answer is ever auto-approved by feeding the store's own protected-question list through the refusal path.
+
+**Boundaries:** must never fabricate an answer to a legal attestation or protected-class question; must never bypass the existing refusal behavior improvement #30 already established.
+
+### 492. Explicit first-attempt SLA and bounded fresh-queue admission
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate B).
+
+Bug #481 (Done) stops an aged `DISCOVERED` row from being outscored forever by forcing it to the front past a 10-day urgency threshold — but sets no proactive first-attempt deadline, and confirmed no periodic sweep of stale rows or per-source/per-provider admission cap exists anywhere in the codebase (`AddToFunnel` inserts unconditionally with `discovered_at = CURRENT_TIMESTAMP`; ranking/expiry logic only ever runs synchronously when the queue is read, never on a schedule).
+
+**Live-measured evidence this is a real, separate gap from #481:** a `job_funnel`↔`application_attempts` join (538 rows) found discovery-to-first-attempt timing of min = 8.1h, p50 = 4.8 days, p90 = 11.7 days, max = 18.4 days — **nothing under 6 hours**. #481 guarantees a stale row eventually wins a ranking comparison; it does not guarantee a *fast* first attempt.
+
+**Proposed direction, per the brief:** an explicit first-attempt deadline (e.g. a configurable SLA measured against `discovered_at`); a periodic sweep of stale `DISCOVERED` rows rather than only on-read ranking (would also give bugs.md #482's breezy.hr rows, and any future excluded-source rows, a real terminal path instead of accumulating forever); a bounded number of pending jobs per source once #499 exists to identify one. Test with deterministic job ages at 0/1/7/14/30 days, and both a small queue and one exceeding the per-cycle processing cap, per the brief's own acceptance-criteria list.
+
+**Acceptance criteria:** a synthetic queue with jobs at each of the five ages above demonstrates the SLA/sweep correctly prioritizing or expiring rows at the intended boundaries; a queue larger than the per-cycle cap does not let admission outpace processing.
+
+**Automated tests:** deterministic age-bucket tests as above; a test proving the periodic sweep terminates already-excluded-source rows (e.g. breezy.hr) instead of leaving them in `DISCOVERED` forever.
+
+**Safe live verification:** after shipping, re-run this row's own discovery-to-first-attempt query against a read-only copy of the real database and confirm the p50/p90 figures have materially improved from this audit's baseline (4.8/11.7 days).
+
+**Boundaries:** does not change the ranking formula itself (that's #493); scoped to admission/sweep/deadline mechanics on top of the existing ranker.
 
 ### 484. Local-model benchmark and routing-evidence harness
 
