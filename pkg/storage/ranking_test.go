@@ -1,6 +1,10 @@
 package storage
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 // TestComputeSourceScores_AwaitingReviewIsNotASourceDefect pins the fix for the
 // ranking inversion Copilot Mode would otherwise cause.
@@ -94,5 +98,86 @@ func TestComputeSourceScores_RealFailuresStillPenalised(t *testing.T) {
 		if scores[bad].PenaltyFactor >= 1.0 {
 			t.Errorf("source %q was not penalised: PenaltyFactor = %v", bad, scores[bad].PenaltyFactor)
 		}
+	}
+}
+
+// TestRankJobs_UrgentAgeBypassesStarvation pins the fix for bugs.md #481: a
+// job with a weak source/fit score used to only ever fall further behind
+// fresh high-scoring jobs as it aged (freshnessMultiplier decays score, it
+// never boosts it), so under a backlog that outpaces processing capacity, a
+// low-scoring job could sit in DISCOVERED indefinitely until the real posting
+// expired. A job at or past urgentAgeDays must now be surfaced ahead of every
+// non-urgent job regardless of score.
+func TestRankJobs_UrgentAgeBypassesStarvation(t *testing.T) {
+	now := time.Now()
+
+	stale := &FunnelJob{
+		URL:           "https://weak-source.example.com/jobs/1",
+		FitSimilarity: 0.1, // weak fit
+		DiscoveredAt:  now.Add(-time.Duration(urgentAgeDays+5) * 24 * time.Hour),
+	}
+
+	var fresh []*FunnelJob
+	for i := 0; i < 20; i++ {
+		fresh = append(fresh, &FunnelJob{
+			URL:           "https://strong-source.example.com/jobs/x",
+			FitSimilarity: 0.95, // strong fit
+			DiscoveredAt:  now,
+		})
+	}
+
+	summaries := []SourceHealthSummary{
+		{Source: "strong-source.example.com", PeriodDays: 30, TotalAttempts: 100, AppliedCount: 60},
+		{Source: "weak-source.example.com", PeriodDays: 30, TotalAttempts: 100, CaptchaCount: 90},
+	}
+
+	jobs := append([]*FunnelJob{stale}, fresh...)
+	ranked := RankJobs(jobs, summaries, 0.20)
+
+	if len(ranked) != len(jobs) {
+		t.Fatalf("RankJobs dropped jobs: got %d, want %d", len(ranked), len(jobs))
+	}
+	if ranked[0] != stale {
+		t.Fatalf("expected the urgent stale job to lead the ranked queue despite its weak score, got URL %q first", ranked[0].URL)
+	}
+	if !strings.Contains(stale.RankingReason, "Urgent") {
+		t.Errorf("expected the urgent job's ranking reason to explain the bypass, got %q", stale.RankingReason)
+	}
+
+	// Sanity check on the score alone, to prove this is a real starvation
+	// scenario and not a tautology: absent the urgent override, the stale
+	// job's raw score must indeed lose to every fresh job's.
+	for _, f := range fresh {
+		if stale.RankingScore >= f.RankingScore {
+			t.Fatalf("test setup invalid: stale job's score %v was not below a fresh job's %v — urgency wasn't actually needed to win", stale.RankingScore, f.RankingScore)
+		}
+	}
+}
+
+// TestRankJobs_NonUrgentJobsStillRankedByScore guards the other direction:
+// jobs under urgentAgeDays must keep the pre-existing score-based ordering,
+// not be swept into the urgent bypass path.
+func TestRankJobs_NonUrgentJobsStillRankedByScore(t *testing.T) {
+	now := time.Now()
+
+	strong := &FunnelJob{
+		URL:           "https://strong-source.example.com/jobs/1",
+		FitSimilarity: 0.95,
+		DiscoveredAt:  now,
+	}
+	weak := &FunnelJob{
+		URL:           "https://weak-source.example.com/jobs/2",
+		FitSimilarity: 0.1,
+		DiscoveredAt:  now,
+	}
+
+	summaries := []SourceHealthSummary{
+		{Source: "strong-source.example.com", PeriodDays: 30, TotalAttempts: 100, AppliedCount: 60},
+		{Source: "weak-source.example.com", PeriodDays: 30, TotalAttempts: 100, CaptchaCount: 90},
+	}
+
+	ranked := RankJobs([]*FunnelJob{weak, strong}, summaries, 0.20)
+	if ranked[0] != strong {
+		t.Fatalf("expected the stronger-scoring non-urgent job first, got URL %q first", ranked[0].URL)
 	}
 }
