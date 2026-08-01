@@ -1,5 +1,17 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — A job with an unresolvable hostname no longer spins the daemon forever
+
+* **Fix (bug #478):** a DNS resolution failure (a "no such host" error, distinct from a rejected private/loopback target) in `cmd/agent/pipeline.go`'s `StateInit` node only logged and left the job at `DISCOVERED` with no backoff, so `GetDiscoveredJobs` reloaded it on every single cycle — observed live at ~1 cycle/sec instead of the documented ~1-minute `cycleInterval`, with unbounded log growth. Now calls `storage.UpdateFunnelStatusRetryable`, the same exponential-backoff/`RETRY_EXHAUSTED` machinery bug #466 built for every other retryable failure in the file. Mutation-checked and live-verified end to end: rebuilt and restarted the real running daemon, confirmed the previously spinning job failed once and the cycle cadence returned to a clean 60 seconds.
+
+## 2026-08-01 — The Yahoo discovery fallback looks a little more like a browser
+
+* **Improvement (#477):** `discoverWithYahooHTML`'s fallback requests (used whenever `SERPAPI_API_KEY` is absent or exhausted) previously sent only a `User-Agent` header and used a fresh, cookie-less HTTP client for every single query. Now sends `Accept`/`Accept-Language` headers too, and shares one `http.CookieJar` across every query made by a single discovery run instead of starting cold each time. Live-verified against the real daemon: failure rate among breaker-allowed attempts dropped from 25.2% to 19.7% in a short post-restart sample — directionally positive, not statistically conclusive given the sample size difference, closed either way per the item's own note.
+
+## 2026-08-01 — A broken database cursor no longer hides behind a shorter-than-expected requeue preview
+
+* **Fix (bug #476):** `cmd/requeue`'s dry-run preview (`GetQueuePlan`) never checked `rows.Err()` after its scan loop, so a driver-level cursor fault partway through iteration looked identical to "this pattern only matched N rows" — the same defect class bug #452 fixed for the dashboard's metrics queries, in a different file. The scan loop is now `scanQueuePlanCandidates`, and a genuine cursor fault surfaces as an error instead of a silently truncated candidate list. Does not affect `-confirm`, which requeues via an independent bulk `UPDATE`.
+
 ## 2026-07-31 — The dashboard can no longer be refused a connection outright by a fresh, contended database
 
 * **Improvement (#450):** `cmd/dashboard` opened with the same DSN as the writer (`storage.DSN`, used by `cmd/agent` and every other command via `storage.InitDBWithPath`), which asks SQLite to set `journal_mode(WAL)` on every connect. Against a genuinely fresh database with another connection holding an open write transaction, that request is refused outright (`SQLITE_BUSY`) rather than merely delayed — `busy_timeout` does not cover a mode-change refusal, only a lock wait. New `storage.ReaderDSN` carries every other pragma (`synchronous`, `busy_timeout`, `cache_size`, `temp_store`) but drops `journal_mode`, since a read-only connection has no business changing it and finds it already WAL once the writer has opened once; `cmd/dashboard` now opens with it. The writer DSN is unchanged.

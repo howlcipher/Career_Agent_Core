@@ -42,22 +42,24 @@ type QueuePlan struct {
 	TotalWithSchemeDup int
 }
 
-func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePlan, error) {
-	if db == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
+// queuePlanRows is the subset of *sql.Rows that scanQueuePlanCandidates
+// needs, factored out so a hand-rolled fake can stand in for a test that
+// needs Next() to fail mid-stream rather than exhaust normally -- a real
+// driver cannot be made to produce a cursor fault on demand.
+type queuePlanRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
 
-	query := `SELECT f.url, f.status, f.discovered_at, f.fit_similarity,
-		(SELECT COUNT(*) FROM applied_jobs a WHERE a.url = f.url OR a.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') ELSE f.url END) as dedup_count,
-		(SELECT COUNT(*) FROM job_funnel dup WHERE dup.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') WHEN f.url LIKE 'https://%' THEN REPLACE(f.url, 'https://', 'http://') ELSE f.url END AND dup.url != f.url) as scheme_dup_count
-		FROM job_funnel f WHERE f.status = ? AND f.url LIKE ?`
-	rows, err := db.Query(query, fromStatus, urlPattern)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var plan QueuePlan
+// scanQueuePlanCandidates drains rows into QueuePlanCandidates. Next()
+// returning false can mean either "rows exhausted" or "a cursor error
+// occurred" -- database/sql cannot tell the caller apart without an
+// explicit Err() check, so a fault partway through the result set must not
+// be mistaken for a complete, if short, plan.
+func scanQueuePlanCandidates(rows queuePlanRows, willClearDedup bool) ([]QueuePlanCandidate, int, int, error) {
+	var candidates []QueuePlanCandidate
+	var totalWithDedup, totalWithSchemeDup int
 
 	for rows.Next() {
 		var cand QueuePlanCandidate
@@ -109,14 +111,44 @@ func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePla
 		}
 
 		if cand.HasDedupRow {
-			plan.TotalWithDedup++
+			totalWithDedup++
 		}
 		if cand.HasSchemeDup {
-			plan.TotalWithSchemeDup++
+			totalWithSchemeDup++
 		}
 
-		plan.Candidates = append(plan.Candidates, cand)
+		candidates = append(candidates, cand)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, fmt.Errorf("scan queue plan candidates: %w", err)
+	}
+
+	return candidates, totalWithDedup, totalWithSchemeDup, nil
+}
+
+func GetQueuePlan(urlPattern, fromStatus string, willClearDedup bool) (*QueuePlan, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	query := `SELECT f.url, f.status, f.discovered_at, f.fit_similarity,
+		(SELECT COUNT(*) FROM applied_jobs a WHERE a.url = f.url OR a.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') ELSE f.url END) as dedup_count,
+		(SELECT COUNT(*) FROM job_funnel dup WHERE dup.url = CASE WHEN f.url LIKE 'http://%' THEN REPLACE(f.url, 'http://', 'https://') WHEN f.url LIKE 'https://%' THEN REPLACE(f.url, 'https://', 'http://') ELSE f.url END AND dup.url != f.url) as scheme_dup_count
+		FROM job_funnel f WHERE f.status = ? AND f.url LIKE ?`
+	rows, err := db.Query(query, fromStatus, urlPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var plan QueuePlan
+	candidates, totalWithDedup, totalWithSchemeDup, err := scanQueuePlanCandidates(rows, willClearDedup)
+	if err != nil {
+		return nil, err
+	}
+	plan.Candidates = candidates
+	plan.TotalWithDedup = totalWithDedup
+	plan.TotalWithSchemeDup = totalWithSchemeDup
 
 	summaries, err := GetSourceHealthSummaries(30)
 	if err == nil {

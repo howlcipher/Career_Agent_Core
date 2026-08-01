@@ -103,6 +103,7 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	if err := storage.InitDBWithPath(dbPath); err != nil {
@@ -207,6 +208,7 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	oldSleep := SleepFunc
 	SleepFunc = func(time.Duration) {}
 	defer func() { SleepFunc = oldSleep }()
+	yahooBreaker = newSourceCircuitBreaker()
 
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")

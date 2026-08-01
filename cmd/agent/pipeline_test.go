@@ -1,8 +1,16 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"net/netip"
 	"testing"
+	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 // classifyGenerationError draws the line bugs.md #444 is about: only a
@@ -60,5 +68,76 @@ func TestClassifyGenerationError(t *testing.T) {
 				t.Errorf("classifyGenerationError(%q) = %v, want %v", tc.err.Error(), got, tc.want)
 			}
 		})
+	}
+}
+
+// failingResolver mimics a genuine DNS lookup failure -- "no such host", not
+// a rejected private/loopback target -- so NetworkGuard.ValidateURL wraps it
+// as a plain resolver error rather than security.ErrUnsafeNetworkTarget.
+type failingResolver struct{}
+
+func (failingResolver) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return nil, errors.New("lookup " + host + ": no such host")
+}
+
+// TestStateInit_DNSFailureLeavesJobRetryable covers bugs.md #478: a DNS
+// resolution failure in StateInit's else branch must route through
+// storage.UpdateFunnelStatusRetryable like every other retryable failure in
+// this file, instead of only logging and leaving the row at DISCOVERED
+// forever -- which is what let one bad hostname spin the live daemon at
+// ~1 cycle/sec instead of the documented ~1/minute cadence.
+func TestStateInit_DNSFailureLeavesJobRetryable(t *testing.T) {
+	if err := storage.InitDBWithPath(":memory:"); err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer func() {
+		storage.GetDB().Close()
+	}()
+
+	const jobURL = "https://wwww.raileurope.com/careers/job1"
+	if _, err := storage.AddToFunnel("Rail Europe", "Engineer", jobURL, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel failed: %v", err)
+	}
+
+	guard := security.NewNetworkGuard(security.WithResolver(failingResolver{}))
+	deps := JobPipelineDeps{NetworkGuard: guard}
+	g := buildJobPipeline(deps)
+	state := &JobState{
+		Job:      scraper.Job{URL: jobURL, CompanyName: "Rail Europe"},
+		WorkerID: 1,
+	}
+
+	before := time.Now().UTC()
+	if err := g.Run(context.Background(), StateInit, state); err != nil {
+		t.Fatalf("pipeline run returned an error: %v", err)
+	}
+
+	var status string
+	var retryCount int
+	var nextEligible sql.NullTime
+	if err := storage.GetDB().QueryRow(
+		"SELECT status, retry_count, next_eligible_at FROM job_funnel WHERE url = ?", jobURL,
+	).Scan(&status, &retryCount, &nextEligible); err != nil {
+		t.Fatalf("failed to read back job_funnel row: %v", err)
+	}
+
+	if status != "DISCOVERED" {
+		t.Errorf("status = %q, want still DISCOVERED (one failure, under MaxRetryAttempts)", status)
+	}
+	if retryCount != 1 {
+		t.Errorf("retry_count = %d, want 1 -- a DNS failure must count as a retryable attempt", retryCount)
+	}
+	if !nextEligible.Valid || !nextEligible.Time.After(before) {
+		t.Fatalf("next_eligible_at = %v, want a time after %v -- without this the row is immediately reselectable and the daemon spins on it every cycle", nextEligible, before)
+	}
+
+	jobs, err := storage.GetDiscoveredJobs()
+	if err != nil {
+		t.Fatalf("GetDiscoveredJobs failed: %v", err)
+	}
+	for _, job := range jobs {
+		if job.URL == jobURL {
+			t.Errorf("GetDiscoveredJobs still returned %s right after its DNS failure -- it must not reappear in the very next queue cycle", jobURL)
+		}
 	}
 }
