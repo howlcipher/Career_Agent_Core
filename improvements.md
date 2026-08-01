@@ -43,6 +43,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
 | 500 | [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at) | Pending | **3.0** = 3×1.0÷1 | mechanical | Found 2026-08-01, mission-alignment audit. `job_funnel` indexes only `status` and `company_name` (`pkg/storage/manager.go:117,119`); `discovered_at` — read by every `RankJobs`/`GetDiscoveredJobs` age computation and now #491's mission-metrics queries — has none. Cheap, low-risk, one migration line |
+| 505 | [`storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice](#505-storedpromptinjectionthreats-and-tostoredthreats-are-the-same-field-for-field-conversion-written-twice) | Pending | **2.0** = 2×1.0÷1 | mechanical | Found 2026-08-01 closing bugs.md #489. `cmd/agent/main.go:124` (`storedPromptInjectionThreats`) and `pkg/submitter/browser.go:37` (`toStoredThreats`) both convert `[]promptsec.Threat` to `[]storage.PromptInjectionThreat` with the identical 7-field mapping. Cheap, low-risk: export one from `pkg/security` or `pkg/storage` and have both callers use it |
 | 491 | [Define authoritative mission metrics and surface them on the dashboard](#491-define-authoritative-mission-metrics-and-surface-them-on-the-dashboard) | Pending | **1.5** = 6×1.0÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate A). `serveMetrics` (`cmd/dashboard/main.go:474-703`) has no confirmed-apps-per-day/week, no aggregate discovery-to-first-attempt latency, no time-since-last-confirmed-application, and no never-attempted count — only funnel status counts and two conversion tables. This audit's own queries prove the metrics are computable today (e.g. p50 discovery-to-first-attempt = 4.8 days from a 538-row `application_attempts` join). Depends on bugs.md #490 (`job_funnel.applied_at`) for a clean confirmed-apps-per-day source |
 | 499 | [Persist `discovery_source` at `AddToFunnel` time](#499-persist-discovery_source-at-addtofunnel-time) | Pending | **1.33** = 4×1.0÷3 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate I). `AddToFunnel` (`pkg/storage/manager.go:1141`) has no source parameter — RemoteOK, Hacker News, ATS feeds, SerpApi, and Yahoo HTML fallback are indistinguishable downstream; "source" is reconstructed later purely from destination hostname (`getATSProvider`), which the seeded candidate's own framing correctly notes conflates discovery channel with ATS provider. Enabler for #493 and #496, not independently mission-moving |
 | 495 | [No-progress / dominant-failure-reason watchdog](#495-no-progress--dominant-failure-reason-watchdog) | Pending | **1.25** = 5×1.0÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate E). Confirmed no staleness/dominant-reason detection exists in `runAgentSchedule` or `runDaemonDiscoveryLoop` (`cmd/agent/main.go`) beyond the existing poll-failure banner (#447/#460) and per-domain circuit breakers (#469/#475), both narrower failure-triggered mechanisms. This audit itself is the proof of value: bugs.md #489 (51% of the funnel quarantined) was only found by a manual database audit, exactly the class of condition this item would surface automatically |
@@ -160,6 +161,18 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 **Safe live verification:** run `EXPLAIN QUERY PLAN` against a read-only copy of the real `applications.db` before and after, confirming the scan strategy changes.
 
 **Boundaries:** schema/migration-only; no ranking logic changes.
+
+### 505. `storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice
+
+**Found 2026-08-01** while closing bugs.md #489, auditing every place `promptsec.Threat` values get converted for storage.
+
+`cmd/agent/main.go:124-147` (`storedPromptInjectionThreats`) and `pkg/submitter/browser.go:37-51` (`toStoredThreats`) both take `[]promptsec.Threat` and build `[]storage.PromptInjectionThreat` with the identical field mapping (`Type`, `Severity`, `Message`, `Guard`, `Match`, `Start`, `End`). Neither is currently broken — bugs.md #489's audit specifically confirmed `toStoredThreats` copies `Match` faithfully — this is pure duplication, not a defect.
+
+**Proposed direction:** export one version (either from `pkg/security`, next to `PromptInjectionError`, or `pkg/storage`, next to `PromptInjectionThreat`) and have both call sites use it. Small enough to be a single sitting.
+
+**Acceptance criteria:** one conversion function, two call sites, `go test ./...` unchanged in behavior (existing tests for both current call sites still pass against the shared function).
+
+**Boundaries:** pure refactor — no behavior change, no new fields.
 
 ### 491. Define authoritative mission metrics and surface them on the dashboard
 
