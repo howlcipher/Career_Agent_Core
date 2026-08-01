@@ -1392,7 +1392,9 @@ func ReapStaleProcessingJobs() (int64, error) {
 
 // GetDiscoveredJobs fetches all discovered jobs and orders the queue using
 // Bayesian smoothed application outcomes, fit similarity, and freshness
-// (improvements.md #35).
+// (improvements.md #35), with jobs at or past urgentAgeDays forced to the
+// front regardless of score so a growing backlog cannot starve them past
+// expiry (bugs.md #481).
 func GetDiscoveredJobs() ([]FunnelJob, error) {
 	if db == nil {
 		return nil, fmt.Errorf("db not initialized")

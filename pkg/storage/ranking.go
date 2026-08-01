@@ -1,11 +1,23 @@
 package storage
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"time"
 )
+
+// urgentAgeDays is the point at which a DISCOVERED job is treated as at risk
+// of expiring before it is ever attempted. bugs.md #481: with no aging
+// override, a job's score-based rank only ever falls as it gets older
+// (freshnessMultiplier below), so a low-scoring row (weak source, weak fit)
+// can keep losing to freshly discovered jobs indefinitely once the daily
+// discovery volume exceeds what a cycle can drain — ten spot-checked rows
+// that expired 2026-08-01 had all sat in DISCOVERED for ~19 days. A job at or
+// past this age bypasses normal score ranking and the exploration/exploit
+// split entirely so it gets attempted with real headroom before that.
+const urgentAgeDays = 10
 
 // RankableJob is a generic interface for jobs that can be ranked.
 type RankableJob interface {
@@ -89,6 +101,8 @@ type jobWrapper struct {
 	Index         int
 	Score         float64
 	IsExploration bool
+	IsUrgent      bool
+	AgeDays       int
 }
 
 // RankJobs sorts the given slice of RankableJob using Bayesian smoothed probability.
@@ -136,13 +150,17 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 
 		ageDays := int(time.Since(j.GetDiscoveredAt()).Hours() / 24)
 		freshnessMultiplier := math.Exp(-0.02 * float64(ageDays))
+		isUrgent := ageDays >= urgentAgeDays
 
 		combinedFit := 0.2 + (0.8 * fit)
 		rawScore := scoreObj.SmoothedSuccessRate * combinedFit * freshnessMultiplier * scoreObj.PenaltyFactor
 
 		isExploration := scoreObj.Confidence == "Sparse"
 		reason := "Ranked by outcome"
-		if isExploration {
+		switch {
+		case isUrgent:
+			reason = fmt.Sprintf("Urgent: %d days old, prioritized ahead of scoring to avoid expiring unattempted (bugs.md #481)", ageDays)
+		case isExploration:
 			reason = "Exploration candidate (sparse data)"
 		}
 
@@ -154,16 +172,24 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 			Index:         i,
 			Score:         rawScore,
 			IsExploration: isExploration,
+			IsUrgent:      isUrgent,
+			AgeDays:       ageDays,
 		}
 	}
 
-	// Separate into explore and exploit pools
+	// Separate into urgent, explore and exploit pools. Urgent jobs (bugs.md
+	// #481) bypass the exploration/exploit split entirely, since sparse-source
+	// exploration slots are worthless to a job that is about to expire.
+	var urgent []jobWrapper
 	var exploit []jobWrapper
 	var explore []jobWrapper
 	for _, w := range wrappers {
-		if w.IsExploration {
+		switch {
+		case w.IsUrgent:
+			urgent = append(urgent, w)
+		case w.IsExploration:
 			explore = append(explore, w)
-		} else {
+		default:
 			exploit = append(exploit, w)
 		}
 	}
@@ -177,8 +203,18 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 	sortByScoreDesc(exploit)
 	sortByScoreDesc(explore)
 
-	// Merge pools based on explorationShare
+	// Oldest urgent job first: it has the least remaining runway before it
+	// expires unattempted.
+	sort.SliceStable(urgent, func(a, b int) bool {
+		return urgent[a].AgeDays > urgent[b].AgeDays
+	})
+
+	// Urgent jobs lead the result unconditionally, then the existing
+	// score-weighted exploit/explore merge fills the rest.
 	result := make([]T, 0, len(jobs))
+	for _, w := range urgent {
+		result = append(result, jobs[w.Index])
+	}
 	exploitIdx := 0
 	exploreIdx := 0
 
