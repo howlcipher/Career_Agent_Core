@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — A broken database cursor no longer hides behind a shorter-than-expected requeue preview
+
+* **Fix (bug #476):** `cmd/requeue`'s dry-run preview (`GetQueuePlan`) never checked `rows.Err()` after its scan loop, so a driver-level cursor fault partway through iteration looked identical to "this pattern only matched N rows" — the same defect class bug #452 fixed for the dashboard's metrics queries, in a different file. The scan loop is now `scanQueuePlanCandidates`, and a genuine cursor fault surfaces as an error instead of a silently truncated candidate list. Does not affect `-confirm`, which requeues via an independent bulk `UPDATE`.
+
 ## 2026-07-31 — The dashboard can no longer be refused a connection outright by a fresh, contended database
 
 * **Improvement (#450):** `cmd/dashboard` opened with the same DSN as the writer (`storage.DSN`, used by `cmd/agent` and every other command via `storage.InitDBWithPath`), which asks SQLite to set `journal_mode(WAL)` on every connect. Against a genuinely fresh database with another connection holding an open write transaction, that request is refused outright (`SQLITE_BUSY`) rather than merely delayed — `busy_timeout` does not cover a mode-change refusal, only a lock wait. New `storage.ReaderDSN` carries every other pragma (`synchronous`, `busy_timeout`, `cache_size`, `temp_store`) but drops `journal_mode`, since a read-only connection has no business changing it and finds it already WAL once the writer has opened once; `cmd/dashboard` now opens with it. The writer DSN is unchanged.

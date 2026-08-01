@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,4 +140,122 @@ func TestGetQueuePlan(t *testing.T) {
 			t.Errorf("unexpected proposed action: %s", plan.Candidates[0].ProposedAction)
 		}
 	})
+}
+
+// queuePlanRow is one row of fakeQueuePlanRows' canned result set.
+type queuePlanRow struct {
+	url        string
+	status     string
+	discovered sql.NullTime
+	fitSim     sql.NullFloat64
+	dedup      int
+	schemeDup  int
+	scanErr    error
+}
+
+// fakeQueuePlanRows is a hand-rolled queuePlanRows for exercising the
+// mid-stream cursor-fault path directly, mirroring cmd/dashboard's
+// fakeConversionRows (bug #452/#459's precedent). A real driver cannot be
+// made to return a cursor error from Next() on demand against an in-memory
+// sqlite database, so this fake stands in for "the row(s) before the fault
+// scanned fine, then the cursor broke" -- the exact ambiguity Next()
+// returning false cannot resolve on its own per database/sql's contract.
+type fakeQueuePlanRows struct {
+	rows    []queuePlanRow
+	i       int
+	failErr error
+}
+
+func (f *fakeQueuePlanRows) Next() bool {
+	if f.i >= len(f.rows) {
+		return false
+	}
+	f.i++
+	return true
+}
+
+func (f *fakeQueuePlanRows) Scan(dest ...any) error {
+	row := f.rows[f.i-1]
+	if row.scanErr != nil {
+		return row.scanErr
+	}
+	*dest[0].(*string) = row.url
+	*dest[1].(*string) = row.status
+	*dest[2].(*sql.NullTime) = row.discovered
+	*dest[3].(*sql.NullFloat64) = row.fitSim
+	*dest[4].(*int) = row.dedup
+	*dest[5].(*int) = row.schemeDup
+	return nil
+}
+
+func (f *fakeQueuePlanRows) Err() error {
+	if f.i >= len(f.rows) {
+		return f.failErr
+	}
+	return nil
+}
+
+// TestScanQueuePlanCandidates_PropagatesRowsErr pins bug #476: a cursor
+// fault partway through the result stream must surface as an error, not as
+// a silently truncated plan that renders as if it were complete. Mutation
+// check: deleting scanQueuePlanCandidates's rows.Err() check makes this
+// fail, since the loop above it already appended the one row that scanned
+// fine before Next() returned false.
+func TestScanQueuePlanCandidates_PropagatesRowsErr(t *testing.T) {
+	rows := &fakeQueuePlanRows{
+		rows: []queuePlanRow{
+			{url: "https://lever.co/a", status: "BLOCKED_CAPTCHA", discovered: sql.NullTime{Time: time.Now(), Valid: true}},
+		},
+		failErr: errors.New("cursor error: connection reset"),
+	}
+
+	got, _, _, err := scanQueuePlanCandidates(rows, false)
+	if err == nil {
+		t.Fatalf("expected an error from a mid-stream cursor fault, got nil with candidates %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected no partial candidate list on a cursor fault, got %+v", got)
+	}
+}
+
+func TestScanQueuePlanCandidates_NoErrorOnCleanExhaustion(t *testing.T) {
+	rows := &fakeQueuePlanRows{
+		rows: []queuePlanRow{
+			{url: "https://lever.co/a", status: "BLOCKED_CAPTCHA", discovered: sql.NullTime{Time: time.Now(), Valid: true}},
+		},
+	}
+
+	got, dedup, schemeDup, err := scanQueuePlanCandidates(rows, false)
+	if err != nil {
+		t.Fatalf("unexpected error on clean exhaustion: %v", err)
+	}
+	if len(got) != 1 || got[0].OriginalURL != "https://lever.co/a" {
+		t.Errorf("unexpected result: %+v", got)
+	}
+	if dedup != 0 || schemeDup != 0 {
+		t.Errorf("expected zero dedup/scheme-dup totals, got %d/%d", dedup, schemeDup)
+	}
+}
+
+// TestScanQueuePlanCandidates_SkipsRowScanErrorWithoutAborting is a
+// regression guard for bug #453: a single row's Scan error must still
+// `continue` past that row rather than discarding the whole plan, and this
+// must keep holding now that a *cursor* error (bug #476, a different
+// failure layer) also surfaces. The two must not be conflated back
+// together.
+func TestScanQueuePlanCandidates_SkipsRowScanErrorWithoutAborting(t *testing.T) {
+	rows := &fakeQueuePlanRows{
+		rows: []queuePlanRow{
+			{scanErr: errors.New("scan error: converting NULL to time.Time")},
+			{url: "https://lever.co/b", status: "DISCOVERED", discovered: sql.NullTime{Time: time.Now(), Valid: true}},
+		},
+	}
+
+	got, _, _, err := scanQueuePlanCandidates(rows, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].OriginalURL != "https://lever.co/b" {
+		t.Errorf("expected the scan-error row skipped and the good row kept, got %+v", got)
+	}
 }
