@@ -18,12 +18,13 @@ import (
 	"strings"
 	"time"
 )
+
 type Metrics struct {
-	Discovered int
-	Processing int
-	Applied int
-	Failed int
-	Invalid_url int
+	Discovered      int
+	Processing      int
+	Applied         int
+	Failed          int
+	Invalid_url     int
 	Blocked_captcha int
 }
 
@@ -57,54 +58,58 @@ func main() {
 	var _ = strconv.Atoi
 	var _ = fmt.Println
 //line metrics_summary.zero:11
-		fmt.Println("Fetching metrics from local dashboard...")
+	fmt.Println("Fetching metrics from local dashboard...")
 //line metrics_summary.zero:12
-		{
-			res, err := func() ([]byte, error) {
+	{
+		res, err := func() ([]byte, error) {
 			req, err := http.NewRequest("GET", "http://127.0.0.1:8080/api/metrics", nil)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			resp, err := http.DefaultClient.Do(req)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			defer resp.Body.Close()
 			return io.ReadAll(resp.Body)
 		}()
-			if err != nil {
+		if err != nil {
 //line metrics_summary.zero:14
-		fmt.Println("Error fetching metrics:", err)
-			} else {
-				_ = res
+			fmt.Println("Error fetching metrics:", err)
+		} else {
+			_ = res
 //line metrics_summary.zero:15
-		{
+			{
 //line metrics_summary.zero:16
-		{
-			var m Metrics
-			if err := json.Unmarshal([]byte(res), &m); err != nil {
+				{
+					var m Metrics
+					if err := json.Unmarshal([]byte(res), &m); err != nil {
 //line metrics_summary.zero:18
-		fmt.Println("Error parsing JSON:", err)
-			} else {
-				_ = m
+						fmt.Println("Error parsing JSON:", err)
+					} else {
+						_ = m
 //line metrics_summary.zero:19
-		{
+						{
 //line metrics_summary.zero:20
-		fmt.Println("--- Career Agent Metrics ---")
+							fmt.Println("--- Career Agent Metrics ---")
 //line metrics_summary.zero:21
-		fmt.Println("Discovered:", m.Discovered)
+							fmt.Println("Discovered:", m.Discovered)
 //line metrics_summary.zero:22
-		fmt.Println("Processing:", m.Processing)
+							fmt.Println("Processing:", m.Processing)
 //line metrics_summary.zero:23
-		fmt.Println("Applied:", m.Applied)
+							fmt.Println("Applied:", m.Applied)
 //line metrics_summary.zero:24
-		fmt.Println("Failed:", m.Failed)
+							fmt.Println("Failed:", m.Failed)
 //line metrics_summary.zero:25
-		fmt.Println("Blocked CAPTCHA:", m.Blocked_captcha)
+							fmt.Println("Blocked CAPTCHA:", m.Blocked_captcha)
 //line metrics_summary.zero:26
-		fmt.Println("Invalid URL:", m.Invalid_url)
+							fmt.Println("Invalid URL:", m.Invalid_url)
 
-		}
+						}
+					}
+				}
+
 			}
 		}
-
-		}
-			}
-		}
+	}
 }
