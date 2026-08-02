@@ -10,6 +10,16 @@ Regression tests cover a retry-exhausted request, a circuit-open skip with no re
 
 ---
 
+# 511. Assisted Apply Queue with resumable human handoff and legacy-job backfill
+
+**Completed 2026-08-02.** Added private, resumable assisted plans for existing and new `AWAITING_REVIEW`, `MANUAL_REQUIRED`, and `BLOCKED_CAPTCHA` applications. The normal loopback dashboard now exposes a visible Assisted Apply queue with plain-language next actions, a five-step progress panel, validated job documents, lease-aware Continue, explicit employer-confirmation dialog, and sequential selected-job workflow. The browser command uses an exclusive SQLite lease, dedicated private persistent profile, guarded proxy/network boundary, and stable job ID only. After a human gate, it re-inspects the same visible page and reuses only healthy mappings and validated documents to refill deterministic fields, never submitting or inferring restricted answers.
+
+Legacy migration is dry-run by default, requires `-confirm`, reports aggregate exclusions, is transaction-backed and idempotent, and leaves statuses/history/dedup intact. Production migration was performed under a paused agent after an owner-only verified ignored backup: 493 eligible plans imported, then a second run reported 493 already queued and zero imports. The original agent process was restored. Expired and below-threshold candidates are excluded; every dashboard mutation is same-origin, method checked, stable-ID based, and argument-safe. Document serving rejects traversal and symlink escape and is private/no-store. Manual confirmation records `manual_user_confirmation` in the same transaction as canonical APPLIED/dedup state.
+
+Verification passed: UI tests/build; storage, dashboard, agent, submitter, and full `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal`. The task journal is removed in the closing commit.
+
+---
+
 ## 479. A permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status
 
 **Completed 2026-08-02.** `StateInit` now recognizes a wrapped `*net.DNSError` whose `IsNotFound` flag is true and terminalizes that URL as `RETRY_EXHAUSTED` with the normalized `dns_not_found` reason. This deliberately reuses the existing terminal status and dashboard/requeue treatment rather than adding a narrow new status. It bypasses retry accounting and backoff because the resolver has authoritatively reported that the hostname does not exist. A temporary DNS resolver error remains on the existing retryable path.
