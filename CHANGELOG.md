@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — The dashboard now shows whether the agent can make mission progress
+
+* **Improvement (#491):** The dashboard previously showed raw funnel counts and last-row snapshots, but not whether there were any jobs the daemon could actually process or whether confirmed applications were happening. It now reports confirmed applications today and in the last seven days, median discovery-to-first-attempt latency, time since the last confirmation, and the eligible queue with its never-attempted subset. The eligibility calculation deliberately mirrors the agent's queue filter, so a visible `DISCOVERED` count can no longer imply that work is available when every row is excluded or delayed. Missing time-based values render as an explicit unavailable state rather than a fabricated zero.
+
 ## 2026-08-01 — Every pre-scrape prompt-injection quarantine now reaches the audit trail
 
 * **Fix (bug #503):** `TwoStepVerification` rejected unsafe career-page DOM before any model use, but it called the basic quarantine API directly and discarded the structured threat details. Those detections never reached `applications/prompt_injection_detections.csv`, undercounting the security audit used to monitor the filter. The pre-scrape boundary now uses the shared quarantine-and-audit helper, preserving the existing rejection behavior while writing one CSV row per detected threat. The pipeline has no company name at this boundary, so rows accurately retain an empty company field rather than fabricating attribution. Safe and unsafe DOM regression tests cover the audit behavior.

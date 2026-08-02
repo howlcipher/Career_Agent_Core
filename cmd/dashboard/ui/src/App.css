@@ -248,6 +248,42 @@ h1 {
   color: var(--text-muted);
 }
 
+.mission-metrics {
+  grid-column: 1 / -1;
+}
+
+.mission-metrics dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.mission-metrics dl div {
+  min-width: 0;
+}
+
+.mission-metrics dt {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.mission-metrics dd {
+  margin: 6px 0 0;
+  color: var(--text-main);
+  font-size: 1.1rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mission-metrics dd span {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
 /* The interview-rate tile holds a percentage string rather than a count, so
    it needs a smaller type size than the numeric tiles to fit "12.5%" plus
    its explanatory line without wrapping. */

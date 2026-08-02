@@ -39,6 +39,12 @@ interface Metrics {
   invalid_url_malformed: number;
   invalid_url_expired: number;
   retry_exhausted: number;
+  confirmed_today: number;
+  confirmed_last_7_days: number;
+  first_attempt_median?: string;
+  last_confirmed_ago?: string;
+  eligible_queue: number;
+  eligible_never_attempted: number;
   last_applied_company?: string;
   last_applied_title?: string;
   last_applied_url?: string;
@@ -344,6 +350,16 @@ function App() {
         </div>
 
         <section className="detail-grid">
+          <article className="detail mission-metrics">
+            <h3>Mission Progress</h3>
+            <dl>
+              <div><dt>Confirmed today</dt><dd>{metrics?.confirmed_today ?? 0}</dd></div>
+              <div><dt>Confirmed last 7 days</dt><dd>{metrics?.confirmed_last_7_days ?? 0}</dd></div>
+              <div><dt>Median first attempt</dt><dd>{metrics?.first_attempt_median ?? '—'}</dd></div>
+              <div><dt>Since last confirmed</dt><dd>{metrics?.last_confirmed_ago ?? 'No confirmed application yet'}</dd></div>
+              <div><dt>Eligible queue</dt><dd>{metrics?.eligible_queue ?? 0} <span>({metrics?.eligible_never_attempted ?? 0} never attempted)</span></dd></div>
+            </dl>
+          </article>
           <article className="detail">
             <h3>Last Applied</h3>
             {metrics?.last_applied_company ? (

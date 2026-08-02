@@ -34,6 +34,8 @@ func setupTestDB(t *testing.T) {
 		status_reason TEXT,
 		last_updated DATETIME,
 		discovered_at DATETIME,
+		applied_at DATETIME,
+		next_eligible_at DATETIME,
 		tone_variant TEXT
 	);
 	CREATE TABLE applied_jobs (
@@ -41,9 +43,64 @@ func setupTestDB(t *testing.T) {
 		job_title TEXT,
 		url TEXT,
 		applied_at DATETIME
+	);
+	CREATE TABLE application_attempts (
+		id INTEGER PRIMARY KEY,
+		url TEXT,
+		started_at DATETIME
 	);`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
+	}
+}
+
+func TestServeMetrics_MissionMetrics(t *testing.T) {
+	setupTestDB(t)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	insertJob := func(url, status string, discoveredAt, appliedAt time.Time) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO job_funnel
+			(url, status, discovered_at, applied_at) VALUES (?, ?, ?, ?)`,
+			url, status, discoveredAt, appliedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertAttempt := func(url string, startedAt time.Time) {
+		t.Helper()
+		if _, err := db.Exec("INSERT INTO application_attempts (url, started_at) VALUES (?, ?)", url, startedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertJob("https://example.com/today", "APPLIED", now.Add(-2*time.Hour), now)
+	insertJob("https://example.com/this-week", "APPLIED", now.Add(-6*time.Hour), now.Add(-2*24*time.Hour))
+	insertJob("https://example.com/older", "APPLIED", now.Add(-10*time.Hour), now.Add(-8*24*time.Hour))
+	insertJob("https://example.com/first-attempt-one", "FAILED_SUBMIT", now.Add(-2*time.Hour), time.Time{})
+	insertJob("https://example.com/first-attempt-two", "FAILED_SUBMIT", now.Add(-6*time.Hour), time.Time{})
+	insertAttempt("https://example.com/first-attempt-one", now)
+	insertAttempt("https://example.com/first-attempt-two", now)
+	insertJob("https://example.com/eligible-new", "DISCOVERED", now, time.Time{})
+	insertJob("https://example.com/eligible-attempted", "DISCOVERED", now.Add(-4*time.Hour), time.Time{})
+	insertAttempt("https://example.com/eligible-attempted", now)
+	insertJob("https://jobs.breezy.hr/excluded", "DISCOVERED", now, time.Time{})
+	if _, err := db.Exec("INSERT INTO job_funnel (url, status, next_eligible_at) VALUES (?, ?, ?)",
+		"https://example.com/backing-off", "DISCOVERED", now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	m := fetchMetricsFromTestServer(t)
+	if m.ConfirmedToday != 1 || m.ConfirmedLast7Days != 2 {
+		t.Errorf("confirmed cadence = today %d, last 7 days %d; want 1 and 2", m.ConfirmedToday, m.ConfirmedLast7Days)
+	}
+	if m.FirstAttemptMedian != "4h 0m" {
+		t.Errorf("first-attempt median = %q, want 4h 0m", m.FirstAttemptMedian)
+	}
+	if m.LastConfirmedAgo == "" {
+		t.Error("last confirmed age should be available when an application was just confirmed")
+	}
+	if m.EligibleQueue != 2 || m.EligibleNeverAttempted != 1 {
+		t.Errorf("eligible queue = %d, never attempted = %d; want 2 and 1", m.EligibleQueue, m.EligibleNeverAttempted)
 	}
 }
 
