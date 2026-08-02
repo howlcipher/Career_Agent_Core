@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielthedm/promptsec"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	_ "modernc.org/sqlite"
 )
@@ -989,8 +990,8 @@ func LogCopilotReview(companyName, jobTitle, applyURL, docsDir string) error {
 }
 
 // PromptInjectionThreat is a storage-local mirror of promptsec.Threat, kept
-// separate so this package doesn't need to import the security package's
-// third-party dependency just to log what was found.
+// separate so this package doesn't need to import the security package
+// itself (which would cycle back to pkg/storage) just to log what was found.
 type PromptInjectionThreat struct {
 	Type     string
 	Severity float64
@@ -999,6 +1000,25 @@ type PromptInjectionThreat struct {
 	Match    string
 	Start    int
 	End      int
+}
+
+// ThreatsToStored converts promptsec's threat type into PromptInjectionThreat,
+// the single field mapping shared by every quarantine call site that logs to
+// the prompt-injection audit trail (improvements.md #505).
+func ThreatsToStored(threats []promptsec.Threat) []PromptInjectionThreat {
+	out := make([]PromptInjectionThreat, 0, len(threats))
+	for _, t := range threats {
+		out = append(out, PromptInjectionThreat{
+			Type:     string(t.Type),
+			Severity: t.Severity,
+			Message:  t.Message,
+			Guard:    t.Guard,
+			Match:    t.Match,
+			Start:    t.Start,
+			End:      t.End,
+		})
+	}
+	return out
 }
 
 var injectionLogMutex sync.Mutex

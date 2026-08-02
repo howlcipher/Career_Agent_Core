@@ -2,6 +2,52 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 506. `/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely
+
+**Fixed 2026-08-01.** The canonical local workflow at `.agents/prompts/work_next_item.md` previously said that a `MET` Usability Gate should select from `improvements.md`; that made the gate a one-way ratchet and left every remaining Minor bug permanently unreachable by normal selection. The revised rule preserves the hard priority while the gate is unmet, then compares all open, above-floor rows in `bugs.md` and `improvements.md` by their common ROI formula after it is met. It explicitly states that a met gate means no Blocker or Major bug remains, not that Minor defects become ineligible.
+
+The acceptance criterion is demonstrated by the live backlog state at close: bug #501 scores 2.0 while the highest Pending improvement, #491, scores 1.5, so a new `/work_next_item` run now selects #501. No production behavior changed; this is a canonical prompt and backlog-record correction only. Antigravity model discovery and local Ollama discovery were both unavailable from the sandbox, so no delegate was used for this bounded documentation task. The required Go build, vet, test, and formatting checks were run before close.
+
+---
+
+## 500. [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at)
+
+**Table rationale cell (original):** **Closed 2026-08-01 — investigated, not implemented.** Live `EXPLAIN QUERY PLAN` evidence showed the premise didn't hold: no current query filters or sorts on `discovered_at`, so the index would never be selected. See detail section
+
+### 500. Add a missing index on `job_funnel(discovered_at)`
+
+**Re-evaluated 2026-08-01** while working `/work_next_item` (this was the top-scoring Pending row, 3.0). The row's premise — "`discovered_at` is read on every row by `RankJobs`'s age computation and `GetDiscoveredJobs`'s `ORDER BY`" — conflates two different things: `discovered_at` genuinely is read on every row, but only in **Go**, after the SQL query has already returned. `RankJobs` (`pkg/storage/ranking.go:151`) computes `ageDays` from an already-fetched `time.Time` field; there is no SQL `ORDER BY discovered_at` anywhere in `GetDiscoveredJobs`, `GetQueuePlan`, or any dashboard query — every one of them either has no `ORDER BY` at all (ranking happens in Go) or orders by `last_updated`/`applied_at` instead.
+
+**Live-verified before implementing anything:** ran `EXPLAIN QUERY PLAN` (via a throwaway `modernc.org/sqlite` script against a read-only copy of the real `applications.db`, 11,731 rows) on both hot queries the row named:
+
+```
+GetDiscoveredJobs: SEARCH job_funnel USING INDEX idx_job_funnel_status (status=?)
+GetQueuePlan:      SEARCH f USING INDEX idx_job_funnel_status (status=?)
+```
+
+Both already use the existing `idx_job_funnel_status` index — neither is a full table scan today, which is what the row's own acceptance criteria ("`EXPLAIN QUERY PLAN` on `GetDiscoveredJobs`'s query shows the new index in use instead of a full table scan") assumed was the starting condition. Adding a plain or composite `(status, discovered_at)` index would not change either plan, because `discovered_at` never appears in a `WHERE` or `ORDER BY` clause for these queries — SQLite has no reason to touch it.
+
+**Closed rather than implemented.** `job_funnel` receives a write (insert or status update) on essentially every discovered/processed job — thousands per day per the row's own growth note (3,000 → 11,731 rows in one day). An index that no live query plan would ever select is pure write-amplification with zero read benefit, which is the opposite of what this item was trying to buy. If a future item (e.g. #491's mission-metrics queries, or #493's ranking-by-yield rewrite) actually adds a SQL `WHERE`/`ORDER BY` on `discovered_at`, add the index at that point and verify the plan change the same way this investigation did — don't add it speculatively ahead of the query that would use it.
+
+`go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` all clean (no production code touched).
+
+---
+
+## 505. [`storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice](#505-storedpromptinjectionthreats-and-tostoredthreats-are-the-same-field-for-field-conversion-written-twice)
+
+**Table rationale cell (original):** **Fixed 2026-08-01.** See detail section for the shared `storage.ThreatsToStored` helper and the two call sites now using it
+
+### 505. `storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice
+
+**Fixed 2026-08-01.** Added `storage.ThreatsToStored([]promptsec.Threat) []PromptInjectionThreat` (`pkg/storage/manager.go`, next to the `PromptInjectionThreat` type it builds) as the single field mapping (`Type`, `Severity`, `Message`, `Guard`, `Match`, `Start`, `End`). Chosen location over `pkg/security`: `pkg/storage` already imports `pkg/security` (for `SetPrivateUmask`/`SecurePrivateFile`/`PrivateDirMode`), so a function in `pkg/security` returning `[]storage.PromptInjectionThreat` would have created an import cycle. `pkg/storage` importing `github.com/danielthedm/promptsec` directly (already a transitive dependency via `pkg/security`) has no such problem — updated the type's doc comment to describe the real constraint (avoiding a `pkg/security` import specifically, not "any third-party dependency") rather than leave a now-inaccurate comment in place.
+
+- `cmd/agent/main.go`'s `storedPromptInjectionThreats` is now a 3-line nil-check wrapper around `storage.ThreatsToStored(detection.Threats)` (kept, rather than deleted, because its caller passes a `*security.PromptInjectionError` that can be nil, and dereferencing `.Threats` on a nil pointer would panic).
+- `pkg/submitter/browser.go`'s `toStoredThreats` was deleted outright (its only caller already had a non-nil `*security.PromptInjectionError` in scope) and its call site now calls `storage.ThreatsToStored(detection.Threats)` directly; the now-unused `github.com/danielthedm/promptsec` import was removed from that file.
+
+No behavior change at either call site — `go test ./...` passes unchanged (neither function had direct unit tests; both are exercised indirectly via the packages' existing quarantine-path tests). `go build ./...`, `go vet ./...`, `gofmt -l ./cmd ./pkg ./internal` all clean.
+
+---
+
 ## 484. [Local-model benchmark and routing-evidence harness](#484-local-model-benchmark-and-routing-evidence-harness)
 
 **Table rationale cell (original):** **Fixed 2026-08-01.** See detail section for `cmd/modelbench`/`internal/modelbench`, its mocked-Ollama test suite, and the live idle-guard verification against the real running daemon. Foundational infrastructure for every other local-model routing decision in this file
@@ -1355,4 +1401,3 @@ Tests: `TestParseHNJobPosting` (6 cases), `TestLatestWhoIsHiringStoryID`/`_NotFo
 **Table rationale cell (original):** Shipped before this backlog restructure
 
 ---
-

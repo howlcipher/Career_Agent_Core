@@ -127,23 +127,7 @@ func storedPromptInjectionThreats(
 	if detection == nil {
 		return nil
 	}
-	threats := make(
-		[]storage.PromptInjectionThreat,
-		0,
-		len(detection.Threats),
-	)
-	for _, threat := range detection.Threats {
-		threats = append(threats, storage.PromptInjectionThreat{
-			Type:     string(threat.Type),
-			Severity: threat.Severity,
-			Message:  threat.Message,
-			Guard:    threat.Guard,
-			Match:    threat.Match,
-			Start:    threat.Start,
-			End:      threat.End,
-		})
-	}
-	return threats
+	return storage.ThreatsToStored(detection.Threats)
 }
 
 // runQuarantinedPostingModelStage is the worker's only gateway to
