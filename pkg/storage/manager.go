@@ -1245,7 +1245,8 @@ const MaxRetryAttempts = 5
 // competes less and less for worker time before it is exhausted.
 const RetryBackoffBase = 2 * time.Minute
 
-// UpdateFunnelStatusRetryable records a retryable failure for url. Bugs.md
+// UpdateFunnelStatusRetryable records a retryable failure and its reason for
+// url. Bugs.md
 // #466: the live daemon's continuous scheduler re-selects every DISCOVERED
 // row with no attempt count or cooldown, so a transient failure that simply
 // reset status back to DISCOVERED was retried immediately on the very next
@@ -1262,8 +1263,10 @@ const RetryBackoffBase = 2 * time.Minute
 // URL-scheme dedup cannot silently resurrect it. The row remains queryable
 // by status for manual investigation (e.g. `cmd/requeue`, which resets
 // retry_count/next_eligible_at on a deliberate requeue); the dashboard UI
-// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468.
-func UpdateFunnelStatusRetryable(url string) error {
+// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468. The
+// terminal row retains the final retryable reason so failures can be grouped
+// from the database without reconstructing them from logs (bugs.md #480).
+func UpdateFunnelStatusRetryable(url, reason string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
@@ -1278,8 +1281,8 @@ func UpdateFunnelStatusRetryable(url string) error {
 
 	if retryCount >= MaxRetryAttempts {
 		_, err := db.Exec(
-			"UPDATE job_funnel SET status = 'RETRY_EXHAUSTED', retry_count = ?, last_updated = ? WHERE url = ?",
-			retryCount, now, url)
+			"UPDATE job_funnel SET status = 'RETRY_EXHAUSTED', status_reason = ?, retry_count = ?, last_updated = ? WHERE url = ?",
+			reason, retryCount, now, url)
 		return err
 	}
 
