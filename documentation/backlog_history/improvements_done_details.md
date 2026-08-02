@@ -2,6 +2,16 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 491. Define authoritative mission metrics and surface them on the dashboard
+
+**Completed 2026-08-01.** `/api/metrics` now returns a deliberately small set of outcome and queue-health measures: confirmed applications today and over the last seven days, median discovery-to-first-attempt latency, time since the last confirmed application, and both the eligible queue count and its never-attempted subset. Confirmations use `job_funnel.applied_at`, the canonical timestamp bug #490 added; first-attempt latency uses the earliest `application_attempts.started_at` per URL; eligibility exactly mirrors `storage.GetDiscoveredJobs`'s status, breezy.hr exclusion, and retry-backoff condition. The React dashboard renders the metrics together in a semantic definition list and uses an em dash or explicit no-confirmation message where no value exists, rather than manufacturing a zero duration.
+
+The seeded SQLite test covers confirmations across three days, the median of multiple first attempts, an eligible unattempted row, an eligible attempted row, a breezy.hr exclusion, and a deferred row. The Vitest coverage confirms the dashboard renders both populated aggregates and the unavailable confirmation state. `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal`, focused UI tests/build, and `oxlint src` all passed.
+
+Live verification restarted the dashboard only (the agent daemon was already healthy) and read the new endpoint against the active database: it reported 0 confirmed today/week, a 4d 18h median first-attempt latency, 185 raw `DISCOVERED` rows, and 0 eligible/never-attempted rows. This confirms the user's observation: the daemon is idle because all visible discovered rows are excluded by bug #482's breezy.hr policy, not because the running process is stuck. Search discovery is also degraded separately by an exhausted SerpAPI quota and Yahoo fallback EOFs; no failed jobs were requeued and no source policy changed in this task.
+
+---
+
 ## 506. `/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely
 
 **Fixed 2026-08-01.** The canonical local workflow at `.agents/prompts/work_next_item.md` previously said that a `MET` Usability Gate should select from `improvements.md`; that made the gate a one-way ratchet and left every remaining Minor bug permanently unreachable by normal selection. The revised rule preserves the hard priority while the gate is unmet, then compares all open, above-floor rows in `bugs.md` and `improvements.md` by their common ROI formula after it is met. It explicitly states that a met gate means no Blocker or Major bug remains, not that Minor defects become ineligible.

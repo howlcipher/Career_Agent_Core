@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -57,6 +58,12 @@ type Metrics struct {
 	// before improvements.md #468 — the count silently dropped out of every
 	// bucket's total.
 	RetryExhausted            int    `json:"retry_exhausted"`
+	ConfirmedToday            int    `json:"confirmed_today"`
+	ConfirmedLast7Days        int    `json:"confirmed_last_7_days"`
+	FirstAttemptMedian        string `json:"first_attempt_median,omitempty"`
+	LastConfirmedAgo          string `json:"last_confirmed_ago,omitempty"`
+	EligibleQueue             int    `json:"eligible_queue"`
+	EligibleNeverAttempted    int    `json:"eligible_never_attempted"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -474,6 +481,96 @@ func main() {
 func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	var m Metrics
 	var g errgroup.Group
+
+	g.Go(func() error {
+		err := db.QueryRow(`SELECT
+			COALESCE(SUM(CASE WHEN applied_at >= datetime('now', 'start of day') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN applied_at >= datetime('now', '-6 days', 'start of day') THEN 1 ELSE 0 END), 0)
+			FROM job_funnel
+			WHERE status IN ('APPLIED', 'PROCESSED_MANUAL') AND applied_at IS NOT NULL`).
+			Scan(&m.ConfirmedToday, &m.ConfirmedLast7Days)
+		if err != nil {
+			return fmt.Errorf("query confirmed application cadence: %w", err)
+		}
+		var lastConfirmedAt sql.NullTime
+		err = db.QueryRow(`SELECT applied_at FROM job_funnel
+			WHERE status IN ('APPLIED', 'PROCESSED_MANUAL') AND applied_at IS NOT NULL
+			ORDER BY applied_at DESC LIMIT 1`).Scan(&lastConfirmedAt)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("query last confirmed application: %w", err)
+		}
+		if lastConfirmedAt.Valid {
+			m.LastConfirmedAgo = formatDuration(time.Since(lastConfirmedAt.Time))
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		rows, err := db.Query(`SELECT jf.url, jf.discovered_at, aa.started_at
+			FROM job_funnel jf
+			JOIN application_attempts aa ON aa.url = jf.url
+			WHERE jf.discovered_at IS NOT NULL AND aa.started_at IS NOT NULL`)
+		if err != nil {
+			return fmt.Errorf("query first-attempt latency: %w", err)
+		}
+		defer rows.Close()
+
+		firstAttempts := make(map[string]time.Time)
+		discoveredTimes := make(map[string]time.Time)
+		for rows.Next() {
+			var url string
+			var discoveredAt, startedAt time.Time
+			if err := rows.Scan(&url, &discoveredAt, &startedAt); err != nil {
+				return fmt.Errorf("scan first-attempt latency: %w", err)
+			}
+			if earliest, found := firstAttempts[url]; !found || startedAt.Before(earliest) {
+				firstAttempts[url] = startedAt
+				discoveredTimes[url] = discoveredAt
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate first-attempt latency: %w", err)
+		}
+		if len(firstAttempts) == 0 {
+			return nil
+		}
+		latencies := make([]time.Duration, 0, len(firstAttempts))
+		for url, firstAttempt := range firstAttempts {
+			discoveredAt := discoveredTimes[url]
+			if firstAttempt.Before(discoveredAt) {
+				continue
+			}
+			latencies = append(latencies, firstAttempt.Sub(discoveredAt))
+		}
+		if len(latencies) == 0 {
+			return nil
+		}
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		middle := len(latencies) / 2
+		median := latencies[middle]
+		if len(latencies)%2 == 0 {
+			median = (latencies[middle-1] + latencies[middle]) / 2
+		}
+		m.FirstAttemptMedian = formatDuration(median)
+		return nil
+	})
+
+	g.Go(func() error {
+		err := db.QueryRow(`SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN NOT EXISTS (
+				SELECT 1 FROM application_attempts aa WHERE aa.url = jf.url
+			) THEN 1 ELSE 0 END), 0)
+			FROM job_funnel jf
+			WHERE jf.status = 'DISCOVERED'
+				AND jf.url NOT LIKE '%breezy.hr%'
+				AND (jf.next_eligible_at IS NULL OR jf.next_eligible_at <= ?)`, time.Now().UTC()).
+			Scan(&m.EligibleQueue, &m.EligibleNeverAttempted)
+		if err != nil {
+			return fmt.Errorf("query eligible queue: %w", err)
+		}
+		return nil
+	})
 
 	g.Go(func() error {
 		err := db.QueryRow(`SELECT 

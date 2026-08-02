@@ -1046,6 +1046,73 @@ func TestUpdateFunnelStatus_StoresLastUpdatedAsCanonicalUTC(t *testing.T) {
 	}
 }
 
+func TestAppliedAtIsRecordedOnlyWhenApplicationIsConfirmed(t *testing.T) {
+	t.Run("automatic submission", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		url := "https://testcorp.com/applied-at-auto"
+		if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
+			t.Fatalf("AddToFunnel failed: %v", err)
+		}
+		if err := UpdateFunnelStatus(url, "PROCESSING"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(PROCESSING) failed: %v", err)
+		}
+
+		var before sql.NullString
+		if err := db.QueryRow(`SELECT applied_at FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&before); err != nil {
+			t.Fatalf("read applied_at before confirmation: %v", err)
+		}
+		if before.Valid {
+			t.Fatalf("applied_at was set before confirmation: %q", before.String)
+		}
+
+		if err := UpdateFunnelStatus(url, "APPLIED"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(APPLIED) failed: %v", err)
+		}
+		appliedAt := assertAppliedAtUTC(t, url)
+
+		if err := UpdateFunnelStatus(url, "INTERVIEW_REQUESTED"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(INTERVIEW_REQUESTED) failed: %v", err)
+		}
+		if afterTransition := assertAppliedAtUTC(t, url); afterTransition != appliedAt {
+			t.Errorf("later status transition overwrote applied_at: got %q, want %q", afterTransition, appliedAt)
+		}
+	})
+
+	t.Run("manual handoff", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		url := "https://testcorp.com/applied-at-handoff"
+		if _, err := AddToFunnel("TestCorp", "Engineer", url, "AWAITING_REVIEW"); err != nil {
+			t.Fatalf("AddToFunnel failed: %v", err)
+		}
+		ok, err := MarkHandoffApplied("TestCorp", "Engineer", url)
+		if err != nil || !ok {
+			t.Fatalf("MarkHandoffApplied: ok=%v err=%v", ok, err)
+		}
+		assertAppliedAtUTC(t, url)
+	})
+}
+
+func assertAppliedAtUTC(t *testing.T, url string) string {
+	t.Helper()
+
+	var raw string
+	if err := db.QueryRow(`SELECT applied_at FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&raw); err != nil {
+		t.Fatalf("read applied_at: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("applied_at is not parseable RFC3339: %q: %v", raw, err)
+	}
+	if parsed.Location() != time.UTC || !strings.HasSuffix(raw, "Z") {
+		t.Errorf("applied_at must be canonical UTC, got %q", raw)
+	}
+	return raw
+}
+
 // TestMigrateJobFunnelLastUpdated simulates a database created before
 // last_updated existed in the schema (job_funnel without that column) and
 // confirms the migration adds it cleanly, and is safe to run again on a
@@ -1471,7 +1538,7 @@ func TestMigrateJobFunnelRetry(t *testing.T) {
 	// The real-world scenario the migration exists for: does a row that
 	// predates the migration actually work with UpdateFunnelStatusRetryable,
 	// or does its backfilled retry_count come back NULL and break the scan?
-	if err := UpdateFunnelStatusRetryable(preExistingURL); err != nil {
+	if err := UpdateFunnelStatusRetryable(preExistingURL, "test retryable failure"); err != nil {
 		t.Fatalf("UpdateFunnelStatusRetryable on a pre-migration row failed: %v (retry_count likely backfilled to NULL instead of 0)", err)
 	}
 	var retryCount int
@@ -1728,7 +1795,7 @@ func TestRequeueByURLPattern_ResetsRetryBudget(t *testing.T) {
 	url := "https://jobs.lever.co/exhausted"
 	AddToFunnel("A", "T", url, "DISCOVERED")
 	for i := 0; i < MaxRetryAttempts; i++ {
-		if err := UpdateFunnelStatusRetryable(url); err != nil {
+		if err := UpdateFunnelStatusRetryable(url, "test retryable failure"); err != nil {
 			t.Fatalf("UpdateFunnelStatusRetryable failed: %v", err)
 		}
 	}
@@ -2100,7 +2167,7 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 	}
 
 	before := time.Now().UTC()
-	if err := UpdateFunnelStatusRetryable(url); err != nil {
+	if err := UpdateFunnelStatusRetryable(url, "test retryable failure"); err != nil {
 		t.Fatalf("UpdateFunnelStatusRetryable (1st) failed: %v", err)
 	}
 	status, retryCount, nextEligible := readRow()
@@ -2115,7 +2182,7 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 	}
 	firstBackoff := nextEligible.Time.Sub(before)
 
-	if err := UpdateFunnelStatusRetryable(url); err != nil {
+	if err := UpdateFunnelStatusRetryable(url, "test retryable failure"); err != nil {
 		t.Fatalf("UpdateFunnelStatusRetryable (2nd) failed: %v", err)
 	}
 	_, retryCount, nextEligible2 := readRow()
@@ -2130,7 +2197,7 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 	// Drive it to MaxRetryAttempts. Calls 3 and 4 stay retryable; call 5
 	// (the MaxRetryAttempts'th) must flip it to the terminal status.
 	for i := 3; i < MaxRetryAttempts; i++ {
-		if err := UpdateFunnelStatusRetryable(url); err != nil {
+		if err := UpdateFunnelStatusRetryable(url, "test retryable failure"); err != nil {
 			t.Fatalf("UpdateFunnelStatusRetryable (call %d) failed: %v", i, err)
 		}
 	}
@@ -2142,7 +2209,8 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 		t.Fatalf("after %d retryable failures: retry_count = %d, want %d", MaxRetryAttempts-1, retryCount, MaxRetryAttempts-1)
 	}
 
-	if err := UpdateFunnelStatusRetryable(url); err != nil {
+	const exhaustionReason = "embedding service unavailable"
+	if err := UpdateFunnelStatusRetryable(url, exhaustionReason); err != nil {
 		t.Fatalf("UpdateFunnelStatusRetryable (exhausting call) failed: %v", err)
 	}
 	status, retryCount, _ = readRow()
@@ -2151,6 +2219,13 @@ func TestUpdateFunnelStatusRetryable_BacksOffThenExhausts(t *testing.T) {
 	}
 	if retryCount != MaxRetryAttempts {
 		t.Errorf("after %d retryable failures: retry_count = %d, want %d", MaxRetryAttempts, retryCount, MaxRetryAttempts)
+	}
+	var statusReason string
+	if err := db.QueryRow("SELECT status_reason FROM job_funnel WHERE url = ?", url).Scan(&statusReason); err != nil {
+		t.Fatalf("failed to read status_reason for exhausted row: %v", err)
+	}
+	if statusReason != exhaustionReason {
+		t.Errorf("after retry exhaustion: status_reason = %q, want final retryable reason %q", statusReason, exhaustionReason)
 	}
 
 	// RETRY_EXHAUSTED must never be silently outranked -- mergeStatusRank's
@@ -2179,7 +2254,7 @@ func TestDeferFunnelStatus_DoesNotSpendRetryBudget(t *testing.T) {
 	// Give the row some existing retry history first, so this test can also
 	// confirm DeferFunnelStatus leaves retry_count exactly as it found it,
 	// not just at zero.
-	if err := UpdateFunnelStatusRetryable(url); err != nil {
+	if err := UpdateFunnelStatusRetryable(url, "test retryable failure"); err != nil {
 		t.Fatalf("UpdateFunnelStatusRetryable failed: %v", err)
 	}
 

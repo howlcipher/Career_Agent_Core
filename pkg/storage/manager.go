@@ -708,8 +708,10 @@ func MarkHandoffApplied(companyName, jobTitle, applyURL string) (bool, error) {
 		return false, nil
 	}
 
-	if _, err := tx.Exec(`UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?`,
-		"APPLIED", time.Now(), applyURL); err != nil {
+	now := time.Now().UTC()
+	if _, err := tx.Exec(`UPDATE job_funnel
+		SET status = ?, last_updated = ?, applied_at = ?
+		WHERE url = ?`, "APPLIED", now, now, applyURL); err != nil {
 		return false, fmt.Errorf("promote handoff row: %w", err)
 	}
 
@@ -717,7 +719,7 @@ func MarkHandoffApplied(companyName, jobTitle, applyURL string) (bool, error) {
 	// may tick a box that a previous reconcile run already promoted.
 	if _, err := tx.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`,
-		companyName, jobTitle, applyURL, time.Now().Format(time.RFC3339)); err != nil {
+		companyName, jobTitle, applyURL, now.Format(time.RFC3339)); err != nil {
 		return false, fmt.Errorf("record handoff application: %w", err)
 	}
 
@@ -1194,7 +1196,11 @@ func UpdateFunnelStatus(url, status string) error {
 	// from ~20 minutes earlier as if it were the current one. Storing
 	// everything as UTC keeps every row's string directly comparable;
 	// convert to local time only when formatting for display.
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?", status, time.Now().UTC(), url)
+	now := time.Now().UTC()
+	_, err := db.Exec(`UPDATE job_funnel
+		SET status = ?, last_updated = ?,
+			applied_at = CASE WHEN ? = 'APPLIED' AND applied_at IS NULL THEN ? ELSE applied_at END
+		WHERE url = ?`, status, now, status, now, url)
 	return err
 }
 
@@ -1245,7 +1251,8 @@ const MaxRetryAttempts = 5
 // competes less and less for worker time before it is exhausted.
 const RetryBackoffBase = 2 * time.Minute
 
-// UpdateFunnelStatusRetryable records a retryable failure for url. Bugs.md
+// UpdateFunnelStatusRetryable records a retryable failure and its reason for
+// url. Bugs.md
 // #466: the live daemon's continuous scheduler re-selects every DISCOVERED
 // row with no attempt count or cooldown, so a transient failure that simply
 // reset status back to DISCOVERED was retried immediately on the very next
@@ -1262,8 +1269,10 @@ const RetryBackoffBase = 2 * time.Minute
 // URL-scheme dedup cannot silently resurrect it. The row remains queryable
 // by status for manual investigation (e.g. `cmd/requeue`, which resets
 // retry_count/next_eligible_at on a deliberate requeue); the dashboard UI
-// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468.
-func UpdateFunnelStatusRetryable(url string) error {
+// surfaces RETRY_EXHAUSTED on its own card as of improvements.md #468. The
+// terminal row retains the final retryable reason so failures can be grouped
+// from the database without reconstructing them from logs (bugs.md #480).
+func UpdateFunnelStatusRetryable(url, reason string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
@@ -1278,8 +1287,8 @@ func UpdateFunnelStatusRetryable(url string) error {
 
 	if retryCount >= MaxRetryAttempts {
 		_, err := db.Exec(
-			"UPDATE job_funnel SET status = 'RETRY_EXHAUSTED', retry_count = ?, last_updated = ? WHERE url = ?",
-			retryCount, now, url)
+			"UPDATE job_funnel SET status = 'RETRY_EXHAUSTED', status_reason = ?, retry_count = ?, last_updated = ? WHERE url = ?",
+			reason, retryCount, now, url)
 		return err
 	}
 

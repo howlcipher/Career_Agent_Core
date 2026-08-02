@@ -2,6 +2,56 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
+
+**Completed 2026-08-01.** The pre-scrape DOM check in `TwoStepVerification` now calls `quarantineTwoStepVerificationDOM`, which retains the existing DOM pruning and rejection behavior while routing unsafe content through `quarantineCareerPageDOM`. That shared helper captures the `PromptInjectionError` threat list and calls `storage.LogPromptInjectionDetections`, so each detected threat reaches `applications/prompt_injection_detections.csv`.
+
+The pipeline's `Execute` interface supplies a URL but not a company name at this boundary. The new CSV rows therefore record the true URL and an empty company field; no name is inferred or fabricated. This matches the logger's established schema and preserves data integrity.
+
+**Regression coverage:** an unsafe DOM produces `ErrPromptInjectionDetected` and an audit CSV containing the expected URL and empty company field; a safe DOM returns normally and creates no audit log. Focused `go test ./pkg/submitter` passed before the full verification loop.
+
+---
+
+## 504. `state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status
+
+**Completed 2026-08-01.** Verified the reported pipeline path still exists: `cmd/agent/pipeline.go` checks the RAG-built `state.TailoredContext` and writes `QUARANTINED_RAG_CONTEXT` if the security layer rejects it. A read-only aggregate query against the live SQLite database returned exactly zero rows with that status. The query returned only the count; no job, company, URL, title, career-context, or other personal data was read or recorded.
+
+**Decision:** closed as a verified non-issue for the current dataset. No trusted-content bypass or relaxation of the quarantine layer was added: zero observed incidents does not justify weakening a security boundary, and the existing status remains available for future telemetry. This can be reconsidered if a nonzero rate is observed.
+
+**Verification:** documentation-only closure; the repository's full Go build, vet, test, and gofmt gates were run before commit.
+
+---
+
+## 490. [`job_funnel.applied_at` is declared in the schema but no code path ever writes it](#490-job_funnelapplied_at-is-declared-in-the-schema-but-no-code-path-ever-writes-it)
+
+**Completed 2026-08-01.** `UpdateFunnelStatus` now records canonical UTC `applied_at` only when a row first becomes `APPLIED`; later status transitions preserve that confirmation time. `MarkHandoffApplied` writes the same canonical UTC value in its existing transaction, alongside its `applied_jobs` dedup record. Historical rows remain untouched because no reliable backfill source exists.
+
+**Regression coverage:** automatic and manual confirmation both produce a parseable UTC timestamp, while a later `INTERVIEW_REQUESTED` transition leaves the original timestamp unchanged. The focused `go test ./pkg/storage` and full `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` verification loop all passed.
+
+---
+
+## 480. [UpdateFunnelStatusRetryable never records a status_reason, so every RETRY_EXHAUSTED row loses its own root cause](#480-updatefunnelstatusretryable-never-records-a-status_reason-so-every-retry_exhausted-row-loses-its-own-root-cause)
+
+**Completed 2026-08-01.** `UpdateFunnelStatusRetryable` now accepts the causal error text and writes it to `job_funnel.status_reason` when its fifth failure changes a row to `RETRY_EXHAUSTED`. The transient backoff updates remain unchanged, so the stored reason is the final observed retryable failure that exhausted the budget.
+
+All six retryable pipeline paths now pass their in-scope error: network-target validation, pre-flight liveness, job-page fetch, RAG retrieval, RAG embedding, and post-score freshness validation. The regression test drives a row through the complete backoff/exhaustion sequence and asserts that its final reason is retained.
+
+**Verification:** focused `go test ./pkg/storage ./cmd/agent`, then `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed. The live daemon was rebuilt and restarted after verification so future exhausted rows use the change.
+
+---
+
+## 501. [Re-run #489's aggregate quarantine-rate queries against fresh data once the fix has been live for a batch cycle](#501-re-run-489s-aggregate-quarantine-rate-queries-against-fresh-data-once-the-fix-has-been-live-for-a-batch-cycle)
+
+**Completed 2026-08-01.** Used only sanitized, read-only aggregates against the live SQLite database and the prompt-injection audit CSV. The cutoff was #489's fix commit, `575ce8f` at 2026-08-01 18:51:40 EDT. The running daemon was confirmed to use `career_agent_bin` built and started at 19:21 EDT, so its later rows were generated by the fixed binary.
+
+**Measurement:** among the first 8 rows discovered and processed after the cutoff, `QUARANTINED_PROMPT_INJECTION` was 0/8 (0.0%) compared with the pre-measurement lifetime baseline of 5,983/11,739 (51.0%). There were no post-fix quarantine rows in the Lever or Greenhouse hostname groups and no post-fix prompt-injection audit-CSV detections, so the two former dominant zero-evidence categories did not reappear in this cohort. No raw URL, company, title, posting text, or matched audit text was inspected or recorded.
+
+**Outcome qualification:** all 8 post-fix rows were `FAILED_SUBMIT`; `BLOCKED_CAPTCHA` was 0. The lifetime `FAILED_SUBMIT` baseline is 531/11,739 (4.5%), making the cohort's 100% failure share an offsetting downstream outcome, not confirmation that #489 improves applications. The cohort is too small to attribute causality. #489's stated re-open condition (quarantine share does not drop) was not met, so it remains Done; filed #507 to diagnose the downstream failures and require an outcome-preserving follow-up measurement.
+
+**Verification:** documentation-only change; the repository's full Go build, vet, test, and gofmt gates were run before commit.
+
+---
+
 ## 489. [`promptsec.Moderate()` still quarantines roughly half of everything discovered, disproportionately on Lever and Greenhouse](#489-promptsecmoderate-still-quarantines-roughly-half-of-everything-discovered-disproportionately-on-lever-and-greenhouse)
 
 **Table rationale cell (original):** Found 2026-08-01, mission-alignment audit. `job_funnel`: 5,983/11,731 rows (51.0%) lifetime are `QUARANTINED_PROMPT_INJECTION`, more than any other status, dominated by `jobs.lever.co` and the `greenhouse.io` family — the two ATS platforms with dedicated auto-submit handlers. `applications/prompt_injection_detections.csv`: 88.5% of 10,967 logged detections have no located `matched_text` (99.3% of `instruction_override`, 100% of `system_prompt_leak`, the two dominant threat types) — pure fuzzy-keyword-density/coercive-language heuristics. Value 8 (ceiling), Decay 0.5 (same theme as #394, a severity dial that didn't fix it), Effort 3.
@@ -3853,4 +3903,3 @@ So "form failed to render in time" was always the same story as #9 — jobs dyin
 
 
 ---
-

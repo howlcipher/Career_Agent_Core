@@ -22,6 +22,10 @@ const baseMetrics = {
   invalid_url_malformed: 0,
   invalid_url_expired: 0,
   retry_exhausted: 0,
+  confirmed_today: 0,
+  confirmed_last_7_days: 0,
+  eligible_queue: 0,
+  eligible_never_attempted: 0,
   total_applied_tracked: 0,
   interviews: 0,
   rejections: 0,
@@ -248,6 +252,33 @@ describe('start/stop action error states', () => {
     await flush();
 
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to stop agent — check the log');
+  });
+});
+
+describe('mission metrics (improvement #491)', () => {
+  it('renders aggregate mission progress and an honest no-data state', async () => {
+    installFetch((input) => {
+      if (String(input) === '/api/metrics') {
+        return Promise.resolve(jsonResponse({
+          ...baseMetrics,
+          confirmed_today: 1,
+          confirmed_last_7_days: 3,
+          first_attempt_median: '4h 0m',
+          eligible_queue: 2,
+          eligible_never_attempted: 1,
+        }));
+      }
+      if (String(input) === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    });
+
+    render(<App />);
+    await flush();
+
+    expect(screen.getByText('Mission Progress')).toBeInTheDocument();
+    expect(screen.getByText('4h 0m')).toBeInTheDocument();
+    expect(screen.getByText('Eligible queue').parentElement).toHaveTextContent('2 (1 never attempted)');
+    expect(screen.getAllByText('No confirmed application yet')).not.toHaveLength(0);
   });
 });
 
