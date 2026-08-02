@@ -2,6 +2,16 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 482. breezy.hr postings are excluded from GetDiscoveredJobs entirely, so they accumulate in DISCOVERED forever with no terminal status
+
+**Completed 2026-08-01.** The earlier SQL filter was correct to keep Breezy out of automation but it applied too late: rows had already been stored as `DISCOVERED`, and one-shot discovery could also hand a fresh row directly to a worker. `storage.AddToFunnel` now recognizes the Breezy host boundary and stores a new discovery as `SKIPPED` with `status_reason = excluded_source`, while reporting it as ineligible to callers so it is never sent to their worker channel.
+
+For legacy data, `SkipExcludedSourceDiscoveredJobs` runs at agent startup. It is idempotent and changes only still-`DISCOVERED` Breezy rows; terminal outcomes and unrelated postings are left unchanged. The dashboard renders that explicit reason as an excluded-source policy rather than its old low-fit caption.
+
+**Regression coverage:** storage tests cover a new excluded discovery and a selective legacy sweep; dashboard coverage verifies the visible skip explanation. `go test ./pkg/storage ./cmd/agent ./cmd/dashboard`, then the full build, vet, test, and gofmt loop passed. The live agent restart applies the sweep and verifies the `DISCOVERED` count clears without inserting or processing a synthetic application.
+
+---
+
 ## 507. The first post-#489 cohort reaches FAILED_SUBMIT 100% of the time, so its lower quarantine rate has not yet improved outcomes
 
 **Completed 2026-08-01.** A sanitized count of the post-#489 cohort found all 8 `FAILED_SUBMIT` rows had Playwright's `target closed` error. For every one, the log showed post-score freshness passed but neither page validation nor document generation began. This rules out the later Vision, cached-mapping, and handler recovery gaps and isolates the failure to `newSubmitPage` during initial browser context/page setup.

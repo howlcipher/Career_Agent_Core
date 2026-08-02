@@ -239,6 +239,13 @@ func statusReason(status string) string {
 	}
 }
 
+func statusReasonWithDetail(status, detail string) string {
+	if status == "SKIPPED" && detail == storage.SkippedReasonExcludedSource {
+		return "Excluded ATS source — not eligible for automated submission"
+	}
+	return statusReason(status)
+}
+
 // explainedStatuses is every status the dashboard surfaces to the user, and so
 // every status statusReason must have a real arm for. Bug #435: statusReason
 // grew arms for MANUAL_REQUIRED, AWAITING_REVIEW, BLOCKED_CAPTCHA and
@@ -640,18 +647,18 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		var skippedCompany, skippedTitle, skippedStatus sql.NullString
+		var skippedCompany, skippedTitle, skippedStatus, skippedDetail sql.NullString
 		var skippedAt, skippedDiscoveredAt sql.NullTime
-		err := db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
+		err := db.QueryRow(`SELECT company_name, job_title, status, status_reason, last_updated, discovered_at FROM job_funnel
 			WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
-			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
+			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedDetail, &skippedAt, &skippedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("query last skipped job: %w", err)
 		}
 		m.LastSkippedCompany = skippedCompany.String
 		m.LastSkippedTitle = skippedTitle.String
 		if skippedStatus.Valid {
-			m.LastSkippedReason = statusReason(skippedStatus.String)
+			m.LastSkippedReason = statusReasonWithDetail(skippedStatus.String, skippedDetail.String)
 		}
 		if skippedAt.Valid {
 			m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")

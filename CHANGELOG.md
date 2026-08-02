@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Excluded ATS postings no longer clog the discovered queue
+
+* **Fix (bug #482):** `breezy.hr` postings are deliberately not auto-submitted, but the old queue filter left them permanently marked `DISCOVERED`. New excluded postings now enter as `SKIPPED` with an explicit source-exclusion reason and are never handed to a batch worker; agent startup also terminalizes legacy excluded rows. The dashboard identifies that reason instead of describing the row as a low-fit skip.
+
 ## 2026-08-01 — A browser crash during initial page setup gets one safe recovery
 
 * **Fix (bug #507):** all eight initial post-#489 submission failures were the same Playwright `target closed` condition, and each occurred before page validation or document generation. `AttemptSubmit` now recreates the browser context once when that failure occurs during initial setup, matching the later fill-path recovery while remaining bounded. A regression test verifies the crashed page is released, the replacement page proceeds, and document generation is not repeated.

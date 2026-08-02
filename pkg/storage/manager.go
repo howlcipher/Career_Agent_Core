@@ -23,6 +23,11 @@ import (
 
 var db *sql.DB
 
+// SkippedReasonExcludedSource identifies a posting from an ATS deliberately
+// excluded from automated submission. It lets the dashboard distinguish this
+// operator policy from an ordinary low-fit SKIPPED row.
+const SkippedReasonExcludedSource = "excluded_source"
+
 func InitDB() error {
 	return InitDBWithPath(DefaultDatabasePath)
 }
@@ -1150,7 +1155,7 @@ func CloseDB() error {
 	return nil
 }
 
-// AddToFunnel inserts a newly discovered job. Callers only ever pass
+// AddToFunnel inserts a newly discovered job. Callers normally pass
 // "DISCOVERED" as status, so on a conflict (a URL already known from an
 // earlier discovery pass, possibly from a previous session) this is a no-op:
 // it must NOT reset an in-progress or already-resolved job's status back to
@@ -1158,16 +1163,24 @@ func CloseDB() error {
 // is already handling it (or already finished it) - confirmed live 2026-07-21
 // as the root cause of the same URL being queued and processed multiple
 // times, eventually hitting the UNIQUE constraint on applied_jobs.url.
-// The returned bool reports whether a genuinely new row was inserted, so
-// callers can avoid re-queuing a URL they already know about.
+// The returned bool reports whether a genuinely new row was inserted into the
+// automatic-processing queue. Excluded sources are retained as SKIPPED audit
+// rows but return false, so discovery callers never send them straight to a
+// one-shot batch worker.
 func AddToFunnel(company, title, url, status string) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("db not initialized")
 	}
 	url = NormalizeURL(url)
-	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, discovered_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(url) DO NOTHING`, company, title, url, status)
+	statusReason := ""
+	excluded := status == "DISCOVERED" && isExcludedSourceURL(url)
+	if excluded {
+		status = "SKIPPED"
+		statusReason = SkippedReasonExcludedSource
+	}
+	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovered_at, last_updated)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), CURRENT_TIMESTAMP, CASE WHEN ? = '' THEN NULL ELSE ? END)
+		ON CONFLICT(url) DO NOTHING`, company, title, url, status, statusReason, statusReason, time.Now().UTC())
 	if err != nil {
 		return false, err
 	}
@@ -1175,7 +1188,34 @@ func AddToFunnel(company, title, url, status string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return rowsAffected > 0, nil
+	return rowsAffected > 0 && !excluded, nil
+}
+
+func isExcludedSourceURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	return host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr")
+}
+
+// SkipExcludedSourceDiscoveredJobs terminalizes legacy rows that were written
+// before AddToFunnel applied the excluded-source policy. It is idempotent and
+// only touches still-DISCOVERED Breezy postings, never a row that has entered
+// another outcome path.
+func SkipExcludedSourceDiscoveredJobs() (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	result, err := db.Exec(`UPDATE job_funnel
+		SET status = 'SKIPPED', status_reason = ?, last_updated = ?
+		WHERE status = 'DISCOVERED' AND lower(url) LIKE '%breezy.hr%'`,
+		SkippedReasonExcludedSource, time.Now().UTC())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func UpdateFunnelStatus(url, status string) error {

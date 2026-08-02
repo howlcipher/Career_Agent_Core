@@ -902,6 +902,11 @@ func main() {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
 	}
 	defer storage.CloseDB()
+	if skipped, err := storage.SkipExcludedSourceDiscoveredJobs(); err != nil {
+		log.Printf("[Agent] Failed to terminalize excluded-source rows: %v", err)
+	} else if skipped > 0 {
+		log.Printf("[Agent] Marked %d excluded-source DISCOVERED row(s) as SKIPPED.", skipped)
+	}
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 	if err := runModelPreflight(ctx, os.Getenv(skipModelPreflightEnv), client.PreflightModels); err != nil {

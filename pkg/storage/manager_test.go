@@ -100,6 +100,59 @@ func TestJobFunnelCRUD(t *testing.T) {
 	}
 }
 
+func TestExcludedSourceRowsAreTerminalAndNeverQueued(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	inserted, err := AddToFunnel("TestCorp", "Engineer", "https://jobs.testcorp.breezy.hr/p/123", "DISCOVERED")
+	if err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+	if inserted {
+		t.Fatal("excluded source must not be reported as an automatic-processing queue insertion")
+	}
+
+	var status, reason string
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url LIKE '%breezy.hr%'").Scan(&status, &reason); err != nil {
+		t.Fatalf("read excluded row: %v", err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonExcludedSource {
+		t.Fatalf("excluded row = %s/%s, want SKIPPED/%s", status, reason, SkippedReasonExcludedSource)
+	}
+
+	if jobs, err := GetDiscoveredJobs(); err != nil || len(jobs) != 0 {
+		t.Fatalf("excluded row reached automatic queue: jobs=%d err=%v", len(jobs), err)
+	}
+}
+
+func TestSkipExcludedSourceDiscoveredJobsOnlyTouchesLegacyRows(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec(`INSERT INTO job_funnel (url, status) VALUES
+		('https://legacy.breezy.hr/p/1', 'DISCOVERED'),
+		('https://resolved.breezy.hr/p/2', 'FAILED_SUBMIT'),
+		('https://other.example.com/p/3', 'DISCOVERED')`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+
+	changed, err := SkipExcludedSourceDiscoveredJobs()
+	if err != nil || changed != 1 {
+		t.Fatalf("sweep = %d, %v; want 1, nil", changed, err)
+	}
+	var status, reason string
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = 'https://legacy.breezy.hr/p/1'").Scan(&status, &reason); err != nil {
+		t.Fatalf("read swept row: %v", err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonExcludedSource {
+		t.Errorf("swept row = %s/%s", status, reason)
+	}
+	var untouched int
+	if err := db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED'").Scan(&untouched); err != nil || untouched != 1 {
+		t.Errorf("unrelated discovered rows = %d, %v; want 1, nil", untouched, err)
+	}
+}
+
 func TestApplicationsAndDuplicates(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
