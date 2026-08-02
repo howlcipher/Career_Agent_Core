@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Discovery stalls now have an explanation
+
+* **Improvement (#509):** The daemon persists privacy-safe refresh timing and aggregate source outcomes. The dashboard distinguishes a stopped agent, a pending first refresh, a source error, no-new-job refreshes, and new eligible work without displaying job content or raw provider errors.
+
 ## 2026-08-02 — Optional NLP offload has measured local value
 
 * **Improvement (#442):** Matched local tailoring runs retained the opt-in FastAPI executor: 5m18s offloaded versus 7m6s in-process, with verifier maximum resident memory reduced from 423 MB to 43 MB. It remains health checked and falls back safely.

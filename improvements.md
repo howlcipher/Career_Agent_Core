@@ -52,7 +52,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account. |
 | 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #448 for the full account. |
 | 442 | [Measure whether the NLP offload is worth keeping](#442-measure-whether-the-nlp-offload-is-worth-keeping) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #442 for the full account. |
-| 509 | [Make an empty application queue explainable before it silently stalls applications](#509-make-an-empty-application-queue-explainable-before-it-silently-stalls-applications) | Pending | 1.0 = 6×0.5÷3 | standard | Discovery-health follow-up to #495; the live dashboard proves the current zero-queue state is visible but unexplained. |
+| 509 | [Make an empty application queue explainable before it silently stalls applications](#509-make-an-empty-application-queue-explainable-before-it-silently-stalls-applications) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #509 for the full account. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Pending | 0.83 = 5×1.0÷6 | deep-reasoning | New capability; #484's benchmark harness exists, but no approved local-edit contract exists. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | #481/#482 already shipped; no admission cap or proactive first-attempt sweep exists. |
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Pending | 0.75 = 3×1.0÷4 | standard | Deterministic classification still covers part of the proposed surface; no safe 4B evaluation has been run. |
@@ -149,6 +149,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 ## Details
 
 ### 509. Make an empty application queue explainable before it silently stalls applications
+
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #509.
 
 **Found 2026-08-02** during a safe live mission-status check. The running dashboard's read-only `/api/metrics` reported `eligible_queue: 0`, while `/api/agent/status` reported `running: false`. That proves no application can currently progress, but not whether the agent was intentionally stopped, discovery failed, all results were duplicates or excluded, or filters yielded no eligible jobs. The dashboard's “last skipped” record is historical and cannot answer that question. #495 deliberately suppresses its no-progress alert when the eligible queue is empty, so it cannot provide this diagnosis either.
 
