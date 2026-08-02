@@ -1,5 +1,9 @@
 # improvements_paywall.md — Archived Groom-Pass / Status History
 
+**2026-08-01 groom pass:** all three rows remain correctly paywalled and retain their scores: **#424 2.0**, **#17 1.75**, **#14 0.43 and `⚠️ below floor`**. The tree still has no CAPTCHA solver, solve-and-continue path, or cloud DOM-routing path; no paid key is available. #14 remains a user decision: re-scope it to preference-label collection or close it with user confirmation.
+
+---
+
 **Prior — 2026-08-01 groom pass (session fifty-one):** all three rows re-verified against current code and live local state, with no score changes — **#424 stays 2.0**, **#17 stays 1.75**, **#14 stays 0.43 and `⚠️ below floor`**. No CAPTCHA solver dependency or solve-and-continue path exists; no cloud DOM-routing path exists; `lspci` still exposes only the integrated Radeon Vega GPU. #14 remains below the floor: recommend re-scope to preference-label collection or close it with user confirmation.
 **2026-08-01 post-#494 groom pass:** all three rows remain correctly paywalled and keep their scores: **#424 2.0**, **#17 1.75**, **#14 0.43 and `⚠️ below floor`**. Current code still has no CAPTCHA solver or solve-and-continue path, no cloud DOM-routing path, and live `lspci` still exposes only the integrated Radeon Vega GPU. Re-scope #14 to preference-label collection or close it with user confirmation.
 

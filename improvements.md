@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-01 groom pass.** All 12 remaining free Pending rows and all three paywalled rows were re-verified against the current tree; no pending bugs or journals exist. #448 and #442 tie at the top (1.0). #493 is now `⚠️ below floor` (0.17): its necessary live outcome database is unavailable in this checkout, so its claimed 1.0 value is not currently actionable. #483 is closed after a fresh process scan found no live or zombie `career_agent_bin` process. #488 and paywalled #14 remain user decisions below the floor. See `documentation/backlog_history/improvements_done_details.md` item #483 for the full account.
+**2026-08-02 groom pass.** #448 shipped; all 11 remaining free Pending rows, all three paywalled rows, and the zero-Pending bug backlog were re-verified. #442 is now the top eligible free item (1.0). The dashboard's live metrics endpoint is readable again, but its 2 applied rows and zero observed outcomes are still too small to validate #493, which remains `⚠️ below floor` at 0.33. #488 and paywalled #14 remain explicit user decisions below the floor. Prior status paragraph archived to `documentation/backlog_history/improvements_groom_history.md`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -60,7 +60,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 485 | [Resource-aware local inference admission control](#485-resource-aware-local-inference-admission-control) | Pending | 0.67 = 4×1.0÷6 | deep-reasoning | Existing one-model limit prevents OOM; contention remains an unobserved risk. |
 | 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | No data-driven approved-answer store exists; historic observed volume remains low. |
 | 479 | [A permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status](#479-a-permanent-dns-failure-spends-the-full-retrybackoff-budget-instead-of-failing-fast-to-a-terminal-status) | Pending | 0.5 = 2×0.5÷2 | standard | Permanent DNS failures still use generic retry/backoff; at the floor. |
-| 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending ⚠️ below floor — awaiting outcome data | 0.17 = 1×1.0÷6 | deep-reasoning | Structural prerequisites exist, but no readable current outcome database is available to support or validate a ranking change. |
+| 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending ⚠️ below floor — insufficient outcome data | 0.33 = 2×1.0÷6 | deep-reasoning | The live metrics endpoint is readable, but only 2 applied rows and zero outcomes exist; that cannot validate a yield-ranking change. |
 | 488 | [OpenClaw read-only sidecar evaluation](#488-openclaw-read-only-sidecar-evaluation) | Pending ⚠️ below floor — user decision | 0.4 = 2×1.0÷5 | deep-reasoning | Optional sidecar remains below the floor and requires explicit user confirmation. |
 | 498 | [Company and role-family duplicate/cooldown protection](#498-company-and-role-family-duplicatecooldown-protection) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #498 for the full account. |
 | 484 | [Local-model benchmark and routing-evidence harness](#484-local-model-benchmark-and-routing-evidence-harness) | Done (2026-08-01) | 2.33 = 7×1.0÷3 | standard | See `documentation/backlog_history/improvements_done_details.md` item #484 for the full account. |
@@ -212,6 +212,8 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 **Boundaries:** does not touch strict eligibility filtering (salary/remote/blocklist), which stays exactly as it is today.
 
 **Groomed 2026-08-01:** the current checkout has no readable live outcome database, so no evidence can justify changing rank weights or validate a new formula. Value is reduced to 1 while that dependency is absent; the item is below the ROI floor until fresh outcome evidence becomes available.
+
+**Groomed 2026-08-02:** the dashboard's live `/api/metrics` endpoint is readable again and reports 2 applied rows, 0 interviews, and 0 rejections. That resolves the prior checkout-access limitation, but the sample remains far too small to support a causal yield estimate or validate a ranking rewrite. Value rises conservatively to 2; `2×1.0÷6 = 0.33` remains below the ROI floor. Keep the item deferred until outcome evidence exists.
 
 ### 498. Company and role-family duplicate/cooldown protection
 

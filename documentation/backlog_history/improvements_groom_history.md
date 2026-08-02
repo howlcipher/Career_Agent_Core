@@ -1,5 +1,9 @@
 # improvements.md — Archived Groom-Pass / Status History
 
+**2026-08-01 groom pass.** All 12 remaining free Pending rows and all three paywalled rows were re-verified against the current tree; no pending bugs or journals exist. #448 and #442 tie at the top (1.0). #493 is now `⚠️ below floor` (0.17): its necessary live outcome database is unavailable in this checkout, so its claimed 1.0 value is not currently actionable. #483 is closed after a fresh process scan found no live or zombie `career_agent_bin` process. #488 and paywalled #14 remain user decisions below the floor. See `documentation/backlog_history/improvements_done_details.md` item #483 for the full account.
+
+---
+
 **Prior — 2026-08-01, session fifty-one groom pass.** Improvement #496 is Done: discovery and recorded submission outcomes now populate `career_sites`; cached form mappings retain outcome-based health and only yield to the established fallback when stale or failure-dominated. All 15 remaining Pending free improvements were re-verified against code and live local state; scores are unchanged, and #494 (1.2) is next. #493's prerequisite wording was corrected because #499 and #496 have now shipped. See `documentation/backlog_history/improvements_done_details.md` item #496 for the full account.
 
 **2026-08-01, session fifty.** Improvement #495 is Done: the daemon now detects three consecutive nonempty cycles without a confirmed application when one recent terminal status accounts for at least 75% of outcomes. It logs one aggregate-only alert and makes the current alert visible on the dashboard; it never changes queue state or submission policy. The dashboard and daemon were rebuilt and restarted successfully. See `documentation/backlog_history/improvements_done_details.md` item #495 for the full account.
