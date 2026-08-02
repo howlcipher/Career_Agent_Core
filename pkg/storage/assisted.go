@@ -255,6 +255,57 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	return jobs, rows.Err()
 }
 
+// ConfirmAssistedSubmission records an explicit human confirmation only after
+// the employer site displayed acceptance. Opening a browser, clicking submit,
+// or clicking Continue never calls this function. The funnel and canonical
+// dedup record commit together.
+func ConfirmAssistedSubmission(conn *sql.DB, jobID string) error {
+	if strings.TrimSpace(jobID) == "" {
+		return errors.New("assisted job identifier is required")
+	}
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin assisted confirmation: %w", err)
+	}
+	defer tx.Rollback()
+	var company, title, url, status, original string
+	err = tx.QueryRow(`SELECT jf.company_name, jf.job_title, jf.url, jf.status, aa.original_status
+		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
+		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'`, jobID).
+		Scan(&company, &title, &url, &status, &original)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("assisted job is no longer awaiting confirmation")
+	}
+	if err != nil {
+		return fmt.Errorf("load assisted job for confirmation: %w", err)
+	}
+	if status != original || !isAssistedEligibleStatus(status) {
+		return fmt.Errorf("refusing to overwrite newer job status %q", status)
+	}
+	now := time.Now().UTC()
+	result, err := tx.Exec(`UPDATE assisted_applications SET assisted_state = 'completed', confirmation_provenance = 'manual_user_confirmation', updated_at = ?
+		WHERE job_id = ? AND assisted_state != 'completed'`, now, jobID)
+	if err != nil {
+		return fmt.Errorf("record assisted confirmation: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted job confirmation conflict")
+	}
+	if _, err := tx.Exec(`UPDATE job_funnel SET status = 'APPLIED', status_reason = NULL, applied_at = ?, last_updated = ?
+		WHERE id = ? AND status = ?`, now, now, jobID, original); err != nil {
+		return fmt.Errorf("mark confirmed assisted application: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at) VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, company, title, NormalizeURL(url), now); err != nil {
+		return fmt.Errorf("record confirmed assisted application: %w", err)
+	}
+	return tx.Commit()
+}
+
+func isAssistedEligibleStatus(status string) bool {
+	_, ok := eligibleAssistedStatuses[status]
+	return ok
+}
+
 func parseAssistedTime(value string) time.Time {
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05"} {
 		if parsed, err := time.Parse(layout, value); err == nil {

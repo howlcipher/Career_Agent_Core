@@ -483,6 +483,7 @@ func main() {
 	// deliberately left ungated.
 	mux.HandleFunc("/api/metrics", serveMetrics)
 	mux.HandleFunc("/api/assisted", serveAssistedQueue)
+	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -912,6 +913,30 @@ func serveAssistedQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
+}
+
+func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JobID     string `json:"job_id"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || !request.Confirmed || strings.TrimSpace(request.JobID) == "" {
+		http.Error(w, "a confirmed assisted job identifier is required", http.StatusBadRequest)
+		return
+	}
+	if err := storage.ConfirmAssistedSubmission(db, request.JobID); err != nil {
+		log.Printf("serveAssistedConfirm: %v", err)
+		http.Error(w, "unable to record application confirmation", http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"confirmed"}`))
 }
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer

@@ -182,6 +182,7 @@ function App() {
   const [actionError, setActionError] = useState<string | null>(null);
 	const [assistedJobs, setAssistedJobs] = useState<AssistedJob[]>([]);
 	const [showAssisted, setShowAssisted] = useState<boolean>(false);
+	const [confirmJob, setConfirmJob] = useState<AssistedJob | null>(null);
 
   // #460: a single missed poll is expected noise (a request can legitimately
   // drop once), but a *run* of them means the numbers on screen may be
@@ -267,7 +268,7 @@ function App() {
     poll();
   };
 
-  const handleStop = async () => {
+	const handleStop = async () => {
     setActionError(null);
     try {
       const res = await fetch('/api/agent/stop', { method: 'POST' });
@@ -278,6 +279,21 @@ function App() {
     }
     poll();
   };
+
+	const confirmApplied = async () => {
+		if (!confirmJob) return;
+		setActionError(null);
+		try {
+			const res = await fetch('/api/assisted/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: confirmJob.id, confirmed: true }) });
+			if (!res.ok) throw new Error('confirmation rejected');
+			setConfirmJob(null);
+			fetchAssisted(pollSeq.current);
+			poll();
+		} catch (e) {
+			console.error(e);
+			setActionError('Could not record the application confirmation. Keep it pending and try again after verifying the employer site.');
+		}
+	};
 
   if (loading) return <div>Loading...</div>;
 
@@ -368,13 +384,14 @@ function App() {
 					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
 						<article className="assisted-job" key={job.id}>
 							<div><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'}</p></div>
-							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted">{job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" disabled={!job.live_browser}>I completed this step — Continue</button>}</div>
+							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted">{job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
 							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p></details>
 							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>
 						</article>
 					))}
 				</section>
 			)}
+			{confirmJob && <div className="confirm-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">Confirm application received</h2><p>Only mark this applied if the employer’s site showed that your application was received or successfully submitted.</p><div><button className="btn btn-assisted" onClick={confirmApplied}>Confirmed — Mark Applied</button><button className="text-button" onClick={() => setConfirmJob(null)}>Not confirmed</button></div></section></div>}
         <div className="grid">
           <div className="card discovered">
             <h2>{metrics?.discovered || 0}</h2>

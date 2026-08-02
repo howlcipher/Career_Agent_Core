@@ -94,3 +94,32 @@ func TestMigrateLegacyAssisted_RejectsUnsupportedStatus(t *testing.T) {
 		t.Fatal("expected unsupported status error")
 	}
 }
+
+func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	url := "https://review.example/jobs/confirm"
+	if _, err := AddToFunnel("Confirm Co", "Engineer", url, "AWAITING_REVIEW"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", url).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := ConfirmAssistedSubmission(GetDB(), id); err != nil {
+		t.Fatal(err)
+	}
+	var status, provenance string
+	if err := GetDB().QueryRow(`SELECT jf.status, aa.confirmation_provenance FROM job_funnel jf JOIN assisted_applications aa ON aa.job_id = jf.id WHERE jf.id = ?`, id).Scan(&status, &provenance); err != nil {
+		t.Fatal(err)
+	}
+	if status != "APPLIED" || provenance != "manual_user_confirmation" {
+		t.Fatalf("status=%q provenance=%q", status, provenance)
+	}
+	if err := ConfirmAssistedSubmission(GetDB(), id); err == nil {
+		t.Fatal("second confirmation must conflict")
+	}
+}

@@ -23,6 +23,10 @@
 .assisted-instruction .btn { margin: 12px 0; }
 .text-button { background: transparent; color: var(--neon-blue); border: 1px solid currentColor; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 .text-button:disabled { opacity: 0.45; cursor: not-allowed; }
+.confirm-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); padding: 20px; z-index: 10; }
+.confirm-dialog { max-width: 520px; padding: 24px; border: 1px solid var(--neon-blue); border-radius: 12px; background: #111827; color: var(--text-main); }
+.confirm-dialog h2 { margin-top: 0; }
+.confirm-dialog div { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 @media (max-width: 700px) { .assisted-banner { align-items: stretch; flex-direction: column; } }
 
 .action-error {
