@@ -2,6 +2,22 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 510. Record discovery-source request failures and circuit-open skips in refresh health
+
+**Completed 2026-08-02.** Yahoo discovery now records its outbound request attempts, final request failures after retries, and queries skipped while its circuit breaker is open. These privacy-safe numeric counters persist with the existing source insertion outcomes in `discovery_refresh.source_counts_json`; no posting URL, title, company, request text, or raw provider error is retained. The dashboard API and React health message surface the failure and skip totals so an empty queue can be distinguished from a healthy no-results refresh.
+
+Regression tests cover a retry-exhausted request, a circuit-open skip with no request, aggregate persistence, and dashboard API decoding. Dashboard reads remain backward compatible with a pre-migration refresh table. Focused Go tests and the dashboard Vitest suite passed before release.
+
+---
+
+## 479. A permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status
+
+**Completed 2026-08-02.** `StateInit` now recognizes a wrapped `*net.DNSError` whose `IsNotFound` flag is true and terminalizes that URL as `RETRY_EXHAUSTED` with the normalized `dns_not_found` reason. This deliberately reuses the existing terminal status and dashboard/requeue treatment rather than adding a narrow new status. It bypasses retry accounting and backoff because the resolver has authoritatively reported that the hostname does not exist. A temporary DNS resolver error remains on the existing retryable path.
+
+Pipeline tests prove both branches: authoritative name-not-found is terminal after its first attempt, while temporary DNS failure records one retry with a future eligibility time. Focused Go tests and the dashboard Vitest suite passed before release.
+
+---
+
 ## 442. Measure whether the NLP offload is worth keeping
 
 **Completed 2026-08-02.** Matched live synthetic tailoring runs used the same local `qwen3:4b-instruct` model and Ollama endpoint. In-process completed in 7m6s with 422,864 KB maximum verifier memory; healthy localhost `nlp_service` completed in 5m18s with 42,732 KB. Both succeeded without fallback. That 25% time reduction and about 90% lower waiting-process memory corroborate the earlier 2026-07-29 observation, so the opt-in service is retained and its tradeoff is documented in README and CHANGELOG.

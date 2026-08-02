@@ -48,6 +48,12 @@ interface Metrics {
   discovery_last_finished_at?: string;
   discovery_new_eligible: number;
   discovery_error_class?: string;
+  discovery_source_counts?: Array<{
+    source: string;
+    request_attempted: number;
+    request_failed: number;
+    circuit_open_skipped: number;
+  }>;
   watchdog_alert?: string;
   watchdog_alert_at?: string;
   last_applied_company?: string;
@@ -268,9 +274,13 @@ function App() {
   const discoveryStatus = () => {
     if (!agentRunning) return 'Agent is stopped; start it to refresh discovery and process eligible jobs.';
     if (!metrics?.discovery_last_finished_at) return 'Agent is running; waiting for the first discovery refresh.';
-    if (metrics.discovery_error_class) return `Latest discovery refresh had a ${metrics.discovery_error_class} error.`;
-    if (metrics.discovery_new_eligible === 0) return 'Latest discovery refresh found no new eligible jobs.';
-    return `Latest discovery refresh added ${metrics.discovery_new_eligible} eligible job${metrics.discovery_new_eligible === 1 ? '' : 's'}.`;
+    const yahoo = metrics.discovery_source_counts?.find((source) => source.source === 'yahoo');
+    const yahooHealth = yahoo && (yahoo.request_failed > 0 || yahoo.circuit_open_skipped > 0)
+      ? ` Yahoo had ${yahoo.request_failed} request failure${yahoo.request_failed === 1 ? '' : 's'} and ${yahoo.circuit_open_skipped} circuit-open skip${yahoo.circuit_open_skipped === 1 ? '' : 's'}.`
+      : '';
+    if (metrics.discovery_error_class) return `Latest discovery refresh had a ${metrics.discovery_error_class} error.${yahooHealth}`;
+    if (metrics.discovery_new_eligible === 0) return `Latest discovery refresh found no new eligible jobs.${yahooHealth}`;
+    return `Latest discovery refresh added ${metrics.discovery_new_eligible} eligible job${metrics.discovery_new_eligible === 1 ? '' : 's'}.${yahooHealth}`;
   };
 
   return (

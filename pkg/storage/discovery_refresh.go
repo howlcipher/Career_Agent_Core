@@ -14,12 +14,15 @@ import (
 type DiscoverySourceCount struct {
 	// Source is one of: "serpapi", "yahoo", "remoteok", "hackernews",
 	// "jobicy", "atsfeeds". Normalized to lowercase on write.
-	Source    string `json:"source"`
-	Attempted int    `json:"attempted"`
-	New       int    `json:"new"`
-	Duplicate int    `json:"duplicate"`
-	Excluded  int    `json:"excluded"`
-	Error     int    `json:"error"`
+	Source             string `json:"source"`
+	Attempted          int    `json:"attempted"`
+	New                int    `json:"new"`
+	Duplicate          int    `json:"duplicate"`
+	Excluded           int    `json:"excluded"`
+	Error              int    `json:"error"`
+	RequestAttempted   int    `json:"request_attempted"`
+	RequestFailed      int    `json:"request_failed"`
+	CircuitOpenSkipped int    `json:"circuit_open_skipped"`
 }
 
 // DiscoveryRefresh is the latest aggregate-only discovery result. It must

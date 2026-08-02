@@ -57,23 +57,24 @@ type Metrics struct {
 	// (bugs.md #466) without succeeding. It had no dashboard presence at all
 	// before improvements.md #468 — the count silently dropped out of every
 	// bucket's total.
-	RetryExhausted            int    `json:"retry_exhausted"`
-	ConfirmedToday            int    `json:"confirmed_today"`
-	ConfirmedLast7Days        int    `json:"confirmed_last_7_days"`
-	FirstAttemptMedian        string `json:"first_attempt_median,omitempty"`
-	LastConfirmedAgo          string `json:"last_confirmed_ago,omitempty"`
-	EligibleQueue             int    `json:"eligible_queue"`
-	EligibleNeverAttempted    int    `json:"eligible_never_attempted"`
-	WatchdogAlert             string `json:"watchdog_alert,omitempty"`
-	WatchdogAlertAt           string `json:"watchdog_alert_at,omitempty"`
-	DiscoveryLastFinishedAt   string `json:"discovery_last_finished_at,omitempty"`
-	DiscoveryNewEligible      int    `json:"discovery_new_eligible"`
-	DiscoveryErrorClass       string `json:"discovery_error_class,omitempty"`
-	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
-	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
-	LastAppliedURL            string `json:"last_applied_url,omitempty"`
-	LastAppliedAt             string `json:"last_applied_at,omitempty"`
-	LastAppliedProcessingTime string `json:"last_applied_processing_time,omitempty"`
+	RetryExhausted            int                            `json:"retry_exhausted"`
+	ConfirmedToday            int                            `json:"confirmed_today"`
+	ConfirmedLast7Days        int                            `json:"confirmed_last_7_days"`
+	FirstAttemptMedian        string                         `json:"first_attempt_median,omitempty"`
+	LastConfirmedAgo          string                         `json:"last_confirmed_ago,omitempty"`
+	EligibleQueue             int                            `json:"eligible_queue"`
+	EligibleNeverAttempted    int                            `json:"eligible_never_attempted"`
+	WatchdogAlert             string                         `json:"watchdog_alert,omitempty"`
+	WatchdogAlertAt           string                         `json:"watchdog_alert_at,omitempty"`
+	DiscoveryLastFinishedAt   string                         `json:"discovery_last_finished_at,omitempty"`
+	DiscoveryNewEligible      int                            `json:"discovery_new_eligible"`
+	DiscoveryErrorClass       string                         `json:"discovery_error_class,omitempty"`
+	DiscoverySourceCounts     []storage.DiscoverySourceCount `json:"discovery_source_counts,omitempty"`
+	LastAppliedCompany        string                         `json:"last_applied_company,omitempty"`
+	LastAppliedTitle          string                         `json:"last_applied_title,omitempty"`
+	LastAppliedURL            string                         `json:"last_applied_url,omitempty"`
+	LastAppliedAt             string                         `json:"last_applied_at,omitempty"`
+	LastAppliedProcessingTime string                         `json:"last_applied_processing_time,omitempty"`
 
 	CurrentCompany string `json:"current_company,omitempty"`
 	CurrentTitle   string `json:"current_title,omitempty"`
@@ -541,6 +542,21 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		if finishedAt.Valid {
 			m.DiscoveryLastFinishedAt = finishedAt.Time.Local().Format("Jan 2, 3:04 PM")
+		}
+
+		// Dashboard tests and old standalone dashboard deployments may open a
+		// database before the agent's additive migration has run. Keep the
+		// existing refresh summary available in that state; source health is
+		// simply absent until the next agent startup upgrades the table.
+		var sourceCountsJSON sql.NullString
+		err = db.QueryRow(`SELECT source_counts_json FROM discovery_refresh WHERE id = 1`).Scan(&sourceCountsJSON)
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return fmt.Errorf("query discovery source counts: %w", err)
+		}
+		if err == nil && sourceCountsJSON.Valid && sourceCountsJSON.String != "" && sourceCountsJSON.String != "null" {
+			if err := json.Unmarshal([]byte(sourceCountsJSON.String), &m.DiscoverySourceCounts); err != nil {
+				return fmt.Errorf("decode discovery source counts: %w", err)
+			}
 		}
 		return nil
 	})

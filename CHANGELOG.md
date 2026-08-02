@@ -1,5 +1,10 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Discovery degradation and dead DNS records no longer hide capacity loss
+
+* **Improvement (#510):** Discovery refresh health now persists Yahoo request attempts, final request failures, and circuit-open skips as numeric, source-level aggregates. The dashboard reports those conditions alongside the existing refresh summary without storing URLs, postings, or raw errors.
+* **Improvement (#479):** A resolver response that authoritatively says a hostname does not exist now enters `RETRY_EXHAUSTED` immediately with the normalized `dns_not_found` reason. Temporary DNS failures still use the existing bounded retry and backoff path.
+
 ## 2026-08-02 — Discovery stalls now have an explanation
 
 * **Improvement (#509):** The daemon persists privacy-safe refresh timing and aggregate source outcomes. The dashboard distinguishes a stopped agent, a pending first refresh, a source error, no-new-job refreshes, and new eligible work without displaying job content or raw provider errors.

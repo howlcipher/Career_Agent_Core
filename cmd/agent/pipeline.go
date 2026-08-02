@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"time"
 
@@ -130,6 +131,11 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				log.Printf("[Worker-%d] Unsafe job URL blocked.", workerID)
 				if statusErr := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); statusErr != nil {
 					log.Printf("[Worker-%d] Failed to mark unsafe URL invalid: %v", workerID, statusErr)
+				}
+			} else if isPermanentDNSNotFound(err) {
+				log.Printf("[Worker-%d] Job URL has no DNS record; terminalizing without retry: %v", workerID, err)
+				if statusErr := storage.UpdateFunnelStatusWithReason(job.URL, "RETRY_EXHAUSTED", "dns_not_found"); statusErr != nil {
+					log.Printf("[Worker-%d] Failed to record permanent DNS failure: %v", workerID, statusErr)
 				}
 			} else {
 				log.Printf("[Worker-%d] Job URL could not be resolved safely; leaving it retryable: %v", workerID, err)
@@ -637,4 +643,12 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 	})
 
 	return g
+}
+
+// isPermanentDNSNotFound distinguishes an authoritative DNS name-not-found
+// response from timeouts and other resolver failures. The former cannot be
+// improved by retrying the same URL, while the latter remain retryable.
+func isPermanentDNSNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }

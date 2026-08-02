@@ -107,6 +107,30 @@ func TestDiscoverWithYahooHTML_ExhaustsRetries(t *testing.T) {
 	if len(jobs) != 0 {
 		t.Fatalf("Expected 0 jobs due to exhausted retries, got %d", len(jobs))
 	}
+
+	engine.counts = map[string]*DiscoverySourceCounts{}
+	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", jobChan)
+	got := engine.sourceCounter("yahoo").Snapshot()
+	if got.RequestAttempted != 3 || got.RequestFailed != 1 || got.CircuitOpenSkipped != 0 {
+		t.Errorf("Yahoo request health = attempts %d, failures %d, skips %d; want 3 attempts, 1 final failure, and no circuit skip", got.RequestAttempted, got.RequestFailed, got.CircuitOpenSkipped)
+	}
+}
+
+func TestDiscoverWithYahooHTML_RecordsCircuitOpenSkipWithoutRequest(t *testing.T) {
+	yahooBreaker = newSourceCircuitBreaker()
+	yahooBreaker.mu.Lock()
+	yahooBreaker.state = circuitOpen
+	yahooBreaker.openedAt = time.Now()
+	yahooBreaker.mu.Unlock()
+
+	engine := NewFunnelEngine([]string{"backend"})
+	engine.counts = map[string]*DiscoverySourceCounts{}
+	engine.discoverWithYahooHTML(context.Background(), "test query", "backend", make(chan Job, 1))
+
+	got := engine.sourceCounter("yahoo").Snapshot()
+	if got.CircuitOpenSkipped != 1 || got.RequestAttempted != 0 || got.RequestFailed != 0 {
+		t.Errorf("Yahoo circuit-open health = attempts %d, failures %d, skips %d; want one skip without a request", got.RequestAttempted, got.RequestFailed, got.CircuitOpenSkipped)
+	}
 }
 
 func TestDiscoverWithYahooHTML_NonRetryableResponse(t *testing.T) {

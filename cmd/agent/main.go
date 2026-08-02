@@ -1165,7 +1165,10 @@ func discoverySourceCounts(counts map[string]*scraper.DiscoverySourceCounts) []s
 	result := make([]storage.DiscoverySourceCount, 0, len(counts))
 	for source, count := range counts {
 		snapshot := count.Snapshot()
-		result = append(result, storage.DiscoverySourceCount{Source: source, Attempted: snapshot.Attempted, New: snapshot.New, Duplicate: snapshot.Duplicate, Excluded: snapshot.Excluded, Error: snapshot.Error})
+		result = append(result, storage.DiscoverySourceCount{
+			Source: source, Attempted: snapshot.Attempted, New: snapshot.New, Duplicate: snapshot.Duplicate, Excluded: snapshot.Excluded, Error: snapshot.Error,
+			RequestAttempted: snapshot.RequestAttempted, RequestFailed: snapshot.RequestFailed, CircuitOpenSkipped: snapshot.CircuitOpenSkipped,
+		})
 	}
 	return result
 }

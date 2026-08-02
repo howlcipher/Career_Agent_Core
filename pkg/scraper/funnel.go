@@ -28,12 +28,15 @@ var (
 // DiscoverySourceCounts accumulates privacy-safe outcome counters for one
 // discovery source within a single refresh run. It is safe for concurrent use.
 type DiscoverySourceCounts struct {
-	mu        sync.Mutex
-	Attempted int
-	New       int
-	Duplicate int
-	Excluded  int
-	Error     int
+	mu                 sync.Mutex
+	Attempted          int
+	New                int
+	Duplicate          int
+	Excluded           int
+	Error              int
+	RequestAttempted   int
+	RequestFailed      int
+	CircuitOpenSkipped int
 }
 
 // record registers the outcome of one AddToFunnel call. isNew and isExcluded
@@ -58,7 +61,28 @@ func (c *DiscoverySourceCounts) record(isNew bool, isExcluded bool, err error) {
 func (c *DiscoverySourceCounts) Snapshot() DiscoverySourceCounts {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return DiscoverySourceCounts{Attempted: c.Attempted, New: c.New, Duplicate: c.Duplicate, Excluded: c.Excluded, Error: c.Error}
+	return DiscoverySourceCounts{
+		Attempted: c.Attempted, New: c.New, Duplicate: c.Duplicate, Excluded: c.Excluded, Error: c.Error,
+		RequestAttempted: c.RequestAttempted, RequestFailed: c.RequestFailed, CircuitOpenSkipped: c.CircuitOpenSkipped,
+	}
+}
+
+func (c *DiscoverySourceCounts) recordRequestAttempt() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.RequestAttempted++
+}
+
+func (c *DiscoverySourceCounts) recordRequestFailure() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.RequestFailed++
+}
+
+func (c *DiscoverySourceCounts) recordCircuitOpenSkip() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.CircuitOpenSkipped++
 }
 
 // DiscoveryResult carries the privacy-safe aggregate outcome of one
@@ -374,8 +398,12 @@ func newYahooHTTPClient() *http.Client {
 }
 
 func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role string, jobChan chan<- Job) {
+	counter := f.sourceCounter("yahoo")
 	if !yahooBreaker.allow() {
 		log.Printf("[FunnelEngine] Yahoo fallback circuit open; skipping query %q during cooldown", query)
+		if counter != nil {
+			counter.recordCircuitOpenSkip()
+		}
 		return
 	}
 
@@ -390,9 +418,15 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 	var html string
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if counter != nil {
+			counter.recordRequestAttempt()
+		}
 		req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to create request for Yahoo: %v", err)
+			if counter != nil && ctx.Err() == nil {
+				counter.recordRequestFailure()
+			}
 			return
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -409,6 +443,9 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			log.Printf("[FunnelEngine] Yahoo fallback final failure for query %q: %v", query, err)
 			if ctx.Err() == nil {
 				yahooBreaker.recordFailure()
+				if counter != nil {
+					counter.recordRequestFailure()
+				}
 			}
 			return
 		}
@@ -421,6 +458,9 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 				continue
 			}
 			log.Printf("[FunnelEngine] Yahoo fallback final failure with status %d for query %q", resp.StatusCode, query)
+			if counter != nil && ctx.Err() == nil {
+				counter.recordRequestFailure()
+			}
 			if ctx.Err() == nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
 				yahooBreaker.recordFailure()
 			}
@@ -438,6 +478,9 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			log.Printf("[FunnelEngine] Yahoo fallback final read failure for query %q: %v", query, err)
 			if ctx.Err() == nil {
 				yahooBreaker.recordFailure()
+				if counter != nil {
+					counter.recordRequestFailure()
+				}
 			}
 			return
 		}

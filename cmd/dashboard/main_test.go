@@ -157,14 +157,21 @@ func TestServeMetrics_Counts(t *testing.T) {
 
 func TestServeMetricsIncludesLatestDiscoveryRefresh(t *testing.T) {
 	setupTestDB(t)
+	if _, err := db.Exec(`ALTER TABLE discovery_refresh ADD COLUMN source_counts_json TEXT`); err != nil {
+		t.Fatal(err)
+	}
 	finished := time.Date(2026, 8, 2, 15, 4, 0, 0, time.UTC)
-	if _, err := db.Exec(`INSERT INTO discovery_refresh (id, started_at, finished_at, new_eligible, error_class)
-		VALUES (1, ?, ?, 0, 'network')`, finished.Add(-time.Minute), finished); err != nil {
+	if _, err := db.Exec(`INSERT INTO discovery_refresh (id, started_at, finished_at, new_eligible, error_class, source_counts_json)
+		VALUES (1, ?, ?, 0, 'network', ?)`, finished.Add(-time.Minute), finished,
+		`[{"source":"yahoo","request_attempted":3,"request_failed":1,"circuit_open_skipped":2}]`); err != nil {
 		t.Fatal(err)
 	}
 	m := fetchMetricsFromTestServer(t)
 	if m.DiscoveryNewEligible != 0 || m.DiscoveryErrorClass != "network" || m.DiscoveryLastFinishedAt == "" {
 		t.Errorf("discovery metrics = %+v", m)
+	}
+	if len(m.DiscoverySourceCounts) != 1 || m.DiscoverySourceCounts[0].RequestFailed != 1 || m.DiscoverySourceCounts[0].CircuitOpenSkipped != 2 {
+		t.Errorf("discovery source metrics = %+v", m.DiscoverySourceCounts)
 	}
 }
 

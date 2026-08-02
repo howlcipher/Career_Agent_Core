@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -102,7 +103,13 @@ func TestClassifyAttemptOutcomeKeepsDistinctLedgerReasons(t *testing.T) {
 type failingResolver struct{}
 
 func (failingResolver) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
-	return nil, errors.New("lookup " + host + ": no such host")
+	return nil, &net.DNSError{Name: host, IsNotFound: true}
+}
+
+type temporaryFailingResolver struct{}
+
+func (temporaryFailingResolver) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return nil, &net.DNSError{Name: host, IsTemporary: true}
 }
 
 type publicResolver struct{}
@@ -154,13 +161,7 @@ func TestStateInit_DuplicateCooldownSkipsBeforeNetworkWork(t *testing.T) {
 	}
 }
 
-// TestStateInit_DNSFailureLeavesJobRetryable covers bugs.md #478: a DNS
-// resolution failure in StateInit's else branch must route through
-// storage.UpdateFunnelStatusRetryable like every other retryable failure in
-// this file, instead of only logging and leaving the row at DISCOVERED
-// forever -- which is what let one bad hostname spin the live daemon at
-// ~1 cycle/sec instead of the documented ~1/minute cadence.
-func TestStateInit_DNSFailureLeavesJobRetryable(t *testing.T) {
+func TestStateInit_DNSNotFoundTerminalizesWithoutRetry(t *testing.T) {
 	if err := storage.InitDBWithPath(":memory:"); err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
@@ -181,7 +182,6 @@ func TestStateInit_DNSFailureLeavesJobRetryable(t *testing.T) {
 		WorkerID: 1,
 	}
 
-	before := time.Now().UTC()
 	if err := g.Run(context.Background(), StateInit, state); err != nil {
 		t.Fatalf("pipeline run returned an error: %v", err)
 	}
@@ -195,14 +195,14 @@ func TestStateInit_DNSFailureLeavesJobRetryable(t *testing.T) {
 		t.Fatalf("failed to read back job_funnel row: %v", err)
 	}
 
-	if status != "DISCOVERED" {
-		t.Errorf("status = %q, want still DISCOVERED (one failure, under MaxRetryAttempts)", status)
+	if status != "RETRY_EXHAUSTED" {
+		t.Errorf("status = %q, want RETRY_EXHAUSTED for a permanent DNS name-not-found", status)
 	}
-	if retryCount != 1 {
-		t.Errorf("retry_count = %d, want 1 -- a DNS failure must count as a retryable attempt", retryCount)
+	if retryCount != 0 {
+		t.Errorf("retry_count = %d, want 0 because a permanent DNS failure must not consume retry budget", retryCount)
 	}
-	if !nextEligible.Valid || !nextEligible.Time.After(before) {
-		t.Fatalf("next_eligible_at = %v, want a time after %v -- without this the row is immediately reselectable and the daemon spins on it every cycle", nextEligible, before)
+	if nextEligible.Valid {
+		t.Fatalf("next_eligible_at = %v, want NULL for a terminal permanent DNS failure", nextEligible)
 	}
 
 	jobs, err := storage.GetDiscoveredJobs()
@@ -211,7 +211,34 @@ func TestStateInit_DNSFailureLeavesJobRetryable(t *testing.T) {
 	}
 	for _, job := range jobs {
 		if job.URL == jobURL {
-			t.Errorf("GetDiscoveredJobs still returned %s right after its DNS failure -- it must not reappear in the very next queue cycle", jobURL)
+			t.Errorf("GetDiscoveredJobs returned %s after permanent DNS failure", jobURL)
 		}
+	}
+}
+
+func TestStateInit_TemporaryDNSFailureRemainsRetryable(t *testing.T) {
+	if err := storage.InitDBWithPath(":memory:"); err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer storage.CloseDB()
+
+	const jobURL = "https://temporarily-unavailable.example/careers/job1"
+	if _, err := storage.AddToFunnel("Example", "Engineer", jobURL, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel failed: %v", err)
+	}
+
+	g := buildJobPipeline(JobPipelineDeps{NetworkGuard: security.NewNetworkGuard(security.WithResolver(temporaryFailingResolver{}))})
+	if err := g.Run(context.Background(), StateInit, &JobState{Job: scraper.Job{URL: jobURL, CompanyName: "Example"}}); err != nil {
+		t.Fatalf("pipeline run returned an error: %v", err)
+	}
+
+	var status string
+	var retryCount int
+	var nextEligible sql.NullTime
+	if err := storage.GetDB().QueryRow("SELECT status, retry_count, next_eligible_at FROM job_funnel WHERE url = ?", jobURL).Scan(&status, &retryCount, &nextEligible); err != nil {
+		t.Fatalf("read back job_funnel row: %v", err)
+	}
+	if status != "DISCOVERED" || retryCount != 1 || !nextEligible.Valid {
+		t.Errorf("temporary DNS failure = status %q, retry_count %d, next_eligible_at %v; want retryable DISCOVERED row", status, retryCount, nextEligible)
 	}
 }
