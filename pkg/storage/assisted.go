@@ -276,7 +276,7 @@ func MigrateLegacyAssisted(opts AssistedMigrationOptions) (AssistedMigrationRepo
 	for _, status := range statuses {
 		args = append(args, status)
 	}
-	query := `SELECT jf.id, jf.status, COALESCE(jf.status_reason, ''),
+	query := `SELECT jf.id, jf.status, COALESCE(jf.status_reason, ''), jf.fit_score,
 		EXISTS(SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url),
 		EXISTS(SELECT 1 FROM assisted_applications aa WHERE aa.job_id = jf.id)
 		FROM job_funnel jf WHERE jf.status IN (` + placeholders + `)`
@@ -303,10 +303,15 @@ func MigrateLegacyAssisted(opts AssistedMigrationOptions) (AssistedMigrationRepo
 	for rows.Next() {
 		var c candidate
 		var applied, present bool
-		if err := rows.Scan(&c.id, &c.status, &c.reason, &applied, &present); err != nil {
+		var fit sql.NullInt64
+		if err := rows.Scan(&c.id, &c.status, &c.reason, &fit, &applied, &present); err != nil {
 			return report, err
 		}
 		switch {
+		case c.reason == "expired":
+			report.Excluded["posting_expired"]++
+		case fit.Valid && fit.Int64 < 50:
+			report.Excluded["below_fit_threshold"]++
 		case applied:
 			report.Excluded["confirmed_application"]++
 		case present:

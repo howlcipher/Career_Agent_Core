@@ -95,6 +95,32 @@ func TestMigrateLegacyAssisted_RejectsUnsupportedStatus(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyAssisted_ExcludesExpiredAndLowFitRows(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	for _, tc := range []struct {
+		url, reason string
+		fit         int
+	}{
+		{"https://expired.example/jobs/1", "expired", 90},
+		{"https://lowfit.example/jobs/2", "", 49},
+	} {
+		if _, err := AddToFunnel("Excluded Co", "Engineer", tc.url, "AWAITING_REVIEW"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := GetDB().Exec("UPDATE job_funnel SET status_reason = ?, fit_score = ? WHERE url = ?", tc.reason, tc.fit, tc.url); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := MigrateLegacyAssisted(AssistedMigrationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Eligible != 0 || report.AlreadyIn != 0 || report.Excluded["posting_expired"] != 1 || report.Excluded["below_fit_threshold"] != 1 {
+		t.Fatalf("unsafe rows entered migration report: %+v", report)
+	}
+}
+
 func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
