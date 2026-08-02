@@ -94,6 +94,68 @@ func TestAttemptSubmit_NewPageFails(t *testing.T) {
 	}
 }
 
+// A renderer can crash before AttemptSubmit reaches its existing fill-path
+// recovery loop. The initial setup gets one fresh context/page, then proceeds
+// normally without retrying document generation or submission indefinitely.
+func TestAttemptSubmit_RecoversFromTargetClosedDuringInitialPageSetup(t *testing.T) {
+	const applyURL = "https://example.com/apply"
+	targetClosedErr := errors.New("target closed: Target page, context or browser has been closed")
+
+	firstPage := &MockPage{
+		urlValue: applyURL,
+		gotoFunc: func(string, ...playwright.PageGotoOptions) (playwright.Response, error) {
+			return nil, targetClosedErr
+		},
+	}
+	secondPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Open application</body></html>",
+		locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+	}
+
+	contextCalls := 0
+	pageCalls := 0
+	mockBrowser := &MockBrowser{
+		newContextFunc: func(...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+			contextCalls++
+			return &MockContext{
+				newPageFunc: func() (playwright.Page, error) {
+					pageCalls++
+					if pageCalls == 1 {
+						return firstPage, nil
+					}
+					return secondPage, nil
+				},
+			}, nil
+		},
+	}
+
+	documentCalls := 0
+	err := AttemptSubmit(
+		mockBrowser, security.NewQuarantineLayer(), nil, nil, "Test Company", applyURL,
+		func() (string, string, error) {
+			documentCalls++
+			return "resume.pdf", "", nil
+		},
+		&config.PII{}, "", true, false, false,
+	)
+
+	if contextCalls != 2 || pageCalls != 2 {
+		t.Fatalf("context/page creations = %d/%d, want 2/2 after one setup recovery", contextCalls, pageCalls)
+	}
+	if !firstPage.closed {
+		t.Error("the initial crashed page was not closed before retrying")
+	}
+	if documentCalls != 1 {
+		t.Errorf("document generation calls = %d, want 1 after the recovered page passed setup", documentCalls)
+	}
+	if err == nil || !strings.Contains(err.Error(), "unsupported Applicant Tracking System") {
+		t.Errorf("err = %v, want the ordinary post-recovery unsupported-ATS result", err)
+	}
+}
+
 // Test edge cases of safeFill using a nil Page or mock Page
 type MockPage struct {
 	playwright.Page
@@ -105,6 +167,7 @@ type MockPage struct {
 	urlValue             string
 	contentValue         string
 	screenshotFunc       func() ([]byte, error)
+	gotoFunc             func(url string, options ...playwright.PageGotoOptions) (playwright.Response, error)
 	// evaluateFunc backs page-level JS probes (bugs.md #99/#101).
 	evaluateFunc func(expression string) (interface{}, error)
 	// closed records whether Close was called on this specific page, so a
@@ -165,6 +228,9 @@ func (m *MockPage) WaitForSelector(selector string, options ...playwright.PageWa
 // of AttemptSubmit (NewContext/NewPage failures), so these were never
 // exercised on MockPage before.
 func (m *MockPage) Goto(url string, options ...playwright.PageGotoOptions) (playwright.Response, error) {
+	if m.gotoFunc != nil {
+		return m.gotoFunc(url, options...)
+	}
 	return nil, nil
 }
 func (m *MockPage) Route(url any, handler func(playwright.Route), times ...int) error { return nil }

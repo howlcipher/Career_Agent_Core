@@ -45,6 +45,8 @@ interface Metrics {
   last_confirmed_ago?: string;
   eligible_queue: number;
   eligible_never_attempted: number;
+  watchdog_alert?: string;
+  watchdog_alert_at?: string;
   last_applied_company?: string;
   last_applied_title?: string;
   last_applied_url?: string;
@@ -273,11 +275,17 @@ function App() {
       {/* #460: role="status" rather than "alert" — persistent staleness is
           worth a passive announcement, not an interruption, and the numbers
           below are still the last real ones fetched, not an error state. */}
-      {pollFailures >= 2 && (
+        {pollFailures >= 2 && (
         <p className="poll-warning" role="status">
           Metrics may be out of date — the last {pollFailures} polls failed
         </p>
-      )}
+        )}
+        {metrics?.watchdog_alert && (
+          <p className="watchdog-alert" role="alert">
+            Daemon watchdog: {metrics.watchdog_alert}
+            {metrics.watchdog_alert_at && ` (${metrics.watchdog_alert_at})`}
+          </p>
+        )}
 
       <div className="dashboard-container" aria-live="polite" aria-atomic="false">
         <div className="grid">

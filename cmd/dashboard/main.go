@@ -64,6 +64,8 @@ type Metrics struct {
 	LastConfirmedAgo          string `json:"last_confirmed_ago,omitempty"`
 	EligibleQueue             int    `json:"eligible_queue"`
 	EligibleNeverAttempted    int    `json:"eligible_never_attempted"`
+	WatchdogAlert             string `json:"watchdog_alert,omitempty"`
+	WatchdogAlertAt           string `json:"watchdog_alert_at,omitempty"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -237,6 +239,13 @@ func statusReason(status string) string {
 	default:
 		return status
 	}
+}
+
+func statusReasonWithDetail(status, detail string) string {
+	if status == "SKIPPED" && detail == storage.SkippedReasonExcludedSource {
+		return "Excluded ATS source — not eligible for automated submission"
+	}
+	return statusReason(status)
 }
 
 // explainedStatuses is every status the dashboard surfaces to the user, and so
@@ -506,6 +515,29 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'daemon_watchdog_alert'`).Scan(&exists); err != nil {
+			return fmt.Errorf("check daemon watchdog alert schema: %w", err)
+		}
+		if exists == 0 {
+			return nil
+		}
+		var updatedAt sql.NullTime
+		err := db.QueryRow(`SELECT message, updated_at FROM daemon_watchdog_alert WHERE id = 1`).
+			Scan(&m.WatchdogAlert, &updatedAt)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("query daemon watchdog alert: %w", err)
+		}
+		if updatedAt.Valid {
+			m.WatchdogAlertAt = updatedAt.Time.Local().Format("Jan 2, 3:04 PM")
+		}
+		return nil
+	})
+
+	g.Go(func() error {
 		rows, err := db.Query(`SELECT jf.url, jf.discovered_at, aa.started_at
 			FROM job_funnel jf
 			JOIN application_attempts aa ON aa.url = jf.url
@@ -640,18 +672,18 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		var skippedCompany, skippedTitle, skippedStatus sql.NullString
+		var skippedCompany, skippedTitle, skippedStatus, skippedDetail sql.NullString
 		var skippedAt, skippedDiscoveredAt sql.NullTime
-		err := db.QueryRow(`SELECT company_name, job_title, status, last_updated, discovered_at FROM job_funnel
+		err := db.QueryRow(`SELECT company_name, job_title, status, status_reason, last_updated, discovered_at FROM job_funnel
 			WHERE status = 'SKIPPED' ORDER BY last_updated DESC LIMIT 1`).
-			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedAt, &skippedDiscoveredAt)
+			Scan(&skippedCompany, &skippedTitle, &skippedStatus, &skippedDetail, &skippedAt, &skippedDiscoveredAt)
 		if err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("query last skipped job: %w", err)
 		}
 		m.LastSkippedCompany = skippedCompany.String
 		m.LastSkippedTitle = skippedTitle.String
 		if skippedStatus.Valid {
-			m.LastSkippedReason = statusReason(skippedStatus.String)
+			m.LastSkippedReason = statusReasonWithDetail(skippedStatus.String, skippedDetail.String)
 		}
 		if skippedAt.Valid {
 			m.LastSkippedAt = skippedAt.Time.Local().Format("Jan 2, 3:04 PM")

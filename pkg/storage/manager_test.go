@@ -100,6 +100,59 @@ func TestJobFunnelCRUD(t *testing.T) {
 	}
 }
 
+func TestExcludedSourceRowsAreTerminalAndNeverQueued(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	inserted, err := AddToFunnel("TestCorp", "Engineer", "https://jobs.testcorp.breezy.hr/p/123", "DISCOVERED")
+	if err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+	if inserted {
+		t.Fatal("excluded source must not be reported as an automatic-processing queue insertion")
+	}
+
+	var status, reason string
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url LIKE '%breezy.hr%'").Scan(&status, &reason); err != nil {
+		t.Fatalf("read excluded row: %v", err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonExcludedSource {
+		t.Fatalf("excluded row = %s/%s, want SKIPPED/%s", status, reason, SkippedReasonExcludedSource)
+	}
+
+	if jobs, err := GetDiscoveredJobs(); err != nil || len(jobs) != 0 {
+		t.Fatalf("excluded row reached automatic queue: jobs=%d err=%v", len(jobs), err)
+	}
+}
+
+func TestSkipExcludedSourceDiscoveredJobsOnlyTouchesLegacyRows(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec(`INSERT INTO job_funnel (url, status) VALUES
+		('https://legacy.breezy.hr/p/1', 'DISCOVERED'),
+		('https://resolved.breezy.hr/p/2', 'FAILED_SUBMIT'),
+		('https://other.example.com/p/3', 'DISCOVERED')`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+
+	changed, err := SkipExcludedSourceDiscoveredJobs()
+	if err != nil || changed != 1 {
+		t.Fatalf("sweep = %d, %v; want 1, nil", changed, err)
+	}
+	var status, reason string
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = 'https://legacy.breezy.hr/p/1'").Scan(&status, &reason); err != nil {
+		t.Fatalf("read swept row: %v", err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonExcludedSource {
+		t.Errorf("swept row = %s/%s", status, reason)
+	}
+	var untouched int
+	if err := db.QueryRow("SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED'").Scan(&untouched); err != nil || untouched != 1 {
+		t.Errorf("unrelated discovered rows = %d, %v; want 1, nil", untouched, err)
+	}
+}
+
 func TestApplicationsAndDuplicates(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
@@ -1633,6 +1686,58 @@ func TestMigrateJobFunnelStatusReason(t *testing.T) {
 
 	if err := migrateJobFunnelStatusReason(); err != nil {
 		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+func TestMigrateJobFunnelDiscoverySourceLeavesExistingRowsNull(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("create old-schema job_funnel: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO job_funnel (company_name, job_title, url, status) VALUES (?, ?, ?, ?)", "Old", "Engineer", "https://old.example/job", "DISCOVERED"); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	var source sql.NullString
+	if err := db.QueryRow("SELECT discovery_source FROM job_funnel WHERE url = ?", "https://old.example/job").Scan(&source); err != nil {
+		t.Fatalf("read migrated row: %v", err)
+	}
+	if source.Valid {
+		t.Fatalf("existing discovery_source = %q, want NULL", source.String)
+	}
+	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+func TestAddToFunnelPersistsDiscoverySource(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := AddToFunnel("New", "Engineer", "https://new.example/job", "DISCOVERED", "remoteok"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+	var source string
+	if err := db.QueryRow("SELECT discovery_source FROM job_funnel WHERE url = ?", "https://new.example/job").Scan(&source); err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if source != "remoteok" {
+		t.Errorf("discovery_source = %q, want remoteok", source)
 	}
 }
 

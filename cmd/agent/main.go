@@ -902,6 +902,11 @@ func main() {
 		log.Fatalf("Failed to initialize SQLite database: %v", err)
 	}
 	defer storage.CloseDB()
+	if skipped, err := storage.SkipExcludedSourceDiscoveredJobs(); err != nil {
+		log.Printf("[Agent] Failed to terminalize excluded-source rows: %v", err)
+	} else if skipped > 0 {
+		log.Printf("[Agent] Marked %d excluded-source DISCOVERED row(s) as SKIPPED.", skipped)
+	}
 
 	client := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
 	if err := runModelPreflight(ctx, os.Getenv(skipModelPreflightEnv), client.PreflightModels); err != nil {
@@ -1105,6 +1110,7 @@ func main() {
 			nil,
 		)
 	}
+	daemonWatchdog := daemonWatchdog{}
 	if err := runAgentSchedule(
 		ctx,
 		*daemonMode,
@@ -1112,7 +1118,17 @@ func main() {
 		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
 			if *daemonMode {
-				return runAgentQueueCycle(cycleCtx, limit, cycleDeps)
+				cycleErr := runAgentQueueCycle(cycleCtx, limit, cycleDeps)
+				snapshot, snapshotErr := storage.GetDaemonWatchdogSnapshot(time.Now())
+				if snapshotErr != nil {
+					log.Printf("[Agent] [WATCHDOG] Snapshot failed: %v", snapshotErr)
+				} else if alert := daemonWatchdog.Observe(watchdogSnapshotFromStorage(snapshot)); alert != "" {
+					log.Printf("[Agent] [WATCHDOG] ALERT: %s", alert)
+					if err := storage.SetDaemonWatchdogAlert(alert); err != nil {
+						log.Printf("[Agent] [WATCHDOG] Failed to publish alert: %v", err)
+					}
+				}
+				return cycleErr
 			}
 			return runAgentCycle(cycleCtx, limit, cycleDeps)
 		},

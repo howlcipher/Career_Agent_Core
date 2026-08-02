@@ -61,19 +61,28 @@ func TestDiscoverJobs(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
 	origSerp := serpAPIBaseURL
 	origRO := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	remoteOKBaseURL = roTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		remoteOKBaseURL = origRO
 		hnAlgoliaBaseURL = origHN
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -96,6 +105,21 @@ func TestDiscoverJobs(t *testing.T) {
 
 	if len(jobs) != 2 {
 		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+	for url, want := range map[string]string{
+		"https://lever.co/testcorp/1": "serpapi",
+		"https://remoteok.com/job/1":  "remoteok",
+	} {
+		source, found, err := storage.GetDiscoverySource(url)
+		if err != nil {
+			t.Fatalf("read %s source: %v", url, err)
+		}
+		if !found {
+			t.Fatalf("source for %s was not persisted", url)
+		}
+		if source != want {
+			t.Errorf("source for %s = %q, want %q", url, source, want)
+		}
 	}
 }
 
@@ -135,6 +159,10 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	yahooRequests := 0
 	yahooTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,15 +178,20 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 	origRemoteOK := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
 	origYahoo := yahooBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	remoteOKBaseURL = remoteOKTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
 	yahooBaseURL = yahooTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		remoteOKBaseURL = origRemoteOK
 		hnAlgoliaBaseURL = origHN
 		yahooBaseURL = origYahoo
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -245,6 +278,10 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
@@ -252,15 +289,20 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	origYahoo := yahooBaseURL
 	origRO := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	yahooBaseURL = yahooTs.URL
 	remoteOKBaseURL = roTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		yahooBaseURL = origYahoo
 		remoteOKBaseURL = origRO
 		hnAlgoliaBaseURL = origHN
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -283,6 +325,16 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	}
 	if jobs[0].URL != "https://jobs.lever.co/TestCorp/123" {
 		t.Errorf("unexpected job URL: %s", jobs[0].URL)
+	}
+	source, found, err := storage.GetDiscoverySource(jobs[0].URL)
+	if err != nil {
+		t.Fatalf("read Yahoo source: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a persisted Yahoo source")
+	}
+	if source != "yahoo" {
+		t.Errorf("Yahoo source = %q, want yahoo", source)
 	}
 }
 

@@ -2,6 +2,26 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 482. breezy.hr postings are excluded from GetDiscoveredJobs entirely, so they accumulate in DISCOVERED forever with no terminal status
+
+**Completed 2026-08-01.** The earlier SQL filter was correct to keep Breezy out of automation but it applied too late: rows had already been stored as `DISCOVERED`, and one-shot discovery could also hand a fresh row directly to a worker. `storage.AddToFunnel` now recognizes the Breezy host boundary and stores a new discovery as `SKIPPED` with `status_reason = excluded_source`, while reporting it as ineligible to callers so it is never sent to their worker channel.
+
+For legacy data, `SkipExcludedSourceDiscoveredJobs` runs at agent startup. It is idempotent and changes only still-`DISCOVERED` Breezy rows; terminal outcomes and unrelated postings are left unchanged. The dashboard renders that explicit reason as an excluded-source policy rather than its old low-fit caption.
+
+**Regression coverage:** storage tests cover a new excluded discovery and a selective legacy sweep; dashboard coverage verifies the visible skip explanation. `go test ./pkg/storage ./cmd/agent ./cmd/dashboard`, then the full build, vet, test, and gofmt loop passed. The live agent restart applies the sweep and verifies the `DISCOVERED` count clears without inserting or processing a synthetic application.
+
+---
+
+## 507. The first post-#489 cohort reaches FAILED_SUBMIT 100% of the time, so its lower quarantine rate has not yet improved outcomes
+
+**Completed 2026-08-01.** A sanitized count of the post-#489 cohort found all 8 `FAILED_SUBMIT` rows had Playwright's `target closed` error. For every one, the log showed post-score freshness passed but neither page validation nor document generation began. This rules out the later Vision, cached-mapping, and handler recovery gaps and isolates the failure to `newSubmitPage` during initial browser context/page setup.
+
+`AttemptSubmit` now retries initial setup once only when `isTargetClosedErr` recognizes that exact Playwright failure. It neither repeats document generation nor retries an actual submit click; the later recovery paths remain unchanged. A regression test makes the initial page fail during navigation, asserts the crashed page is closed, confirms exactly one replacement context/page is created, and verifies the recovered path generates documents once before reaching its ordinary unsupported-ATS result.
+
+**Verification:** `go test ./pkg/submitter`, then `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed. The daemon was rebuilt and restarted after verification; at restart it had one live process and zero eligible non-breezy queue rows, so the new recovery is deployed for the next discovery cohort without inventing a live outcome claim.
+
+---
+
 ## 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
 
 **Completed 2026-08-01.** The pre-scrape DOM check in `TwoStepVerification` now calls `quarantineTwoStepVerificationDOM`, which retains the existing DOM pruning and rejection behavior while routing unsafe content through `quarantineCareerPageDOM`. That shared helper captures the `PromptInjectionError` threat list and calls `storage.LogPromptInjectionDetections`, so each detected threat reaches `applications/prompt_injection_detections.csv`.
@@ -3901,5 +3921,14 @@ So "form failed to render in time" was always the same story as #9 — jobs dyin
 
 **Resolved 2026-07-23:** closed on the strength of the above rather than a live-traffic confirmation, per user go-ahead — live verification of this specific path is structurally unreachable (not merely unlucky), since the fix's own reasoning (frame-scan fallback) is directly, deterministically exercised by the unit test above using the exact original repro shape, and no code path between here and a real `APPLIED` remains unverified as a result of closing this one. If a genuine non-SmartRecruiters iframe-embedded-form case ever surfaces live, treat it as a bonus confirmation, not a requirement to reopen.
 
+
+---
+## 508. Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails
+
+**Completed 2026-08-01.** Live daemon evidence showed the configured SerpApi account was out of searches and the Yahoo fallback was repeatedly failing with unexpected EOF. RemoteOK, Hacker News, and 120 known ATS boards supplied no new posting, leaving the eligible queue empty.
+
+Added a Jobicy structured-feed source before the slower RemoteOK sweep. It uses the existing role-title relevance gate, rejects malformed/non-HTTP/junk records, persists `discovery_source = "jobicy"`, retains URL deduplication, and has a process-wide one-hour poll limit matching the provider's documented fair-use guidance. Tests cover successful ingestion, relevance filtering, duplicates, non-200 and malformed/unsuccessful responses, and the poll limit. The prior discovery tests now mock the added feed to stay offline and deterministic.
+
+`go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` passed. Rebuilt the daemon and launched it through the persistent dashboard control path; its first live refresh admitted 18 relevant Jobicy postings and the next queue cycle loaded 15 jobs. The dashboard reports the daemon running.
 
 ---

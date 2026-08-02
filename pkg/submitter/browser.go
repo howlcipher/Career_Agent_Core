@@ -1175,13 +1175,29 @@ func newSubmitPage(browser playwright.Browser, applyURL string) (*secureBrowserS
 	return session, page, nil
 }
 
+// newSubmitPageWithRecovery retries only the initial browser setup when
+// Playwright reports that its target closed. The later fill paths already
+// recover this condition, but a renderer crash can happen during context
+// creation or navigation, before document generation and those paths exist.
+// Keep this bounded: a browser that crashes again must release the worker for
+// the next job instead of retrying indefinitely.
+func newSubmitPageWithRecovery(browser playwright.Browser, applyURL string) (*secureBrowserSession, playwright.Page, error) {
+	session, page, err := newSubmitPage(browser, applyURL)
+	if err == nil || !isTargetClosedErr(err) {
+		return session, page, err
+	}
+
+	log.Printf("[Auto-Submit] Browser target closed during initial page setup; retrying once")
+	return newSubmitPage(browser, applyURL)
+}
+
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
 func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer, mapper FormMapper, judge LLMJudge, companyName, applyURL string, generateDocs func() (string, string, error), pii *config.PII, profileContext string, headlessBrowser, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Initiating submission sequence for %s at %s", companyName, applyURL)
 
-	session, page, err := newSubmitPage(browser, applyURL)
+	session, page, err := newSubmitPageWithRecovery(browser, applyURL)
 	if err != nil {
 		return err
 	}

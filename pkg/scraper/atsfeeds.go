@@ -78,7 +78,7 @@ func (f *FunnelEngine) discoverWithATSFeeds(jobChan chan<- Job) {
 	for _, slug := range gh {
 		s := slug
 		eg.Go(func() error {
-			f := f.pollBoard(s, fmt.Sprintf(greenhouseBoardAPI, s), parseGreenhouseBoard, jobChan)
+			f := f.pollBoard(s, fmt.Sprintf(greenhouseBoardAPI, s), parseGreenhouseBoard, "atsfeed:greenhouse", jobChan)
 			atomic.AddInt32(&found, int32(f))
 			return nil
 		})
@@ -86,7 +86,7 @@ func (f *FunnelEngine) discoverWithATSFeeds(jobChan chan<- Job) {
 	for _, slug := range lv {
 		s := slug
 		eg.Go(func() error {
-			f := f.pollBoard(s, fmt.Sprintf(leverBoardAPI, s), parseLeverBoard, jobChan)
+			f := f.pollBoard(s, fmt.Sprintf(leverBoardAPI, s), parseLeverBoard, "atsfeed:lever", jobChan)
 			atomic.AddInt32(&found, int32(f))
 			return nil
 		})
@@ -104,7 +104,7 @@ type feedJob struct {
 
 var retryBackoffBase = time.Second
 
-func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, jobChan chan<- Job) int {
+func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, discoverySource string, jobChan chan<- Job) int {
 	var jobs []feedJob
 	var err error
 
@@ -157,7 +157,7 @@ func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, jo
 		if !f.titleLooksRelevant(j.Title) {
 			continue
 		}
-		isNew, err := storage.AddToFunnel(company, j.Title, j.URL, "DISCOVERED")
+		isNew, err := storage.AddToFunnel(company, j.Title, j.URL, "DISCOVERED", discoverySource)
 		if err != nil {
 			continue
 		}

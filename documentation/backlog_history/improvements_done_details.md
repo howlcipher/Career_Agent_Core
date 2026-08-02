@@ -2,6 +2,24 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 495. No-progress / dominant-failure-reason watchdog
+
+**Completed 2026-08-01.** The daemon now observes a sanitized aggregate snapshot after each queue cycle. After three consecutive cycles with eligible work but no new confirmation, it alerts only when one terminal status is at least 75% of recent outcomes. Alerts are deduplicated, logged without job content or URLs, persisted as the current dashboard alert, and rendered by the React dashboard. The watchdog never requeues jobs, suppresses sources, relaxes constraints, or changes submission behavior.
+
+Table-driven coverage includes the #489-shaped `QUARANTINED_PROMPT_INJECTION` condition, healthy variety, and an empty eligible queue. The full Go build, vet, test, formatting loop, dashboard UI tests, and production UI build passed. The dashboard and daemon were rebuilt and restarted; immediately after restart the dashboard reported 128 eligible jobs and no watchdog alert, as expected before three completed cycles.
+
+---
+
+## 499. Persist `discovery_source` at `AddToFunnel` time
+
+**Completed 2026-08-01.** `job_funnel` now has a nullable `discovery_source` column. The idempotent migration leaves every pre-existing row `NULL`: the original discovery channel was discarded, so reconstructing it from a destination hostname would fabricate data. New inserts use the actual channel at the five live paths: `remoteok`, `hackernews`, `atsfeed:greenhouse`, `atsfeed:lever`, `serpapi`, and `yahoo`.
+
+Storage coverage verifies both the migration and a source-aware insert. Discovery coverage verifies SerpApi, RemoteOK, Yahoo, Hacker News, and an ATS feed persist their respective labels. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed.
+
+Live verification rebuilt the dashboard-managed daemon and restarted it through its local lifecycle endpoint. The daemon preflight passed and began a fresh discovery cycle. A read-only grouped aggregate at verification time contained only `legacy_unknown` rows, and the dashboard reported zero eligible jobs; this is an honest no-new-posting observation, not a migration failure. The next newly inserted job will carry its channel label automatically, allowing #493 and #496 to use the data without pretending historical rows have it.
+
+---
+
 ## 491. Define authoritative mission metrics and surface them on the dashboard
 
 **Completed 2026-08-01.** `/api/metrics` now returns a deliberately small set of outcome and queue-health measures: confirmed applications today and over the last seven days, median discovery-to-first-attempt latency, time since the last confirmed application, and both the eligible queue count and its never-attempted subset. Confirmations use `job_funnel.applied_at`, the canonical timestamp bug #490 added; first-attempt latency uses the earliest `application_attempts.started_at` per URL; eligibility exactly mirrors `storage.GetDiscoveredJobs`'s status, breezy.hr exclusion, and retry-backoff condition. The React dashboard renders the metrics together in a semantic definition list and uses an em dash or explicit no-confirmation message where no value exists, rather than manufacturing a zero duration.

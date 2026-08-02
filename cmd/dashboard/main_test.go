@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
 )
 
@@ -372,6 +373,18 @@ func TestServeMetrics_LastSkippedAndFailed_HaveHumanReadableReasons(t *testing.T
 	}
 	if m.LastFailedCompany != "SubmitFailCorp" || m.LastFailedReason == "" {
 		t.Errorf("expected a populated failure reason for SubmitFailCorp, got company=%q reason=%q", m.LastFailedCompany, m.LastFailedReason)
+	}
+}
+
+func TestServeMetrics_LastSkipped_ExplainsExcludedSource(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, status_reason, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+		"https://jobs.example.com/excluded", "ExcludedCorp", "Role A", "SKIPPED", storage.SkippedReasonExcludedSource, time.Now())
+
+	m := fetchMetricsFromTestServer(t)
+	if m.LastSkippedReason != "Excluded ATS source — not eligible for automated submission" {
+		t.Errorf("last skipped reason = %q", m.LastSkippedReason)
 	}
 }
 

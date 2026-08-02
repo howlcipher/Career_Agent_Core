@@ -1,5 +1,25 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — The daemon now reports stalled, one-sided outcomes
+
+* **Improvement (#495):** After three nonempty cycles without a new confirmation, the agent emits one aggregate-only alert when a recent terminal status accounts for at least 75% of outcomes. The dashboard displays the current alert. Detection cannot requeue jobs, suppress sources, relax constraints, or change submission behavior.
+
+## 2026-08-01 — Discovery retains a free, current remote-job source when search is unavailable
+
+* **Fix (bug #508):** The live eligible queue emptied after SerpApi exhausted its search quota and the Yahoo fallback began returning transport EOFs; RemoteOK, Hacker News, and the existing known-board sweep supplied no new postings in that refresh. The daemon now also reads Jobicy's public structured remote-job feed, title-filters it using the established role gate, and stores the actual title, company, URL, and `jobicy` discovery source. The provider is polled at most once per hour across daemon refreshes, respecting its documented fair-use cadence. This adds an independent, no-key feed without relaxing job constraints or changing submission behavior.
+
+## 2026-08-01 — Discovery channels are now visible in the funnel
+
+* **Improvement (#499):** New job-funnel records retain their actual discovery channel (`remoteok`, `hackernews`, `atsfeed:<board>`, `serpapi`, or `yahoo`) instead of only the eventual ATS hostname. Existing records intentionally remain unknown, so no historical channel is fabricated. This makes the live empty queue and source-quality investigations attributable to the channel that found a posting.
+
+## 2026-08-01 — Excluded ATS postings no longer clog the discovered queue
+
+* **Fix (bug #482):** `breezy.hr` postings are deliberately not auto-submitted, but the old queue filter left them permanently marked `DISCOVERED`. New excluded postings now enter as `SKIPPED` with an explicit source-exclusion reason and are never handed to a batch worker; agent startup also terminalizes legacy excluded rows. The dashboard identifies that reason instead of describing the row as a low-fit skip.
+
+## 2026-08-01 — A browser crash during initial page setup gets one safe recovery
+
+* **Fix (bug #507):** all eight initial post-#489 submission failures were the same Playwright `target closed` condition, and each occurred before page validation or document generation. `AttemptSubmit` now recreates the browser context once when that failure occurs during initial setup, matching the later fill-path recovery while remaining bounded. A regression test verifies the crashed page is released, the replacement page proceeds, and document generation is not repeated.
+
 ## 2026-08-01 — The dashboard now shows whether the agent can make mission progress
 
 * **Improvement (#491):** The dashboard previously showed raw funnel counts and last-row snapshots, but not whether there were any jobs the daemon could actually process or whether confirmed applications were happening. It now reports confirmed applications today and in the last seven days, median discovery-to-first-attempt latency, time since the last confirmation, and the eligible queue with its never-attempted subset. The eligibility calculation deliberately mirrors the agent's queue filter, so a visible `DISCOVERED` count can no longer imply that work is available when every row is excluded or delayed. Missing time-based values render as an explicit unavailable state rather than a fabricated zero.

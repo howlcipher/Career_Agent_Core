@@ -71,7 +71,7 @@ func (f *FunnelEngine) discoverWithHackerNews(jobChan chan<- Job) {
 		if !ok {
 			continue
 		}
-		isNew, err := storage.AddToFunnel(company, title, jobURL, "DISCOVERED")
+		isNew, err := storage.AddToFunnel(company, title, jobURL, "DISCOVERED", "hackernews")
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to add HN posting to funnel: %v", err)
 			continue
