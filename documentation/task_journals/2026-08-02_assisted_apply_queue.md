@@ -31,7 +31,8 @@
 - 2026-08-02 — Added a 20-minute atomic assisted-browser lease. The dashboard can request continuation only for an active lease; it cannot mark completion or release another process’s lease. Queue rows now identify a safe ATS provider category instead of exposing a URL. Storage/dashboard/UI tests and UI build pass.
 - 2026-08-02 — Added `cmd/assist` and its same-origin dashboard launch endpoint. A validated stable ID is the only browser-launch input; the command rechecks the plan, claims it atomically, uses a private dedicated persistent profile, and routes navigation through an authenticated loopback proxy plus the existing public-network validator. The command deliberately opens one visible browser only and does not solve CAPTCHA, collect credentials, infer answers, or submit. Focused storage/dashboard/UI tests and UI build pass.
 - 2026-08-02 — Added server-side assisted document lookup and `View Résumé`/`View Cover Letter` controls. The resolver derives only known document names from the selected job’s canonical application directory, rejects root escape and symlinks at every component, and the dashboard serves the validated file with private no-store headers. Focused storage/dashboard/UI tests and UI build pass.
+- 2026-08-02 — Added the user-facing progress stepper and sequential batch selection. Job cards now show provider, original status, freshness, document/mapping readiness, legacy provenance, attempt count, one translated human instruction, and only the action controls relevant to the next action. Batch mode reports `Application N of M`, opens a single selected session at a time, and offers `Stop After This Application`.
 
 ## Next Step
 
-Add status-specific workflow/stepper UI, skip/retry and sequential batch orchestration; then expand synthetic coverage and run the production migration protocol.
+Add retry/skip actions and expand synthetic coverage; document the workflow, then run the authorized production migration protocol.

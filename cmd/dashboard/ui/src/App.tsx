@@ -183,6 +183,9 @@ function App() {
 	const [assistedJobs, setAssistedJobs] = useState<AssistedJob[]>([]);
 	const [showAssisted, setShowAssisted] = useState<boolean>(false);
 	const [confirmJob, setConfirmJob] = useState<AssistedJob | null>(null);
+	const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
+	const [batchIndex, setBatchIndex] = useState<number | null>(null);
+	const [stopAfterCurrent, setStopAfterCurrent] = useState<boolean>(false);
 
   // #460: a single missed poll is expected noise (a request can legitimately
   // drop once), but a *run* of them means the numbers on screen may be
@@ -314,6 +317,22 @@ function App() {
 		} catch (e) { console.error(e); setActionError('Could not open the assisted application. It may already be active.'); }
 	};
 
+	const toggleSelected = (id: string) => setSelectedJobs((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
+	const startSelected = async () => {
+		if (selectedJobs.length === 0) return;
+		setBatchIndex(0); setStopAfterCurrent(false);
+		const first = assistedJobs.find((job) => job.id === selectedJobs[0]);
+		if (first) await launchAssisted(first);
+	};
+	const nextSelected = async () => {
+		if (batchIndex === null || stopAfterCurrent) { setBatchIndex(null); return; }
+		const nextIndex = batchIndex + 1;
+		if (nextIndex >= selectedJobs.length) { setBatchIndex(null); return; }
+		setBatchIndex(nextIndex);
+		const next = assistedJobs.find((job) => job.id === selectedJobs[nextIndex]);
+		if (next) await launchAssisted(next);
+	};
+
 	const openDocument = (job: AssistedJob, kind: 'resume' | 'cover_letter') => {
 		window.open(`/api/assisted/document?job_id=${encodeURIComponent(job.id)}&kind=${kind}`, '_blank', 'noopener,noreferrer');
 	};
@@ -404,9 +423,11 @@ function App() {
 			{showAssisted && (
 				<section className="assisted-queue" aria-labelledby="assisted-heading">
 					<div className="assisted-heading"><h2 id="assisted-heading">Assisted Apply</h2><button className="text-button" onClick={() => setShowAssisted(false)}>Return to dashboard</button></div>
+					{assistedJobs.length > 0 && <div className="batch-controls"><button className="btn btn-assisted" onClick={startSelected} disabled={selectedJobs.length === 0 || batchIndex !== null}>Start Selected Applications</button>{batchIndex !== null && <><span>Application {batchIndex + 1} of {selectedJobs.length}</span><button className="text-button" onClick={() => setStopAfterCurrent(true)}>Stop After This Application</button><button className="text-button" onClick={nextSelected}>Open Next Selected Application</button></>}</div>}
 					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
 						<article className="assisted-job" key={job.id}>
-							<div><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'}</p></div>
+							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
+							<ol className="assisted-stepper" aria-label="Application progress"><li className="done">Prepared</li><li className="active">Human action</li><li>Continue filling</li><li className={job.next_action.requires_explicit_submit ? 'active' : ''}>Review and submit</li><li>Confirmed</li></ol>
 							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted" onClick={() => launchAssisted(job)} disabled={job.live_browser}>{job.live_browser ? 'Assisted Application Open' : job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
 							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p>{job.resume_ready && <button className="text-button" onClick={() => openDocument(job, 'resume')}>View Résumé</button>}{job.cover_letter_ready && <button className="text-button" onClick={() => openDocument(job, 'cover_letter')}>View Cover Letter</button>}</details>
 							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>

@@ -21,6 +21,12 @@
 .assisted-instruction { margin: 16px 0; padding: 14px; border-left: 4px solid var(--neon-blue); background: rgba(0, 240, 255, 0.08); }
 .assisted-instruction h4 { margin: 0; color: var(--neon-blue); }
 .assisted-instruction .btn { margin: 12px 0; }
+.batch-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
+.batch-select { display: block; margin-bottom: 10px; color: var(--text-muted); font-size: 0.85rem; }
+.assisted-stepper { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 16px 0; list-style: none; }
+.assisted-stepper li { border: 1px solid var(--card-border); border-radius: 999px; padding: 5px 9px; color: var(--text-muted); font-size: 0.78rem; }
+.assisted-stepper .done { border-color: var(--neon-green); color: var(--neon-green); }
+.assisted-stepper .active { border-color: var(--neon-blue); color: var(--neon-blue); background: rgba(0, 240, 255, 0.12); }
 .text-button { background: transparent; color: var(--neon-blue); border: 1px solid currentColor; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 .text-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .confirm-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); padding: 20px; z-index: 10; }
