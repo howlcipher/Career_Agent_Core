@@ -2,6 +2,16 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 504. `state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status
+
+**Completed 2026-08-01.** Verified the reported pipeline path still exists: `cmd/agent/pipeline.go` checks the RAG-built `state.TailoredContext` and writes `QUARANTINED_RAG_CONTEXT` if the security layer rejects it. A read-only aggregate query against the live SQLite database returned exactly zero rows with that status. The query returned only the count; no job, company, URL, title, career-context, or other personal data was read or recorded.
+
+**Decision:** closed as a verified non-issue for the current dataset. No trusted-content bypass or relaxation of the quarantine layer was added: zero observed incidents does not justify weakening a security boundary, and the existing status remains available for future telemetry. This can be reconsidered if a nonzero rate is observed.
+
+**Verification:** documentation-only closure; the repository's full Go build, vet, test, and gofmt gates were run before commit.
+
+---
+
 ## 490. [`job_funnel.applied_at` is declared in the schema but no code path ever writes it](#490-job_funnelapplied_at-is-declared-in-the-schema-but-no-code-path-ever-writes-it)
 
 **Completed 2026-08-01.** `UpdateFunnelStatus` now records canonical UTC `applied_at` only when a row first becomes `APPLIED`; later status transitions preserve that confirmation time. `MarkHandoffApplied` writes the same canonical UTC value in its existing transaction, alongside its `applied_jobs` dedup record. Historical rows remain untouched because no reliable backfill source exists.

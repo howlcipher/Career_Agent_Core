@@ -57,7 +57,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 507 | [The first post-#489 cohort reaches FAILED_SUBMIT 100% of the time, so its lower quarantine rate has not yet improved outcomes](#507-the-first-post-489-cohort-reaches-failed_submit-100-of-the-time-so-its-lower-quarantine-rate-has-not-yet-improved-outcomes) | Minor | Pending | 1.33 = 4×1.0÷3 | standard | Found 2026-08-01 closing #501. The first eight rows processed by the daemon built after #489 had 0 `QUARANTINED_PROMPT_INJECTION` but 8 `FAILED_SUBMIT`; the cohort is too small to attribute cause, but its failure share is 100% against a 4.5% lifetime baseline. Diagnose sanitized categories and add an outcome-preserving regression test before calling #489 live-proven. |
 | 481 | [Aged DISCOVERED postings expire before the ranking algorithm's freshness decay ever surfaces them, starving the funnel](#481-aged-discovered-postings-expire-before-the-ranking-algorithms-freshness-decay-ever-surfaces-them-starving-the-funnel) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #481 for the full fix account. |
 | 480 | [UpdateFunnelStatusRetryable never records a status_reason, so every RETRY_EXHAUSTED row loses its own root cause](#480-updatefunnelstatusretryable-never-records-a-status_reason-so-every-retry_exhausted-row-loses-its-own-root-cause) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #480 for the full account. |
-| 504 | [`state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status](#504-statetailoredcontext-our-own-rag-generated-content-can-trip-the-same-zero-evidence-quarantine-as-489-via-a-dedicated-but-unverified-quarantined_rag_context-status) | Minor | Pending | 1.5 = 3×1.0÷2 | standard | Found 2026-08-01 closing #489. `cmd/agent/pipeline.go:311` runs `CheckPayload` on `state.TailoredContext` (our own model-generated RAG career context, not scraped posting text) and records `QUARANTINED_RAG_CONTEXT` on failure — a status that already exists, implying this was previously anticipated but its live rate was never measured. #489's fuzzy-branch mechanism (edit-distance-1 "assistance"/"assistant" plus common words) is plausible on generated cover-letter-style text too, and #489's ATS-boilerplate allowlist would not rescue it (RAG context doesn't contain EEO/background-check phrasing). Value 3, Effort 2: measure `QUARANTINED_RAG_CONTEXT`'s live rate in `job_funnel` first; if nonzero, this needs its own override design scoped to trusted-content characteristics, not the ATS-boilerplate allowlist |
+| 504 | [`state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status](#504-statetailoredcontext-our-own-rag-generated-content-can-trip-the-same-zero-evidence-quarantine-as-489-via-a-dedicated-but-unverified-quarantined_rag_context-status) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #504 for the full account. |
 | 503 | [`TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total](#503-twostepverifications-quarantine-check-never-logs-to-the-prompt-injection-audit-trail-undercounting-the-csv-total) | Minor | Pending | 1.5 = 3×1.0÷2 | mechanical | Found 2026-08-01 closing #489. `pkg/submitter/dynamic.go:83` calls `Filter.QuarantinePayload` directly (not `CheckPayloadDetailed`) when vetting a career page's DOM before scraping. Confirmed the only two call sites of `storage.LogPromptInjectionDetections` in the codebase are `cmd/agent/pipeline.go:264` and `pkg/submitter/browser.go:64` — neither covers this path. Quarantines here never reach `prompt_injection_detections.csv`, so every count derived from that file (including #489's own 10,967-detection baseline) undercounts by an unknown amount. Value 3, Effort 2: thread threat capture + `LogPromptInjectionDetections` through this call site the same way the other two already do |
 | 478 | [A DNS resolution failure never moves a job out of DISCOVERED, so one bad hostname spins the daemon forever](#478-a-dns-resolution-failure-never-moves-a-job-out-of-discovered-so-one-bad-hostname-spins-the-daemon-forever) | Major | Done (2026-08-01) | 3.0 = 6×1.0÷2 | standard | See `documentation/backlog_history/bugs_done_details.md` item #478 for the full fix account. |
 | 475 | [Yahoo fallback still fails most discovery queries despite bug 130's retry and backoff fix](#475-yahoo-fallback-still-fails-most-discovery-queries-despite-bug-130s-retry-and-backoff-fix) | Major | Done (2026-07-31) | 0.83 = 5×0.5÷3 | standard | See `documentation/backlog_history/bugs_done_details.md` item #475 for the full fix account. |
@@ -281,28 +281,7 @@ This calls `QuarantinePayload` directly, discarding the returned `PromptInjectio
 
 ### 504. `state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status
 
-**Found 2026-08-01** closing #489, while checking every caller of `QuarantinePayload`/`CheckPayload` for whether #489's fix helps or is irrelevant to it.
-
-**Evidence:** `cmd/agent/pipeline.go:311-318`:
-
-```go
-if err := deps.Filter.CheckPayload(state.TailoredContext); err != nil {
-    log.Printf("[Worker-%d] Security quarantine triggered on trusted RAG output: %v", workerID, err)
-    if statusErr := storage.UpdateFunnelStatus(job.URL, "QUARANTINED_RAG_CONTEXT"); statusErr != nil {
-        ...
-    }
-    skipJob = true
-    return
-}
-```
-
-`state.TailoredContext` is built from the user's own career-profile RAG chunks (`sb.WriteString(tc.Text)`, `pipeline.go:295-300`), not scraped posting text — a fundamentally different payload source than everything #489's audit measured. The existence of a dedicated `QUARANTINED_RAG_CONTEXT` status (distinct from `QUARANTINED_PROMPT_INJECTION`) suggests this was anticipated as a real possibility when written, but its live rate was never measured as part of this audit or #489's fix.
-
-**Why #489's fix doesn't help here:** #489's `overrideZeroEvidenceDetection` requires 2+ matches from `benignATSSignatures` (EEO statements, background-check disclosures, application-process language) — phrases that appear in scraped ATS postings, not in a candidate's own resume/career-history text. A career chunk quarantined by the same fuzzy edit-distance mechanism #489 fixed (e.g. "assistance"/"assistant" plus common technical words) would not be rescued by #489's allowlist.
-
-**Fix direction:** first measure — a safe aggregate query on `job_funnel.status = 'QUARANTINED_RAG_CONTEXT'` count. If it's zero or negligible, this row can close as "verified non-issue." If nonzero, this needs its own override design scoped to *trusted-content* characteristics (e.g. the content's provenance is already known-trusted RAG output, so the right question may be a different threshold or corroboration rule entirely, not an ATS-boilerplate allowlist).
-
-**Acceptance criteria:** a measured `QUARANTINED_RAG_CONTEXT` live rate; if material, a fix verified not to let genuinely injected content (e.g. a career-profile chunk that itself got poisoned upstream) through unchecked — trusted provenance is not the same guarantee as trusted content.
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #504.
 
 ### 490. `job_funnel.applied_at` is declared in the schema but no code path ever writes it
 
