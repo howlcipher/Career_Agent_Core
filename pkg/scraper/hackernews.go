@@ -3,7 +3,6 @@ package scraper
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
 	"html"
@@ -71,7 +70,7 @@ func (f *FunnelEngine) discoverWithHackerNews(jobChan chan<- Job) {
 		if !ok {
 			continue
 		}
-		isNew, err := storage.AddToFunnel(company, title, jobURL, "DISCOVERED", "hackernews")
+		isNew, err := f.addToFunnelCounted("hackernews", company, title, jobURL, "DISCOVERED")
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to add HN posting to funnel: %v", err)
 			continue

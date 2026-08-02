@@ -157,7 +157,7 @@ func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, di
 		if !f.titleLooksRelevant(j.Title) {
 			continue
 		}
-		isNew, err := storage.AddToFunnel(company, j.Title, j.URL, "DISCOVERED", discoverySource)
+		isNew, err := f.addToFunnelCounted(discoverySource, company, j.Title, j.URL, "DISCOVERED")
 		if err != nil {
 			continue
 		}

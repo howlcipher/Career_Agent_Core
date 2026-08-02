@@ -25,6 +25,54 @@ var (
 	yahooBaseURL   = "https://search.yahoo.com/search"
 )
 
+// DiscoverySourceCounts accumulates privacy-safe outcome counters for one
+// discovery source within a single refresh run. It is safe for concurrent use.
+type DiscoverySourceCounts struct {
+	mu        sync.Mutex
+	Attempted int
+	New       int
+	Duplicate int
+	Excluded  int
+	Error     int
+}
+
+// record registers the outcome of one AddToFunnel call. isNew and isExcluded
+// come from storage.AddToFunnel; err is its error return.
+func (c *DiscoverySourceCounts) record(isNew bool, isExcluded bool, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Attempted++
+	switch {
+	case err != nil:
+		c.Error++
+	case isExcluded:
+		c.Excluded++
+	case isNew:
+		c.New++
+	default:
+		c.Duplicate++
+	}
+}
+
+// Snapshot returns a consistent aggregate for persistence after discovery.
+func (c *DiscoverySourceCounts) Snapshot() DiscoverySourceCounts {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return DiscoverySourceCounts{Attempted: c.Attempted, New: c.New, Duplicate: c.Duplicate, Excluded: c.Excluded, Error: c.Error}
+}
+
+// DiscoveryResult carries the privacy-safe aggregate outcome of one
+// DiscoverJobsWithCounts call. It never contains URLs, job names, company
+// names, resumes, application content, or raw error strings.
+type DiscoveryResult struct {
+	// SourceCounts is keyed by lowercase source name ("serpapi", "yahoo",
+	// "remoteok", "hackernews", "jobicy", "atsfeeds").
+	SourceCounts map[string]*DiscoverySourceCounts
+	// ErrorClass is a sanitized error category: "", "network", "timeout",
+	// "provider", "cancelled", or "unknown". Never a raw error message.
+	ErrorClass string
+}
+
 type FunnelEngine struct {
 	TargetATS []string
 	Roles     []string
@@ -35,6 +83,13 @@ type FunnelEngine struct {
 	// starting fresh per request (improvement #477).
 	yahooClientOnce sync.Once
 	yahooClient     *http.Client
+
+	// counts, when non-nil, accumulates per-source discovery outcomes for the
+	// current DiscoverJobsWithCounts run. nil during ordinary DiscoverJobs
+	// calls; always accessed through the per-source DiscoverySourceCounts
+	// mutex so concurrent goroutines in DiscoverJobs are safe.
+	counts   map[string]*DiscoverySourceCounts
+	countsMu sync.Mutex
 }
 
 func NewFunnelEngine(roles []string) *FunnelEngine {
@@ -52,6 +107,94 @@ type SerpApiResponse struct {
 		Title string `json:"title"`
 		Link  string `json:"link"`
 	} `json:"organic_results"`
+}
+
+// sourceCounter returns the per-source counter for name, lazily initialising
+// it. Returns nil when the engine was not constructed with count tracking
+// (i.e. when counts == nil, which is the case for ordinary DiscoverJobs
+// calls).
+func (f *FunnelEngine) sourceCounter(name string) *DiscoverySourceCounts {
+	if f.counts == nil {
+		return nil
+	}
+	f.countsMu.Lock()
+	defer f.countsMu.Unlock()
+	if f.counts[name] == nil {
+		f.counts[name] = &DiscoverySourceCounts{}
+	}
+	return f.counts[name]
+}
+
+// addToFunnelCounted calls storage.AddToFunnel and records the outcome in the
+// per-source counter when count tracking is active. It is the only gateway
+// from discovery code to the funnel DB during a DiscoverJobsWithCounts run;
+// neither URLs, company names, job titles, nor raw errors are stored in the
+// counter.
+func (f *FunnelEngine) addToFunnelCounted(source, company, title, rawURL, status string) (bool, error) {
+	// Detect an excluded-source URL before the DB round-trip so the counter
+	// can distinguish "excluded by policy" from "duplicate already in DB".
+	// The DB also enforces this (AddToFunnel converts DISCOVERED→SKIPPED for
+	// excluded URLs), but we need the flag here for the counter.
+	isExcluded := status == "DISCOVERED" && isExcludedSourceURLScraper(rawURL)
+	isNew, err := storage.AddToFunnel(company, title, rawURL, status, source)
+	if c := f.sourceCounter(source); c != nil {
+		c.record(isNew, isExcluded, err)
+	}
+	return isNew, err
+}
+
+// isExcludedSourceURLScraper is the scraper-package copy of the storage-level
+// breezy.hr exclusion check. Duplicated to avoid a circular import; must stay
+// in sync with storage.isExcludedSourceURL.
+func isExcludedSourceURLScraper(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	return host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr")
+}
+
+// DiscoverJobsWithCounts is identical to DiscoverJobs but also returns a
+// DiscoveryResult containing privacy-safe per-source outcome counts. Call
+// this from the daemon discovery loop to persist a health diagnostic; use
+// DiscoverJobs for all other callers to avoid changing their signatures.
+func (f *FunnelEngine) DiscoverJobsWithCounts(ctx context.Context, jobChan chan<- Job) (DiscoveryResult, error) {
+	f.countsMu.Lock()
+	f.counts = make(map[string]*DiscoverySourceCounts)
+	f.countsMu.Unlock()
+
+	err := f.DiscoverJobs(ctx, jobChan)
+
+	f.countsMu.Lock()
+	result := DiscoveryResult{
+		SourceCounts: f.counts,
+		ErrorClass:   classifyDiscoveryError(ctx, err),
+	}
+	f.counts = nil
+	f.countsMu.Unlock()
+	return result, err
+}
+
+// classifyDiscoveryError maps an error from a discovery run to a sanitized
+// class string safe for storage. Never records the raw error message.
+func classifyDiscoveryError(ctx context.Context, err error) string {
+	if err == nil {
+		return ""
+	}
+	if ctx.Err() != nil {
+		return "cancelled"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(msg, "connection") || strings.Contains(msg, "dial") ||
+		strings.Contains(msg, "network") || strings.Contains(msg, "no route"):
+		return "network"
+	default:
+		return "unknown"
+	}
 }
 
 // DiscoverJobs runs every free discovery source, then augments those results
@@ -143,7 +286,7 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 					log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
 
 					jobTitle := extractJobTitleFromResult(result.Title, role)
-					isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED", "serpapi")
+					isNew, err := f.addToFunnelCounted("serpapi", company, jobTitle, result.Link, "DISCOVERED")
 					if err != nil {
 						log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
 					} else if isNew && jobChan != nil {
@@ -332,7 +475,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			// the searched role is genuinely the only label available here
 			// (bugs.md #69).
 			log.Printf("[FunnelEngine] Yahoo Fallback Discovered Live Job at %s", decoded)
-			isNew, err := storage.AddToFunnel(company, role, decoded, "DISCOVERED", "yahoo")
+			isNew, err := f.addToFunnelCounted("yahoo", company, role, decoded, "DISCOVERED")
 			if err == nil && isNew && jobChan != nil {
 				jobChan <- Job{
 					CompanyName: company,
@@ -639,7 +782,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 				}
 
 				// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
-				isNew, err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED", "remoteok")
+				isNew, err := f.addToFunnelCounted("remoteok", roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
 				if err != nil {
 					log.Printf("[FunnelEngine] Failed to add %s to funnel: %v", roJob.URL, err)
 				} else if isNew && jobChan != nil {

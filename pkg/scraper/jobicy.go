@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 )
 
@@ -90,7 +89,7 @@ func (f *FunnelEngine) discoverWithJobicy(jobChan chan<- Job) {
 			continue
 		}
 
-		isNew, err := storage.AddToFunnel(company, title, jobURL, "DISCOVERED", "jobicy")
+		isNew, err := f.addToFunnelCounted("jobicy", company, title, jobURL, "DISCOVERED")
 		if err != nil {
 			log.Printf("[FunnelEngine] Failed to add Jobicy posting: %v", err)
 			continue

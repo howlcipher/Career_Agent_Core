@@ -1107,13 +1107,14 @@ func main() {
 			func(discoveryCtx context.Context) error {
 				startedAt := time.Now().UTC()
 				before, beforeErr := storage.CountEligibleDiscoveryRows(startedAt)
-				err := cycleDeps.discoverJobs(discoveryCtx, nil)
+				engine := scraper.NewFunnelEngine(prof.Roles)
+				result, err := engine.DiscoverJobsWithCounts(discoveryCtx, nil)
 				after, afterErr := storage.CountEligibleDiscoveryRows(time.Now().UTC())
 				newEligible := 0
 				if beforeErr == nil && afterErr == nil && after > before {
 					newEligible = after - before
 				}
-				errorClass := ""
+				errorClass := result.ErrorClass
 				if err != nil {
 					errorClass = "unknown"
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1122,6 +1123,7 @@ func main() {
 				}
 				if recordErr := storage.SetDiscoveryRefresh(storage.DiscoveryRefresh{
 					StartedAt: startedAt, FinishedAt: time.Now().UTC(), NewEligible: newEligible, ErrorClass: errorClass,
+					SourceCounts: discoverySourceCounts(result.SourceCounts),
 				}); recordErr != nil {
 					log.Printf("[Agent] [DISCOVERY] Could not record aggregate refresh result: %v", recordErr)
 				}
@@ -1157,6 +1159,15 @@ func main() {
 		log.Printf("[Agent] Execution completed with errors: %v", err)
 	}
 	log.Println("[Agent] Shutdown complete.")
+}
+
+func discoverySourceCounts(counts map[string]*scraper.DiscoverySourceCounts) []storage.DiscoverySourceCount {
+	result := make([]storage.DiscoverySourceCount, 0, len(counts))
+	for source, count := range counts {
+		snapshot := count.Snapshot()
+		result = append(result, storage.DiscoverySourceCount{Source: source, Attempted: snapshot.Attempted, New: snapshot.New, Duplicate: snapshot.Duplicate, Excluded: snapshot.Excluded, Error: snapshot.Error})
+	}
+	return result
 }
 
 // defaultWorkerCount picks a starting concurrency: local Ollama serves one
