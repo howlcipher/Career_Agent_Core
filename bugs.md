@@ -4,7 +4,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**MET 2026-08-02 mission-status groom.** There are no Pending bug rows; the zero-Blocker/Major box remains checked. The live dashboard confirms the agent is stopped with no eligible jobs, which is an operational state rather than a reproducible defect. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
+**MET 2026-08-02 passive-funnel audit and second groom.** There are no Pending bug rows and the zero-Blocker/Major box remains checked. Live logs show the daemon is active and its latest six eligible rows reached terminal outcomes (CAPTCHA, expiry, timeout, or quarantine), leaving the eligible queue at zero; the end-to-end audit found no additional reproducible defect. The operational gaps remain improvements #510 and #479, plus the paid CAPTCHA-solving item #17. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass.
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 
@@ -44,8 +44,6 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 ## Ranked Backlog (best ROI first)
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
-
-**2026-08-01, post-#494 groom pass.** There are still no Pending bug rows. The static Usability Gate checks re-ran clean (`go build ./...`, `go vet ./...`, `go test ./...`), while the live end-to-end verification notes remain current and were not re-run against personal services. Improvement #493/#498/#448/#442 (1.0) are the next free candidates. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|---|

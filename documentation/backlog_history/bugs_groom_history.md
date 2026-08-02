@@ -1,5 +1,9 @@
 # bugs.md — Archived Groom-Pass / Status History
 
+**Prior — 2026-08-02 passive-funnel groom.** There are no Pending bug rows and the zero-Blocker/Major box remains checked. Live logs show the daemon is active and its latest six eligible rows reached terminal outcomes (CAPTCHA, expiry, timeout, or quarantine), leaving the eligible queue at zero; this is operational evidence for improvements #510 and #479, not a reproducible code defect. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass.
+
+**Prior — 2026-08-01, post-#494 groom pass.** There are still no Pending bug rows. The static Usability Gate checks re-ran clean (`go build ./...`, `go vet ./...`, `go test ./...`), while the live end-to-end verification notes remain current and were not re-run against personal services. Improvement #493/#498/#448/#442 (1.0) are the next free candidates.
+
 **Prior — MET 2026-08-02 groom pass.** There were no Pending bug rows; the zero-Blocker/Major box remained checked. `go build ./...`, `go vet ./...`, and `go test ./...` remained clean after #448 and that backlog pass.
 
 **MET 2026-08-01 (session fifty-one groom pass).** There are no Pending bug rows; the zero-Blocker/Major box remains checked. `go build ./...`, `go vet ./...`, and `go test ./...` re-ran clean during this pass.
