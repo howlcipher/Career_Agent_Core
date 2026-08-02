@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Discovery channels are now visible in the funnel
+
+* **Improvement (#499):** New job-funnel records retain their actual discovery channel (`remoteok`, `hackernews`, `atsfeed:<board>`, `serpapi`, or `yahoo`) instead of only the eventual ATS hostname. Existing records intentionally remain unknown, so no historical channel is fabricated. This makes the live empty queue and source-quality investigations attributable to the channel that found a posting.
+
 ## 2026-08-01 — Excluded ATS postings no longer clog the discovered queue
 
 * **Fix (bug #482):** `breezy.hr` postings are deliberately not auto-submitted, but the old queue filter left them permanently marked `DISCOVERED`. New excluded postings now enter as `SKIPPED` with an explicit source-exclusion reason and are never handed to a batch worker; agent startup also terminalizes legacy excluded rows. The dashboard identifies that reason instead of describing the row as a low-fit skip.

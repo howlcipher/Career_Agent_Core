@@ -139,7 +139,7 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 					log.Printf("[FunnelEngine] Discovered Live Job: %s at %s", result.Title, result.Link)
 
 					jobTitle := extractJobTitleFromResult(result.Title, role)
-					isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED")
+					isNew, err := storage.AddToFunnel(company, jobTitle, result.Link, "DISCOVERED", "serpapi")
 					if err != nil {
 						log.Printf("[FunnelEngine] Warning: Failed to add to funnel DB: %v", err)
 					} else if isNew && jobChan != nil {
@@ -328,7 +328,7 @@ func (f *FunnelEngine) discoverWithYahooHTML(ctx context.Context, query, role st
 			// the searched role is genuinely the only label available here
 			// (bugs.md #69).
 			log.Printf("[FunnelEngine] Yahoo Fallback Discovered Live Job at %s", decoded)
-			isNew, err := storage.AddToFunnel(company, role, decoded, "DISCOVERED")
+			isNew, err := storage.AddToFunnel(company, role, decoded, "DISCOVERED", "yahoo")
 			if err == nil && isNew && jobChan != nil {
 				jobChan <- Job{
 					CompanyName: company,
@@ -635,7 +635,7 @@ func (f *FunnelEngine) discoverWithRemoteOK(jobChan chan<- Job) {
 				}
 
 				// RemoteOK has its own ATS, but for our pipeline, we extract the domain or let the dynamic learner handle it
-				isNew, err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED")
+				isNew, err := storage.AddToFunnel(roJob.Company, roJob.Position, roJob.URL, "DISCOVERED", "remoteok")
 				if err != nil {
 					log.Printf("[FunnelEngine] Failed to add %s to funnel: %v", roJob.URL, err)
 				} else if isNew && jobChan != nil {

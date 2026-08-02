@@ -1689,6 +1689,58 @@ func TestMigrateJobFunnelStatusReason(t *testing.T) {
 	}
 }
 
+func TestMigrateJobFunnelDiscoverySourceLeavesExistingRowsNull(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := db.Exec("DROP TABLE job_funnel"); err != nil {
+		t.Fatalf("drop job_funnel: %v", err)
+	}
+	oldSchema := `CREATE TABLE job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT,
+		job_title TEXT,
+		url TEXT UNIQUE,
+		status TEXT
+	)`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("create old-schema job_funnel: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO job_funnel (company_name, job_title, url, status) VALUES (?, ?, ?, ?)", "Old", "Engineer", "https://old.example/job", "DISCOVERED"); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+
+	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	var source sql.NullString
+	if err := db.QueryRow("SELECT discovery_source FROM job_funnel WHERE url = ?", "https://old.example/job").Scan(&source); err != nil {
+		t.Fatalf("read migrated row: %v", err)
+	}
+	if source.Valid {
+		t.Fatalf("existing discovery_source = %q, want NULL", source.String)
+	}
+	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		t.Errorf("second migration call should be a no-op, got error: %v", err)
+	}
+}
+
+func TestAddToFunnelPersistsDiscoverySource(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if _, err := AddToFunnel("New", "Engineer", "https://new.example/job", "DISCOVERED", "remoteok"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+	var source string
+	if err := db.QueryRow("SELECT discovery_source FROM job_funnel WHERE url = ?", "https://new.example/job").Scan(&source); err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if source != "remoteok" {
+		t.Errorf("discovery_source = %q, want remoteok", source)
+	}
+}
+
 // TestUpdateFunnelStatusInvalid_RecordsReason confirms both reason
 // constants persist correctly, independent of the migration path above.
 func TestUpdateFunnelStatusInvalid_RecordsReason(t *testing.T) {

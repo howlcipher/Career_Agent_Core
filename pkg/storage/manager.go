@@ -85,7 +85,8 @@ func InitDBWithPath(path string) error {
 		tone_variant TEXT,
 		retry_count INTEGER DEFAULT 0,
 		next_eligible_at DATETIME,
-		status_reason TEXT
+		status_reason TEXT,
+		discovery_source TEXT
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,6 +149,9 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateJobFunnelStatusReason(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelDiscoverySource(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -350,6 +354,37 @@ func migrateJobFunnelStatusReason() error {
 	}
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN status_reason TEXT")
+	return err
+}
+
+// migrateJobFunnelDiscoverySource adds job_funnel.discovery_source
+// (improvements.md #499) without inventing a source for existing rows. The
+// discovery channel was previously discarded at insertion time, so NULL is
+// the only truthful value for rows created before this migration.
+func migrateJobFunnelDiscoverySource() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "discovery_source" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN discovery_source TEXT")
 	return err
 }
 
@@ -1167,9 +1202,16 @@ func CloseDB() error {
 // automatic-processing queue. Excluded sources are retained as SKIPPED audit
 // rows but return false, so discovery callers never send them straight to a
 // one-shot batch worker.
-func AddToFunnel(company, title, url, status string) (bool, error) {
+func AddToFunnel(company, title, url, status string, discoverySources ...string) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("db not initialized")
+	}
+	if len(discoverySources) > 1 {
+		return false, fmt.Errorf("expected at most one discovery source, got %d", len(discoverySources))
+	}
+	discoverySource := ""
+	if len(discoverySources) == 1 {
+		discoverySource = strings.TrimSpace(discoverySources[0])
 	}
 	url = NormalizeURL(url)
 	statusReason := ""
@@ -1178,9 +1220,9 @@ func AddToFunnel(company, title, url, status string) (bool, error) {
 		status = "SKIPPED"
 		statusReason = SkippedReasonExcludedSource
 	}
-	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovered_at, last_updated)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), CURRENT_TIMESTAMP, CASE WHEN ? = '' THEN NULL ELSE ? END)
-		ON CONFLICT(url) DO NOTHING`, company, title, url, status, statusReason, statusReason, time.Now().UTC())
+	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovery_source, discovered_at, last_updated)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), CURRENT_TIMESTAMP, CASE WHEN ? = '' THEN NULL ELSE ? END)
+		ON CONFLICT(url) DO NOTHING`, company, title, url, status, statusReason, discoverySource, statusReason, time.Now().UTC())
 	if err != nil {
 		return false, err
 	}
@@ -1189,6 +1231,24 @@ func AddToFunnel(company, title, url, status string) (bool, error) {
 		return false, err
 	}
 	return rowsAffected > 0 && !excluded, nil
+}
+
+// GetDiscoverySource returns the channel that inserted a funnel row. The
+// boolean is false for legacy rows, whose channel was not stored and must not
+// be inferred from their destination hostname.
+func GetDiscoverySource(rawURL string) (string, bool, error) {
+	if db == nil {
+		return "", false, fmt.Errorf("db not initialized")
+	}
+	var source sql.NullString
+	err := db.QueryRow("SELECT discovery_source FROM job_funnel WHERE url = ?", NormalizeURL(rawURL)).Scan(&source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return source.String, source.Valid, nil
 }
 
 func isExcludedSourceURL(rawURL string) bool {

@@ -97,6 +97,21 @@ func TestDiscoverJobs(t *testing.T) {
 	if len(jobs) != 2 {
 		t.Fatalf("expected 2 jobs, got %d", len(jobs))
 	}
+	for url, want := range map[string]string{
+		"https://lever.co/testcorp/1": "serpapi",
+		"https://remoteok.com/job/1":  "remoteok",
+	} {
+		source, found, err := storage.GetDiscoverySource(url)
+		if err != nil {
+			t.Fatalf("read %s source: %v", url, err)
+		}
+		if !found {
+			t.Fatalf("source for %s was not persisted", url)
+		}
+		if source != want {
+			t.Errorf("source for %s = %q, want %q", url, source, want)
+		}
+	}
 }
 
 func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
@@ -283,6 +298,16 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	}
 	if jobs[0].URL != "https://jobs.lever.co/TestCorp/123" {
 		t.Errorf("unexpected job URL: %s", jobs[0].URL)
+	}
+	source, found, err := storage.GetDiscoverySource(jobs[0].URL)
+	if err != nil {
+		t.Fatalf("read Yahoo source: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a persisted Yahoo source")
+	}
+	if source != "yahoo" {
+		t.Errorf("Yahoo source = %q, want yahoo", source)
 	}
 }
 

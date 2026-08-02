@@ -218,4 +218,14 @@ func TestDiscoverWithHackerNews(t *testing.T) {
 	if jobs[0].CompanyName != "TestCorp" || jobs[0].URL != "https://testcorp.com/apply/1" {
 		t.Errorf("unexpected job: %+v", jobs[0])
 	}
+	source, found, err := storage.GetDiscoverySource(jobs[0].URL)
+	if err != nil {
+		t.Fatalf("read Hacker News source: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a persisted Hacker News source")
+	}
+	if source != "hackernews" {
+		t.Errorf("Hacker News source = %q, want hackernews", source)
+	}
 }

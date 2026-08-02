@@ -3,9 +3,12 @@ package scraper
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 // improvements.md #26: board feeds return a company's complete current posting
@@ -85,7 +88,7 @@ func TestPollBoard_RetriesOnTransientAndParseErrors(t *testing.T) {
 	defer ts.Close()
 
 	f := &FunnelEngine{}
-	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, nil)
+	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, "atsfeed:greenhouse", nil)
 
 	if attempts != 3 {
 		t.Errorf("expected 3 attempts, got %d", attempts)
@@ -101,10 +104,38 @@ func TestPollBoard_NoRetryOn404(t *testing.T) {
 	defer ts.Close()
 
 	f := &FunnelEngine{}
-	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, nil)
+	f.pollBoard("test-company", ts.URL, parseGreenhouseBoard, "atsfeed:greenhouse", nil)
 
 	if attempts != 1 {
 		t.Errorf("expected 1 attempt for a 404, got %d", attempts)
+	}
+}
+
+func TestPollBoardPersistsDiscoverySource(t *testing.T) {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
+		t.Fatalf("InitDBWithPath: %v", err)
+	}
+	defer storage.CloseDB()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jobs":[{"absolute_url":"https://job-boards.greenhouse.io/acme/jobs/1","title":"Backend Engineer"}]}`))
+	}))
+	defer ts.Close()
+
+	f := &FunnelEngine{Roles: []string{"Backend Engineer"}}
+	if found := f.pollBoard("acme", ts.URL, parseGreenhouseBoard, "atsfeed:greenhouse", nil); found != 0 {
+		t.Fatalf("found = %d, want 0 when no queue channel is supplied", found)
+	}
+
+	source, found, err := storage.GetDiscoverySource("https://job-boards.greenhouse.io/acme/jobs/1")
+	if err != nil {
+		t.Fatalf("read persisted source: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a persisted discovery source")
+	}
+	if source != "atsfeed:greenhouse" {
+		t.Fatalf("discovery_source = %q, want atsfeed:greenhouse", source)
 	}
 }
 
