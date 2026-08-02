@@ -24,7 +24,8 @@
 
 - 2026-08-02 — Selected #509 after confirming no in-flight journal, concurrent agent process, or unmerged worktree. Live model inventory checked; delegation model selected.
 - 2026-08-02 — Antigravity Gemini delegation stopped at an account quota error. Independent GPT-OSS delegation returned without a diff despite the clean pre-flight state. Verified no code changes; falling back to an orchestrator-owned implementation after optional local-model design review.
+- 2026-08-02 — Implemented and verified the first safe diagnostic slice: an idempotent aggregate-only `discovery_refresh` record, daemon refresh recording, metrics API fields, and a dashboard explanation for stopped, waiting, error, zero-new, and new-job states. Full Go build/vet/test/format and UI test/lint/build pass. Remaining: source-level duplicate/excluded/error accounting is not yet captured by the individual discovery adapters, so the item cannot close yet.
 
 ## Next Step
 
-Inspect the existing storage, discovery, dashboard, and UI seams; implement the smallest privacy-safe aggregate path directly with tests.
+Instrument individual discovery adapters for source-level candidate, duplicate, excluded, and error counts without recording raw posting or personal data.

@@ -45,6 +45,9 @@ interface Metrics {
   last_confirmed_ago?: string;
   eligible_queue: number;
   eligible_never_attempted: number;
+  discovery_last_finished_at?: string;
+  discovery_new_eligible: number;
+  discovery_error_class?: string;
   watchdog_alert?: string;
   watchdog_alert_at?: string;
   last_applied_company?: string;
@@ -262,6 +265,14 @@ function App() {
     return parts.join('; ');
   };
 
+  const discoveryStatus = () => {
+    if (!agentRunning) return 'Agent is stopped; start it to refresh discovery and process eligible jobs.';
+    if (!metrics?.discovery_last_finished_at) return 'Agent is running; waiting for the first discovery refresh.';
+    if (metrics.discovery_error_class) return `Latest discovery refresh had a ${metrics.discovery_error_class} error.`;
+    if (metrics.discovery_new_eligible === 0) return 'Latest discovery refresh found no new eligible jobs.';
+    return `Latest discovery refresh added ${metrics.discovery_new_eligible} eligible job${metrics.discovery_new_eligible === 1 ? '' : 's'}.`;
+  };
+
   return (
     <main>
       <h1>🚀 Career Agent Live Metrics</h1>
@@ -366,6 +377,7 @@ function App() {
               <div><dt>Median first attempt</dt><dd>{metrics?.first_attempt_median ?? '—'}</dd></div>
               <div><dt>Since last confirmed</dt><dd>{metrics?.last_confirmed_ago ?? 'No confirmed application yet'}</dd></div>
               <div><dt>Eligible queue</dt><dd>{metrics?.eligible_queue ?? 0} <span>({metrics?.eligible_never_attempted ?? 0} never attempted)</span></dd></div>
+              <div><dt>Discovery health</dt><dd>{discoveryStatus()} {metrics?.discovery_last_finished_at && <span>({metrics.discovery_last_finished_at})</span>}</dd></div>
             </dl>
           </article>
           <article className="detail">

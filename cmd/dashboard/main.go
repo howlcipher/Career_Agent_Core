@@ -66,6 +66,9 @@ type Metrics struct {
 	EligibleNeverAttempted    int    `json:"eligible_never_attempted"`
 	WatchdogAlert             string `json:"watchdog_alert,omitempty"`
 	WatchdogAlertAt           string `json:"watchdog_alert_at,omitempty"`
+	DiscoveryLastFinishedAt   string `json:"discovery_last_finished_at,omitempty"`
+	DiscoveryNewEligible      int    `json:"discovery_new_eligible"`
+	DiscoveryErrorClass       string `json:"discovery_error_class,omitempty"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -515,6 +518,29 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		if lastConfirmedAt.Valid {
 			m.LastConfirmedAgo = formatDuration(time.Since(lastConfirmedAt.Time))
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'discovery_refresh'`).Scan(&exists); err != nil {
+			return fmt.Errorf("check discovery refresh schema: %w", err)
+		}
+		if exists == 0 {
+			return nil
+		}
+		var finishedAt sql.NullTime
+		err := db.QueryRow(`SELECT finished_at, new_eligible, error_class FROM discovery_refresh WHERE id = 1`).
+			Scan(&finishedAt, &m.DiscoveryNewEligible, &m.DiscoveryErrorClass)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("query discovery refresh: %w", err)
+		}
+		if finishedAt.Valid {
+			m.DiscoveryLastFinishedAt = finishedAt.Time.Local().Format("Jan 2, 3:04 PM")
 		}
 		return nil
 	})

@@ -26,6 +26,7 @@ const baseMetrics = {
   confirmed_last_7_days: 0,
   eligible_queue: 0,
   eligible_never_attempted: 0,
+  discovery_new_eligible: 0,
   total_applied_tracked: 0,
   interviews: 0,
   rejections: 0,

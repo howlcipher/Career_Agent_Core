@@ -49,6 +49,13 @@ func setupTestDB(t *testing.T) {
 		id INTEGER PRIMARY KEY,
 		url TEXT,
 		started_at DATETIME
+	);
+	CREATE TABLE discovery_refresh (
+		id INTEGER PRIMARY KEY,
+		started_at DATETIME,
+		finished_at DATETIME,
+		new_eligible INTEGER,
+		error_class TEXT
 	);`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
@@ -145,6 +152,19 @@ func TestServeMetrics_Counts(t *testing.T) {
 	// or Failed.
 	if m.Skipped != 1 {
 		t.Errorf("expected BLOCKED_CAPTCHA to not inflate the Skipped count, got %d", m.Skipped)
+	}
+}
+
+func TestServeMetricsIncludesLatestDiscoveryRefresh(t *testing.T) {
+	setupTestDB(t)
+	finished := time.Date(2026, 8, 2, 15, 4, 0, 0, time.UTC)
+	if _, err := db.Exec(`INSERT INTO discovery_refresh (id, started_at, finished_at, new_eligible, error_class)
+		VALUES (1, ?, ?, 0, 'network')`, finished.Add(-time.Minute), finished); err != nil {
+		t.Fatal(err)
+	}
+	m := fetchMetricsFromTestServer(t)
+	if m.DiscoveryNewEligible != 0 || m.DiscoveryErrorClass != "network" || m.DiscoveryLastFinishedAt == "" {
+		t.Errorf("discovery metrics = %+v", m)
 	}
 }
 
@@ -582,6 +602,7 @@ func TestUIDistEmbed_RendersEveryServedMetricsField(t *testing.T) {
 		"last_failed_company", "last_failed_reason",
 		"last_manual_company", "last_manual_reason",
 		"status_legend",
+		"discovery_last_finished_at", "discovery_new_eligible", "discovery_error_class",
 		// The three #426 deleted and #437 restored.
 		"total_applied_tracked", "interviews", "rejections",
 		"interview_rate_pct", "by_source", "by_variant",

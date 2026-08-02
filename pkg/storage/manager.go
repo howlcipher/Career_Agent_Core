@@ -151,6 +151,13 @@ func InitDBWithPath(path string) error {
 		message TEXT NOT NULL,
 		updated_at DATETIME NOT NULL
 	);
+	CREATE TABLE IF NOT EXISTS discovery_refresh (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		started_at DATETIME NOT NULL,
+		finished_at DATETIME NOT NULL,
+		new_eligible INTEGER NOT NULL DEFAULT 0,
+		error_class TEXT NOT NULL DEFAULT ''
+	);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);
 	CREATE INDEX IF NOT EXISTS idx_application_attempts_started ON application_attempts(started_at);
 	CREATE INDEX IF NOT EXISTS idx_funnel_stage_events_url_id ON funnel_stage_events(url, id);
@@ -199,6 +206,10 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := createFunnelStageLedgerTrigger(); err != nil {
+		return err
+	}
+	// improvement #509: per-source discovery counts column.
+	if err := migrateDiscoveryRefreshSourceCounts(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {

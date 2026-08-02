@@ -1105,7 +1105,27 @@ func main() {
 			ctx,
 			*discoveryInterval,
 			func(discoveryCtx context.Context) error {
-				return cycleDeps.discoverJobs(discoveryCtx, nil)
+				startedAt := time.Now().UTC()
+				before, beforeErr := storage.CountEligibleDiscoveryRows(startedAt)
+				err := cycleDeps.discoverJobs(discoveryCtx, nil)
+				after, afterErr := storage.CountEligibleDiscoveryRows(time.Now().UTC())
+				newEligible := 0
+				if beforeErr == nil && afterErr == nil && after > before {
+					newEligible = after - before
+				}
+				errorClass := ""
+				if err != nil {
+					errorClass = "unknown"
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						errorClass = "cancelled"
+					}
+				}
+				if recordErr := storage.SetDiscoveryRefresh(storage.DiscoveryRefresh{
+					StartedAt: startedAt, FinishedAt: time.Now().UTC(), NewEligible: newEligible, ErrorClass: errorClass,
+				}); recordErr != nil {
+					log.Printf("[Agent] [DISCOVERY] Could not record aggregate refresh result: %v", recordErr)
+				}
+				return err
 			},
 			nil,
 		)
