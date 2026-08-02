@@ -258,6 +258,64 @@ describe('start/stop action error states', () => {
 });
 
 describe('Assisted Apply workflow', () => {
+	it('keeps an Assisted Apply response when a metrics poll starts before it resolves', async () => {
+		vi.useFakeTimers();
+		try {
+			const assisted = deferred<Response>();
+			installFetch((input) => {
+				const url = String(input);
+				if (url === '/api/metrics') return Promise.resolve(jsonResponse(baseMetrics));
+				if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+				if (url === '/api/assisted') return assisted.promise;
+				throw new Error(`unexpected fetch ${url}`);
+			});
+
+			render(<App />);
+			await flush();
+			fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+			await flush();
+
+			// A normal dashboard poll advances pollSeq while the large queue is
+			// still loading. It must not invalidate this independent response.
+			await vi.advanceTimersByTimeAsync(2000);
+			assisted.resolve(jsonResponse({ jobs: [{
+				id: '41', company: 'Acme', role: 'Platform Engineer', provider: 'Greenhouse', original_status: 'BLOCKED_CAPTCHA',
+				interruption: 'challenge', last_updated: '2026-08-02T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+				mapping_ready: true, completed_work: 'Job validated.', legacy: true, live_browser: false, assisted_attempt_count: 1,
+				priority_reason: 'Quick completion: human verification is blocking progress',
+				next_action: { code: 'solve_captcha', title: 'Solve CAPTCHA', instruction: 'Solve the CAPTCHA so Career Agent can access the application form.', primary_button: 'Open CAPTCHA', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: true },
+			}] }));
+			await flush();
+
+			expect(screen.getByRole('heading', { name: 'What you need to do' })).toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('checks a historic plan before it can open a browser', async () => {
+		installFetch((input, init) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+				id: '41', company: 'Acme', role: 'Platform Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-02T12:00:00Z', resume_ready: false, cover_letter_ready: false,
+				mapping_ready: false, completed_work: 'Historic handoff.', legacy: true, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Check before opening',
+				next_action: { code: 'revalidate_current_page', title: 'Check current page', instruction: 'Check it first.', primary_button: 'Check Current Page', requires_browser: false, documents_ready: false, requires_explicit_submit: false, can_continue: false },
+			}] }));
+			if (url === '/api/assisted/revalidate' && init?.method === 'POST') return Promise.resolve(jsonResponse({ status: 'revalidated' }));
+			throw new Error(`unexpected fetch ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: 'Check Current Page' }));
+		await flush();
+		expect(globalThis.fetch).toHaveBeenCalledWith('/api/assisted/revalidate', expect.objectContaining({ method: 'POST' }));
+		expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/assisted/launch', expect.anything());
+	});
+
   it('exposes the queue, human instruction, and only the relevant actions', async () => {
     installFetch((input) => {
       const url = String(input);
@@ -283,6 +341,25 @@ describe('Assisted Apply workflow', () => {
     expect(screen.getByRole('button', { name: /continue/i })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /mark applied/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Legacy handoff/)).toBeInTheDocument();
+  });
+
+  it('prevents starting a second assisted browser while one is active', async () => {
+    installFetch((input) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 2 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [
+        { id: '41', company: 'Open Co', role: 'Engineer', provider: 'Lever', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-02T12:00:00Z', resume_ready: true, cover_letter_ready: true, mapping_ready: true, completed_work: 'Job validated.', legacy: false, live_browser: true, assisted_attempt_count: 1, priority_reason: 'Quick completion', next_action: { code: 'solve_captcha', title: 'Solve CAPTCHA', instruction: 'Solve the CAPTCHA.', primary_button: 'Open CAPTCHA', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: true } },
+        { id: '42', company: 'Waiting Co', role: 'Engineer', provider: 'Lever', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-02T12:00:00Z', resume_ready: true, cover_letter_ready: true, mapping_ready: true, completed_work: 'Job validated.', legacy: false, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Quick completion', next_action: { code: 'solve_captcha', title: 'Solve CAPTCHA', instruction: 'Solve the CAPTCHA.', primary_button: 'Open CAPTCHA', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: true } },
+      ] }));
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+    const waitingButton = screen.getByRole('button', { name: 'Finish Open Application First' });
+    expect(waitingButton).toBeDisabled();
   });
 });
 

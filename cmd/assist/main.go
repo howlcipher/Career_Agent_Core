@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
@@ -49,29 +51,39 @@ func main() {
 		log.Fatalf("assisted application is already active: %v", err)
 	}
 	defer storage.ReleaseAssistedLease(storage.GetDB(), info.JobID, owner, time.Now())
-	profileDir := filepath.Join("applications", "assisted-browser-profile")
-	if err := ensurePrivateDirectory(profileDir); err != nil {
-		log.Fatalf("prepare assisted browser profile: %v", err)
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		log.Printf("locate assisted browser cache: %v", err)
+		return
+	}
+	profileDir, err := assistedBrowserProfileDir(cacheDir)
+	if err != nil {
+		log.Printf("prepare assisted browser profile: %v", err)
+		return
 	}
 	if err := playwright.Install(); err != nil {
-		log.Fatalf("install Playwright: %v", err)
+		log.Printf("install Playwright: %v", err)
+		return
 	}
 	pw, err := playwright.Run()
 	if err != nil {
-		log.Fatalf("start Playwright: %v", err)
+		log.Printf("start Playwright: %v", err)
+		return
 	}
 	defer pw.Stop()
 	guard := security.NewNetworkGuard()
 	proxy, err := guard.StartHTTPProxy()
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return
 	}
 	defer proxy.Close()
 	browserContext, err := pw.Chromium.LaunchPersistentContext(profileDir, playwright.BrowserTypeLaunchPersistentContextOptions{
 		Headless: playwright.Bool(false), Proxy: &playwright.Proxy{Server: proxy.URL(), Bypass: playwright.String("<-loopback>"), Username: playwright.String(proxy.Username()), Password: playwright.String(proxy.Password())},
 	})
 	if err != nil {
-		log.Fatalf("launch visible assisted browser: %v", err)
+		log.Printf("launch visible assisted browser: %v", err)
+		return
 	}
 	defer browserContext.Close()
 	pages := browserContext.Pages()
@@ -81,7 +93,8 @@ func main() {
 	} else {
 		page, err = browserContext.NewPage()
 		if err != nil {
-			log.Fatal(err)
+			log.Print(err)
+			return
 		}
 	}
 	if err := page.Route("**/*", func(route playwright.Route) {
@@ -93,20 +106,38 @@ func main() {
 		}
 		_ = route.Continue()
 	}); err != nil {
-		log.Fatalf("install browser network guard: %v", err)
+		log.Printf("install browser network guard: %v", err)
+		return
 	}
 	if _, err := page.Goto(info.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
-		log.Fatalf("open assisted application: %v", err)
+		log.Printf("open assisted application: %v", err)
+		return
 	}
 	log.Print("Assisted application is open. Complete the stated human step, then return to the dashboard and click Continue. Closing this browser releases the assisted lease.")
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
-		time.Sleep(time.Second)
-		var state string
-		err := storage.GetDB().QueryRow("SELECT assisted_state FROM assisted_applications WHERE job_id = ?", info.JobID).Scan(&state)
-		if err != nil || state == "continue_requested" {
-			break
+		select {
+		case <-signals:
+			log.Print("Assisted application stopped; releasing its lease.")
+			return
+		case <-ticker.C:
+			if page.IsClosed() {
+				log.Print("Assisted browser closed; releasing its lease.")
+				return
+			}
+			var state string
+			err := storage.GetDB().QueryRow("SELECT assisted_state FROM assisted_applications WHERE job_id = ?", info.JobID).Scan(&state)
+			if err != nil || state == "continue_requested" {
+				goto continueFill
+			}
 		}
 	}
+
+continueFill:
 	resume, resumeErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "resume")
 	cover, coverErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
 	pii, piiErr := config.LoadPII("pii.yaml")
@@ -140,4 +171,22 @@ func ensurePrivateDirectory(path string) error {
 		return fmt.Errorf("refusing unsafe profile directory")
 	}
 	return os.Chmod(path, security.PrivateDirMode)
+}
+
+// assistedBrowserProfileDir keeps Chromium's Singleton* symlinks outside the
+// workspace. Those locks are normal browser internals, but a private workspace
+// must reject symlinks rather than trust them during dashboard startup.
+func assistedBrowserProfileDir(cacheDir string) (string, error) {
+	if cacheDir == "" {
+		return "", fmt.Errorf("browser cache directory is empty")
+	}
+	root := filepath.Join(cacheDir, "career-agent")
+	if err := ensurePrivateDirectory(root); err != nil {
+		return "", err
+	}
+	profileDir := filepath.Join(root, "assisted-browser-profile")
+	if err := ensurePrivateDirectory(profileDir); err != nil {
+		return "", err
+	}
+	return profileDir, nil
 }

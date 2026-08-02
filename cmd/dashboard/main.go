@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -465,6 +467,9 @@ func main() {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(10)
+	if err := storage.EnsureAssistedSchema(db); err != nil {
+		log.Fatalf("Failed to prepare assisted apply schema: %v", err)
+	}
 
 	mux := http.NewServeMux()
 
@@ -485,6 +490,7 @@ func main() {
 	mux.HandleFunc("/api/assisted", serveAssistedQueue)
 	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
 	mux.HandleFunc("/api/assisted/continue", requireSameOrigin(serveAssistedContinue))
+	mux.HandleFunc("/api/assisted/revalidate", requireSameOrigin(serveAssistedRevalidate))
 	mux.HandleFunc("/api/assisted/launch", requireSameOrigin(serveAssistedLaunch))
 	mux.HandleFunc("/api/assisted/document", serveAssistedDocument)
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
@@ -965,6 +971,82 @@ func serveAssistedContinue(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"continue_requested"}`))
 }
 
+// revalidateAssistedPlan is replaceable only by isolated handler tests. The
+// production implementation performs one bounded, guarded public-page GET;
+// it never launches a browser, fills a form, or retains page content.
+var revalidateAssistedPlan = checkCurrentAssistedPage
+
+func serveAssistedRevalidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JobID string `json:"job_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.JobID) == "" {
+		http.Error(w, "an assisted job identifier is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := strconv.ParseInt(request.JobID, 10, 64); err != nil {
+		http.Error(w, "invalid assisted job identifier", http.StatusBadRequest)
+		return
+	}
+	if err := revalidateAssistedPlan(r.Context(), db, request.JobID); err != nil {
+		log.Printf("serveAssistedRevalidate: %v", err)
+		http.Error(w, "could not check the current employer page", http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"revalidated"}`))
+}
+
+func checkCurrentAssistedPage(ctx context.Context, conn *sql.DB, jobID string) error {
+	info, err := storage.GetAssistedRevalidationInfo(conn, jobID)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, info.URL, nil)
+	if err != nil {
+		return fmt.Errorf("build current-page check: %w", err)
+	}
+	request.Header.Set("Accept", "text/html,application/xhtml+xml")
+	response, err := security.NewNetworkGuard().HTTPClient(12 * time.Second).Do(request)
+	state := "current_page_review"
+	if err != nil {
+		state = "unreachable"
+	} else {
+		defer response.Body.Close()
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			state = "unreachable"
+		} else {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+			if readErr != nil {
+				state = "unreachable"
+			} else if currentPageShowsCaptcha(string(body)) {
+				state = "captcha_confirmed"
+			}
+		}
+	}
+	if recordErr := storage.RecordAssistedRevalidation(conn, info.JobID, state, time.Now()); recordErr != nil {
+		return recordErr
+	}
+	return nil
+}
+
+// currentPageShowsCaptcha requires a direct challenge, not a widget name or
+// a branded loading shell. A false positive would recreate the stale-handoff
+// problem this check exists to prevent.
+func currentPageShowsCaptcha(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "verify you are human") ||
+		strings.Contains(lower, "attention required") ||
+		strings.Contains(lower, "complete the captcha") ||
+		strings.Contains(lower, "captcha challenge")
+}
+
 func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -984,14 +1066,19 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The command receives only a validated stable database ID, never a URL,
-	// path, or user-provided shell fragment. Its own atomic lease is the final
-	// process-conflict check before it opens a visible browser.
-	cmd := exec.Command("go", "run", "./cmd/assist", "-job", request.JobID)
+	// path, or user-provided shell fragment. Use the prebuilt binary so the
+	// dashboard does not leave go-run wrapper processes behind.
+	cmd := exec.Command("./career_assist_bin", "-job", request.JobID)
 	if err := cmd.Start(); err != nil {
 		log.Printf("serveAssistedLaunch: %v", err)
 		http.Error(w, "failed to open assisted application", http.StatusInternalServerError)
 		return
 	}
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("serveAssistedLaunch: assisted browser exited: %v", err)
+		}
+	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"launching"}`))
 }

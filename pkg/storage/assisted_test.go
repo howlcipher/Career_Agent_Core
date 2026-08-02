@@ -79,11 +79,42 @@ func TestGetAssistedQueue_UsesHumanInstructionAndHidesURLs(t *testing.T) {
 		t.Fatalf("queue length = %d", len(jobs))
 	}
 	job := jobs[0]
-	if job.NextAction.Code != "review_and_submit" || job.NextAction.Instruction == "" || job.NextAction.PrimaryButton != "Open Prepared Application" {
+	if job.NextAction.Code != "revalidate_current_page" || job.NextAction.Instruction == "" || job.NextAction.PrimaryButton != "Check Current Page" {
 		t.Fatalf("next action = %+v", job.NextAction)
 	}
 	if job.ID == "" || job.Company != "Ready Co" || job.LastUpdated.After(time.Now().Add(time.Minute)) {
 		t.Fatalf("queue job = %+v", job)
+	}
+}
+
+func TestAssistedRevalidation_GatesBrowserLaunchAndPersistsSafeOutcome(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Captcha Co", "Engineer", "https://captcha.example/jobs/1", "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Captcha Co'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetAssistedLaunchInfo(GetDB(), id); err == nil {
+		t.Fatal("unrevalidated job must not be launchable")
+	}
+	if err := RecordAssistedRevalidation(GetDB(), id, "current_page_review", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetAssistedLaunchInfo(GetDB(), id); err != nil {
+		t.Fatalf("reviewed current page should be launchable: %v", err)
+	}
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("queue = %#v, %v", jobs, err)
+	}
+	if jobs[0].NextAction.Code != "review_current_page" || jobs[0].NextAction.PrimaryButton != "Open Current Page" {
+		t.Fatalf("reviewed next action = %+v", jobs[0].NextAction)
 	}
 }
 
@@ -182,6 +213,36 @@ func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) 
 	}
 	if err := RequestAssistedContinue(GetDB(), id, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("continuation without live browser must fail")
+	}
+}
+
+func TestAssistedLease_AllowsOnlyOneVisibleBrowserAcrossPlans(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	for _, tc := range []struct{ company, url string }{
+		{"First Lease Co", "https://lease.example/jobs/first"},
+		{"Second Lease Co", "https://lease.example/jobs/second"},
+	} {
+		if _, err := AddToFunnel(tc.company, "Engineer", tc.url, "MANUAL_REQUIRED"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var firstID, secondID string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'First Lease Co'").Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Second Lease Co'").Scan(&secondID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if claimed, err := AcquireAssistedLease(GetDB(), firstID, "first", now); err != nil || !claimed {
+		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
+	}
+	if claimed, err := AcquireAssistedLease(GetDB(), secondID, "second", now.Add(time.Minute)); err != nil || claimed {
+		t.Fatalf("second plan claim while another browser is active: claimed=%v err=%v", claimed, err)
 	}
 }
 

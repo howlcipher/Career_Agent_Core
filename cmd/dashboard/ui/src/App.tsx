@@ -200,6 +200,11 @@ function App() {
   // it is still the most recent request in flight when it resolves.
   const pollSeq = useRef(0);
 
+  // Assisted Apply is requested independently of the metrics poll. Reusing
+  // pollSeq here made a large queue disappear whenever its response arrived
+  // after the next two-second metrics poll advanced that counter.
+  const assistedSeq = useRef(0);
+
   const fetchMetrics = async (seq: number) => {
     try {
       const res = await fetch('/api/metrics');
@@ -232,12 +237,13 @@ function App() {
     }
   };
 
-	const fetchAssisted = async (seq: number) => {
+	const fetchAssisted = async () => {
+		const seq = ++assistedSeq.current;
 		try {
 			const res = await fetch('/api/assisted');
 			if (!res.ok) return;
 			const data = await res.json();
-			if (seq === pollSeq.current) setAssistedJobs(data.jobs ?? []);
+			if (seq === assistedSeq.current) setAssistedJobs(data.jobs ?? []);
 		} catch (e) {
 			console.error(e);
 		}
@@ -256,7 +262,7 @@ function App() {
   }, []);
 
 	useEffect(() => {
-		if (showAssisted) fetchAssisted(pollSeq.current);
+		if (showAssisted) fetchAssisted();
 	}, [showAssisted]);
 
   const handleStart = async () => {
@@ -290,7 +296,7 @@ function App() {
 			const res = await fetch('/api/assisted/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: confirmJob.id, confirmed: true }) });
 			if (!res.ok) throw new Error('confirmation rejected');
 			setConfirmJob(null);
-			fetchAssisted(pollSeq.current);
+			fetchAssisted();
 			poll();
 		} catch (e) {
 			console.error(e);
@@ -302,7 +308,7 @@ function App() {
 		try {
 			const res = await fetch('/api/assisted/continue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job.id }) });
 			if (!res.ok) throw new Error('continue rejected');
-			fetchAssisted(pollSeq.current);
+			fetchAssisted();
 		} catch (e) {
 			console.error(e);
 			setActionError('The assisted browser is no longer active. Open the application again before continuing.');
@@ -313,8 +319,20 @@ function App() {
 		try {
 			const res = await fetch('/api/assisted/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job.id }) });
 			if (!res.ok) throw new Error('launch rejected');
-			window.setTimeout(() => fetchAssisted(pollSeq.current), 600);
+			window.setTimeout(() => fetchAssisted(), 600);
 		} catch (e) { console.error(e); setActionError('Could not open the assisted application. It may already be active.'); }
+	};
+
+	const revalidateAssisted = async (job: AssistedJob) => {
+		setActionError(null);
+		try {
+			const res = await fetch('/api/assisted/revalidate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job.id }) });
+			if (!res.ok) throw new Error('revalidation rejected');
+			fetchAssisted();
+		} catch (e) {
+			console.error(e);
+			setActionError('Could not check the current employer page. No browser was opened; try again later.');
+		}
 	};
 
 	const toggleSelected = (id: string) => setSelectedJobs((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
@@ -336,6 +354,7 @@ function App() {
 	const openDocument = (job: AssistedJob, kind: 'resume' | 'cover_letter') => {
 		window.open(`/api/assisted/document?job_id=${encodeURIComponent(job.id)}&kind=${kind}`, '_blank', 'noopener,noreferrer');
 	};
+	const assistedBrowserOpen = assistedJobs.some((job) => job.live_browser);
 
   if (loading) return <div>Loading...</div>;
 
@@ -426,9 +445,9 @@ function App() {
 					{assistedJobs.length > 0 && <div className="batch-controls"><button className="btn btn-assisted" onClick={startSelected} disabled={selectedJobs.length === 0 || batchIndex !== null}>Start Selected Applications</button>{batchIndex !== null && <><span>Application {batchIndex + 1} of {selectedJobs.length}</span><button className="text-button" onClick={() => setStopAfterCurrent(true)}>Stop After This Application</button><button className="text-button" onClick={nextSelected}>Open Next Selected Application</button></>}</div>}
 					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
 						<article className="assisted-job" key={job.id}>
-							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
+							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null || !job.next_action.requires_browser} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
 							<ol className="assisted-stepper" aria-label="Application progress"><li className="done">Prepared</li><li className="active">Human action</li><li>Continue filling</li><li className={job.next_action.requires_explicit_submit ? 'active' : ''}>Review and submit</li><li>Confirmed</li></ol>
-							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted" onClick={() => launchAssisted(job)} disabled={job.live_browser}>{job.live_browser ? 'Assisted Application Open' : job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
+						<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted" onClick={() => job.next_action.requires_browser ? launchAssisted(job) : revalidateAssisted(job)} disabled={job.next_action.requires_browser && assistedBrowserOpen}>{job.next_action.requires_browser && job.live_browser ? 'Assisted Application Open' : job.next_action.requires_browser && assistedBrowserOpen ? 'Finish Open Application First' : job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
 							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p>{job.resume_ready && <button className="text-button" onClick={() => openDocument(job, 'resume')}>View Résumé</button>}{job.cover_letter_ready && <button className="text-button" onClick={() => openDocument(job, 'cover_letter')}>View Cover Letter</button>}</details>
 							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>
 						</article>

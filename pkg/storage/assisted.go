@@ -72,14 +72,21 @@ type AssistedLaunchInfo struct {
 	URL     string
 }
 
+// AssistedRevalidationInfo is the server-only target for a current-page
+// check. It deliberately omits employer and job details from the dashboard.
+type AssistedRevalidationInfo struct {
+	JobID string
+	URL   string
+}
+
 // AssistedDocument is a resolved private file, never a client-supplied path.
 type AssistedDocument struct{ Path, Name string }
 
 const AssistedLeaseDuration = 20 * time.Minute
 
-// AcquireAssistedLease atomically claims a plan for one visible browser
-// process. The daemon never receives an assisted status, and a second assisted
-// process cannot claim until the lease expires or is explicitly released.
+// AcquireAssistedLease atomically claims the sole visible assisted browser.
+// A persistent browser profile cannot safely serve concurrent employers, so
+// another plan must wait until the active lease expires or is released.
 func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (bool, error) {
 	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(owner) == "" {
 		return false, errors.New("assisted lease needs a job identifier and owner")
@@ -88,8 +95,12 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 		SET lease_owner = ?, lease_expires_at = ?, assisted_state = 'waiting_human',
 			assisted_attempt_count = assisted_attempt_count + 1, updated_at = ?
 		WHERE job_id = ? AND assisted_state != 'completed'
-			AND (lease_owner = '' OR lease_expires_at IS NULL OR lease_expires_at <= ?)`,
-		owner, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, now.UTC())
+			AND (lease_owner = '' OR lease_expires_at IS NULL OR lease_expires_at <= ?)
+			AND NOT EXISTS (
+				SELECT 1 FROM assisted_applications active
+				WHERE active.job_id != ? AND active.lease_owner != '' AND active.lease_expires_at > ?
+			)`,
+		owner, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, now.UTC(), jobID, now.UTC())
 	if err != nil {
 		return false, fmt.Errorf("claim assisted application: %w", err)
 	}
@@ -99,12 +110,12 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 
 func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
 	var info AssistedLaunchInfo
-	var status, original string
-	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, jf.url, jf.status, aa.original_status
+	var status, original, revalidationState string
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, jf.url, jf.status, aa.original_status, aa.revalidation_state
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
 		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
-		Scan(&info.JobID, &info.Company, &info.URL, &status, &original)
+		Scan(&info.JobID, &info.Company, &info.URL, &status, &original, &revalidationState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssistedLaunchInfo{}, errors.New("assisted job is not available to launch")
 	}
@@ -114,7 +125,52 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	if status != original || !isAssistedEligibleStatus(status) {
 		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
 	}
+	if revalidationState != "captcha_confirmed" && revalidationState != "current_page_review" {
+		return AssistedLaunchInfo{}, errors.New("assisted job must be revalidated before opening a browser")
+	}
 	return info, nil
+}
+
+// GetAssistedRevalidationInfo returns the current unfinished plan without
+// treating its historic handoff as permission to launch a browser.
+func GetAssistedRevalidationInfo(conn *sql.DB, jobID string) (AssistedRevalidationInfo, error) {
+	var info AssistedRevalidationInfo
+	var status, original string
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.url, jf.status, aa.original_status
+		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
+		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
+		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
+		Scan(&info.JobID, &info.URL, &status, &original)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssistedRevalidationInfo{}, errors.New("assisted job is not available to revalidate")
+	}
+	if err != nil {
+		return AssistedRevalidationInfo{}, fmt.Errorf("load assisted revalidation plan: %w", err)
+	}
+	if status != original || !isAssistedEligibleStatus(status) {
+		return AssistedRevalidationInfo{}, fmt.Errorf("refusing to revalidate newer job status %q", status)
+	}
+	return info, nil
+}
+
+// RecordAssistedRevalidation saves only a compact outcome class. Raw URLs,
+// page text, HTTP status, and provider errors remain server-only.
+func RecordAssistedRevalidation(conn *sql.DB, jobID, state string, now time.Time) error {
+	switch state {
+	case "captcha_confirmed", "current_page_review", "unreachable":
+	default:
+		return errors.New("unsupported assisted revalidation state")
+	}
+	result, err := conn.Exec(`UPDATE assisted_applications
+		SET revalidation_state = ?, revalidated_at = ?, updated_at = ?
+		WHERE job_id = ? AND assisted_state != 'completed'`, state, now.UTC(), now.UTC(), jobID)
+	if err != nil {
+		return fmt.Errorf("record assisted revalidation: %w", err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("assisted job is no longer awaiting revalidation")
+	}
+	return nil
 }
 
 func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, error) {
@@ -204,7 +260,16 @@ func migrateAssistedApplications() error {
 	if db == nil {
 		return errors.New("database not initialized")
 	}
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS assisted_applications (
+	return EnsureAssistedSchema(db)
+}
+
+// EnsureAssistedSchema makes the private handoff table readable by a
+// dashboard connection even when it was created by an earlier release.
+func EnsureAssistedSchema(conn *sql.DB) error {
+	if conn == nil {
+		return errors.New("assisted schema connection is nil")
+	}
+	_, err := conn.Exec(`CREATE TABLE IF NOT EXISTS assisted_applications (
 		job_id INTEGER PRIMARY KEY,
 		original_status TEXT NOT NULL,
 		next_action_code TEXT NOT NULL,
@@ -215,12 +280,46 @@ func migrateAssistedApplications() error {
 		lease_owner TEXT NOT NULL DEFAULT '',
 		lease_expires_at DATETIME,
 		confirmation_provenance TEXT NOT NULL DEFAULT '',
+		revalidation_state TEXT NOT NULL DEFAULT 'required',
+		revalidated_at DATETIME,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		FOREIGN KEY(job_id) REFERENCES job_funnel(id)
 	);
 	CREATE INDEX IF NOT EXISTS idx_assisted_applications_state ON assisted_applications(assisted_state, lease_expires_at);`)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := conn.Query("PRAGMA table_info(assisted_applications)")
+	if err != nil {
+		return fmt.Errorf("inspect assisted schema: %w", err)
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan assisted schema: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"revalidation_state", "TEXT NOT NULL DEFAULT 'required'"},
+		{"revalidated_at", "DATETIME"},
+	} {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := conn.Exec("ALTER TABLE assisted_applications ADD COLUMN " + column.name + " " + column.definition); err != nil {
+			return fmt.Errorf("add assisted schema column %s: %w", column.name, err)
+		}
+	}
+	return nil
 }
 
 func actionForLegacy(status, reason string) AssistedNextAction {
@@ -235,6 +334,19 @@ func actionForLegacy(status, reason string) AssistedNextAction {
 			instruction = "The application has been filled. Solve the CAPTCHA before submission can continue."
 		}
 		return AssistedNextAction{"solve_captcha", "Solve CAPTCHA", instruction, "Open CAPTCHA", true, false, false, true}
+	}
+}
+
+func actionForRevalidation(status, reason, state string) AssistedNextAction {
+	switch state {
+	case "captcha_confirmed":
+		return actionForLegacy(status, reason)
+	case "current_page_review":
+		return AssistedNextAction{"review_current_page", "Current page needs review", "The current public page did not show a CAPTCHA. Open it only to review the employer's current application flow.", "Open Current Page", true, false, false, false}
+	case "unreachable":
+		return AssistedNextAction{"revalidate_current_page", "Could not check current page", "The public employer page could not be checked. Try the safe check again later; no browser was opened.", "Check Current Page Again", false, false, false, false}
+	default:
+		return AssistedNextAction{"revalidate_current_page", "Check current page", "This historic handoff must be checked against the employer's current public page before it is treated as a CAPTCHA or opened in a browser.", "Check Current Page", false, false, false, false}
 	}
 }
 
@@ -380,6 +492,7 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		WHEN jf.url LIKE '%workday%' THEN 'Workday' WHEN jf.url LIKE '%ashby%' THEN 'Ashby' ELSE 'Other ATS' END,
 		COALESCE(jf.status, ''), COALESCE(jf.status_reason, ''), COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
 		aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
+		COALESCE(aa.revalidation_state, 'required'),
 		aa.lease_owner, aa.lease_expires_at
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.assisted_state != 'completed'
@@ -399,8 +512,9 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var lastUpdated sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpiry sql.NullTime
+		var revalidationState string
 		var currentStatus string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &leaseOwner, &leaseExpiry); err != nil {
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &leaseOwner, &leaseExpiry); err != nil {
 			return nil, err
 		}
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)
@@ -408,7 +522,7 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			v := int(fit.Int64)
 			job.FitScore = &v
 		}
-		job.NextAction = actionForLegacy(job.OriginalStatus, job.Interruption)
+		job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
 		job.CompletedWork = completedWork(job.OriginalStatus)
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")

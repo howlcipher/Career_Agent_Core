@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +17,41 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
 )
+
+func TestServeAssistedRevalidate_UsesValidatedIDWithoutLaunchingBrowser(t *testing.T) {
+	setupTestDB(t)
+	previous := revalidateAssistedPlan
+	t.Cleanup(func() { revalidateAssistedPlan = previous })
+	called := false
+	revalidateAssistedPlan = func(ctx context.Context, conn *sql.DB, jobID string) error {
+		called = true
+		if conn != db || jobID != "41" {
+			t.Fatalf("revalidation inputs = conn %p, id %q", conn, jobID)
+		}
+		return nil
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/assisted/revalidate", bytes.NewBufferString(`{"job_id":"41"}`))
+	rec := httptest.NewRecorder()
+	serveAssistedRevalidate(rec, req)
+	if rec.Code != http.StatusOK || !called {
+		t.Fatalf("status=%d called=%v body=%q", rec.Code, called, rec.Body.String())
+	}
+}
+
+func TestCurrentPageShowsCaptcha_RequiresChallengeLanguage(t *testing.T) {
+	for _, tc := range []struct {
+		page string
+		want bool
+	}{
+		{"<title>Meesho</title><div class=spinner></div>", false},
+		{"<div class=g-recaptcha></div><p>Platform Engineer</p>", false},
+		{"<title>Attention Required</title><p>Verify you are human</p>", true},
+	} {
+		if got := currentPageShowsCaptcha(tc.page); got != tc.want {
+			t.Errorf("currentPageShowsCaptcha(%q) = %v, want %v", tc.page, got, tc.want)
+		}
+	}
+}
 
 func setupTestDB(t *testing.T) {
 	t.Helper()
