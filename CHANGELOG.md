@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Site capabilities now learn from discovery and submission outcomes
+
+* **Improvement (#496):** The formerly unused `career_sites` table now records every newly discovered or attempted domain, its observed provider, form-reach confirmation strategy, account-gate evidence, and mapping health. Cached form mappings now retain outcome counters and validation timestamps; a recently successful mapping is preferred, while a stale or failure-dominated one yields to the established provider-specific fallback rather than becoming a permanent blacklist. Existing databases receive idempotent schema upgrades without inventing historical capability evidence.
+
 ## 2026-08-01 — The daemon now reports stalled, one-sided outcomes
 
 * **Improvement (#495):** After three nonempty cycles without a new confirmation, the agent emits one aggregate-only alert when a recent terminal status accounts for at least 75% of outcomes. The dashboard displays the current alert. Detection cannot requeue jobs, suppress sources, relax constraints, or change submission behavior.

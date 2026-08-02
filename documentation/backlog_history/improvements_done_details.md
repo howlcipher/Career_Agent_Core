@@ -2,6 +2,16 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 496. ATS capability and automation-success registry
+
+**Completed 2026-08-01.** The existing `career_sites` table is now populated whenever a new funnel row is discovered and whenever an application attempt is recorded. It retains the observed domain/provider, most recent observation, successful form reach, account-gate evidence, confirmation strategy, and mapping-health state. `form_mappings` now stores success and failure counts plus its latest validation time. Both upgrades are idempotent: old databases gain the fields without fabricated historical evidence.
+
+`RecordAttempt` writes the original attempt and registry evidence in one transaction. A confirmed application or intentional human-review handoff counts as a successful form reach; a manual account gate sets durable evidence without treating it as a permanent source ban. Cached mappings remain selectable when new or successful, but `AttemptSubmit` now yields to the existing provider-specific flow if a mapping becomes failure-dominated or its successful evidence is older than 30 days. This preserves a safe fallback without blacklisting an ATS from one error.
+
+Storage tests cover old-table migrations, discovery population, successful and failed outcome updates, account-gate evidence, fresh-success preference, failure-dominated fallback, and stale-success fallback. Focused storage and submitter tests passed. Full `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` verification is recorded in the final task commit. No live production database was queried or changed during this task; the next normal discovery or attempt will populate the registry automatically.
+
+---
+
 ## 495. No-progress / dominant-failure-reason watchdog
 
 **Completed 2026-08-01.** The daemon now observes a sanitized aggregate snapshot after each queue cycle. After three consecutive cycles with eligible work but no new confirmation, it alerts only when one terminal status is at least 75% of recent outcomes. Alerts are deduplicated, logged without job content or URLs, persisted as the current dashboard alert, and rendered by the React dashboard. The watchdog never requeues jobs, suppresses sources, relaxes constraints, or changes submission behavior.

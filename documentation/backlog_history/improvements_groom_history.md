@@ -1,5 +1,7 @@
 # improvements.md — Archived Groom-Pass / Status History
 
+**2026-08-01, session fifty.** Improvement #495 is Done: the daemon now detects three consecutive nonempty cycles without a confirmed application when one recent terminal status accounts for at least 75% of outcomes. It logs one aggregate-only alert and makes the current alert visible on the dashboard; it never changes queue state or submission policy. The dashboard and daemon were rebuilt and restarted successfully. See `documentation/backlog_history/improvements_done_details.md` item #495 for the full account.
+
 Superseded dated status paragraphs moved out of `improvements.md` during the 2026-08-01 backlog-size restructure (see `documentation/task_journals/2026-08-01_optimize-backlog-access.md`). `improvements.md` now carries only the single current status paragraph (the one that sat immediately before the ranked table, which turned out to be the true most-recent note — this file's groom notes were not consistently prepended at the top the way `bugs.md`'s were). This file is the full historical record, kept for audit, not read on a normal work session.
 
 ## Ranked Backlog — prior groom-pass paragraphs (in original file order)

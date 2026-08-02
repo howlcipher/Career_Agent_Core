@@ -4,7 +4,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**MET 2026-08-01 (fortieth session, #508 fix).** #508 is Done: the daemon now gets a rate-limited current remote-job feed even when search providers are exhausted or unavailable, and its live restart immediately admitted 18 relevant postings and loaded 15 into the queue. The zero-Blocker/Major box remains checked. See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
+**MET 2026-08-01 (session fifty-one groom pass).** There are no Pending bug rows; the zero-Blocker/Major box remains checked. `go build ./...`, `go vet ./...`, and `go test ./...` re-ran clean during this pass. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 

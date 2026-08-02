@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -62,24 +64,113 @@ func RecordAttempt(attempt ApplicationAttempt) error {
 		return fmt.Errorf("database not initialized")
 	}
 
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin application attempt transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	query := `
 		INSERT INTO application_attempts 
 		(source, url, terminal_class, started_at, ended_at, model_call_count, inference_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
-	_, err := db.Exec(query,
+	if _, err := tx.Exec(query,
 		attempt.Source,
 		attempt.URL,
 		string(attempt.TerminalClass),
 		attempt.StartedAt,
 		attempt.EndedAt,
 		attempt.ModelCallCount,
-		attempt.InferenceMs)
-
-	if err != nil {
+		attempt.InferenceMs); err != nil {
 		return fmt.Errorf("failed to record application attempt: %w", err)
 	}
+	if err := recordSiteCapability(tx, attempt); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit application attempt transaction: %w", err)
+	}
 	return nil
+}
+
+func recordSiteCapability(tx *sql.Tx, attempt ApplicationAttempt) error {
+	domain := attemptDomain(attempt.URL, attempt.Source)
+	if domain == "" {
+		return nil
+	}
+
+	observedAt := attempt.EndedAt.UTC()
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO career_sites (domain, ats_provider, last_scanned)
+		VALUES (?, ?, ?)
+		ON CONFLICT(domain) DO UPDATE SET
+			ats_provider = excluded.ats_provider,
+			last_scanned = excluded.last_scanned`, domain, attempt.Source, observedAt); err != nil {
+		return fmt.Errorf("record career site capability: %w", err)
+	}
+
+	successfulFormReach := attempt.TerminalClass == AttemptApplied || attempt.TerminalClass == AttemptAwaitingReview
+	if successfulFormReach {
+		if _, err := tx.Exec(`
+			UPDATE career_sites
+			SET last_successful_form_reach = ?, confirmation_strategy = ?, mapping_health = 'healthy'
+			WHERE domain = ?`, observedAt, confirmationStrategy(attempt.TerminalClass), domain); err != nil {
+			return fmt.Errorf("record successful form reach: %w", err)
+		}
+	}
+	if attempt.TerminalClass == AttemptManualAccountGate {
+		if _, err := tx.Exec("UPDATE career_sites SET account_required = 1 WHERE domain = ?", domain); err != nil {
+			return fmt.Errorf("record account requirement: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE form_mappings
+		SET success_count = success_count + ?,
+			failure_count = failure_count + ?,
+			last_validated_at = ?
+		WHERE domain = ?`, boolInt(successfulFormReach), boolInt(!successfulFormReach), observedAt, domain); err != nil {
+		return fmt.Errorf("record form mapping health: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE career_sites
+		SET mapping_health = CASE
+			WHEN EXISTS (SELECT 1 FROM form_mappings WHERE domain = career_sites.domain AND failure_count > success_count) THEN 'degraded'
+			WHEN EXISTS (SELECT 1 FROM form_mappings WHERE domain = career_sites.domain) THEN 'healthy'
+			ELSE mapping_health
+		END
+		WHERE domain = ?`, domain); err != nil {
+		return fmt.Errorf("refresh mapping health: %w", err)
+	}
+	return nil
+}
+
+func attemptDomain(rawURL, fallback string) string {
+	parsed, err := url.Parse(rawURL)
+	if err == nil {
+		if host := strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www."); host != "" {
+			return host
+		}
+	}
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fallback)), "www.")
+}
+
+func confirmationStrategy(terminalClass TerminalClass) string {
+	if terminalClass == AttemptApplied {
+		return "confirmed_submission"
+	}
+	return "human_review"
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // GetSourceHealthSummaries returns aggregated outcome data by source for the given lookback period

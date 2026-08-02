@@ -69,7 +69,11 @@ func InitDBWithPath(path string) error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		domain TEXT UNIQUE,
 		ats_provider TEXT,
-		last_scanned DATETIME
+		last_scanned DATETIME,
+		last_successful_form_reach DATETIME,
+		account_required INTEGER NOT NULL DEFAULT 0,
+		confirmation_strategy TEXT,
+		mapping_health TEXT NOT NULL DEFAULT 'unknown'
 	);
 	CREATE TABLE IF NOT EXISTS job_funnel (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +96,10 @@ func InitDBWithPath(path string) error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		domain TEXT UNIQUE,
 		mapping_json TEXT,
-		created_at DATETIME
+		created_at DATETIME,
+		success_count INTEGER NOT NULL DEFAULT 0,
+		failure_count INTEGER NOT NULL DEFAULT 0,
+		last_validated_at DATETIME
 	);
 	CREATE TABLE IF NOT EXISTS execution_logs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,6 +164,12 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		return err
+	}
+	if err := migrateCareerSiteCapabilities(); err != nil {
+		return err
+	}
+	if err := migrateFormMappingHealth(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -391,6 +404,76 @@ func migrateJobFunnelDiscoverySource() error {
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN discovery_source TEXT")
 	return err
+}
+
+// migrateCareerSiteCapabilities upgrades the previously unused career_sites
+// table so each observed site can retain only durable, outcome-derived
+// capability evidence. Existing rows intentionally retain unknown values:
+// inventing a past capability from an old URL would make the registry less
+// trustworthy than leaving it empty.
+func migrateCareerSiteCapabilities() error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"last_successful_form_reach", "DATETIME"},
+		{"account_required", "INTEGER NOT NULL DEFAULT 0"},
+		{"confirmation_strategy", "TEXT"},
+		{"mapping_health", "TEXT NOT NULL DEFAULT 'unknown'"},
+	}
+	return addMissingColumns("career_sites", columns)
+}
+
+// migrateFormMappingHealth adds outcome-derived health fields to cached form
+// mappings. A mapping's JSON remains the source of selectors; these fields
+// only decide whether the cache has enough negative evidence to yield to the
+// provider-specific fallback.
+func migrateFormMappingHealth() error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"success_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"failure_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_validated_at", "DATETIME"},
+	}
+	return addMissingColumns("form_mappings", columns)
+}
+
+func addMissingColumns(table string, columns []struct {
+	name       string
+	definition string
+}) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool, len(columns))
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan %s column info: %w", table, err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column.name + " " + column.definition); err != nil {
+			return fmt.Errorf("add %s.%s: %w", table, column.name, err)
+		}
+	}
+	return nil
 }
 
 // mergeStatusRank ranks job_funnel statuses for mergeStatuses' scheme-dedup
@@ -1225,7 +1308,12 @@ func AddToFunnel(company, title, url, status string, discoverySources ...string)
 		status = "SKIPPED"
 		statusReason = SkippedReasonExcludedSource
 	}
-	result, err := db.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovery_source, discovered_at, last_updated)
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin funnel insert transaction: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovery_source, discovered_at, last_updated)
 		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), CURRENT_TIMESTAMP, CASE WHEN ? = '' THEN NULL ELSE ? END)
 		ON CONFLICT(url) DO NOTHING`, company, title, url, status, statusReason, discoverySource, statusReason, time.Now().UTC())
 	if err != nil {
@@ -1234,6 +1322,20 @@ func AddToFunnel(company, title, url, status string, discoverySources ...string)
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return false, err
+	}
+	if rowsAffected > 0 {
+		domain := attemptDomain(url, "")
+		if domain != "" {
+			if _, err := tx.Exec(`
+				INSERT INTO career_sites (domain, ats_provider, last_scanned)
+				VALUES (?, ?, ?)
+				ON CONFLICT(domain) DO UPDATE SET last_scanned = excluded.last_scanned`, domain, domain, time.Now().UTC()); err != nil {
+				return false, fmt.Errorf("record discovered career site: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit funnel insert transaction: %w", err)
 	}
 	return rowsAffected > 0 && !excluded, nil
 }
@@ -1459,6 +1561,32 @@ func GetFormMapping(domain string) (string, error) {
 	var mappingJson string
 	err := db.QueryRow("SELECT mapping_json FROM form_mappings WHERE domain = ?", domain).Scan(&mappingJson)
 	return mappingJson, err
+}
+
+const formMappingFreshnessWindow = 30 * 24 * time.Hour
+
+// PreferCachedFormMapping returns false only when the registry has stronger
+// evidence that a cached mapping is failing than that it succeeds, or its
+// last success is stale. Unknown mappings remain eligible so a newly learned
+// mapping gets its first chance; this is a fallback decision, never a
+// permanent site blacklist.
+func PreferCachedFormMapping(domain string) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("db not initialized")
+	}
+	var successes, failures int
+	var lastValidated sql.NullTime
+	err := db.QueryRow("SELECT success_count, failure_count, last_validated_at FROM form_mappings WHERE domain = ?", domain).Scan(&successes, &failures, &lastValidated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if successes == 0 {
+		return successes >= failures, nil
+	}
+	return successes >= failures && lastValidated.Valid && lastValidated.Time.After(time.Now().Add(-formMappingFreshnessWindow)), nil
 }
 
 func DeleteFormMapping(domain string) error {

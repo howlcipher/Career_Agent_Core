@@ -242,6 +242,71 @@ func TestFormMappingCRUD(t *testing.T) {
 	}
 }
 
+func TestCapabilityMigrationsUpgradeExistingTables(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	for _, table := range []string{"career_sites", "form_mappings"} {
+		if _, err := db.Exec("DROP TABLE " + table); err != nil {
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+	if _, err := db.Exec(`CREATE TABLE career_sites (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT UNIQUE,
+		ats_provider TEXT,
+		last_scanned DATETIME
+	)`); err != nil {
+		t.Fatalf("create old career_sites: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE form_mappings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT UNIQUE,
+		mapping_json TEXT,
+		created_at DATETIME
+	)`); err != nil {
+		t.Fatalf("create old form_mappings: %v", err)
+	}
+
+	if err := migrateCareerSiteCapabilities(); err != nil {
+		t.Fatalf("migrate career_sites: %v", err)
+	}
+	if err := migrateFormMappingHealth(); err != nil {
+		t.Fatalf("migrate form_mappings: %v", err)
+	}
+	for table, columns := range map[string][]string{
+		"career_sites":  {"last_successful_form_reach", "account_required", "confirmation_strategy", "mapping_health"},
+		"form_mappings": {"success_count", "failure_count", "last_validated_at"},
+	} {
+		rows, err := db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("inspect %s: %v", table, err)
+		}
+		found := make(map[string]bool)
+		for rows.Next() {
+			var cid, notnull, pk int
+			var name, ctype string
+			var defaultValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &defaultValue, &pk); err != nil {
+				t.Fatalf("scan %s: %v", table, err)
+			}
+			found[name] = true
+		}
+		rows.Close()
+		for _, column := range columns {
+			if !found[column] {
+				t.Errorf("%s missing migrated column %s", table, column)
+			}
+		}
+	}
+	if err := migrateCareerSiteCapabilities(); err != nil {
+		t.Errorf("second career_sites migration should be a no-op: %v", err)
+	}
+	if err := migrateFormMappingHealth(); err != nil {
+		t.Errorf("second form_mappings migration should be a no-op: %v", err)
+	}
+}
+
 func TestExecutionLogs(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
@@ -1738,6 +1803,13 @@ func TestAddToFunnelPersistsDiscoverySource(t *testing.T) {
 	}
 	if source != "remoteok" {
 		t.Errorf("discovery_source = %q, want remoteok", source)
+	}
+	var provider string
+	if err := db.QueryRow("SELECT ats_provider FROM career_sites WHERE domain = ?", "new.example").Scan(&provider); err != nil {
+		t.Fatalf("read discovered career site: %v", err)
+	}
+	if provider != "new.example" {
+		t.Errorf("discovered site provider = %q, want new.example", provider)
 	}
 }
 

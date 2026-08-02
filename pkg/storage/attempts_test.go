@@ -133,3 +133,104 @@ func TestApplicationAttempts(t *testing.T) {
 		t.Errorf("expected 0 manual for lever in 1-day summary, got %d", summaries1Day[1].ManualCount)
 	}
 }
+
+func TestRecordAttemptUpdatesCapabilityRegistryAndMappingHealth(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const domain = "jobs.example-ats.com"
+	if err := SaveFormMapping(domain, `{"fields":{"submit_button":"button.submit"}}`); err != nil {
+		t.Fatalf("SaveFormMapping: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := RecordAttempt(ApplicationAttempt{
+		Source:        "example-ats",
+		URL:           "https://" + domain + "/apply/123",
+		TerminalClass: AttemptApplied,
+		StartedAt:     now.Add(-time.Minute),
+		EndedAt:       now,
+	}); err != nil {
+		t.Fatalf("RecordAttempt applied: %v", err)
+	}
+
+	var provider, strategy, health string
+	var accountRequired int
+	var successfulReach time.Time
+	if err := db.QueryRow(`
+		SELECT ats_provider, confirmation_strategy, mapping_health, account_required, last_successful_form_reach
+		FROM career_sites WHERE domain = ?`, domain).Scan(&provider, &strategy, &health, &accountRequired, &successfulReach); err != nil {
+		t.Fatalf("read career site: %v", err)
+	}
+	if provider != "example-ats" || strategy != "confirmed_submission" || health != "healthy" || accountRequired != 0 || successfulReach.IsZero() {
+		t.Errorf("unexpected successful capability row: provider=%q strategy=%q health=%q account_required=%d reached=%v", provider, strategy, health, accountRequired, successfulReach)
+	}
+
+	var successes, failures int
+	if err := db.QueryRow("SELECT success_count, failure_count FROM form_mappings WHERE domain = ?", domain).Scan(&successes, &failures); err != nil {
+		t.Fatalf("read mapping health: %v", err)
+	}
+	if successes != 1 || failures != 0 {
+		t.Errorf("mapping counters after success = %d/%d, want 1/0", successes, failures)
+	}
+	prefer, err := PreferCachedFormMapping(domain)
+	if err != nil || !prefer {
+		t.Errorf("PreferCachedFormMapping after success = %t, %v; want true, nil", prefer, err)
+	}
+
+	for range 2 {
+		if err := RecordAttempt(ApplicationAttempt{
+			Source:        "example-ats",
+			URL:           "https://" + domain + "/apply/123",
+			TerminalClass: AttemptValidationFailure,
+			StartedAt:     now,
+			EndedAt:       now.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("RecordAttempt failure: %v", err)
+		}
+	}
+	if err := db.QueryRow("SELECT success_count, failure_count FROM form_mappings WHERE domain = ?", domain).Scan(&successes, &failures); err != nil {
+		t.Fatalf("read degraded mapping health: %v", err)
+	}
+	if successes != 1 || failures != 2 {
+		t.Errorf("mapping counters after failures = %d/%d, want 1/2", successes, failures)
+	}
+	if err := db.QueryRow("SELECT mapping_health FROM career_sites WHERE domain = ?", domain).Scan(&health); err != nil {
+		t.Fatalf("read degraded site health: %v", err)
+	}
+	if health != "degraded" {
+		t.Errorf("mapping health = %q, want degraded", health)
+	}
+	prefer, err = PreferCachedFormMapping(domain)
+	if err != nil || prefer {
+		t.Errorf("PreferCachedFormMapping after more failures = %t, %v; want false, nil", prefer, err)
+	}
+	if _, err := db.Exec("UPDATE form_mappings SET success_count = 2, failure_count = 0, last_validated_at = ? WHERE domain = ?", now.Add(-formMappingFreshnessWindow-time.Second), domain); err != nil {
+		t.Fatalf("age mapping health: %v", err)
+	}
+	prefer, err = PreferCachedFormMapping(domain)
+	if err != nil || prefer {
+		t.Errorf("PreferCachedFormMapping with stale success = %t, %v; want false, nil", prefer, err)
+	}
+}
+
+func TestRecordAttemptMarksAccountRequired(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	if err := RecordAttempt(ApplicationAttempt{
+		Source:        "workday",
+		URL:           "https://jobs.workday.example/apply",
+		TerminalClass: AttemptManualAccountGate,
+		EndedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordAttempt: %v", err)
+	}
+	var accountRequired int
+	if err := db.QueryRow("SELECT account_required FROM career_sites WHERE domain = ?", "jobs.workday.example").Scan(&accountRequired); err != nil {
+		t.Fatalf("read account requirement: %v", err)
+	}
+	if accountRequired != 1 {
+		t.Errorf("account_required = %d, want 1", accountRequired)
+	}
+}

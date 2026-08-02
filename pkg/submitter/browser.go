@@ -1262,7 +1262,12 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 	}
 
 	mappingJSON, err := storage.GetFormMapping(domain)
-	if err == nil && mappingJSON != "" {
+	preferCachedMapping, preferenceErr := storage.PreferCachedFormMapping(domain)
+	if preferenceErr != nil {
+		log.Printf("[Auto-Submit] Could not read mapping health for %s: %v", domain, preferenceErr)
+		preferCachedMapping = true
+	}
+	if err == nil && mappingJSON != "" && preferCachedMapping {
 		log.Printf("[Auto-Submit] Using learned dynamic mapping for %s", domain)
 		cachedTarget := resolveFillTarget(page)
 		if err := quarantineFillTargetDOM(

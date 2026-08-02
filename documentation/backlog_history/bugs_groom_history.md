@@ -1,5 +1,7 @@
 # bugs.md — Archived Groom-Pass / Status History
 
+**MET 2026-08-01 (fortieth session, #508 fix).** #508 is Done: the daemon now gets a rate-limited current remote-job feed even when search providers are exhausted or unavailable, and its live restart immediately admitted 18 relevant postings and loaded 15 into the queue. The zero-Blocker/Major box remains checked. See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account.
+
 Superseded dated status paragraphs moved out of `bugs.md` during the 2026-08-01 backlog-size restructure (see `documentation/task_journals/2026-08-01_optimize-backlog-access.md`). `bugs.md` itself now carries only the single current status paragraph in each section; this file is the full historical record, kept for audit, not read on a normal work session.
 
 **Prior — 2026-08-01, session forty-eight.** Bug #482 is Done: excluded Breezy postings now become `SKIPPED` at insertion and legacy `DISCOVERED` rows terminalize at agent startup, so the daemon no longer sees a false nonempty backlog. Storage and dashboard regression coverage plus the full build, vet, test, and formatting loop are clean. The highest Pending bug is now #502 (1.0). See `documentation/backlog_history/bugs_done_details.md` item #482 for the full account.
