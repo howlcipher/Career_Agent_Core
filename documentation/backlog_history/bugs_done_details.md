@@ -2,6 +2,18 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 502. `encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window
+
+**Completed 2026-08-01 — closed as a measured non-issue.** The installed `promptsec@v0.1.0` source confirms the reported branch exists: `guard/heuristic/encoding.go` emits an unlocated heuristic `encoding_attack` at severity 0.7 when `HasSuspiciousConfusables` detects a suspicious script. The source fact alone did not justify broadening #489's narrowly scoped release rule, so this task measured the real audit trail before changing any security behavior.
+
+**Measurement:** a new `scripts/audit_prompt_injection.go` reads `applications/prompt_injection_detections.csv` with Go's CSV parser and emits only aggregate counters. It never prints URLs, employer names, matched text, or posting content. Across 11,036 logged detections, 1,057 were `encoding_attack`. Of those, 649 had no matched text, but all 649 were sub-threshold severity 0.30: 647 sanitizer entries and two heuristic entries. Every decisive heuristic entry was located (11 at 0.60, 314 at 0.75, and 19 at 0.90); the 64 severity-0.70 rows were located sanitizer decoded-payload detections. There were therefore **zero** observed unlocated heuristic `encoding_attack` rows at the 0.5 decisive threshold.
+
+**Decision:** no change to `isZeroEvidenceThreat`, the 0.7 severity, or `HasSuspiciousConfusables`. Extending the #489 allowlist without a measured population would weaken a security boundary based only on a plausible mechanism. The reusable aggregate-only script makes the same check repeatable if future data produces a nonzero decisive unlocated rate.
+
+**Verification:** `go run scripts/audit_prompt_injection.go` completed against the live audit CSV without disclosing raw audit fields. The repository's full Go build, vet, test, and formatting loop passed before commit. No application rebuild or daemon restart was needed because runtime behavior was unchanged.
+
+---
+
 ## 482. breezy.hr postings are excluded from GetDiscoveredJobs entirely, so they accumulate in DISCOVERED forever with no terminal status
 
 **Completed 2026-08-01.** The earlier SQL filter was correct to keep Breezy out of automation but it applied too late: rows had already been stored as `DISCOVERED`, and one-shot discovery could also hand a fresh row directly to a worker. `storage.AddToFunnel` now recognizes the Breezy host boundary and stores a new discovery as `SKIPPED` with `status_reason = excluded_source`, while reporting it as ineligible to callers so it is never sent to their worker channel.

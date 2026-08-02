@@ -45,12 +45,12 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
-**2026-08-01, session forty-eight.** Bug #482 is Done: excluded Breezy postings now become `SKIPPED` at insertion and legacy `DISCOVERED` rows terminalize at agent startup, so the daemon no longer sees a false nonempty backlog. Storage and dashboard regression coverage plus the full build, vet, test, and formatting loop are clean. The highest Pending bug is now #502 (1.0). See `documentation/backlog_history/bugs_done_details.md` item #482 for the full account. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
+**2026-08-01, session forty-nine.** Bug #502 is Done: the installed `promptsec` source does contain the unlocated 0.7 heuristic homoglyph branch, but a privacy-preserving audit of all 1,057 logged `encoding_attack` rows found zero unlocated heuristic threats at decisive severity. The only unlocated entries were 649 sub-threshold (0.30) sanitizer rows and two equivalent heuristic rows, so no evidence supports relaxing quarantine behavior. The highest eligible pending item is now improvement #496 (1.25). See `documentation/backlog_history/bugs_done_details.md` item #502 for the full account. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|---|
 | 508 | [Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails](#508-discovery-has-no-independent-current-listings-fallback-when-serpapi-quota-is-exhausted-and-yahoo-search-fails) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account. |
-| 502 | [`encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window](#502-encodinggos-homoglyph-branch-is-a-third-zero-evidence-heuristic-threat-source-outside-489s-fix-window) | Minor | Pending | 1.0 = 3×1.0÷3 | standard | Found 2026-08-01 closing #489. `guard/heuristic/encoding.go:82-90`'s `detectEncodingAttacks` reports `ThreatEncodingAttack` at severity 0.7 (decisive) with `Guard: "heuristic"` and no `Match`/`Start`/`End` whenever `HasSuspiciousConfusables` fires — the same "zero-evidence at decisive severity" shape #489 fixed for `instruction_override`/`system_prompt_leak`, but a different `Type`, so #489's narrow override window correctly leaves it quarantining. Value 3: plausible false-positive source on non-Latin company names or stylized Unicode in postings, not yet measured at scale. Effort 3: needs its own false-positive evidence (aggregate query on `threat_type='encoding_attack'` matched_text-emptiness, same method as #489's audit) before extending the allowlist logic to this category |
+| 502 | [`encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window](#502-encodinggos-homoglyph-branch-is-a-third-zero-evidence-heuristic-threat-source-outside-489s-fix-window) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #502 for the full account. |
 | 501 | [Re-run #489's aggregate quarantine-rate queries against fresh data once the fix has been live for a batch cycle](#501-re-run-489s-aggregate-quarantine-rate-queries-against-fresh-data-once-the-fix-has-been-live-for-a-batch-cycle) | Minor | Done (2026-08-01) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #501 for the full account. |
 | 490 | [`job_funnel.applied_at` is declared in the schema but no code path ever writes it](#490-job_funnelapplied_at-is-declared-in-the-schema-but-no-code-path-ever-writes-it) | Minor | Done (2026-08-01) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #490 for the full account. |
 | 489 | [`promptsec.Moderate()` still quarantines roughly half of everything discovered, disproportionately on Lever and Greenhouse](#489-promptsecmoderate-still-quarantines-roughly-half-of-everything-discovered-disproportionately-on-lever-and-greenhouse) | Major | Done (2026-08-01) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #489 for the full fix account. |
@@ -232,30 +232,7 @@ Done — full account archived in `documentation/backlog_history/bugs_done_detai
 
 ### 502. `encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window
 
-**Found 2026-08-01** closing #489, while verifying #489's claim that its override logic doesn't touch any threat category outside `instruction_override`/`system_prompt_leak`.
-
-**Evidence:** `~/go/pkg/mod/github.com/danielthedm/promptsec@v0.1.0/guard/heuristic/encoding.go:82-90` (`detectEncodingAttacks`, part of the same heuristic guard #489's audit implicated):
-
-```go
-if intu.HasSuspiciousConfusables(input) {
-    threats = append(threats, core.Threat{
-        Type:     core.ThreatEncodingAttack,
-        Severity: 0.7,
-        Message:  "input contains confusable/homoglyph characters that may bypass pattern matching",
-        Guard:    "heuristic",
-    })
-}
-```
-
-This is the exact same shape #489 fixed — `Guard: "heuristic"`, no `Match`/`Start`/`End`, and severity 0.7 is above `promptsec.Protector`'s hardcoded 0.5 unsafe threshold, so it can single-handedly quarantine a payload with zero located evidence. #489's `isZeroEvidenceThreat` deliberately only matches `Type == ThreatInstructionOverride || Type == ThreatSystemPromptLeak`, so a payload whose only decisive threat is this homoglyph branch stays quarantined today, unaffected by #489's fix — correctly conservative for #489's own scope, but a residual gap.
-
-**Why this is plausible at scale, not just theoretical:** `HasSuspiciousConfusables` flags Cyrillic/Greek/fullwidth-script characters mixed into otherwise-Latin text. Real job postings can trip this legitimately: non-Latin company names, candidate-facing text in stylized Unicode (common in some social-media-style job ads), or genuinely multilingual postings.
-
-**Fix direction:** first needs its own evidence, the same way #489 built its case — a safe aggregate query against `prompt_injection_detections.csv` filtered to `threat_type='encoding_attack'`, checking what fraction has empty `matched_text` and what the underlying company/posting characteristics look like (without printing raw content). If the false-positive rate is material, extend `isZeroEvidenceThreat`'s type set and design a distinct allowlist signal (script/language legitimacy, not ATS-boilerplate phrases — the current `benignATSSignatures` list would not help here).
-
-**Acceptance criteria:** a measured false-positive rate for `encoding_attack` detections, and if material, a fix following the same conservative override-with-corroboration-veto pattern #489 established, verified against its own regression corpus.
-
-**Boundaries:** do not lower the 0.7 severity or disable `HasSuspiciousConfusables` outright — homoglyph attacks (visually-confusable characters used to defeat literal pattern matching) are a real evasion technique the sanitizer/heuristic guards are specifically designed to catch.
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #502.
 
 ### 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
 
