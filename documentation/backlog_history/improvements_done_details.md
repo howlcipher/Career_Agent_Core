@@ -2,6 +2,14 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 506. `/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely
+
+**Fixed 2026-08-01.** The canonical local workflow at `.agents/prompts/work_next_item.md` previously said that a `MET` Usability Gate should select from `improvements.md`; that made the gate a one-way ratchet and left every remaining Minor bug permanently unreachable by normal selection. The revised rule preserves the hard priority while the gate is unmet, then compares all open, above-floor rows in `bugs.md` and `improvements.md` by their common ROI formula after it is met. It explicitly states that a met gate means no Blocker or Major bug remains, not that Minor defects become ineligible.
+
+The acceptance criterion is demonstrated by the live backlog state at close: bug #501 scores 2.0 while the highest Pending improvement, #491, scores 1.5, so a new `/work_next_item` run now selects #501. No production behavior changed; this is a canonical prompt and backlog-record correction only. Antigravity model discovery and local Ollama discovery were both unavailable from the sandbox, so no delegate was used for this bounded documentation task. The required Go build, vet, test, and formatting checks were run before close.
+
+---
+
 ## 500. [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at)
 
 **Table rationale cell (original):** **Closed 2026-08-01 — investigated, not implemented.** Live `EXPLAIN QUERY PLAN` evidence showed the premise didn't hold: no current query filters or sorts on `discovered_at`, so the index would never be selected. See detail section
@@ -1393,4 +1401,3 @@ Tests: `TestParseHNJobPosting` (6 cases), `TestLatestWhoIsHiringStoryID`/`_NotFo
 **Table rationale cell (original):** Shipped before this backlog restructure
 
 ---
-
