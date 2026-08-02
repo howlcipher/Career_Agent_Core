@@ -257,6 +257,35 @@ describe('start/stop action error states', () => {
   });
 });
 
+describe('Assisted Apply workflow', () => {
+  it('exposes the queue, human instruction, and only the relevant actions', async () => {
+    installFetch((input) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+        id: '41', company: 'Acme', role: 'Platform Engineer', provider: 'Greenhouse', original_status: 'BLOCKED_CAPTCHA',
+        interruption: 'challenge', last_updated: '2026-08-02T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+        mapping_ready: true, completed_work: 'Job validated.', legacy: true, live_browser: false, assisted_attempt_count: 1,
+        priority_reason: 'Quick completion: human verification is blocking progress',
+        next_action: { code: 'solve_captcha', title: 'Solve CAPTCHA', instruction: 'Solve the CAPTCHA so Career Agent can access the application form.', primary_button: 'Open CAPTCHA', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: true },
+      }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+    await flush();
+    expect(screen.getByText('Assisted applications waiting: 1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+    expect(screen.getByRole('heading', { name: 'What you need to do' })).toBeInTheDocument();
+    expect(screen.getByText(/Solve the CAPTCHA so Career Agent/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open CAPTCHA' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /continue/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /mark applied/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Legacy handoff/)).toBeInTheDocument();
+  });
+});
+
 describe('mission metrics (improvement #491)', () => {
   it('renders aggregate mission progress and an honest no-data state', async () => {
     installFetch((input) => {
