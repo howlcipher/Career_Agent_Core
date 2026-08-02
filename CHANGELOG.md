@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Assisted Apply preserves safe human handoffs
+
+* **Improvement (#511):** The loopback dashboard now has a visible Assisted Apply queue for interrupted and legacy human handoffs. It uses private resumable plans, plain-language next actions, atomic browser leases, guarded visible Chromium sessions, validated per-job document access, explicit manual receipt confirmation, and sequential batch guidance. CAPTCHA challenges, credentials, legal questions, and employer acceptance remain human actions; nothing is marked applied merely because a browser opened or a button was clicked.
+
 ## 2026-08-02 — Discovery degradation and dead DNS records no longer hide capacity loss
 
 * **Improvement (#510):** Discovery refresh health now persists Yahoo request attempts, final request failures, and circuit-open skips as numeric, source-level aggregates. The dashboard reports those conditions alongside the existing refresh summary without storing URLs, postings, or raw errors.

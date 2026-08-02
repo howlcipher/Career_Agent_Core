@@ -173,6 +173,33 @@ Use the instructions for your Linux distribution inside WSL. The bundled Ollama 
 
 ## Configure the Agent
 
+## Completing Assisted Applications
+
+When an application needs a CAPTCHA, account login, answer, unsupported
+control, or final review, the dashboard preserves the handoff rather than
+asking you to start again.
+
+1. Start the dashboard.
+2. Open `http://127.0.0.1:8080`.
+3. Select **Assisted Apply**.
+4. Choose the highest-priority job.
+5. Read **What you need to do**.
+6. Click the primary action.
+7. Complete the CAPTCHA, login, question, field, or review in the dedicated Career Agent browser.
+8. Return to Career Agent and click **I completed this step — Continue** when it is available.
+9. Submit when requested, then mark Applied only after the employer confirms receipt.
+
+Legacy `AWAITING_REVIEW`, `MANUAL_REQUIRED`, and `BLOCKED_CAPTCHA` jobs can
+be safely backfilled with `go run ./cmd/assist-migrate` (dry run) and
+`go run ./cmd/assist-migrate -confirm`. The migration preserves original
+statuses and never launches a browser, clears deduplication, or submits an
+application. The Assisted Apply screen identifies legacy handoffs, shows
+whether a live browser exists or the session will be recreated, and offers
+only documents belonging to that job. CAPTCHA solving, password capture,
+legal attestations, and submission confirmation are intentionally left to
+you. Select multiple jobs for a sequential batch; the dashboard opens one
+application at a time and lets you stop after the current one.
+
 Follow these steps after the platform setup.
 
 ### 1. Set Up Your Personal Identifiable Information (PII)

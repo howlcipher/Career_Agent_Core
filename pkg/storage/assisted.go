@@ -381,9 +381,6 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			job.FitScore = &v
 		}
 		job.NextAction = actionForLegacy(job.OriginalStatus, job.Interruption)
-		if job.NextAction.Code != "" {
-			job.NextAction.Code = job.NextAction.Code
-		}
 		job.CompletedWork = completedWork(job.OriginalStatus)
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
