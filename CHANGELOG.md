@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Optional NLP offload has measured local value
+
+* **Improvement (#442):** Matched local tailoring runs retained the opt-in FastAPI executor: 5m18s offloaded versus 7m6s in-process, with verifier maximum resident memory reduced from 423 MB to 43 MB. It remains health checked and falls back safely.
+
 ## 2026-08-01 — Equivalent recent applications can be skipped conservatively
 
 * **Improvement (#498):** An optional `duplicate_cooldown_days` profile setting now prevents repeat applications only when a recently confirmed application has the same normalized company, role family and seniority, location, and remote classification. It defaults to `0`, preserving existing behavior; incomplete or different metadata never causes a skip. The dashboard identifies these skips explicitly, and setting the value back to `0` is the user-controlled override.

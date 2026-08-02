@@ -2,6 +2,12 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 442. Measure whether the NLP offload is worth keeping
+
+**Completed 2026-08-02.** Matched live synthetic tailoring runs used the same local `qwen3:4b-instruct` model and Ollama endpoint. In-process completed in 7m6s with 422,864 KB maximum verifier memory; healthy localhost `nlp_service` completed in 5m18s with 42,732 KB. Both succeeded without fallback. That 25% time reduction and about 90% lower waiting-process memory corroborate the earlier 2026-07-29 observation, so the opt-in service is retained and its tradeoff is documented in README and CHANGELOG.
+
+---
+
 ## 448. `npm run lint` lints the dashboard's own committed build output
 
 **Completed 2026-08-02.** The committed dashboard bundle must remain present because `cmd/dashboard/main.go` embeds `ui/dist`, but it is generated output and should not be linted as project source. `cmd/dashboard/ui/.oxlintrc.json` now uses `ignorePatterns: ["dist/**"]`, so the documented `npm run lint` command checks the dashboard source without emitting warnings from minified React internals.

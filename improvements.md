@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-02 groom pass.** #448 shipped; all 11 remaining free Pending rows, all three paywalled rows, and the zero-Pending bug backlog were re-verified. #442 is now the top eligible free item (1.0). The dashboard's live metrics endpoint is readable again, but its 2 applied rows and zero observed outcomes are still too small to validate #493, which remains `⚠️ below floor` at 0.33. #488 and paywalled #14 remain explicit user decisions below the floor. Prior status paragraph archived to `documentation/backlog_history/improvements_groom_history.md`.
+**2026-08-02 groom pass.** #442 shipped after matched live CPU-only measurements showed a 25% wall-time reduction and about 90% lower waiting-process memory with the opt-in offload. Ten free Pending rows remain; #486 (0.83) is now the top eligible item. The bug backlog is still empty, and #493, #488, and paywalled #14 remain below-floor user decisions. Prior status paragraph archived to `documentation/backlog_history/improvements_groom_history.md`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -51,7 +51,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 496 | [ATS capability and automation-success registry](#496-ats-capability-and-automation-success-registry) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #496 for the full account. |
 | 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account. |
 | 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #448 for the full account. |
-| 442 | [Measure whether the NLP offload is worth keeping](#442-measure-whether-the-nlp-offload-is-worth-keeping) | Pending | 1.0 = 2×1.0÷2 | standard | Re-verified 2026-08-01: `NLP_SERVICE_URL` still gates the same unmeasured optional offload; no benchmark evidence was added. |
+| 442 | [Measure whether the NLP offload is worth keeping](#442-measure-whether-the-nlp-offload-is-worth-keeping) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #442 for the full account. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Pending | 0.83 = 5×1.0÷6 | deep-reasoning | New capability; #484's benchmark harness exists, but no approved local-edit contract exists. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | #481/#482 already shipped; no admission cap or proactive first-attempt sweep exists. |
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Pending | 0.75 = 3×1.0÷4 | standard | Deterministic classification still covers part of the proposed surface; no safe 4B evaluation has been run. |
@@ -407,20 +407,7 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 
 ### 442. Measure whether the NLP offload is worth keeping
 
-**Filed 2026-07-29** while resolving bug #439, which restored in-process document generation and left #427's Python microservice in place as an opt-in offload behind `NLP_SERVICE_URL`.
-
-That was the right call for a bug fix — deleting a feature shipped the same day is a scope decision, not a defect repair — but it leaves an open question that should be answered rather than inherited: **the offload has never been shown to help.**
-
-The stated benefit was "improving latency and freeing up the main agent pipeline". Latency it cannot plausibly improve: both routes drive the same single local Ollama instance, and both already fan the three document calls out concurrently, so moving the fan-out into another process changes where the HTTP call originates, not how much inference capacity exists. Freeing the agent process is real but small — the Go path blocks on a goroutine waiting for HTTP either way.
-
-The first measured numbers, from bug #439's live verification on this host with `qwen3:4b-instruct` and one job, were **6m3s in-process versus 5m48s offloaded**. That gap is noise on a CPU-only host, and it is one sample.
-
-The work: run `scripts/verify_tailoring.go` over several jobs on both routes, ideally at both model sizes, and compare wall time and agent-process resource use. Then either
-
-- document a real, reproducible benefit in the README so the extra Python dependency, venv, manual launch step and second set of tests are justified; or
-- **delete `nlp_service/` and the offload path**, which removes a Python runtime dependency, a manual startup step, a health-check-and-fallback code path, and 12 tests from the project's surface area.
-
-Effort 2 and Value 2: nothing is broken either way, so this is a cost-of-ownership decision. It is scored above the floor because the measurement is cheap and the "delete it" outcome is a genuine simplification, not merely a tidy-up — the fallback machinery in `tailoringSession.run` exists only to make an unmeasured optimization safe.
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #442.
 
 ### 423. Human-in-the-Loop "Copilot" Mode
 

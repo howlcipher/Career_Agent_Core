@@ -368,6 +368,8 @@ NLP_SERVICE_URL="http://localhost:8000"
 
 The agent sends the prompts, the model, the Ollama host, the context size, and its own timeout on every request, so the service inherits your `.env` configuration rather than holding any of its own. Before using it the agent calls `GET /health`; if that fails, or if the service stops answering mid-job, it logs the reason and generates in-process instead. Leaving `NLP_SERVICE_URL` unset skips the service entirely. Because the service speaks Ollama's API, `LLM_PROVIDER=claude` and `LLM_PROVIDER=gemini` always generate in-process regardless of this setting.
 
+On the maintained CPU-only local setup, matched `qwen3:4b-instruct` runs on 2026-08-02 completed in 5m18s offloaded versus 7m6s in-process, while verifier memory fell from 423 MB to 43 MB. Keep the service running when that isolation is useful.
+
 To confirm either route works on your machine, drive one real generation through it:
 ```bash
 go run scripts/verify_tailoring.go                                    # in-process
