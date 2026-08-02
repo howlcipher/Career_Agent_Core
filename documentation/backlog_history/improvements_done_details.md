@@ -1454,3 +1454,9 @@ Tests: `TestParseHNJobPosting` (6 cases), `TestLatestWhoIsHiringStoryID`/`_NotFo
 **Completed 2026-08-01.** Added an opt-in `duplicate_cooldown_days` profile setting. At a positive value, the pipeline records each discovered job's location and remote metadata, then skips it only when a recent confirmed application has the same normalized company, role family, seniority, location, and remote classification. The matcher intentionally declines incomplete metadata and does not use fuzzy title or company matching, so a distinct role or location is never silently suppressed. Existing profiles default to `0`, which keeps the prior behavior and acts as the explicit override.
 
 SQLite receives idempotent `job_location` and `is_remote` columns without backfilling legacy rows, because that historical information cannot be reconstructed truthfully. The dashboard labels the persisted `duplicate_cooldown` skip reason. Regression tests cover same-identity suppression, different seniority/role/location/remote cases, incomplete and expired history, idempotent migration, profile validation, pipeline behavior before expensive network work, and dashboard text. Full `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` passed. Live verification is intentionally limited to synthetic fixtures: the real database has too little confirmed-application volume to establish an observed duplicate cohort.
+
+---
+
+# 483. Confirm whether zombie `career_agent_bin` processes need reaping
+
+**Closed 2026-08-01.** A fresh `ps` scan found no live or zombie `career_agent_bin` process. The previously observed zombies therefore did not persist as a process-table leak. No code or operational-documentation change is warranted from this one observation; reopen only if a future scan finds a zombie with a still-live parent that does not reap it.

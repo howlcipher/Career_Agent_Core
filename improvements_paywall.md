@@ -6,7 +6,7 @@ Everything else — format, scoring model, Working Protocol — is identical to 
 
 ## Ranked Backlog (best ROI first)
 
-**2026-08-01 post-#494 groom pass:** all three rows remain correctly paywalled and keep their scores: **#424 2.0**, **#17 1.75**, **#14 0.43 and `⚠️ below floor`**. Current code still has no CAPTCHA solver or solve-and-continue path, no cloud DOM-routing path, and live `lspci` still exposes only the integrated Radeon Vega GPU. Re-scope #14 to preference-label collection or close it with user confirmation. Prior status paragraph archived to `documentation/backlog_history/paywall_groom_history.md`.
+**2026-08-01 groom pass:** all three rows remain correctly paywalled and retain their scores: **#424 2.0**, **#17 1.75**, **#14 0.43 and `⚠️ below floor`**. The tree still has no CAPTCHA solver, solve-and-continue path, or cloud DOM-routing path; no paid key is available. #14 remains a user decision: re-scope it to preference-label collection or close it with user confirmation. Prior status paragraph archived to `documentation/backlog_history/paywall_groom_history.md`.
 
 **The standing #14 recommendation is unchanged and now ten passes old.** It has scored below the floor every pass since it was filed, for a reason waiting will not fix: it needs paid GPU compute *and* a preference-labeled dataset that does not exist and is not being collected. **Close it, or re-scope it to the "start capturing preference labels" precursor** that would make it viable later. It stays open per the never-close-unilaterally rule, but re-verifying it each pass has produced no new information in over a week.
 
