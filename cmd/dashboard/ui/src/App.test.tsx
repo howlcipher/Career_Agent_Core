@@ -22,6 +22,7 @@ const baseMetrics = {
   invalid_url_malformed: 0,
   invalid_url_expired: 0,
   retry_exhausted: 0,
+	assisted_waiting: 0,
   confirmed_today: 0,
   confirmed_last_7_days: 0,
   eligible_queue: 0,

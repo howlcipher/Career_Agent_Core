@@ -39,6 +39,7 @@ interface Metrics {
   invalid_url_malformed: number;
   invalid_url_expired: number;
   retry_exhausted: number;
+	assisted_waiting: number;
   confirmed_today: number;
   confirmed_last_7_days: number;
   first_attempt_median?: string;
@@ -86,6 +87,37 @@ interface Metrics {
   interview_rate_pct?: string;
   by_source?: SourceConversionRow[];
   by_variant?: VariantConversionRow[];
+}
+
+interface AssistedAction {
+	code: string;
+	title: string;
+	instruction: string;
+	primary_button: string;
+	requires_browser: boolean;
+	documents_ready: boolean;
+	requires_explicit_submit: boolean;
+	can_continue: boolean;
+}
+
+interface AssistedJob {
+	id: string;
+	company: string;
+	role: string;
+	fit_score?: number;
+	provider: string;
+	original_status: string;
+	interruption: string;
+	last_updated: string;
+	resume_ready: boolean;
+	cover_letter_ready: boolean;
+	mapping_ready: boolean;
+	completed_work: string;
+	legacy: boolean;
+	live_browser: boolean;
+	assisted_attempt_count: number;
+	priority_reason: string;
+	next_action: AssistedAction;
 }
 
 // ConversionTable renders one conversion breakdown. The <caption> and the
@@ -148,6 +180,8 @@ function App() {
   const [agentRunning, setAgentRunning] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [actionError, setActionError] = useState<string | null>(null);
+	const [assistedJobs, setAssistedJobs] = useState<AssistedJob[]>([]);
+	const [showAssisted, setShowAssisted] = useState<boolean>(false);
 
   // #460: a single missed poll is expected noise (a request can legitimately
   // drop once), but a *run* of them means the numbers on screen may be
@@ -194,6 +228,17 @@ function App() {
     }
   };
 
+	const fetchAssisted = async (seq: number) => {
+		try {
+			const res = await fetch('/api/assisted');
+			if (!res.ok) return;
+			const data = await res.json();
+			if (seq === pollSeq.current) setAssistedJobs(data.jobs ?? []);
+		} catch (e) {
+			console.error(e);
+		}
+	};
+
   const poll = () => {
     const seq = ++pollSeq.current;
     fetchMetrics(seq);
@@ -205,6 +250,10 @@ function App() {
     const int = setInterval(poll, 2000);
     return () => clearInterval(int);
   }, []);
+
+	useEffect(() => {
+		if (showAssisted) fetchAssisted(pollSeq.current);
+	}, [showAssisted]);
 
   const handleStart = async () => {
     setActionError(null);
@@ -290,6 +339,10 @@ function App() {
         <button className="btn btn-start" onClick={handleStart} disabled={agentRunning}>▶ Start Agent</button>
         <button className="btn btn-stop" onClick={handleStop} disabled={!agentRunning}>🛑 Stop Agent</button>
       </div>
+		<section className="assisted-banner" aria-label="Assisted Apply">
+			<div><strong>Assisted applications waiting: {metrics?.assisted_waiting ?? 0}</strong><span> Complete the next safe human step without restarting the application.</span></div>
+			<button className="btn btn-assisted" onClick={() => setShowAssisted(true)}>Open Assisted Apply</button>
+		</section>
       {actionError && (
         <p className="action-error" role="alert">{actionError}</p>
       )}
@@ -309,6 +362,19 @@ function App() {
         )}
 
       <div className="dashboard-container" aria-live="polite" aria-atomic="false">
+			{showAssisted && (
+				<section className="assisted-queue" aria-labelledby="assisted-heading">
+					<div className="assisted-heading"><h2 id="assisted-heading">Assisted Apply</h2><button className="text-button" onClick={() => setShowAssisted(false)}>Return to dashboard</button></div>
+					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
+						<article className="assisted-job" key={job.id}>
+							<div><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'}</p></div>
+							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted">{job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" disabled={!job.live_browser}>I completed this step — Continue</button>}</div>
+							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p></details>
+							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>
+						</article>
+					))}
+				</section>
+			)}
         <div className="grid">
           <div className="card discovered">
             <h2>{metrics?.discovered || 0}</h2>

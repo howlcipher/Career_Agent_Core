@@ -212,6 +212,9 @@ func InitDBWithPath(path string) error {
 	if err := migrateDiscoveryRefreshSourceCounts(); err != nil {
 		return err
 	}
+	if err := migrateAssistedApplications(); err != nil {
+		return err
+	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
 		return fmt.Errorf("secure database files after initialization: %w", err)
 	}

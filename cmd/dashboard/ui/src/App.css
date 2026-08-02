@@ -7,6 +7,24 @@
   max-width: 1200px;
 }
 
+.assisted-banner, .assisted-queue, .assisted-job {
+  border: 1px solid rgba(0, 240, 255, 0.35);
+  background: rgba(0, 240, 255, 0.08);
+  border-radius: 12px;
+}
+.assisted-banner { max-width: 1200px; margin: 0 auto 24px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.btn-assisted { background: rgba(0, 240, 255, 0.18); border: 1px solid rgba(0, 240, 255, 0.55); }
+.assisted-queue { padding: 22px; margin-bottom: 25px; }
+.assisted-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.assisted-heading h2, .assisted-job h3 { margin: 0; color: var(--text-main); }
+.assisted-job { margin-top: 16px; padding: 18px; background: rgba(0, 0, 0, 0.16); }
+.assisted-instruction { margin: 16px 0; padding: 14px; border-left: 4px solid var(--neon-blue); background: rgba(0, 240, 255, 0.08); }
+.assisted-instruction h4 { margin: 0; color: var(--neon-blue); }
+.assisted-instruction .btn { margin: 12px 0; }
+.text-button { background: transparent; color: var(--neon-blue); border: 1px solid currentColor; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+.text-button:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (max-width: 700px) { .assisted-banner { align-items: stretch; flex-direction: column; } }
+
 .action-error {
   text-align: center;
   color: #ff5c5c;

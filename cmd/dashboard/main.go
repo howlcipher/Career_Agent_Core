@@ -58,6 +58,7 @@ type Metrics struct {
 	// before improvements.md #468 — the count silently dropped out of every
 	// bucket's total.
 	RetryExhausted            int                            `json:"retry_exhausted"`
+	AssistedWaiting           int                            `json:"assisted_waiting"`
 	ConfirmedToday            int                            `json:"confirmed_today"`
 	ConfirmedLast7Days        int                            `json:"confirmed_last_7_days"`
 	FirstAttemptMedian        string                         `json:"first_attempt_median,omitempty"`
@@ -481,6 +482,7 @@ func main() {
 	// would break scripted polling for no security gain. They are
 	// deliberately left ungated.
 	mux.HandleFunc("/api/metrics", serveMetrics)
+	mux.HandleFunc("/api/assisted", serveAssistedQueue)
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -521,6 +523,17 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			m.LastConfirmedAgo = formatDuration(time.Since(lastConfirmedAt.Time))
 		}
 		return nil
+	})
+
+	g.Go(func() error {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'assisted_applications'`).Scan(&exists); err != nil {
+			return fmt.Errorf("check assisted queue schema: %w", err)
+		}
+		if exists == 0 {
+			return nil
+		}
+		return db.QueryRow(`SELECT COUNT(*) FROM assisted_applications WHERE assisted_state != 'completed'`).Scan(&m.AssistedWaiting)
 	})
 
 	g.Go(func() error {
@@ -882,6 +895,23 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(m)
+}
+
+// serveAssistedQueue exposes only the privacy-safe plan projection. URLs,
+// document paths, browser state, and page content never leave the server.
+func serveAssistedQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jobs, err := storage.GetAssistedQueue(db)
+	if err != nil {
+		log.Printf("serveAssistedQueue: %v", err)
+		http.Error(w, "failed to load assisted applications", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
 }
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
