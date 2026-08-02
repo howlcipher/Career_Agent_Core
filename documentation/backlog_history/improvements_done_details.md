@@ -2,6 +2,14 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 448. `npm run lint` lints the dashboard's own committed build output
+
+**Completed 2026-08-02.** The committed dashboard bundle must remain present because `cmd/dashboard/main.go` embeds `ui/dist`, but it is generated output and should not be linted as project source. `cmd/dashboard/ui/.oxlintrc.json` now uses `ignorePatterns: ["dist/**"]`, so the documented `npm run lint` command checks the dashboard source without emitting warnings from minified React internals.
+
+The UI lint and Vitest suite pass, as do `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal`. This is an internal developer-experience change; no runtime behavior or generated asset changed.
+
+---
+
 ## 494. Append-only funnel/attempt stage ledger
 
 **Completed 2026-08-01.** `funnel_stage_events` is an append-only, indexed SQLite ledger of every actual `job_funnel.status` transition. Each event contains only the canonical URL, prior and next state, derived pipeline stage, normalized reason code, UTC timestamp, and time since the preceding state. A database trigger writes the event as part of the status update, chosen over a separate Go call at every writer because it prevents new or overlooked writers from silently bypassing history. The marginal write is one compact indexed insert per state change, appropriate for the local agent's volume; no retention policy was added because the full durable transition history is the explicit purpose of the item and the ledger deliberately excludes all job content and applicant data.

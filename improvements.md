@@ -50,7 +50,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 495 | [No-progress / dominant-failure-reason watchdog](#495-no-progress--dominant-failure-reason-watchdog) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #495 for the full account. |
 | 496 | [ATS capability and automation-success registry](#496-ats-capability-and-automation-success-registry) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #496 for the full account. |
 | 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account. |
-| 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Pending | 1.0 = 2×1.0÷2 | standard | Re-verified 2026-08-01: `npm run lint` still reports generated `dist/` warnings while `npx oxlint src` is clean. |
+| 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #448 for the full account. |
 | 442 | [Measure whether the NLP offload is worth keeping](#442-measure-whether-the-nlp-offload-is-worth-keeping) | Pending | 1.0 = 2×1.0÷2 | standard | Re-verified 2026-08-01: `NLP_SERVICE_URL` still gates the same unmeasured optional offload; no benchmark evidence was added. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Pending | 0.83 = 5×1.0÷6 | deep-reasoning | New capability; #484's benchmark harness exists, but no approved local-edit contract exists. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | #481/#482 already shipped; no admission cap or proactive first-attempt sweep exists. |
@@ -397,20 +397,7 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 
 ### 448. `npm run lint` lints the dashboard's own committed build output
 
-**Found 2026-07-30** while running the UI linter as part of bug #437's verification.
-
-`cmd/dashboard/ui/dist` is committed deliberately — bug #436 established that, because `cmd/dashboard/main.go` embeds it with `//go:embed ui/dist` and a clone without it cannot build at all. But `.oxlintrc.json` declares no `ignorePatterns`, so the `lint` script walks the whole directory including `dist/`, and every warning it prints comes from minified React internals rather than from anything in this repository:
-
-```
-dist/assets/index-*.js:9:34201: warning eslint(no-unused-expressions)
-dist/assets/index-*.js:9:34722: warning react(no-this-in-sfc)
-```
-
-Dozens of them, all pointing at column offsets inside a single-line bundle. Meanwhile `npx oxlint src` reports **0 warnings and 0 errors on 2 files** — the actual source is clean, and always was.
-
-**The cost is not the noise itself, it is what the noise trains people to do.** A linter whose default invocation always prints dozens of warnings has no signal left: a genuine warning in `src/` would appear in the same list, indistinguishable, and anyone who runs the documented command learns within a day to stop reading its output. This is the same failure mode as a flaky test — the tool still runs, and nobody looks.
-
-Fix is one `ignorePatterns: ["dist"]` entry in `.oxlintrc.json`. Worth pairing with a check that `npm run lint` is actually part of anyone's loop, since nothing in `AGENTS.md`'s documented verification sequence runs it.
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #448.
 
 ### 443. Eight Go files are not `gofmt`-clean, and nothing in the verification loop notices
 
