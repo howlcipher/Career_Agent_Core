@@ -28,7 +28,8 @@
 - 2026-08-02 — `agy -p` architecture/security review with `gemini-3.1-pro-high` was rejected before execution because its individual quota is exhausted. No delegated work or external mutation occurred.
 - 2026-08-02 — Added `assisted_applications` as an additive, privacy-safe SQLite plan table; it retains only stable job IDs, status/action metadata, attempt/lease/confirmation fields, and timestamps. Added `cmd/assist-migrate`: dry-run by default, `-confirm` required, idempotent, filterable, transaction-backed, and aggregate-only reporting. The dashboard has `/api/assisted` and an explicit Assisted Apply entry point that lists individual plans with translated human instructions. `go test ./pkg/storage ./cmd/dashboard ./cmd/assist-migrate`, UI tests, and the UI build pass.
 - 2026-08-02 — Added atomic manual confirmation: only a selected assisted plan still in its original eligible status can become `APPLIED`; the canonical dedup record and `manual_user_confirmation` provenance commit in the same transaction. Added same-origin `POST /api/assisted/confirm` with bounded strict JSON and the dashboard confirmation dialog. Storage/dashboard/UI tests and UI build pass.
+- 2026-08-02 — Added a 20-minute atomic assisted-browser lease. The dashboard can request continuation only for an active lease; it cannot mark completion or release another process’s lease. Queue rows now identify a safe ATS provider category instead of exposing a URL. Storage/dashboard/UI tests and UI build pass.
 
 ## Next Step
 
-Implement authoritative leases, action transitions, and a visible single-job assisted browser command; then wire those actions into the dashboard.
+Implement a visible single-job assisted browser command using the existing guarded Playwright boundary, then wire the primary dashboard action to it.

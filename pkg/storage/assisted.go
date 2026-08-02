@@ -61,6 +61,56 @@ type AssistedMigrationReport struct {
 	Excluded  map[string]int `json:"excluded"`
 }
 
+const AssistedLeaseDuration = 20 * time.Minute
+
+// AcquireAssistedLease atomically claims a plan for one visible browser
+// process. The daemon never receives an assisted status, and a second assisted
+// process cannot claim until the lease expires or is explicitly released.
+func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (bool, error) {
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(owner) == "" {
+		return false, errors.New("assisted lease needs a job identifier and owner")
+	}
+	result, err := conn.Exec(`UPDATE assisted_applications
+		SET lease_owner = ?, lease_expires_at = ?, assisted_state = 'waiting_human',
+			assisted_attempt_count = assisted_attempt_count + 1, updated_at = ?
+		WHERE job_id = ? AND assisted_state != 'completed'
+			AND (lease_owner = '' OR lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+		owner, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, now.UTC())
+	if err != nil {
+		return false, fmt.Errorf("claim assisted application: %w", err)
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
+// RequestAssistedContinue is the sole dashboard transition after a human
+// completes a CAPTCHA/login/field. It cannot mark an application successful
+// and it retains the active browser claim for its owning process to observe.
+func RequestAssistedContinue(conn *sql.DB, jobID string, now time.Time) error {
+	result, err := conn.Exec(`UPDATE assisted_applications SET assisted_state = 'continue_requested', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'waiting_human' AND lease_owner != '' AND lease_expires_at > ?`, now.UTC(), jobID, now.UTC())
+	if err != nil {
+		return fmt.Errorf("request assisted continuation: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("no active assisted browser is available to continue")
+	}
+	return nil
+}
+
+func ReleaseAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) error {
+	result, err := conn.Exec(`UPDATE assisted_applications SET lease_owner = '', lease_expires_at = NULL,
+		assisted_state = CASE WHEN assisted_state = 'continue_requested' THEN 'waiting_human' ELSE assisted_state END,
+		updated_at = ? WHERE job_id = ? AND lease_owner = ?`, now.UTC(), jobID, owner)
+	if err != nil {
+		return fmt.Errorf("release assisted lease: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted lease is not owned by this process")
+	}
+	return nil
+}
+
 var eligibleAssistedStatuses = map[string]struct{}{
 	"AWAITING_REVIEW": {}, "MANUAL_REQUIRED": {}, "BLOCKED_CAPTCHA": {},
 }
@@ -214,6 +264,8 @@ func MigrateLegacyAssisted(opts AssistedMigrationOptions) (AssistedMigrationRepo
 // dashboard readers never need to initialize the storage package singleton.
 func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	rows, err := conn.Query(`SELECT jf.id, COALESCE(jf.company_name, ''), COALESCE(jf.job_title, ''), jf.fit_score,
+		CASE WHEN jf.url LIKE '%greenhouse%' THEN 'Greenhouse' WHEN jf.url LIKE '%lever.co%' THEN 'Lever'
+		WHEN jf.url LIKE '%workday%' THEN 'Workday' WHEN jf.url LIKE '%ashby%' THEN 'Ashby' ELSE 'Other ATS' END,
 		COALESCE(jf.status, ''), COALESCE(jf.status_reason, ''), COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
 		aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
 		aa.lease_owner, aa.lease_expires_at
@@ -235,7 +287,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var lastUpdated sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpiry sql.NullTime
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &leaseOwner, &leaseExpiry); err != nil {
+		var currentStatus string
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &leaseOwner, &leaseExpiry); err != nil {
 			return nil, err
 		}
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)

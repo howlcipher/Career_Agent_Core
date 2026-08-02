@@ -123,3 +123,38 @@ func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *t
 		t.Fatal("second confirmation must conflict")
 	}
 }
+
+func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Lease Co", "Engineer", "https://lease.example/jobs/1", "MANUAL_REQUIRED"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Lease Co'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	claimed, err := AcquireAssistedLease(GetDB(), id, "first", now)
+	if err != nil || !claimed {
+		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
+	}
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "second", now.Add(time.Minute)); err != nil || claimed {
+		t.Fatalf("second claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := RequestAssistedContinue(GetDB(), id, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReleaseAssistedLease(GetDB(), id, "second", now.Add(time.Minute)); err == nil {
+		t.Fatal("different owner released lease")
+	}
+	if err := ReleaseAssistedLease(GetDB(), id, "first", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequestAssistedContinue(GetDB(), id, now.Add(2*time.Minute)); err == nil {
+		t.Fatal("continuation without live browser must fail")
+	}
+}

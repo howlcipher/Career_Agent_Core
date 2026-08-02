@@ -484,6 +484,7 @@ func main() {
 	mux.HandleFunc("/api/metrics", serveMetrics)
 	mux.HandleFunc("/api/assisted", serveAssistedQueue)
 	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
+	mux.HandleFunc("/api/assisted/continue", requireSameOrigin(serveAssistedContinue))
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -937,6 +938,29 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"confirmed"}`))
+}
+
+func serveAssistedContinue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JobID string `json:"job_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.JobID) == "" {
+		http.Error(w, "an assisted job identifier is required", http.StatusBadRequest)
+		return
+	}
+	if err := storage.RequestAssistedContinue(db, request.JobID, time.Now()); err != nil {
+		log.Printf("serveAssistedContinue: %v", err)
+		http.Error(w, "no active assisted browser is available", http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"continue_requested"}`))
 }
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
