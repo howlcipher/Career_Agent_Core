@@ -61,6 +61,14 @@ type AssistedMigrationReport struct {
 	Excluded  map[string]int `json:"excluded"`
 }
 
+// AssistedLaunchInfo is deliberately server/command-only. Its URL is never
+// serialized to the dashboard; it is read from SQLite immediately before a
+// guarded browser navigation.
+type AssistedLaunchInfo struct {
+	JobID string
+	URL   string
+}
+
 const AssistedLeaseDuration = 20 * time.Minute
 
 // AcquireAssistedLease atomically claims a plan for one visible browser
@@ -81,6 +89,26 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 	}
 	n, err := result.RowsAffected()
 	return n == 1, err
+}
+
+func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
+	var info AssistedLaunchInfo
+	var status, original string
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.url, jf.status, aa.original_status
+		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
+		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
+		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
+		Scan(&info.JobID, &info.URL, &status, &original)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssistedLaunchInfo{}, errors.New("assisted job is not available to launch")
+	}
+	if err != nil {
+		return AssistedLaunchInfo{}, fmt.Errorf("load assisted launch plan: %w", err)
+	}
+	if status != original || !isAssistedEligibleStatus(status) {
+		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
+	}
+	return info, nil
 }
 
 // RequestAssistedContinue is the sole dashboard transition after a human

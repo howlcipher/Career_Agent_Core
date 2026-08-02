@@ -485,6 +485,7 @@ func main() {
 	mux.HandleFunc("/api/assisted", serveAssistedQueue)
 	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
 	mux.HandleFunc("/api/assisted/continue", requireSameOrigin(serveAssistedContinue))
+	mux.HandleFunc("/api/assisted/launch", requireSameOrigin(serveAssistedLaunch))
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -961,6 +962,37 @@ func serveAssistedContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"continue_requested"}`))
+}
+
+func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JobID string `json:"job_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.JobID) == "" {
+		http.Error(w, "an assisted job identifier is required", http.StatusBadRequest)
+		return
+	}
+	if _, err := strconv.ParseInt(request.JobID, 10, 64); err != nil {
+		http.Error(w, "invalid assisted job identifier", http.StatusBadRequest)
+		return
+	}
+	// The command receives only a validated stable database ID, never a URL,
+	// path, or user-provided shell fragment. Its own atomic lease is the final
+	// process-conflict check before it opens a visible browser.
+	cmd := exec.Command("go", "run", "./cmd/assist", "-job", request.JobID)
+	if err := cmd.Start(); err != nil {
+		log.Printf("serveAssistedLaunch: %v", err)
+		http.Error(w, "failed to open assisted application", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"launching"}`))
 }
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
