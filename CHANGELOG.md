@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Confirmed applications now have an authoritative funnel timestamp
+
+* **Fix (bug #490):** `job_funnel.applied_at` existed in the schema but was never set, leaving the funnel unable to answer when a confirmed application happened. Both automatic confirmation and manual handoff promotion now record a canonical UTC timestamp; later status changes retain the original confirmation time. Existing historical rows are intentionally not backfilled because no reliable source exists.
+
 ## 2026-08-01 — Exhausted retries retain their diagnostic cause
 
 * **Fix (bug #480):** retryable pipeline failures already logged their causal error, but a job that exhausted its five-attempt budget entered `RETRY_EXHAUSTED` with a blank `status_reason`, making the terminal queue impossible to group by cause without reconstructing logs. `UpdateFunnelStatusRetryable` now accepts that reason from all six retryable paths and writes the final one when the row becomes terminal. Regression coverage verifies both the existing exponential backoff and the retained terminal reason.

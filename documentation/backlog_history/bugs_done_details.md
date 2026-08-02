@@ -2,6 +2,14 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 490. [`job_funnel.applied_at` is declared in the schema but no code path ever writes it](#490-job_funnelapplied_at-is-declared-in-the-schema-but-no-code-path-ever-writes-it)
+
+**Completed 2026-08-01.** `UpdateFunnelStatus` now records canonical UTC `applied_at` only when a row first becomes `APPLIED`; later status transitions preserve that confirmation time. `MarkHandoffApplied` writes the same canonical UTC value in its existing transaction, alongside its `applied_jobs` dedup record. Historical rows remain untouched because no reliable backfill source exists.
+
+**Regression coverage:** automatic and manual confirmation both produce a parseable UTC timestamp, while a later `INTERVIEW_REQUESTED` transition leaves the original timestamp unchanged. The focused `go test ./pkg/storage` and full `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` verification loop all passed.
+
+---
+
 ## 480. [UpdateFunnelStatusRetryable never records a status_reason, so every RETRY_EXHAUSTED row loses its own root cause](#480-updatefunnelstatusretryable-never-records-a-status_reason-so-every-retry_exhausted-row-loses-its-own-root-cause)
 
 **Completed 2026-08-01.** `UpdateFunnelStatusRetryable` now accepts the causal error text and writes it to `job_funnel.status_reason` when its fifth failure changes a row to `RETRY_EXHAUSTED`. The transient backoff updates remain unchanged, so the stored reason is the final observed retryable failure that exhausted the budget.
