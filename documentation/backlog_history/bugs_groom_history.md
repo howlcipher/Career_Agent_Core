@@ -1,5 +1,7 @@
 # bugs.md — Archived Groom-Pass / Status History
 
+**Prior — MET 2026-08-02 groom pass.** There were no Pending bug rows; the zero-Blocker/Major box remained checked. `go build ./...`, `go vet ./...`, and `go test ./...` remained clean after #448 and that backlog pass.
+
 **MET 2026-08-01 (session fifty-one groom pass).** There are no Pending bug rows; the zero-Blocker/Major box remains checked. `go build ./...`, `go vet ./...`, and `go test ./...` re-ran clean during this pass.
 
 ---

@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-02 groom pass.** #442 shipped after matched live CPU-only measurements showed a 25% wall-time reduction and about 90% lower waiting-process memory with the opt-in offload. Ten free Pending rows remain; #486 (0.83) is now the top eligible item. The bug backlog is still empty, and #493, #488, and paywalled #14 remain below-floor user decisions. Prior status paragraph archived to `documentation/backlog_history/improvements_groom_history.md`.
+**2026-08-02 mission-status groom.** The live dashboard reports `running: false` and `eligible_queue: 0`: no job can be submitted until the agent runs and discovery yields an eligible posting. It exposes neither the last discovery result nor why the queue is empty, so #509 is added at 1.0 as the top free, mission-facing diagnostic improvement. All prior Pending rows remain correctly ranked; #493, #488, and paywalled #14 remain below-floor user decisions. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. Prior status paragraph archived to `documentation/backlog_history/improvements_groom_history.md`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -52,6 +52,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account. |
 | 448 | [`npm run lint` lints the dashboard's own committed build output](#448-npm-run-lint-lints-the-dashboards-own-committed-build-output) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #448 for the full account. |
 | 442 | [Measure whether the NLP offload is worth keeping](#442-measure-whether-the-nlp-offload-is-worth-keeping) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #442 for the full account. |
+| 509 | [Make an empty application queue explainable before it silently stalls applications](#509-make-an-empty-application-queue-explainable-before-it-silently-stalls-applications) | Pending | 1.0 = 6×0.5÷3 | standard | Discovery-health follow-up to #495; the live dashboard proves the current zero-queue state is visible but unexplained. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Pending | 0.83 = 5×1.0÷6 | deep-reasoning | New capability; #484's benchmark harness exists, but no approved local-edit contract exists. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | #481/#482 already shipped; no admission cap or proactive first-attempt sweep exists. |
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Pending | 0.75 = 3×1.0÷4 | standard | Deterministic classification still covers part of the proposed surface; no safe 4B evaluation has been run. |
@@ -146,6 +147,20 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 23 | [Static master cover letter, reused across every application](#23-static-master-cover-letter-reused-across-every-application) | Done (2026-07-24) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #23 for the full account. |
 
 ## Details
+
+### 509. Make an empty application queue explainable before it silently stalls applications
+
+**Found 2026-08-02** during a safe live mission-status check. The running dashboard's read-only `/api/metrics` reported `eligible_queue: 0`, while `/api/agent/status` reported `running: false`. That proves no application can currently progress, but not whether the agent was intentionally stopped, discovery failed, all results were duplicates or excluded, or filters yielded no eligible jobs. The dashboard's “last skipped” record is historical and cannot answer that question. #495 deliberately suppresses its no-progress alert when the eligible queue is empty, so it cannot provide this diagnosis either.
+
+**Proposed direction:** persist a privacy-safe aggregate result for each discovery refresh (started/finished time; source-level attempted/new/duplicate/excluded/error counts; sanitized error class), expose the latest result in `/api/metrics`, and show an actionable dashboard state when the agent is stopped or the most recent refresh produced no eligible jobs. Do not retain job descriptions, URLs, resumes, application answers, raw errors, or credentials; do not start the agent, relax filters, requeue jobs, or submit applications automatically.
+
+**Acceptance criteria:** a deterministic discovery fixture can produce new eligible jobs, zero results, all-filtered or duplicate results, and a source error; the API/dashboard state distinguishes each case without leaking job or personal content. An intentionally stopped agent is visibly distinct from a running agent awaiting its next refresh.
+
+**Automated tests:** table-driven storage/API tests for the aggregate outcomes and a dashboard-handler test for the stopped/empty state.
+
+**Safe live verification:** query only the dashboard's aggregate endpoint after one controlled discovery refresh; confirm the displayed explanation agrees with the persisted aggregate without inspecting raw job data.
+
+**Boundaries:** this is observability and diagnosis, not a discovery-source rewrite (#508), queue-admission change (#492), or autonomous application-start authority. Its theme has one shipped precursor (#495), hence Decay 0.5; Value 6 and Effort 3 yield `1.0`.
 
 ### 506. `/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely
 

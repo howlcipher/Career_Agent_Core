@@ -1,5 +1,7 @@
 # improvements.md — Archived Groom-Pass / Status History
 
+**Prior — 2026-08-02 groom pass.** #442 shipped after matched live CPU-only measurements showed a 25% wall-time reduction and about 90% lower waiting-process memory with the opt-in offload. Ten free Pending rows remained; #486 (0.83) was the top eligible item. The bug backlog was empty, and #493, #488, and paywalled #14 remained below-floor user decisions.
+
 **2026-08-01 groom pass.** All 12 remaining free Pending rows and all three paywalled rows were re-verified against the current tree; no pending bugs or journals exist. #448 and #442 tie at the top (1.0). #493 is now `⚠️ below floor` (0.17): its necessary live outcome database is unavailable in this checkout, so its claimed 1.0 value is not currently actionable. #483 is closed after a fresh process scan found no live or zombie `career_agent_bin` process. #488 and paywalled #14 remain user decisions below the floor. See `documentation/backlog_history/improvements_done_details.md` item #483 for the full account.
 
 ---

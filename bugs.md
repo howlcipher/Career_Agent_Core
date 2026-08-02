@@ -4,7 +4,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**MET 2026-08-02 groom pass.** There are no Pending bug rows; the zero-Blocker/Major box remains checked. `go build ./...`, `go vet ./...`, and `go test ./...` remain clean after #448 and this backlog pass. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
+**MET 2026-08-02 mission-status groom.** There are no Pending bug rows; the zero-Blocker/Major box remains checked. The live dashboard confirms the agent is stopped with no eligible jobs, which is an operational state rather than a reproducible defect. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 
