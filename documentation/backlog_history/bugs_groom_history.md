@@ -1,5 +1,7 @@
 # bugs.md — Archived Groom-Pass / Status History
 
+**Prior — 2026-08-01, session forty-nine.** Bug #502 is Done: the installed `promptsec` source does contain the unlocated 0.7 heuristic homoglyph branch, but a privacy-preserving audit of all 1,057 logged `encoding_attack` rows found zero unlocated heuristic threats at decisive severity. The only unlocated entries were 649 sub-threshold (0.30) sanitizer rows and two equivalent heuristic rows, so no evidence supports relaxing quarantine behavior. The highest eligible pending item is now improvement #496 (1.25). See `documentation/backlog_history/bugs_done_details.md` item #502 for the full account.
+
 **MET 2026-08-01 (fortieth session, #508 fix).** #508 is Done: the daemon now gets a rate-limited current remote-job feed even when search providers are exhausted or unavailable, and its live restart immediately admitted 18 relevant postings and loaded 15 into the queue. The zero-Blocker/Major box remains checked. See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account.
 
 Superseded dated status paragraphs moved out of `bugs.md` during the 2026-08-01 backlog-size restructure (see `documentation/task_journals/2026-08-01_optimize-backlog-access.md`). `bugs.md` itself now carries only the single current status paragraph in each section; this file is the full historical record, kept for audit, not read on a normal work session.

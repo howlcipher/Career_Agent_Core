@@ -72,6 +72,34 @@ func classifyGenerationError(err error) genErrorClass {
 	}
 }
 
+// classifyAttemptOutcome preserves the existing coarse terminal class for
+// compatibility while retaining a normalized reason code for the stage
+// ledger. Codes are fixed operational labels, never raw page or error text.
+func classifyAttemptOutcome(err error) (storage.TerminalClass, string) {
+	if err == nil {
+		return storage.AttemptApplied, "confirmed_submission"
+	}
+	if errors.Is(err, security.ErrPromptInjectionDetected) {
+		return storage.AttemptOtherFailure, "prompt_injection_quarantine"
+	}
+	if errors.Is(err, submitter.ErrAwaitingHumanReview) || errors.Is(err, submitter.ErrSubmitClickDisabled) {
+		return storage.AttemptAwaitingReview, "awaiting_human_review"
+	}
+	if errors.Is(err, submitter.ErrCaptchaBlocked) {
+		return storage.AttemptPostSubmitCaptcha, "post_submit_captcha"
+	}
+	if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || submitter.IsManualReviewError(err) {
+		return storage.AttemptManualAccountGate, "manual_account_gate"
+	}
+	if errors.Is(err, submitter.ErrUncommittableField) {
+		return storage.AttemptValidationFailure, "uncommittable_field"
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "target closed") {
+		return storage.AttemptOtherFailure, "browser_crash_recovery_exhausted"
+	}
+	return storage.AttemptOtherFailure, "generic_fill_failure"
+}
+
 type JobPipelineDeps struct {
 	NetworkGuard   *security.NetworkGuard
 	Profile        *config.Profile
@@ -540,25 +568,13 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		err := submitter.AttemptSubmit(deps.Submitter.Browser, deps.Filter, deps.Client, deps.Client, job.CompanyName, job.URL, generateDocsFunc, deps.PIIData, state.TailoredContext, deps.Profile.HeadlessBrowser, deps.Profile.CopilotMode, deps.Profile.AutoSubmitClick)
 		inferenceMs := int(time.Since(attemptStart).Milliseconds())
 
-		var terminalClass storage.TerminalClass
-		if err == nil {
-			terminalClass = storage.AttemptApplied
-		} else if errors.Is(err, submitter.ErrAwaitingHumanReview) || errors.Is(err, submitter.ErrSubmitClickDisabled) {
-			terminalClass = storage.AttemptAwaitingReview
-		} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
-			terminalClass = storage.AttemptPostSubmitCaptcha
-		} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || submitter.IsManualReviewError(err) {
-			terminalClass = storage.AttemptManualAccountGate
-		} else if errors.Is(err, submitter.ErrUncommittableField) {
-			terminalClass = storage.AttemptValidationFailure
-		} else {
-			terminalClass = storage.AttemptOtherFailure
-		}
+		terminalClass, reasonCode := classifyAttemptOutcome(err)
 
 		_ = storage.RecordAttempt(storage.ApplicationAttempt{
 			Source:        getATSProvider(job.URL),
 			URL:           job.URL,
 			TerminalClass: terminalClass,
+			ReasonCode:    reasonCode,
 			StartedAt:     attemptStart,
 			EndedAt:       time.Now(),
 			InferenceMs:   inferenceMs,
@@ -569,7 +585,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			if checkpointErr := deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, promptInjectionQuarantineStatus); checkpointErr != nil {
 				log.Printf("[Worker-%d] Failed to checkpoint browser quarantine for %s: %v", workerID, job.CompanyName, checkpointErr)
 			}
-			if statusErr := storage.UpdateFunnelStatus(job.URL, promptInjectionQuarantineStatus); statusErr != nil {
+			if statusErr := storage.UpdateFunnelStatusWithReason(job.URL, promptInjectionQuarantineStatus, reasonCode); statusErr != nil {
 				log.Printf("[Worker-%d] Failed to record browser quarantine for %s: %v", workerID, job.CompanyName, statusErr)
 			}
 		} else if errors.Is(err, submitter.ErrAwaitingHumanReview) || errors.Is(err, submitter.ErrSubmitClickDisabled) {
@@ -591,7 +607,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		} else if err != nil {
 			log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
-			storage.UpdateFunnelStatus(job.URL, "FAILED_SUBMIT")
+			storage.UpdateFunnelStatusWithReason(job.URL, "FAILED_SUBMIT", reasonCode)
 			_ = storage.LogFailedSubmission(job.CompanyName, job.Title, job.URL)
 		} else {
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "COMPLETED")

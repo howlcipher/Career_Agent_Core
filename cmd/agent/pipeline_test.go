@@ -11,6 +11,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 )
 
 // classifyGenerationError draws the line bugs.md #444 is about: only a
@@ -66,6 +67,29 @@ func TestClassifyGenerationError(t *testing.T) {
 			got := classifyGenerationError(tc.err)
 			if got != tc.want {
 				t.Errorf("classifyGenerationError(%q) = %v, want %v", tc.err.Error(), got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassifyAttemptOutcomeKeepsDistinctLedgerReasons(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantClass  storage.TerminalClass
+		wantReason string
+	}{
+		{"prompt injection", security.ErrPromptInjectionDetected, storage.AttemptOtherFailure, "prompt_injection_quarantine"},
+		{"browser recovery exhausted", errors.New("playwright: target closed"), storage.AttemptOtherFailure, "browser_crash_recovery_exhausted"},
+		{"generic fill failure", errors.New("selector matched no element"), storage.AttemptOtherFailure, "generic_fill_failure"},
+		{"captcha", submitter.ErrCaptchaBlocked, storage.AttemptPostSubmitCaptcha, "post_submit_captcha"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotClass, gotReason := classifyAttemptOutcome(tc.err)
+			if gotClass != tc.wantClass || gotReason != tc.wantReason {
+				t.Errorf("classifyAttemptOutcome(%v) = (%q, %q), want (%q, %q)", tc.err, gotClass, gotReason, tc.wantClass, tc.wantReason)
 			}
 		})
 	}

@@ -134,6 +134,61 @@ func TestApplicationAttempts(t *testing.T) {
 	}
 }
 
+func TestFunnelStageLedgerReconstructsTransitionsAndReasons(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	url := "https://jobs.example.com/role"
+	if _, err := AddToFunnel("Example", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatalf("add job to funnel: %v", err)
+	}
+	if err := UpdateFunnelStatus(url, "PROCESSING"); err != nil {
+		t.Fatalf("set processing: %v", err)
+	}
+	if err := UpdateFunnelStatusWithReason(url, "QUARANTINED_PROMPT_INJECTION", "prompt_injection_quarantine"); err != nil {
+		t.Fatalf("record quarantine: %v", err)
+	}
+
+	events, err := GetFunnelStageEvents(url)
+	if err != nil {
+		t.Fatalf("get stage history: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	if got := events[0]; got.PriorStatus != "DISCOVERED" || got.NewStatus != "PROCESSING" || got.PipelineStage != "intake" || got.ReasonCode != "processing" {
+		t.Errorf("first event = %+v, want DISCOVERED -> PROCESSING intake/processing", got)
+	}
+	if got := events[1]; got.PriorStatus != "PROCESSING" || got.NewStatus != "QUARANTINED_PROMPT_INJECTION" || got.PipelineStage != "submission" || got.ReasonCode != "prompt_injection_quarantine" {
+		t.Errorf("second event = %+v, want prompt-injection quarantine transition", got)
+	}
+}
+
+func TestRecordAttemptPersistsNormalizedFailureCode(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	attempt := ApplicationAttempt{
+		Source:        "example.com",
+		URL:           "https://example.com/role",
+		TerminalClass: AttemptOtherFailure,
+		ReasonCode:    "browser_crash_recovery_exhausted",
+		StartedAt:     time.Now().Add(-time.Second),
+		EndedAt:       time.Now(),
+	}
+	if err := RecordAttempt(attempt); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+
+	var reason string
+	if err := db.QueryRow("SELECT reason_code FROM application_attempts WHERE url = ?", attempt.URL).Scan(&reason); err != nil {
+		t.Fatalf("read attempt reason code: %v", err)
+	}
+	if reason != attempt.ReasonCode {
+		t.Errorf("reason_code = %q, want %q", reason, attempt.ReasonCode)
+	}
+}
+
 func TestRecordAttemptUpdatesCapabilityRegistryAndMappingHealth(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

@@ -2,6 +2,16 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 494. Append-only funnel/attempt stage ledger
+
+**Completed 2026-08-01.** `funnel_stage_events` is an append-only, indexed SQLite ledger of every actual `job_funnel.status` transition. Each event contains only the canonical URL, prior and next state, derived pipeline stage, normalized reason code, UTC timestamp, and time since the preceding state. A database trigger writes the event as part of the status update, chosen over a separate Go call at every writer because it prevents new or overlooked writers from silently bypassing history. The marginal write is one compact indexed insert per state change, appropriate for the local agent's volume; no retention policy was added because the full durable transition history is the explicit purpose of the item and the ledger deliberately excludes all job content and applicant data.
+
+`application_attempts.reason_code` receives an idempotent migration without fabricating historical values. Pipeline classification preserves the existing coarse terminal classes for compatibility while distinguishing `prompt_injection_quarantine`, `browser_crash_recovery_exhausted`, and `generic_fill_failure`; no raw error text is stored. Existing `status_reason` values are cleared when a reasonless state replaces them, preventing a prior terminal cause from leaking into a later ledger event.
+
+Focused tests prove state-history reconstruction, normalized attempt-code persistence, and the three required failure classifications. Legacy-schema tests exposed two compatibility gaps during implementation: old rows may have no `last_updated`, so the trigger safely timestamps those events at write time; a focused retry migration may predate `status_reason`, so its writer ensures that idempotent migration before use. Full `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed. No production database was queried or modified; the normal next pipeline transition will begin accumulating live ledger evidence.
+
+---
+
 ## 496. ATS capability and automation-success registry
 
 **Completed 2026-08-01.** The existing `career_sites` table is now populated whenever a new funnel row is discovered and whenever an application attempt is recorded. It retains the observed domain/provider, most recent observation, successful form reach, account-gate evidence, confirmation strategy, and mapping-health state. `form_mappings` now stores success and failure counts plus its latest validation time. Both upgrades are idempotent: old databases gain the fields without fabricated historical evidence.

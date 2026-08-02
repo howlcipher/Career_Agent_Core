@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Funnel transitions and submission failures are now traceable
+
+* **Improvement (#494):** SQLite now keeps an append-only, indexed record of every `job_funnel` status transition, including its prior state, pipeline stage, normalized reason code, time, and measured duration since the preceding state. The ledger is enforced by a database trigger, so status writers cannot accidentally bypass it. `application_attempts` also preserves a normalized failure reason: prompt-injection quarantine, exhausted browser-crash recovery, and generic fill failure are distinguishable even though legacy dashboard aggregates retain the compatible `OTHER_FAILURE` class. Neither store contains job content, prompts, answers, generated documents, DOM, or screenshots; historical rows are intentionally not invented.
+
 ## 2026-08-01 — Site capabilities now learn from discovery and submission outcomes
 
 * **Improvement (#496):** The formerly unused `career_sites` table now records every newly discovered or attempted domain, its observed provider, form-reach confirmation strategy, account-gate evidence, and mapping health. Cached form mappings now retain outcome counters and validation timestamps; a recently successful mapping is preferred, while a stale or failure-dominated one yields to the established provider-specific fallback rather than becoming a permanent blacklist. Existing databases receive idempotent schema upgrades without inventing historical capability evidence.

@@ -29,10 +29,53 @@ type ApplicationAttempt struct {
 	Source         string
 	URL            string
 	TerminalClass  TerminalClass
+	ReasonCode     string
 	StartedAt      time.Time
 	EndedAt        time.Time
 	ModelCallCount int
 	InferenceMs    int
+}
+
+// FunnelStageEvent is the privacy-safe, append-only record of one job state
+// transition. It deliberately contains only operational metadata.
+type FunnelStageEvent struct {
+	ID              int64
+	URL             string
+	PriorStatus     string
+	NewStatus       string
+	PipelineStage   string
+	ReasonCode      string
+	OccurredAt      time.Time
+	StageDurationMs *int64
+}
+
+// GetFunnelStageEvents returns a job's complete persisted transition history.
+func GetFunnelStageEvents(rawURL string) ([]FunnelStageEvent, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	rows, err := db.Query(`SELECT id, url, prior_status, new_status, pipeline_stage,
+		reason_code, occurred_at, stage_duration_ms
+		FROM funnel_stage_events WHERE url = ? ORDER BY id ASC`, NormalizeURL(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("query funnel stage events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []FunnelStageEvent
+	for rows.Next() {
+		var event FunnelStageEvent
+		var duration sql.NullInt64
+		if err := rows.Scan(&event.ID, &event.URL, &event.PriorStatus, &event.NewStatus,
+			&event.PipelineStage, &event.ReasonCode, &event.OccurredAt, &duration); err != nil {
+			return nil, fmt.Errorf("scan funnel stage event: %w", err)
+		}
+		if duration.Valid {
+			event.StageDurationMs = &duration.Int64
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 type SourceHealthSummary struct {
@@ -72,13 +115,14 @@ func RecordAttempt(attempt ApplicationAttempt) error {
 
 	query := `
 		INSERT INTO application_attempts 
-		(source, url, terminal_class, started_at, ended_at, model_call_count, inference_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		(source, url, terminal_class, reason_code, started_at, ended_at, model_call_count, inference_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := tx.Exec(query,
 		attempt.Source,
 		attempt.URL,
 		string(attempt.TerminalClass),
+		attempt.ReasonCode,
 		attempt.StartedAt,
 		attempt.EndedAt,
 		attempt.ModelCallCount,

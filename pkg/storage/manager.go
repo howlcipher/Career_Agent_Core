@@ -123,10 +123,21 @@ func InitDBWithPath(path string) error {
 		source TEXT,
 		url TEXT,
 		terminal_class TEXT,
+		reason_code TEXT,
 		started_at DATETIME,
 		ended_at DATETIME,
 		model_call_count INTEGER,
 		inference_ms INTEGER
+	);
+	CREATE TABLE IF NOT EXISTS funnel_stage_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		url TEXT NOT NULL,
+		prior_status TEXT,
+		new_status TEXT NOT NULL,
+		pipeline_stage TEXT NOT NULL,
+		reason_code TEXT NOT NULL,
+		occurred_at DATETIME NOT NULL,
+		stage_duration_ms INTEGER
 	);
 	CREATE TABLE IF NOT EXISTS daemon_watchdog_alert (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -135,6 +146,8 @@ func InitDBWithPath(path string) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);
 	CREATE INDEX IF NOT EXISTS idx_application_attempts_started ON application_attempts(started_at);
+	CREATE INDEX IF NOT EXISTS idx_funnel_stage_events_url_id ON funnel_stage_events(url, id);
+	CREATE INDEX IF NOT EXISTS idx_funnel_stage_events_status_time ON funnel_stage_events(new_status, occurred_at);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_company_name ON job_funnel(company_name);
 	CREATE INDEX IF NOT EXISTS idx_career_sites_last_scanned ON career_sites(last_scanned);
 	CREATE INDEX IF NOT EXISTS idx_applied_jobs_applied_at ON applied_jobs(applied_at);`
@@ -170,6 +183,12 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateFormMappingHealth(); err != nil {
+		return err
+	}
+	if err := migrateApplicationAttemptReasonCode(); err != nil {
+		return err
+	}
+	if err := createFunnelStageLedgerTrigger(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -438,6 +457,57 @@ func migrateFormMappingHealth() error {
 		{"last_validated_at", "DATETIME"},
 	}
 	return addMissingColumns("form_mappings", columns)
+}
+
+// migrateApplicationAttemptReasonCode preserves historical coarse outcome
+// classes while letting new attempts retain a privacy-safe, normalized cause.
+func migrateApplicationAttemptReasonCode() error {
+	return addMissingColumns("application_attempts", []struct {
+		name       string
+		definition string
+	}{{"reason_code", "TEXT"}})
+}
+
+// createFunnelStageLedgerTrigger records every persisted status transition in
+// one place. Keeping this at the database boundary prevents a new writer from
+// accidentally bypassing the ledger. The ledger stores only state metadata,
+// never job content, prompts, answers, documents, or browser artifacts.
+func createFunnelStageLedgerTrigger() error {
+	_, err := db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS record_funnel_stage_transition
+		AFTER UPDATE OF status ON job_funnel
+		WHEN OLD.status IS NOT NEW.status
+		BEGIN
+			INSERT INTO funnel_stage_events
+				(url, prior_status, new_status, pipeline_stage, reason_code, occurred_at, stage_duration_ms)
+			VALUES (
+				NEW.url,
+				OLD.status,
+				NEW.status,
+				CASE NEW.status
+					WHEN 'PROCESSING' THEN 'intake'
+					WHEN 'FAILED_SCORE' THEN 'scoring'
+					WHEN 'QUARANTINED_RAG_CONTEXT' THEN 'tailoring'
+					WHEN 'APPLIED' THEN 'submission'
+					WHEN 'AWAITING_REVIEW' THEN 'submission'
+					WHEN 'MANUAL_REQUIRED' THEN 'submission'
+					WHEN 'BLOCKED_CAPTCHA' THEN 'submission'
+					WHEN 'FAILED_SUBMIT' THEN 'submission'
+					WHEN 'QUARANTINED_PROMPT_INJECTION' THEN 'submission'
+					ELSE 'funnel'
+				END,
+				COALESCE(NULLIF(NEW.status_reason, ''), lower(NEW.status)),
+				COALESCE(NEW.last_updated, CURRENT_TIMESTAMP),
+				CASE WHEN (
+					SELECT occurred_at FROM funnel_stage_events
+					WHERE url = NEW.url ORDER BY id DESC LIMIT 1
+				) IS NULL THEN NULL ELSE CAST(ROUND((julianday(NEW.last_updated) - julianday((
+					SELECT occurred_at FROM funnel_stage_events
+					WHERE url = NEW.url ORDER BY id DESC LIMIT 1
+				))) * 86400000) AS INTEGER) END
+			);
+		END`)
+	return err
 }
 
 func addMissingColumns(table string, columns []struct {
@@ -1386,6 +1456,13 @@ func SkipExcludedSourceDiscoveredJobs() (int64, error) {
 }
 
 func UpdateFunnelStatus(url, status string) error {
+	return UpdateFunnelStatusWithReason(url, status, "")
+}
+
+// UpdateFunnelStatusWithReason changes the current funnel state and records a
+// normalized, non-sensitive reason for the stage ledger. Callers must pass a
+// stable code rather than a raw error because errors can contain page content.
+func UpdateFunnelStatusWithReason(url, status, reasonCode string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
@@ -1405,9 +1482,9 @@ func UpdateFunnelStatus(url, status string) error {
 	// convert to local time only when formatting for display.
 	now := time.Now().UTC()
 	_, err := db.Exec(`UPDATE job_funnel
-		SET status = ?, last_updated = ?,
+		SET status = ?, status_reason = NULLIF(?, ''), last_updated = ?,
 			applied_at = CASE WHEN ? = 'APPLIED' AND applied_at IS NULL THEN ? ELSE applied_at END
-		WHERE url = ?`, status, now, status, now, url)
+		WHERE url = ?`, status, reasonCode, now, status, now, url)
 	return err
 }
 
@@ -1444,7 +1521,7 @@ func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 		return fmt.Errorf("db not initialized")
 	}
 	url = NormalizeURL(url)
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now().UTC(), url)
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, status_reason = NULL, fit_score = ?, last_updated = ? WHERE url = ?", status, fitScore, time.Now().UTC(), url)
 	return err
 }
 
@@ -1483,6 +1560,12 @@ func UpdateFunnelStatusRetryable(url, reason string) error {
 	if db == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	// A focused legacy migration can invoke this writer after adding retry
+	// fields but before the later status-reason migration. Make the writer
+	// safe in that order too; normal initialization makes this a no-op.
+	if err := migrateJobFunnelStatusReason(); err != nil {
+		return fmt.Errorf("ensure status_reason migration: %w", err)
+	}
 	url = NormalizeURL(url)
 
 	var retryCount int
@@ -1502,8 +1585,8 @@ func UpdateFunnelStatusRetryable(url, reason string) error {
 	backoff := RetryBackoffBase * time.Duration(1<<uint(retryCount-1))
 	nextEligible := now.Add(backoff)
 	_, err := db.Exec(
-		"UPDATE job_funnel SET status = 'DISCOVERED', retry_count = ?, next_eligible_at = ?, last_updated = ? WHERE url = ?",
-		retryCount, nextEligible, now, url)
+		"UPDATE job_funnel SET status = 'DISCOVERED', status_reason = ?, retry_count = ?, next_eligible_at = ?, last_updated = ? WHERE url = ?",
+		reason, retryCount, nextEligible, now, url)
 	return err
 }
 
@@ -1525,7 +1608,7 @@ func DeferFunnelStatus(url string, cooldown time.Duration) error {
 	url = NormalizeURL(url)
 	now := time.Now().UTC()
 	_, err := db.Exec(
-		"UPDATE job_funnel SET status = 'DISCOVERED', next_eligible_at = ?, last_updated = ? WHERE url = ?",
+		"UPDATE job_funnel SET status = 'DISCOVERED', status_reason = NULL, next_eligible_at = ?, last_updated = ? WHERE url = ?",
 		now.Add(cooldown), now, url)
 	return err
 }
