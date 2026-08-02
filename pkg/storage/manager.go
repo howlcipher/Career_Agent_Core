@@ -708,8 +708,10 @@ func MarkHandoffApplied(companyName, jobTitle, applyURL string) (bool, error) {
 		return false, nil
 	}
 
-	if _, err := tx.Exec(`UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?`,
-		"APPLIED", time.Now(), applyURL); err != nil {
+	now := time.Now().UTC()
+	if _, err := tx.Exec(`UPDATE job_funnel
+		SET status = ?, last_updated = ?, applied_at = ?
+		WHERE url = ?`, "APPLIED", now, now, applyURL); err != nil {
 		return false, fmt.Errorf("promote handoff row: %w", err)
 	}
 
@@ -717,7 +719,7 @@ func MarkHandoffApplied(companyName, jobTitle, applyURL string) (bool, error) {
 	// may tick a box that a previous reconcile run already promoted.
 	if _, err := tx.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at)
 		VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`,
-		companyName, jobTitle, applyURL, time.Now().Format(time.RFC3339)); err != nil {
+		companyName, jobTitle, applyURL, now.Format(time.RFC3339)); err != nil {
 		return false, fmt.Errorf("record handoff application: %w", err)
 	}
 
@@ -1194,7 +1196,11 @@ func UpdateFunnelStatus(url, status string) error {
 	// from ~20 minutes earlier as if it were the current one. Storing
 	// everything as UTC keeps every row's string directly comparable;
 	// convert to local time only when formatting for display.
-	_, err := db.Exec("UPDATE job_funnel SET status = ?, last_updated = ? WHERE url = ?", status, time.Now().UTC(), url)
+	now := time.Now().UTC()
+	_, err := db.Exec(`UPDATE job_funnel
+		SET status = ?, last_updated = ?,
+			applied_at = CASE WHEN ? = 'APPLIED' AND applied_at IS NULL THEN ? ELSE applied_at END
+		WHERE url = ?`, status, now, status, now, url)
 	return err
 }
 

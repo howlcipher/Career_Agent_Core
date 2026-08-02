@@ -1046,6 +1046,73 @@ func TestUpdateFunnelStatus_StoresLastUpdatedAsCanonicalUTC(t *testing.T) {
 	}
 }
 
+func TestAppliedAtIsRecordedOnlyWhenApplicationIsConfirmed(t *testing.T) {
+	t.Run("automatic submission", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		url := "https://testcorp.com/applied-at-auto"
+		if _, err := AddToFunnel("TestCorp", "Engineer", url, "DISCOVERED"); err != nil {
+			t.Fatalf("AddToFunnel failed: %v", err)
+		}
+		if err := UpdateFunnelStatus(url, "PROCESSING"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(PROCESSING) failed: %v", err)
+		}
+
+		var before sql.NullString
+		if err := db.QueryRow(`SELECT applied_at FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&before); err != nil {
+			t.Fatalf("read applied_at before confirmation: %v", err)
+		}
+		if before.Valid {
+			t.Fatalf("applied_at was set before confirmation: %q", before.String)
+		}
+
+		if err := UpdateFunnelStatus(url, "APPLIED"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(APPLIED) failed: %v", err)
+		}
+		appliedAt := assertAppliedAtUTC(t, url)
+
+		if err := UpdateFunnelStatus(url, "INTERVIEW_REQUESTED"); err != nil {
+			t.Fatalf("UpdateFunnelStatus(INTERVIEW_REQUESTED) failed: %v", err)
+		}
+		if afterTransition := assertAppliedAtUTC(t, url); afterTransition != appliedAt {
+			t.Errorf("later status transition overwrote applied_at: got %q, want %q", afterTransition, appliedAt)
+		}
+	})
+
+	t.Run("manual handoff", func(t *testing.T) {
+		setupTestDB(t)
+		defer teardownTestDB()
+
+		url := "https://testcorp.com/applied-at-handoff"
+		if _, err := AddToFunnel("TestCorp", "Engineer", url, "AWAITING_REVIEW"); err != nil {
+			t.Fatalf("AddToFunnel failed: %v", err)
+		}
+		ok, err := MarkHandoffApplied("TestCorp", "Engineer", url)
+		if err != nil || !ok {
+			t.Fatalf("MarkHandoffApplied: ok=%v err=%v", ok, err)
+		}
+		assertAppliedAtUTC(t, url)
+	})
+}
+
+func assertAppliedAtUTC(t *testing.T, url string) string {
+	t.Helper()
+
+	var raw string
+	if err := db.QueryRow(`SELECT applied_at FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&raw); err != nil {
+		t.Fatalf("read applied_at: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("applied_at is not parseable RFC3339: %q: %v", raw, err)
+	}
+	if parsed.Location() != time.UTC || !strings.HasSuffix(raw, "Z") {
+		t.Errorf("applied_at must be canonical UTC, got %q", raw)
+	}
+	return raw
+}
+
 // TestMigrateJobFunnelLastUpdated simulates a database created before
 // last_updated existed in the schema (job_funnel without that column) and
 // confirms the migration adds it cleanly, and is safe to run again on a
