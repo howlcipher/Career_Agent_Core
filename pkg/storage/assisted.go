@@ -349,6 +349,28 @@ func MigrateLegacyAssisted(opts AssistedMigrationOptions) (AssistedMigrationRepo
 	return report, nil
 }
 
+// EnsureAssistedPlanForURL creates the same privacy-safe plan for a newly
+// interrupted pipeline job that the migration creates for historical work.
+// Callers pass only a normalized funnel status; raw submitter errors and page
+// text must never enter the plan.
+func EnsureAssistedPlanForURL(rawURL, status string) error {
+	if db == nil {
+		return errors.New("database not initialized")
+	}
+	if _, ok := eligibleAssistedStatuses[status]; !ok {
+		return fmt.Errorf("status %q cannot create an assisted plan", status)
+	}
+	var id int
+	if err := db.QueryRow(`SELECT id FROM job_funnel WHERE url = ? AND status = ?`, NormalizeURL(rawURL), status).Scan(&id); err != nil {
+		return fmt.Errorf("find interrupted job: %w", err)
+	}
+	action := actionForLegacy(status, "")
+	now := time.Now().UTC()
+	_, err := db.Exec(`INSERT INTO assisted_applications (job_id, original_status, next_action_code, interruption_reason, is_legacy, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 0, ?, ?) ON CONFLICT(job_id) DO NOTHING`, id, status, action.Code, status, now, now)
+	return err
+}
+
 // GetAssistedQueue reads a queue through an explicitly supplied connection so
 // dashboard readers never need to initialize the storage package singleton.
 func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {

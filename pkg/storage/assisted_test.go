@@ -184,3 +184,30 @@ func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) 
 		t.Fatal("continuation without live browser must fail")
 	}
 }
+
+func TestEnsureAssistedPlanForURL_CreatesNewInterruptionPlanOnce(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	url := "https://new.example/jobs/1"
+	if _, err := AddToFunnel("New Co", "Engineer", url, "DISCOVERED"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateFunnelStatus(url, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(url, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(url, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	var legacy bool
+	var action string
+	if err := GetDB().QueryRow("SELECT COUNT(*), is_legacy, next_action_code FROM assisted_applications").Scan(&count, &legacy, &action); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || legacy || action != "solve_captcha" {
+		t.Fatalf("new plan count=%d legacy=%v action=%q", count, legacy, action)
+	}
+}

@@ -614,18 +614,27 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			log.Printf("[Worker-%d] %s form filled — awaiting human review: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "AWAITING_REVIEW")
 			storage.UpdateFunnelStatus(job.URL, "AWAITING_REVIEW")
+			if planErr := storage.EnsureAssistedPlanForURL(job.URL, "AWAITING_REVIEW"); planErr != nil {
+				log.Printf("[Worker-%d] Failed to create assisted plan: %v", workerID, planErr)
+			}
 			state.DocsDir, _ = storage.MoveToManualApply(state.DocsDir)
 			_ = storage.LogCopilotReview(job.CompanyName, job.Title, job.URL, state.DocsDir)
 		} else if errors.Is(err, submitter.ErrAuthWall) || errors.Is(err, submitter.ErrNeedsUnprovidedAttestation) || errors.Is(err, submitter.ErrFormTooLargeForModel) || submitter.IsManualReviewError(err) {
 			log.Printf("[Worker-%d] %s queued for manual submission: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "MANUAL_REQUIRED")
 			storage.UpdateFunnelStatus(job.URL, "MANUAL_REQUIRED")
+			if planErr := storage.EnsureAssistedPlanForURL(job.URL, "MANUAL_REQUIRED"); planErr != nil {
+				log.Printf("[Worker-%d] Failed to create assisted plan: %v", workerID, planErr)
+			}
 			state.DocsDir, _ = storage.MoveToManualApply(state.DocsDir)
 			_ = storage.LogManualRequired(job.CompanyName, job.Title, job.URL, state.DocsDir)
 		} else if errors.Is(err, submitter.ErrCaptchaBlocked) {
 			log.Printf("[Worker-%d] %s is behind a bot-protection challenge — marked BLOCKED_CAPTCHA: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "BLOCKED_CAPTCHA")
 			storage.UpdateFunnelStatus(job.URL, "BLOCKED_CAPTCHA")
+			if planErr := storage.EnsureAssistedPlanForURL(job.URL, "BLOCKED_CAPTCHA"); planErr != nil {
+				log.Printf("[Worker-%d] Failed to create assisted plan: %v", workerID, planErr)
+			}
 		} else if err != nil {
 			log.Printf("[Worker-%d] Auto-Submit failed for %s: %v", workerID, job.CompanyName, err)
 			deps.Submitter.SaveCheckpoint(job.CompanyName, job.URL, "FAILED")
