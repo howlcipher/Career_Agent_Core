@@ -3923,3 +3923,12 @@ So "form failed to render in time" was always the same story as #9 — jobs dyin
 
 
 ---
+## 508. Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails
+
+**Completed 2026-08-01.** Live daemon evidence showed the configured SerpApi account was out of searches and the Yahoo fallback was repeatedly failing with unexpected EOF. RemoteOK, Hacker News, and 120 known ATS boards supplied no new posting, leaving the eligible queue empty.
+
+Added a Jobicy structured-feed source before the slower RemoteOK sweep. It uses the existing role-title relevance gate, rejects malformed/non-HTTP/junk records, persists `discovery_source = "jobicy"`, retains URL deduplication, and has a process-wide one-hour poll limit matching the provider's documented fair-use guidance. Tests cover successful ingestion, relevance filtering, duplicates, non-200 and malformed/unsuccessful responses, and the poll limit. The prior discovery tests now mock the added feed to stay offline and deterministic.
+
+`go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` passed. Rebuilt the daemon and launched it through the persistent dashboard control path; its first live refresh admitted 18 relevant Jobicy postings and the next queue cycle loaded 15 jobs. The dashboard reports the daemon running.
+
+---

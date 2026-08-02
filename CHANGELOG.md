@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Discovery retains a free, current remote-job source when search is unavailable
+
+* **Fix (bug #508):** The live eligible queue emptied after SerpApi exhausted its search quota and the Yahoo fallback began returning transport EOFs; RemoteOK, Hacker News, and the existing known-board sweep supplied no new postings in that refresh. The daemon now also reads Jobicy's public structured remote-job feed, title-filters it using the established role gate, and stores the actual title, company, URL, and `jobicy` discovery source. The provider is polled at most once per hour across daemon refreshes, respecting its documented fair-use cadence. This adds an independent, no-key feed without relaxing job constraints or changing submission behavior.
+
 ## 2026-08-01 — Discovery channels are now visible in the funnel
 
 * **Improvement (#499):** New job-funnel records retain their actual discovery channel (`remoteok`, `hackernews`, `atsfeed:<board>`, `serpapi`, or `yahoo`) instead of only the eventual ATS hostname. Existing records intentionally remain unknown, so no historical channel is fabricated. This makes the live empty queue and source-quality investigations attributable to the channel that found a posting.

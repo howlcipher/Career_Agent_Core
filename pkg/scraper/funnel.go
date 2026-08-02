@@ -61,6 +61,10 @@ func (f *FunnelEngine) DiscoverJobs(ctx context.Context, jobChan chan<- Job) err
 
 	log.Println("[FunnelEngine] Starting free job discovery sources...")
 
+	// Jobicy is the bounded, structured source. Run it first so an empty queue
+	// can receive current listings without waiting for the much larger
+	// role-by-role RemoteOK sweep or search-provider fallback.
+	f.discoverWithJobicy(jobChan)
 	f.discoverWithRemoteOK(jobChan)
 	f.discoverWithHackerNews(jobChan)
 	f.discoverWithATSFeeds(jobChan)

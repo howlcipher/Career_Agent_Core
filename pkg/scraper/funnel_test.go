@@ -61,19 +61,28 @@ func TestDiscoverJobs(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
 	origSerp := serpAPIBaseURL
 	origRO := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	remoteOKBaseURL = roTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		remoteOKBaseURL = origRO
 		hnAlgoliaBaseURL = origHN
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -150,6 +159,10 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	yahooRequests := 0
 	yahooTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,15 +178,20 @@ func TestDiscoverJobsWithoutSerpAPIKeyRunsFreeSources(t *testing.T) {
 	origRemoteOK := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
 	origYahoo := yahooBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	remoteOKBaseURL = remoteOKTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
 	yahooBaseURL = yahooTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		remoteOKBaseURL = origRemoteOK
 		hnAlgoliaBaseURL = origHN
 		yahooBaseURL = origYahoo
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
@@ -260,6 +278,10 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 		json.NewEncoder(w).Encode(hnStorySearchResponse{})
 	}))
 	defer hnTs.Close()
+	jobicyTs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"jobs":[]}`))
+	}))
+	defer jobicyTs.Close()
 
 	os.Setenv("SERPAPI_API_KEY", "test_key")
 
@@ -267,15 +289,20 @@ func TestDiscoverWithYahooFallback(t *testing.T) {
 	origYahoo := yahooBaseURL
 	origRO := remoteOKBaseURL
 	origHN := hnAlgoliaBaseURL
+	origJobicy := jobicyBaseURL
 	serpAPIBaseURL = serpTs.URL
 	yahooBaseURL = yahooTs.URL
 	remoteOKBaseURL = roTs.URL
 	hnAlgoliaBaseURL = hnTs.URL
+	jobicyBaseURL = jobicyTs.URL
+	resetJobicyPollForTest()
 	defer func() {
 		serpAPIBaseURL = origSerp
 		yahooBaseURL = origYahoo
 		remoteOKBaseURL = origRO
 		hnAlgoliaBaseURL = origHN
+		jobicyBaseURL = origJobicy
+		resetJobicyPollForTest()
 	}()
 
 	engine := NewFunnelEngine([]string{"backend"})
