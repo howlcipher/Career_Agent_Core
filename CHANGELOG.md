@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Equivalent recent applications can be skipped conservatively
+
+* **Improvement (#498):** An optional `duplicate_cooldown_days` profile setting now prevents repeat applications only when a recently confirmed application has the same normalized company, role family and seniority, location, and remote classification. It defaults to `0`, preserving existing behavior; incomplete or different metadata never causes a skip. The dashboard identifies these skips explicitly, and setting the value back to `0` is the user-controlled override.
+
 ## 2026-08-01 — Funnel transitions and submission failures are now traceable
 
 * **Improvement (#494):** SQLite now keeps an append-only, indexed record of every `job_funnel` status transition, including its prior state, pipeline stage, normalized reason code, time, and measured duration since the preceding state. The ledger is enforced by a database trigger, so status writers cannot accidentally bypass it. `application_attempts` also preserves a normalized failure reason: prompt-injection quarantine, exhausted browser-crash recovery, and generic fill failure are distinguishable even though legacy dashboard aggregates retain the compatible `OTHER_FAILURE` class. Neither store contains job content, prompts, answers, generated documents, DOM, or screenshots; historical rows are intentionally not invented.

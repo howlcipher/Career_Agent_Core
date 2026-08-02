@@ -28,6 +28,11 @@ var db *sql.DB
 // operator policy from an ordinary low-fit SKIPPED row.
 const SkippedReasonExcludedSource = "excluded_source"
 
+// SkippedReasonDuplicateCooldown identifies a job skipped because a recent,
+// strictly equivalent application exists. The matcher intentionally requires
+// complete location and remote metadata rather than guessing equivalence.
+const SkippedReasonDuplicateCooldown = "duplicate_cooldown"
+
 func InitDB() error {
 	return InitDBWithPath(DefaultDatabasePath)
 }
@@ -90,7 +95,9 @@ func InitDBWithPath(path string) error {
 		retry_count INTEGER DEFAULT 0,
 		next_eligible_at DATETIME,
 		status_reason TEXT,
-		discovery_source TEXT
+		discovery_source TEXT,
+		job_location TEXT,
+		is_remote INTEGER
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,6 +184,9 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateJobFunnelDiscoverySource(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelIdentity(); err != nil {
 		return err
 	}
 	if err := migrateCareerSiteCapabilities(); err != nil {
@@ -423,6 +433,50 @@ func migrateJobFunnelDiscoverySource() error {
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN discovery_source TEXT")
 	return err
+}
+
+// migrateJobFunnelIdentity adds the conservative duplicate-matching metadata
+// used by improvement #498. Existing rows deliberately remain NULL: a past
+// role's location and remote classification cannot be reconstructed safely.
+func migrateJobFunnelIdentity() error {
+	columns := []struct {
+		name     string
+		typeName string
+	}{
+		{"job_location", "TEXT"},
+		{"is_remote", "INTEGER"},
+	}
+
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool, len(columns))
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE job_funnel ADD COLUMN " + column.name + " " + column.typeName); err != nil {
+			return fmt.Errorf("add job_funnel.%s: %w", column.name, err)
+		}
+	}
+	return nil
 }
 
 // migrateCareerSiteCapabilities upgrades the previously unused career_sites

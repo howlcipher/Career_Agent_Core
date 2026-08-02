@@ -242,8 +242,13 @@ func statusReason(status string) string {
 }
 
 func statusReasonWithDetail(status, detail string) string {
-	if status == "SKIPPED" && detail == storage.SkippedReasonExcludedSource {
-		return "Excluded ATS source — not eligible for automated submission"
+	if status == "SKIPPED" {
+		switch detail {
+		case storage.SkippedReasonExcludedSource:
+			return "Excluded ATS source — not eligible for automated submission"
+		case storage.SkippedReasonDuplicateCooldown:
+			return "Equivalent recent application is within your configured cooldown"
+		}
 	}
 	return statusReason(status)
 }

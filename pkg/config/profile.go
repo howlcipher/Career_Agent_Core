@@ -75,6 +75,13 @@ type Profile struct {
 	// will automatically be assigned a score of 100 and proceed to application.
 	// This is useful for high-volume pipelines where local inference takes too long.
 	SkipScoring bool `yaml:"skip_scoring"`
+	// DuplicateCooldownDays prevents repeat applications to the same strictly
+	// normalized company, role family, seniority, location, and remote class.
+	// It is opt-in: zero preserves the behavior of profiles written before this
+	// setting existed. A match with incomplete location metadata is never
+	// suppressed, because guessing whether two roles are equivalent could hide
+	// a legitimate opportunity.
+	DuplicateCooldownDays int `yaml:"duplicate_cooldown_days"`
 }
 
 // ShouldSendCoverLetter reports whether applications should include a cover
@@ -112,6 +119,9 @@ func LoadProfile(path string) (*Profile, error) {
 	var p Profile
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("failed to parse profile: %w", err)
+	}
+	if p.DuplicateCooldownDays < 0 {
+		return nil, fmt.Errorf("duplicate_cooldown_days must be zero or positive")
 	}
 
 	return &p, nil

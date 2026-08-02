@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-01, post-#494 groom pass.** Improvement #494 is Done: every `job_funnel` state transition now has an append-only, privacy-safe SQLite stage event, and new attempts retain normalized failure reasons. All 14 remaining Pending free improvements were re-verified against code and live local state. Scores are unchanged: #493, #498, #448, and #442 tie at 1.0; #493 is now unblocked structurally but still lacks a meaningful outcome sample. Below-floor #488 (0.4) remains a user decision. See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account.
+**2026-08-01, post-#498 completion.** Improvement #498 is Done: an opt-in, strictly metadata-matched cooldown skips only equivalent recent confirmed applications and identifies the reason on the dashboard. Existing profiles remain unchanged at `duplicate_cooldown_days: 0`; incomplete metadata never blocks a job. #493 remains structurally unblocked but still lacks a meaningful outcome sample. The full re-ranking follows in this session's groom pass. See `documentation/backlog_history/improvements_done_details.md` item #498 for the full account.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -51,7 +51,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 496 | [ATS capability and automation-success registry](#496-ats-capability-and-automation-success-registry) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #496 for the full account. |
 | 494 | [Append-only funnel/attempt stage ledger](#494-append-only-funnelattempt-stage-ledger) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #494 for the full account. |
 | 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending | 1.0 = 6×1.0÷6 | deep-reasoning | Re-verified 2026-08-01: #499, #496, and #494 now supply discovery source, ATS capability, and stage-ledger infrastructure, but the new ledger has no meaningful outcome sample yet. Keep the existing ranker until evidence exists. |
-| 498 | [Company and role-family duplicate/cooldown protection](#498-company-and-role-family-duplicatecooldown-protection) | Pending | 1.0 = 3×1.0÷3 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate H). Only exact-URL dedup (`applied_jobs`, plus #112's scheme normalization) and #128's directory-collision fix exist; no company/role-family cooldown. Classified as an improvement, not a bug, per the brief's own rule — this audit found zero evidence of harmful duplicates (2 real `APPLIED` rows total, no repeats observed) |
+| 498 | [Company and role-family duplicate/cooldown protection](#498-company-and-role-family-duplicatecooldown-protection) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #498 for the full account. |
 | 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | Found 2026-08-01, mission-alignment audit (seeded candidate G). Confirmed no unanswered-question logging or extensible answer store exists — #29 (Done) is a hardcoded Go struct (`pkg/config/pii.go`), not data-driven. Value held to 3 on real observed volume: only 26 `MANUAL_REQUIRED` rows exist today (0.2% of the funnel), dwarfed by bugs.md #489's 5,983. At the floor, not below it |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | Found 2026-08-01, mission-alignment audit (seeded candidate B). #481 (Done) stops aged rows from being outscored forever but sets no proactive first-attempt deadline; this audit's own join of `job_funnel`↔`application_attempts` measured p50 = 4.8 days and p90 = 11.7 days from discovery to first attempt, with nothing under 6 hours (538-row sample). No periodic sweep or per-source admission cap exists anywhere in the codebase today. Decay 0.5: same theme as #481/#482, already shipped/filed this session |
 | 484 | [Local-model benchmark and routing-evidence harness](#484-local-model-benchmark-and-routing-evidence-harness) | Done (2026-08-01) | 2.33 = 7×1.0÷3 | standard | See `documentation/backlog_history/improvements_done_details.md` item #484 for the full account. |
@@ -213,19 +213,7 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 
 ### 498. Company and role-family duplicate/cooldown protection
 
-**Filed 2026-08-01**, mission-alignment audit (seeded candidate H).
-
-Confirmed the only deduplication today is exact-URL (`applied_jobs`/`HasApplied`), plus bug #112's http/https scheme normalization and bug #128's per-role documents-directory fix (which only prevents an artifact-directory collision, not a duplicate application). No mechanism prevents multiple applications to substantially similar roles at the same company within a time window, and no employer blocklist exists beyond whatever the user encodes by hand. **Classified as an improvement, not a bug, per the brief's own rule** ("bug if current behavior has produced harmful duplicates; otherwise free improvement") — this audit found zero evidence of harmful duplicates: only 2 real `APPLIED` rows exist in the entire database's history, and they are for different postings.
-
-**Proposed direction:** normalized company identity + role family + seniority + location/remote classification; a configurable company cooldown and configurable similar-role cooldown; explicit user override; a visible skip reason (mirroring the dashboard's existing per-tile reason pattern from bugs.md #451); no fuzzy merging when confidence is low, so a genuinely distinct role at the same company is never silently skipped.
-
-**Acceptance criteria:** two postings for the same normalized role family at the same company within the cooldown window: the second is skipped with a visible reason; two postings at different companies, or different role families at the same company, are both processed normally.
-
-**Automated tests:** table-driven tests over the normalization/cooldown logic covering same-company/same-family, same-company/different-family, and different-company cases.
-
-**Safe live verification:** given the current near-zero volume of real applications, live verification is limited to confirming the skip logic fires correctly against synthetic fixtures rather than observed real duplicates — note this limitation explicitly when the item is worked.
-
-**Boundaries:** must never block a legitimately distinct posting; no change to the existing employer blocklist mechanism.
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #498.
 
 ### 497. User-approved application-answer memory
 

@@ -109,6 +109,46 @@ cover_letter_tones:
 	}
 }
 
+func TestLoadProfile_DuplicateCooldownDays(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		want    int
+		wantErr bool
+	}{
+		{"absent remains disabled", "salary_floor: 1\n", 0, false},
+		{"positive duration is accepted", "duplicate_cooldown_days: 30\n", 30, false},
+		{"negative duration is rejected", "duplicate_cooldown_days: -1\n", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "profile_*.yaml")
+			if err != nil {
+				t.Fatalf("create profile: %v", err)
+			}
+			if _, err := file.WriteString(tc.yaml); err != nil {
+				t.Fatalf("write profile: %v", err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatalf("close profile: %v", err)
+			}
+			profile, err := LoadProfile(file.Name())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("LoadProfile succeeded, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadProfile: %v", err)
+			}
+			if profile.DuplicateCooldownDays != tc.want {
+				t.Errorf("DuplicateCooldownDays = %d, want %d", profile.DuplicateCooldownDays, tc.want)
+			}
+		})
+	}
+}
+
 func TestSelectToneVariant(t *testing.T) {
 	if _, _, ok := SelectToneVariant(nil); ok {
 		t.Error("expected ok=false for zero tones")

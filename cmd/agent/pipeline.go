@@ -118,7 +118,6 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 	g.AddNode(StateInit, func(ctx context.Context, state *JobState) (graph.State, error) {
 		job := state.Job
 		workerID := state.WorkerID
-
 		if scraper.IsKnownJunkJobURL(job.URL) {
 			log.Printf("[Worker-%d] Skipping known-junk URL (never a posting): %s", workerID, job.URL)
 			if err := storage.UpdateFunnelStatusInvalid(job.URL, storage.InvalidURLReasonMalformed); err != nil {
@@ -139,6 +138,23 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 				}
 			}
 			return StateEnd, nil
+		}
+		if deps.Profile != nil && deps.Profile.DuplicateCooldownDays > 0 {
+			if err := storage.UpdateFunnelIdentity(job.URL, job.Location, job.Remote); err != nil {
+				log.Printf("[Worker-%d] Failed to save duplicate-check identity for %s: %v", workerID, job.CompanyName, err)
+			} else {
+				cooldown := time.Duration(deps.Profile.DuplicateCooldownDays) * 24 * time.Hour
+				duplicate, err := storage.DuplicateApplicationExists(job.CompanyName, job.Title, job.Location, job.Remote, cooldown)
+				if err != nil {
+					log.Printf("[Worker-%d] Failed to check duplicate cooldown for %s: %v", workerID, job.CompanyName, err)
+				} else if duplicate {
+					log.Printf("[Worker-%d] Skipping %s: an equivalent application is within the %d-day cooldown.", workerID, job.CompanyName, deps.Profile.DuplicateCooldownDays)
+					if err := storage.UpdateFunnelStatusWithReason(job.URL, "SKIPPED", storage.SkippedReasonDuplicateCooldown); err != nil {
+						log.Printf("[Worker-%d] Failed to record duplicate cooldown skip for %s: %v", workerID, job.CompanyName, err)
+					}
+					return StateEnd, nil
+				}
+			}
 		}
 		if err := storage.UpdateFunnelStatus(job.URL, "PROCESSING"); err != nil {
 			log.Printf("[Worker-%d] Failed to claim %s for processing: %v", workerID, job.CompanyName, err)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/scraper"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
@@ -102,6 +103,55 @@ type failingResolver struct{}
 
 func (failingResolver) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	return nil, errors.New("lookup " + host + ": no such host")
+}
+
+type publicResolver struct{}
+
+func (publicResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+}
+
+func TestStateInit_DuplicateCooldownSkipsBeforeNetworkWork(t *testing.T) {
+	if err := storage.InitDBWithPath(":memory:"); err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer storage.CloseDB()
+
+	now := time.Now().UTC()
+	if _, err := storage.GetDB().Exec(`INSERT INTO job_funnel
+		(company_name, job_title, job_location, is_remote, url, status, applied_at)
+		VALUES (?, ?, ?, ?, ?, 'APPLIED', ?)`,
+		"Acme Inc.", "Senior Software Engineer", "Detroit MI", true,
+		"https://jobs.example.com/acme/previous", now); err != nil {
+		t.Fatalf("seed confirmed application: %v", err)
+	}
+	const jobURL = "https://jobs.example.com/acme/new"
+	if _, err := storage.AddToFunnel("Acme", "Senior Software Engineer", jobURL, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+
+	g := buildJobPipeline(JobPipelineDeps{
+		NetworkGuard: security.NewNetworkGuard(security.WithResolver(publicResolver{})),
+		Profile:      &config.Profile{DuplicateCooldownDays: 30},
+	})
+	state := &JobState{Job: scraper.Job{
+		CompanyName: "Acme LLC",
+		Title:       "Senior Software Engineer",
+		Location:    "Detroit, MI",
+		Remote:      true,
+		URL:         jobURL,
+	}}
+	if err := g.Run(context.Background(), StateInit, state); err != nil {
+		t.Fatalf("pipeline run: %v", err)
+	}
+
+	var status, reason string
+	if err := storage.GetDB().QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", jobURL).Scan(&status, &reason); err != nil {
+		t.Fatalf("read skipped job: %v", err)
+	}
+	if status != "SKIPPED" || reason != storage.SkippedReasonDuplicateCooldown {
+		t.Errorf("duplicate row = (%q, %q), want (SKIPPED, %q)", status, reason, storage.SkippedReasonDuplicateCooldown)
+	}
 }
 
 // TestStateInit_DNSFailureLeavesJobRetryable covers bugs.md #478: a DNS

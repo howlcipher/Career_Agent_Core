@@ -388,6 +388,18 @@ func TestServeMetrics_LastSkipped_ExplainsExcludedSource(t *testing.T) {
 	}
 }
 
+func TestServeMetrics_LastSkipped_ExplainsDuplicateCooldown(t *testing.T) {
+	setupTestDB(t)
+
+	db.Exec("INSERT INTO job_funnel (url, company_name, job_title, status, status_reason, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
+		"https://jobs.example.com/duplicate", "Acme", "Senior Engineer", "SKIPPED", storage.SkippedReasonDuplicateCooldown, time.Now())
+
+	m := fetchMetricsFromTestServer(t)
+	if m.LastSkippedReason != "Equivalent recent application is within your configured cooldown" {
+		t.Errorf("last skipped reason = %q", m.LastSkippedReason)
+	}
+}
+
 // TestServeMetrics_LastSkipped_ExcludesBlockedCaptcha is a regression test
 // for bugs.md #55's investigation: the "last skipped" widget used to
 // include BLOCKED_CAPTCHA rows, disagreeing with the Skipped tile's own
