@@ -1110,6 +1110,7 @@ func main() {
 			nil,
 		)
 	}
+	daemonWatchdog := daemonWatchdog{}
 	if err := runAgentSchedule(
 		ctx,
 		*daemonMode,
@@ -1117,7 +1118,17 @@ func main() {
 		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
 			if *daemonMode {
-				return runAgentQueueCycle(cycleCtx, limit, cycleDeps)
+				cycleErr := runAgentQueueCycle(cycleCtx, limit, cycleDeps)
+				snapshot, snapshotErr := storage.GetDaemonWatchdogSnapshot(time.Now())
+				if snapshotErr != nil {
+					log.Printf("[Agent] [WATCHDOG] Snapshot failed: %v", snapshotErr)
+				} else if alert := daemonWatchdog.Observe(watchdogSnapshotFromStorage(snapshot)); alert != "" {
+					log.Printf("[Agent] [WATCHDOG] ALERT: %s", alert)
+					if err := storage.SetDaemonWatchdogAlert(alert); err != nil {
+						log.Printf("[Agent] [WATCHDOG] Failed to publish alert: %v", err)
+					}
+				}
+				return cycleErr
 			}
 			return runAgentCycle(cycleCtx, limit, cycleDeps)
 		},

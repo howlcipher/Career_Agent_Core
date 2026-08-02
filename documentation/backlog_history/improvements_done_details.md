@@ -2,6 +2,14 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 495. No-progress / dominant-failure-reason watchdog
+
+**Completed 2026-08-01.** The daemon now observes a sanitized aggregate snapshot after each queue cycle. After three consecutive cycles with eligible work but no new confirmation, it alerts only when one terminal status is at least 75% of recent outcomes. Alerts are deduplicated, logged without job content or URLs, persisted as the current dashboard alert, and rendered by the React dashboard. The watchdog never requeues jobs, suppresses sources, relaxes constraints, or changes submission behavior.
+
+Table-driven coverage includes the #489-shaped `QUARANTINED_PROMPT_INJECTION` condition, healthy variety, and an empty eligible queue. The full Go build, vet, test, formatting loop, dashboard UI tests, and production UI build passed. The dashboard and daemon were rebuilt and restarted; immediately after restart the dashboard reported 128 eligible jobs and no watchdog alert, as expected before three completed cycles.
+
+---
+
 ## 499. Persist `discovery_source` at `AddToFunnel` time
 
 **Completed 2026-08-01.** `job_funnel` now has a nullable `discovery_source` column. The idempotent migration leaves every pre-existing row `NULL`: the original discovery channel was discarded, so reconstructing it from a destination hostname would fabricate data. New inserts use the actual channel at the five live paths: `remoteok`, `hackernews`, `atsfeed:greenhouse`, `atsfeed:lever`, `serpapi`, and `yahoo`.

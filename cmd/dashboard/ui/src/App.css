@@ -21,6 +21,17 @@
   font-size: 0.9rem;
 }
 
+.watchdog-alert {
+  max-width: 900px;
+  margin: -12px auto 20px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 136, 0, 0.7);
+  border-radius: 8px;
+  color: #ffd18a;
+  background: rgba(255, 136, 0, 0.12);
+  line-height: 1.4;
+}
+
 .btn {
   padding: 12px 28px;
   border: none;

@@ -121,6 +121,11 @@ func InitDBWithPath(path string) error {
 		model_call_count INTEGER,
 		inference_ms INTEGER
 	);
+	CREATE TABLE IF NOT EXISTS daemon_watchdog_alert (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		message TEXT NOT NULL,
+		updated_at DATETIME NOT NULL
+	);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);
 	CREATE INDEX IF NOT EXISTS idx_application_attempts_started ON application_attempts(started_at);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_company_name ON job_funnel(company_name);

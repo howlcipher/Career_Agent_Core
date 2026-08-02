@@ -64,6 +64,8 @@ type Metrics struct {
 	LastConfirmedAgo          string `json:"last_confirmed_ago,omitempty"`
 	EligibleQueue             int    `json:"eligible_queue"`
 	EligibleNeverAttempted    int    `json:"eligible_never_attempted"`
+	WatchdogAlert             string `json:"watchdog_alert,omitempty"`
+	WatchdogAlertAt           string `json:"watchdog_alert_at,omitempty"`
 	LastAppliedCompany        string `json:"last_applied_company,omitempty"`
 	LastAppliedTitle          string `json:"last_applied_title,omitempty"`
 	LastAppliedURL            string `json:"last_applied_url,omitempty"`
@@ -508,6 +510,29 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		if lastConfirmedAt.Valid {
 			m.LastConfirmedAgo = formatDuration(time.Since(lastConfirmedAt.Time))
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'daemon_watchdog_alert'`).Scan(&exists); err != nil {
+			return fmt.Errorf("check daemon watchdog alert schema: %w", err)
+		}
+		if exists == 0 {
+			return nil
+		}
+		var updatedAt sql.NullTime
+		err := db.QueryRow(`SELECT message, updated_at FROM daemon_watchdog_alert WHERE id = 1`).
+			Scan(&m.WatchdogAlert, &updatedAt)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("query daemon watchdog alert: %w", err)
+		}
+		if updatedAt.Valid {
+			m.WatchdogAlertAt = updatedAt.Time.Local().Format("Jan 2, 3:04 PM")
 		}
 		return nil
 	})
