@@ -3918,3 +3918,36 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 
 	return nil
 }
+
+// FillAssistedMappedPage resumes only a healthy cached mapping in an already
+// visible assisted page. It never learns from raw DOM, answers unknown/legal
+// questions, solves CAPTCHA, or clicks Submit.
+func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLayer, companyName, applyURL, resumePath, coverPath string, pii *config.PII) error {
+	content, err := page.Content()
+	if err != nil {
+		return err
+	}
+	if isDeadJobPage(content) || DeadRedirectReason(applyURL, page.URL()) != "" {
+		return errors.New("job posting is expired")
+	}
+	if isCaptchaBlocked(page, content) {
+		return ErrCaptchaBlocked
+	}
+	if err := quarantineCareerPageDOM(filter, applyURL, companyName, content); err != nil {
+		return err
+	}
+	domain := ExtractDomain(applyURL)
+	mapping, err := storage.GetFormMapping(domain)
+	if err != nil {
+		return fmt.Errorf("no reusable form mapping: %w", err)
+	}
+	healthy, err := storage.PreferCachedFormMapping(domain)
+	if err != nil || !healthy {
+		return errors.New("form mapping is not healthy enough to reuse")
+	}
+	err = handleDynamic(resolveFillTarget(page), resumePath, coverPath, pii, mapping, true, false)
+	if errors.Is(err, ErrAwaitingHumanReview) {
+		return nil
+	}
+	return err
+}

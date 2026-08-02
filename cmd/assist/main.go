@@ -15,8 +15,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -105,7 +107,18 @@ func main() {
 			break
 		}
 	}
-	log.Print("Continuation requested. The page remains open for review; this safe initial command does not infer answers, solve challenges, or submit.")
+	resume, resumeErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "resume")
+	cover, coverErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
+	pii, piiErr := config.LoadPII("pii.yaml")
+	if resumeErr != nil || coverErr != nil || piiErr != nil {
+		log.Print("Continuation requested. Documents or PII are unavailable, so the form remains ready for your review.")
+		return
+	}
+	if err := submitter.FillAssistedMappedPage(page, security.NewQuarantineLayer(), info.Company, info.URL, resume.Path, cover.Path, pii); err != nil {
+		log.Printf("Assisted refill stopped safely: %v", err)
+		return
+	}
+	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit.")
 }
 
 func randomOwner() (string, error) {

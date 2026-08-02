@@ -67,8 +67,9 @@ type AssistedMigrationReport struct {
 // serialized to the dashboard; it is read from SQLite immediately before a
 // guarded browser navigation.
 type AssistedLaunchInfo struct {
-	JobID string
-	URL   string
+	JobID   string
+	Company string
+	URL     string
 }
 
 // AssistedDocument is a resolved private file, never a client-supplied path.
@@ -99,11 +100,11 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
 	var info AssistedLaunchInfo
 	var status, original string
-	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.url, jf.status, aa.original_status
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, jf.url, jf.status, aa.original_status
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
 		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
-		Scan(&info.JobID, &info.URL, &status, &original)
+		Scan(&info.JobID, &info.Company, &info.URL, &status, &original)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssistedLaunchInfo{}, errors.New("assisted job is not available to launch")
 	}
