@@ -314,6 +314,10 @@ function App() {
 		} catch (e) { console.error(e); setActionError('Could not open the assisted application. It may already be active.'); }
 	};
 
+	const openDocument = (job: AssistedJob, kind: 'resume' | 'cover_letter') => {
+		window.open(`/api/assisted/document?job_id=${encodeURIComponent(job.id)}&kind=${kind}`, '_blank', 'noopener,noreferrer');
+	};
+
   if (loading) return <div>Loading...</div>;
 
   // The counted-only statuses have no "last job" card of their own, so the
@@ -404,7 +408,7 @@ function App() {
 						<article className="assisted-job" key={job.id}>
 							<div><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'}</p></div>
 							<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted" onClick={() => launchAssisted(job)} disabled={job.live_browser}>{job.live_browser ? 'Assisted Application Open' : job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
-							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p></details>
+							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p>{job.resume_ready && <button className="text-button" onClick={() => openDocument(job, 'resume')}>View Résumé</button>}{job.cover_letter_ready && <button className="text-button" onClick={() => openDocument(job, 'cover_letter')}>View Cover Letter</button>}</details>
 							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>
 						</article>
 					))}

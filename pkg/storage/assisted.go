@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -69,6 +71,9 @@ type AssistedLaunchInfo struct {
 	URL   string
 }
 
+// AssistedDocument is a resolved private file, never a client-supplied path.
+type AssistedDocument struct{ Path, Name string }
+
 const AssistedLeaseDuration = 20 * time.Minute
 
 // AcquireAssistedLease atomically claims a plan for one visible browser
@@ -109,6 +114,57 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
 	}
 	return info, nil
+}
+
+func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, error) {
+	fileName := map[string]string{"resume": "resume.md", "cover_letter": "coverletter.txt"}[kind]
+	if fileName == "" {
+		return AssistedDocument{}, errors.New("unsupported assisted document")
+	}
+	var company, postingURL string
+	err := conn.QueryRow(`SELECT jf.company_name, jf.url FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id WHERE aa.job_id = ?`, jobID).Scan(&company, &postingURL)
+	if err != nil {
+		return AssistedDocument{}, fmt.Errorf("load assisted document identity: %w", err)
+	}
+	path := filepath.Join(applicationDir(company, postingURL), fileName)
+	if err := validateAssistedDocument(path); err != nil {
+		return AssistedDocument{}, err
+	}
+	return AssistedDocument{Path: path, Name: fileName}, nil
+}
+
+func validateAssistedDocument(path string) error {
+	root, err := filepath.Abs("applications")
+	if err != nil {
+		return err
+	}
+	candidate, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return errors.New("assisted document escapes private root")
+	}
+	current := root
+	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return fmt.Errorf("inspect assisted document: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("refusing symlinked assisted document")
+		}
+	}
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("assisted document is not a regular file")
+	}
+	return nil
 }
 
 // RequestAssistedContinue is the sole dashboard transition after a human
@@ -329,11 +385,18 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			job.NextAction.Code = job.NextAction.Code
 		}
 		job.CompletedWork = completedWork(job.OriginalStatus)
+		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
+		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
 		job.PriorityReason = priorityReason(job.NextAction.Code)
 		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(time.Now().UTC())
 		jobs = append(jobs, job)
 	}
 	return jobs, rows.Err()
+}
+
+func assistedDocumentExists(conn *sql.DB, jobID, kind string) bool {
+	_, err := GetAssistedDocument(conn, jobID, kind)
+	return err == nil
 }
 
 // ConfirmAssistedSubmission records an explicit human confirmation only after

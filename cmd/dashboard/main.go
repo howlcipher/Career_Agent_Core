@@ -486,6 +486,7 @@ func main() {
 	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
 	mux.HandleFunc("/api/assisted/continue", requireSameOrigin(serveAssistedContinue))
 	mux.HandleFunc("/api/assisted/launch", requireSameOrigin(serveAssistedLaunch))
+	mux.HandleFunc("/api/assisted/document", serveAssistedDocument)
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -993,6 +994,39 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"launching"}`))
+}
+
+func serveAssistedDocument(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jobID, kind := r.URL.Query().Get("job_id"), r.URL.Query().Get("kind")
+	if _, err := strconv.ParseInt(jobID, 10, 64); err != nil {
+		http.Error(w, "invalid assisted job identifier", http.StatusBadRequest)
+		return
+	}
+	document, err := storage.GetAssistedDocument(db, jobID, kind)
+	if err != nil {
+		log.Printf("serveAssistedDocument: %v", err)
+		http.NotFound(w, r)
+		return
+	}
+	file, err := os.Open(document.Path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", `inline; filename="`+document.Name+`"`)
+	http.ServeContent(w, r, document.Name, info.ModTime(), file)
 }
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
