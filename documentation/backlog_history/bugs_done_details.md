@@ -2,6 +2,16 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 507. The first post-#489 cohort reaches FAILED_SUBMIT 100% of the time, so its lower quarantine rate has not yet improved outcomes
+
+**Completed 2026-08-01.** A sanitized count of the post-#489 cohort found all 8 `FAILED_SUBMIT` rows had Playwright's `target closed` error. For every one, the log showed post-score freshness passed but neither page validation nor document generation began. This rules out the later Vision, cached-mapping, and handler recovery gaps and isolates the failure to `newSubmitPage` during initial browser context/page setup.
+
+`AttemptSubmit` now retries initial setup once only when `isTargetClosedErr` recognizes that exact Playwright failure. It neither repeats document generation nor retries an actual submit click; the later recovery paths remain unchanged. A regression test makes the initial page fail during navigation, asserts the crashed page is closed, confirms exactly one replacement context/page is created, and verifies the recovered path generates documents once before reaching its ordinary unsupported-ATS result.
+
+**Verification:** `go test ./pkg/submitter`, then `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed. The daemon was rebuilt and restarted after verification; at restart it had one live process and zero eligible non-breezy queue rows, so the new recovery is deployed for the next discovery cohort without inventing a live outcome claim.
+
+---
+
 ## 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
 
 **Completed 2026-08-01.** The pre-scrape DOM check in `TwoStepVerification` now calls `quarantineTwoStepVerificationDOM`, which retains the existing DOM pruning and rejection behavior while routing unsafe content through `quarantineCareerPageDOM`. That shared helper captures the `PromptInjectionError` threat list and calls `storage.LogPromptInjectionDetections`, so each detected threat reaches `applications/prompt_injection_detections.csv`.

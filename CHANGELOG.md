@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — A browser crash during initial page setup gets one safe recovery
+
+* **Fix (bug #507):** all eight initial post-#489 submission failures were the same Playwright `target closed` condition, and each occurred before page validation or document generation. `AttemptSubmit` now recreates the browser context once when that failure occurs during initial setup, matching the later fill-path recovery while remaining bounded. A regression test verifies the crashed page is released, the replacement page proceeds, and document generation is not repeated.
+
 ## 2026-08-01 — The dashboard now shows whether the agent can make mission progress
 
 * **Improvement (#491):** The dashboard previously showed raw funnel counts and last-row snapshots, but not whether there were any jobs the daemon could actually process or whether confirmed applications were happening. It now reports confirmed applications today and in the last seven days, median discovery-to-first-attempt latency, time since the last confirmation, and the eligible queue with its never-attempted subset. The eligibility calculation deliberately mirrors the agent's queue filter, so a visible `DISCOVERED` count can no longer imply that work is available when every row is excluded or delayed. Missing time-based values render as an explicit unavailable state rather than a fabricated zero.
