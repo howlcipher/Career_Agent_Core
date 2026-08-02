@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-01 — Every pre-scrape prompt-injection quarantine now reaches the audit trail
+
+* **Fix (bug #503):** `TwoStepVerification` rejected unsafe career-page DOM before any model use, but it called the basic quarantine API directly and discarded the structured threat details. Those detections never reached `applications/prompt_injection_detections.csv`, undercounting the security audit used to monitor the filter. The pre-scrape boundary now uses the shared quarantine-and-audit helper, preserving the existing rejection behavior while writing one CSV row per detected threat. The pipeline has no company name at this boundary, so rows accurately retain an empty company field rather than fabricating attribution. Safe and unsafe DOM regression tests cover the audit behavior.
+
 ## 2026-08-01 — Confirmed applications now have an authoritative funnel timestamp
 
 * **Fix (bug #490):** `job_funnel.applied_at` existed in the schema but was never set, leaving the funnel unable to answer when a confirmed application happened. Both automatic confirmation and manual handoff promotion now record a canonical UTC timestamp; later status changes retain the original confirmation time. Existing historical rows are intentionally not backfilled because no reliable source exists.

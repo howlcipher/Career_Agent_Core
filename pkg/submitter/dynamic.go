@@ -79,14 +79,24 @@ func (p *Pipeline) TwoStepVerification(page playwright.Page, url string) (string
 		return "", fmt.Errorf("failed to extract page DOM: %w", err)
 	}
 
-	pruned, _ := parser.PruneDOMToText(strings.NewReader(domHTML))
-	if err := p.Filter.QuarantinePayload(pruned); err != nil {
+	if err := quarantineTwoStepVerificationDOM(p.Filter, url, domHTML); err != nil {
 		return "", fmt.Errorf("career page rejected before model use: %w", err)
 	}
 
 	log.Println("[Pipeline] Step 2: Site verified secure. Extracting structural DOM...")
 
 	return domHTML, nil
+}
+
+// quarantineTwoStepVerificationDOM preserves structured detections from the
+// pre-scrape DOM boundary so all quarantine paths reach the same audit trail.
+func quarantineTwoStepVerificationDOM(
+	filter *security.QuarantineLayer,
+	url string,
+	domHTML string,
+) error {
+	pruned, _ := parser.PruneDOMToText(strings.NewReader(domHTML))
+	return quarantineCareerPageDOM(filter, url, "", pruned)
 }
 
 // ExtractDomain gets the base domain + tenant path from a URL for caching

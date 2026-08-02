@@ -45,7 +45,7 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
-**2026-08-01, session forty-four.** Bug #490 is Done: both automatic confirmation and manual handoff promotion now persist one canonical UTC `job_funnel.applied_at` timestamp, while later status transitions preserve it. Focused storage regression coverage plus the full build, vet, test, and formatting loop are clean. The highest remaining score is a three-way 1.5 tie (#504, #503, and improvement #491). See `documentation/backlog_history/bugs_done_details.md` item #490 for the full account. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
+**2026-08-01, session forty-five.** Bug #503 is Done: `TwoStepVerification` now sends structured quarantine threats to the same CSV logger as the other security boundaries, preserving the rejection and recording the URL with no fabricated company attribution. Focused submitter regression coverage plus the full build, vet, test, and formatting loop are clean. The highest remaining score is improvement #491 (1.5), followed by bugs #482 and #507 (1.33). See `documentation/backlog_history/bugs_done_details.md` item #503 for the full account. Prior status paragraph archived to `documentation/backlog_history/bugs_groom_history.md`.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|---|
@@ -58,7 +58,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 481 | [Aged DISCOVERED postings expire before the ranking algorithm's freshness decay ever surfaces them, starving the funnel](#481-aged-discovered-postings-expire-before-the-ranking-algorithms-freshness-decay-ever-surfaces-them-starving-the-funnel) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #481 for the full fix account. |
 | 480 | [UpdateFunnelStatusRetryable never records a status_reason, so every RETRY_EXHAUSTED row loses its own root cause](#480-updatefunnelstatusretryable-never-records-a-status_reason-so-every-retry_exhausted-row-loses-its-own-root-cause) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #480 for the full account. |
 | 504 | [`state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status](#504-statetailoredcontext-our-own-rag-generated-content-can-trip-the-same-zero-evidence-quarantine-as-489-via-a-dedicated-but-unverified-quarantined_rag_context-status) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #504 for the full account. |
-| 503 | [`TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total](#503-twostepverifications-quarantine-check-never-logs-to-the-prompt-injection-audit-trail-undercounting-the-csv-total) | Minor | Pending | 1.5 = 3×1.0÷2 | mechanical | Found 2026-08-01 closing #489. `pkg/submitter/dynamic.go:83` calls `Filter.QuarantinePayload` directly (not `CheckPayloadDetailed`) when vetting a career page's DOM before scraping. Confirmed the only two call sites of `storage.LogPromptInjectionDetections` in the codebase are `cmd/agent/pipeline.go:264` and `pkg/submitter/browser.go:64` — neither covers this path. Quarantines here never reach `prompt_injection_detections.csv`, so every count derived from that file (including #489's own 10,967-detection baseline) undercounts by an unknown amount. Value 3, Effort 2: thread threat capture + `LogPromptInjectionDetections` through this call site the same way the other two already do |
+| 503 | [`TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total](#503-twostepverifications-quarantine-check-never-logs-to-the-prompt-injection-audit-trail-undercounting-the-csv-total) | Minor | Done (2026-08-01) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #503 for the full account. |
 | 478 | [A DNS resolution failure never moves a job out of DISCOVERED, so one bad hostname spins the daemon forever](#478-a-dns-resolution-failure-never-moves-a-job-out-of-discovered-so-one-bad-hostname-spins-the-daemon-forever) | Major | Done (2026-08-01) | 3.0 = 6×1.0÷2 | standard | See `documentation/backlog_history/bugs_done_details.md` item #478 for the full fix account. |
 | 475 | [Yahoo fallback still fails most discovery queries despite bug 130's retry and backoff fix](#475-yahoo-fallback-still-fails-most-discovery-queries-despite-bug-130s-retry-and-backoff-fix) | Major | Done (2026-07-31) | 0.83 = 5×0.5÷3 | standard | See `documentation/backlog_history/bugs_done_details.md` item #475 for the full fix account. |
 | 476 | [`GetQueuePlan` has no `rows.Err()` check, so a cursor error silently truncates the requeue dry-run preview](#476-getqueueplan-has-no-rowserr-check-so-a-cursor-error-silently-truncates-the-requeue-dry-run-preview) | Minor | Done (2026-08-01) | **2.0** = 4×1.0÷2 | standard | See `documentation/backlog_history/bugs_done_details.md` item #476 for the full fix account. |
@@ -258,26 +258,7 @@ This is the exact same shape #489 fixed — `Guard: "heuristic"`, no `Match`/`St
 
 ### 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
 
-**Found 2026-08-01** closing #489, while auditing every call site of the quarantine layer to confirm #489's fix reaches all of them.
-
-**Evidence:** `pkg/submitter/dynamic.go:83` (`TwoStepVerification`, which vets a career page's DOM before scraping):
-
-```go
-pruned, _ := parser.PruneDOMToText(strings.NewReader(domHTML))
-if err := p.Filter.QuarantinePayload(pruned); err != nil {
-    return "", fmt.Errorf("career page rejected before model use: %w", err)
-}
-```
-
-This calls `QuarantinePayload` directly, discarding the returned `PromptInjectionError`'s `Threats` slice into a generic wrapped error. Confirmed the only two call sites of `storage.LogPromptInjectionDetections` in the entire codebase are `cmd/agent/pipeline.go:264` (via an injected `logDetections` func) and `pkg/submitter/browser.go:64` — neither is reachable from this path. Every quarantine triggered here is invisible in `applications/prompt_injection_detections.csv`.
-
-**Impact:** #489's own 10,967-detection baseline, and any future re-measurement (#501), undercounts by however many quarantines actually happen via this specific pre-scrape DOM check rather than the posting-payload check in `cmd/agent/pipeline.go`. The magnitude is unmeasured — that's the point of this row.
-
-**Fix direction:** change `TwoStepVerification` to call `p.Filter.CheckPayloadDetailed(pruned)` instead of `QuarantinePayload`, and thread the returned threats through to `storage.LogPromptInjectionDetections` the same way `pkg/submitter/browser.go:64` already does, with a URL/company-name for the CSV row (available in `Pipeline`'s caller context — confirm exact plumbing at fix time).
-
-**Acceptance criteria:** a quarantine triggered via `TwoStepVerification` produces a `prompt_injection_detections.csv` row, verified with a table-driven test asserting the log call happens on the unsafe path and not on the safe path.
-
-**Automated tests:** a `pkg/submitter` test with an injected filter that returns unsafe, asserting the detection-logging dependency is invoked with the right threats.
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #503.
 
 ### 504. `state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status
 

@@ -2,6 +2,16 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 503. `TwoStepVerification`'s quarantine check never logs to the prompt-injection audit trail, undercounting the CSV total
+
+**Completed 2026-08-01.** The pre-scrape DOM check in `TwoStepVerification` now calls `quarantineTwoStepVerificationDOM`, which retains the existing DOM pruning and rejection behavior while routing unsafe content through `quarantineCareerPageDOM`. That shared helper captures the `PromptInjectionError` threat list and calls `storage.LogPromptInjectionDetections`, so each detected threat reaches `applications/prompt_injection_detections.csv`.
+
+The pipeline's `Execute` interface supplies a URL but not a company name at this boundary. The new CSV rows therefore record the true URL and an empty company field; no name is inferred or fabricated. This matches the logger's established schema and preserves data integrity.
+
+**Regression coverage:** an unsafe DOM produces `ErrPromptInjectionDetected` and an audit CSV containing the expected URL and empty company field; a safe DOM returns normally and creates no audit log. Focused `go test ./pkg/submitter` passed before the full verification loop.
+
+---
+
 ## 504. `state.TailoredContext` (our own RAG-generated content) can trip the same zero-evidence quarantine as #489, via a dedicated but unverified `QUARANTINED_RAG_CONTEXT` status
 
 **Completed 2026-08-01.** Verified the reported pipeline path still exists: `cmd/agent/pipeline.go` checks the RAG-built `state.TailoredContext` and writes `QUARANTINED_RAG_CONTEXT` if the security layer rejects it. A read-only aggregate query against the live SQLite database returned exactly zero rows with that status. The query returned only the count; no job, company, URL, title, career-context, or other personal data was read or recorded.
