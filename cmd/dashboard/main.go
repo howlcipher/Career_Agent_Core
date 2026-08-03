@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1048,7 +1049,33 @@ func classifyCurrentApplicationPage(html, role string) string {
 
 func currentPageMatchesRole(html, role string) bool {
 	role = normalizePageText(role)
-	return role != "" && strings.Contains(normalizePageText(html), role)
+	if role == "" {
+		return false
+	}
+	for _, candidate := range currentPageHeadings(html) {
+		if strings.Contains(" "+normalizePageText(candidate)+" ", " "+role+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// currentPageHeadings extracts only page identity fields. Searching the full
+// document lets a different job pass merely because its description names a
+// target team or discipline.
+func currentPageHeadings(html string) []string {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<title[^>]*>\s*(.*?)\s*</title>`),
+		regexp.MustCompile(`(?is)<meta[^>]+(?:property|name)\s*=\s*["'](?:og:title|twitter:title)["'][^>]+content\s*=\s*["'](.*?)["'][^>]*>`),
+		regexp.MustCompile(`(?is)<h1[^>]*>\s*(.*?)\s*</h1>`),
+	}
+	headings := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if match := pattern.FindStringSubmatch(html); len(match) == 2 {
+			headings = append(headings, match[1])
+		}
+	}
+	return headings
 }
 
 func currentPageHasApplicationEntry(html string) bool {
@@ -1094,22 +1121,38 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assisted job identifier", http.StatusBadRequest)
 		return
 	}
-	// The command receives only a validated stable database ID, never a URL,
-	// path, or user-provided shell fragment. Use the prebuilt binary so the
-	// dashboard does not leave go-run wrapper processes behind.
-	cmd := exec.Command("./career_assist_bin", "-job", request.JobID)
-	if err := cmd.Start(); err != nil {
+	// Validate the plan before acknowledging the click. Previously this handler
+	// returned success and let a child process reject an unavailable plan, which
+	// made a broken launch indistinguishable from a browser that was opening.
+	if _, err := storage.GetAssistedLaunchInfo(db, request.JobID); err != nil {
+		log.Printf("serveAssistedLaunch: %v", err)
+		http.Error(w, "assisted application is no longer available", http.StatusConflict)
+		return
+	}
+	if err := launchAssistedApplication(request.JobID); err != nil {
 		log.Printf("serveAssistedLaunch: %v", err)
 		http.Error(w, "failed to open assisted application", http.StatusInternalServerError)
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"launching"}`))
+}
+
+// launchAssistedApplication is replaceable only by handler tests. Dashboard
+// users normally start it with `go run`, so Assisted Apply works from the
+// documented development command without requiring a separately built,
+// potentially stale career_assist_bin beside the dashboard process.
+var launchAssistedApplication = func(jobID string) error {
+	cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
+	if err := cmd.Start(); err != nil {
+		return err
 	}
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			log.Printf("serveAssistedLaunch: assisted browser exited: %v", err)
 		}
 	}()
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"launching"}`))
+	return nil
 }
 
 func serveAssistedDocument(w http.ResponseWriter, r *http.Request) {

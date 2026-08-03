@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -109,8 +110,29 @@ func main() {
 		log.Printf("install browser network guard: %v", err)
 		return
 	}
-	if _, err := page.Goto(info.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
-		log.Printf("open assisted application: %v", err)
+	page.SetDefaultTimeout(45000)
+	if _, err := page.Goto(info.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateNetworkidle}); err != nil {
+		// Analytics and bot-protection assets can keep an otherwise usable
+		// employer page busy indefinitely. DOM content is still enough to verify
+		// that the visible document is the role the user selected.
+		log.Printf("assisted application network-idle wait failed; checking loaded document: %v", err)
+		if _, err = page.Goto(info.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
+			log.Printf("open assisted application: %v", err)
+			return
+		}
+	}
+	page.WaitForTimeout(1500)
+	title, err := page.Title()
+	if err != nil {
+		log.Printf("verify assisted application title: %v", err)
+		return
+	}
+	if !assistedPageTitleMatchesRole(title, info.Role) {
+		log.Printf("refusing assisted application page whose title %q does not match expected role %q", title, info.Role)
+		return
+	}
+	if page.IsClosed() {
+		log.Print("open assisted application: browser page closed before it became usable")
 		return
 	}
 	log.Print("Assisted application is open. Complete the stated human step, then return to the dashboard and click Continue. Closing this browser releases the assisted lease.")
@@ -150,6 +172,22 @@ continueFill:
 		return
 	}
 	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit.")
+}
+
+// assistedPageTitleMatchesRole makes the browser handoff fail closed when an
+// ATS redirect or stale URL displays a different job. The dashboard has
+// already performed the same heading-aware check; repeating it here protects
+// against a page that changed between that check and the visible navigation.
+func assistedPageTitleMatchesRole(title, role string) bool {
+	title = normalizeAssistedTitle(title)
+	role = normalizeAssistedTitle(role)
+	return role != "" && strings.Contains(" "+title+" ", " "+role+" ")
+}
+
+func normalizeAssistedTitle(value string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	}), " ")
 }
 
 func randomOwner() (string, error) {

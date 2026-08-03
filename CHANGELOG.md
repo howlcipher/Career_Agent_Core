@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Assisted Apply verifies the actual employer page before opening it
+
+* **Fix (bug #512):** The dashboard now starts the current assisted-browser command instead of relying on a stale sibling binary, rejects an unavailable handoff before reporting that it is launching, and invalidates earlier whole-page revalidation results. A page must match the requested role in its title or heading and expose an application entry point before the visible browser opens; the browser repeats the title check after navigation. This prevents a stale or logo-only page from masquerading as the requested application while preserving an explicit human CAPTCHA, login, and submission step.
+
 ## 2026-08-02 — Security-code resubmission survives one browser crash
 
 * **Improvement (#472):** If Playwright reports that its target closed while resubmitting an emailed security code, the submitter now follows the established one-context-recreation recovery path instead of immediately misclassifying the attempt as an email-verification failure. Recovery remains strictly bounded; a second target-closed failure surfaces normally.

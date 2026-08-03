@@ -79,7 +79,7 @@ func TestGetAssistedQueue_UsesHumanInstructionAndHidesURLs(t *testing.T) {
 		t.Fatalf("queue length = %d", len(jobs))
 	}
 	job := jobs[0]
-	if job.NextAction.Code != "revalidate_current_page" || job.NextAction.Instruction == "" || job.NextAction.PrimaryButton != "Check Current Page" {
+	if job.NextAction.Code != "revalidate_current_page" || job.NextAction.RequiresBrowser || job.NextAction.Instruction == "" || job.NextAction.PrimaryButton != "Check Current Page" {
 		t.Fatalf("next action = %+v", job.NextAction)
 	}
 	if job.ID == "" || job.Company != "Ready Co" || job.LastUpdated.After(time.Now().Add(time.Minute)) {
@@ -87,7 +87,7 @@ func TestGetAssistedQueue_UsesHumanInstructionAndHidesURLs(t *testing.T) {
 	}
 }
 
-func TestAssistedRevalidation_GatesBrowserLaunchAndPersistsSafeOutcome(t *testing.T) {
+func TestAssistedRevalidationGuidesBrowserLaunchAndPersistsSafeOutcome(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 	if _, err := AddToFunnel("Captcha Co", "Engineer", "https://captcha.example/jobs/1", "BLOCKED_CAPTCHA"); err != nil {

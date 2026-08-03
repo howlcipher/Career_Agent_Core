@@ -69,6 +69,7 @@ type AssistedMigrationReport struct {
 type AssistedLaunchInfo struct {
 	JobID   string
 	Company string
+	Role    string
 	URL     string
 }
 
@@ -84,6 +85,12 @@ type AssistedRevalidationInfo struct {
 type AssistedDocument struct{ Path, Name string }
 
 const AssistedLeaseDuration = 20 * time.Minute
+
+// assistedRevalidationVersion invalidates results recorded by the original
+// whole-document matcher. Job descriptions can mention another role (as the
+// Meesho Forward Deployed Engineer posting did with "Platform Engineering"),
+// so a role must match a page heading before the dashboard calls it ready.
+const assistedRevalidationVersion = 2
 
 // AcquireAssistedLease atomically claims the sole visible assisted browser.
 // A persistent browser profile cannot safely serve concurrent employers, so
@@ -112,11 +119,12 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
 	var info AssistedLaunchInfo
 	var status, original, revalidationState string
-	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, jf.url, jf.status, aa.original_status, aa.revalidation_state
+	var revalidationVersion int
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, COALESCE(jf.job_title, ''), jf.url, jf.status, aa.original_status, aa.revalidation_state, aa.revalidation_version
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
 		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
-		Scan(&info.JobID, &info.Company, &info.URL, &status, &original, &revalidationState)
+		Scan(&info.JobID, &info.Company, &info.Role, &info.URL, &status, &original, &revalidationState, &revalidationVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssistedLaunchInfo{}, errors.New("assisted job is not available to launch")
 	}
@@ -126,7 +134,8 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	if status != original || !isAssistedEligibleStatus(status) {
 		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
 	}
-	if revalidationState != "captcha_confirmed" && revalidationState != "application_ready" {
+	if revalidationVersion != assistedRevalidationVersion ||
+		(revalidationState != "captcha_confirmed" && revalidationState != "application_ready") {
 		return AssistedLaunchInfo{}, errors.New("assisted job must be revalidated before opening a browser")
 	}
 	return info, nil
@@ -163,8 +172,8 @@ func RecordAssistedRevalidation(conn *sql.DB, jobID, state string, now time.Time
 		return errors.New("unsupported assisted revalidation state")
 	}
 	result, err := conn.Exec(`UPDATE assisted_applications
-		SET revalidation_state = ?, revalidated_at = ?, updated_at = ?
-		WHERE job_id = ? AND assisted_state != 'completed'`, state, now.UTC(), now.UTC(), jobID)
+		SET revalidation_state = ?, revalidation_version = ?, revalidated_at = ?, updated_at = ?
+		WHERE job_id = ? AND assisted_state != 'completed'`, state, assistedRevalidationVersion, now.UTC(), now.UTC(), jobID)
 	if err != nil {
 		return fmt.Errorf("record assisted revalidation: %w", err)
 	}
@@ -282,6 +291,7 @@ func EnsureAssistedSchema(conn *sql.DB) error {
 		lease_expires_at DATETIME,
 		confirmation_provenance TEXT NOT NULL DEFAULT '',
 		revalidation_state TEXT NOT NULL DEFAULT 'required',
+		revalidation_version INTEGER NOT NULL DEFAULT 0,
 		revalidated_at DATETIME,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
@@ -311,6 +321,7 @@ func EnsureAssistedSchema(conn *sql.DB) error {
 	}
 	for _, column := range []struct{ name, definition string }{
 		{"revalidation_state", "TEXT NOT NULL DEFAULT 'required'"},
+		{"revalidation_version", "INTEGER NOT NULL DEFAULT 0"},
 		{"revalidated_at", "DATETIME"},
 	} {
 		if existing[column.name] {
@@ -320,9 +331,11 @@ func EnsureAssistedSchema(conn *sql.DB) error {
 			return fmt.Errorf("add assisted schema column %s: %w", column.name, err)
 		}
 	}
-	// #512: the prior release labelled a reachable page as reviewable without
-	// proving it was the intended role or even an application entry point.
-	if _, err := conn.Exec("UPDATE assisted_applications SET revalidation_state = 'required', revalidated_at = NULL WHERE revalidation_state = 'current_page_review'"); err != nil {
+	// #512: the prior release searched an entire document for the role, so a
+	// different job could look valid when its description mentioned that role.
+	// Keep the historic state for auditability but force a heading-aware check
+	// before it can open a visible browser.
+	if _, err := conn.Exec("UPDATE assisted_applications SET revalidation_state = 'required', revalidated_at = NULL WHERE revalidation_version < ?", assistedRevalidationVersion); err != nil {
 		return fmt.Errorf("reset obsolete assisted review state: %w", err)
 	}
 	return nil

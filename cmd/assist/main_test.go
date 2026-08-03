@@ -34,3 +34,21 @@ func TestAssistedBrowserProfileDirRejectsEmptyCacheDirectory(t *testing.T) {
 		t.Fatal("expected empty cache directory to be rejected")
 	}
 }
+
+func TestAssistedPageTitleMatchesRole(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		role  string
+		want  bool
+	}{
+		{"Meesho - Platform Engineer", "Platform Engineer", true},
+		{"Meesho - Forward Deployed Engineer II", "Platform Engineer", false},
+		{"CloudCo | Senior Platform Engineer", "Platform Engineer", true},
+		{"CloudCo - Platform Engineering Manager", "Platform Engineer", false},
+		{"Meesho", "Platform Engineer", false},
+	} {
+		if got := assistedPageTitleMatchesRole(tc.title, tc.role); got != tc.want {
+			t.Errorf("assistedPageTitleMatchesRole(%q, %q) = %v, want %v", tc.title, tc.role, got, tc.want)
+		}
+	}
+}

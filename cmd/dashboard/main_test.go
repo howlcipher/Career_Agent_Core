@@ -38,6 +38,23 @@ func TestServeAssistedRevalidate_UsesValidatedIDWithoutLaunchingBrowser(t *testi
 	}
 }
 
+func TestServeAssistedLaunch_RejectsUnavailablePlanBeforeStartingProcess(t *testing.T) {
+	setupTestDB(t)
+	previous := launchAssistedApplication
+	t.Cleanup(func() { launchAssistedApplication = previous })
+	started := false
+	launchAssistedApplication = func(string) error {
+		started = true
+		return nil
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/assisted/launch", bytes.NewBufferString(`{"job_id":"41"}`))
+	rec := httptest.NewRecorder()
+	serveAssistedLaunch(rec, req)
+	if rec.Code != http.StatusConflict || started {
+		t.Fatalf("status=%d started=%v body=%q", rec.Code, started, rec.Body.String())
+	}
+}
+
 func TestCurrentPageShowsCaptcha_RequiresChallengeLanguage(t *testing.T) {
 	for _, tc := range []struct {
 		page string
@@ -57,8 +74,10 @@ func TestClassifyCurrentApplicationPage_RequiresRoleAndEntryPoint(t *testing.T) 
 	for _, tc := range []struct {
 		name, html, role, want string
 	}{
-		{"matching application", "<h1>AI Field Engineer</h1><button>Apply now</button>", "AI Field Engineer", "application_ready"},
-		{"wrong role", "<h1>Assistant Manager - Ops</h1><button>Apply for this job</button>", "DevOps Engineer", "unavailable"},
+		{"matching application", "<title>Example - AI Field Engineer</title><button>Apply now</button>", "AI Field Engineer", "application_ready"},
+		{"wrong role", "<title>Example - Assistant Manager - Ops</title><button>Apply for this job</button>", "DevOps Engineer", "unavailable"},
+		{"role only in description", "<title>Meesho - Forward Deployed Engineer II</title><p>Partner with Platform Engineering.</p><button>Apply for this job</button>", "Platform Engineer", "unavailable"},
+		{"role in heading", "<h1>Platform Engineer</h1><button>Apply now</button>", "Platform Engineer", "application_ready"},
 		{"blank shell", "<div class=spinner></div>", "AI Architect", "unavailable"},
 		{"captcha", "<p>Verify you are human</p>", "AI Architect", "captcha_confirmed"},
 	} {
