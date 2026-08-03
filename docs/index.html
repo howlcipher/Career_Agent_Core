@@ -101,8 +101,8 @@
                         <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
                     </div>
                     <div class="card-content">
-                        <h3>Visual form recovery</h3>
-                        <p>Leverages native multimodal AI to visually "see" the page. When DOM extraction fails due to heavy obfuscation, the agent snaps a screenshot and uses spatial intelligence to pinpoint elements.</p>
+                        <h3>Layered form recovery</h3>
+                        <p>Recovers stale selectors through accessible labels and, when configured, a screenshot-assisted visual fallback for hard-to-map forms.</p>
                     </div>
                 </div>
                 
@@ -112,7 +112,7 @@
                     </div>
                     <div class="card-content">
                         <h3>Inbox outcome tracker</h3>
-                        <p>Silently monitors your inbox in the background, reading rejection and interview emails to automatically update your job funnel database.</p>
+                        <p>Tracks rejection and interview messages through IMAP, recording each outcome and message acknowledgement in one local SQLite transaction.</p>
                     </div>
                 </div>
 
@@ -122,7 +122,7 @@
                     </div>
                     <div class="card-content">
                         <h3>Go-native runtime</h3>
-                        <p>Built on a 100% CGO-free stack using Go 1.26.5+, utilizing modernc.org/sqlite, parallel scraping, and rapid model context building.</p>
+                        <p>A CGO-free Go runtime using modernc.org/sqlite, bounded worker pools, parallel discovery, and local-first model routing.</p>
                     </div>
                 </div>
 
@@ -132,7 +132,7 @@
                     </div>
                     <div class="card-content">
                         <h3>Local operations console</h3>
-                        <p>A zero-dependency embedded web server showing live funnel counts, conversion rates by ATS platform and by cover-letter variant, and the status of current applications in real-time, complete with start/stop agent controls. It binds to loopback only, and the start/stop endpoints reject any request that is not same-origin, so no other page open in your browser can launch a run on your behalf.</p>
+                        <p>A loopback-only operations console with live funnel metrics, queue state, and guarded same-origin start and stop controls.</p>
                     </div>
                 </div>
                 
@@ -142,7 +142,7 @@
                     </div>
                     <div class="card-content">
                         <h3>Bounded queue cycles</h3>
-                        <p>Run the engine with <code>--daemon</code> to let it seamlessly process up to 15 jobs every 6 hours, completely evading ATS rate limit bans.</p>
+                        <p>Run with <code>--daemon</code> to refresh discovery and process a capped batch every six hours, with clean interruption between cycles.</p>
                     </div>
                 </div>
 
@@ -162,7 +162,7 @@
                     </div>
                     <div class="card-content">
                         <h3>Local-first model routing</h3>
-                        <p>Runs entirely on your machine with <strong>Ollama</strong> by default — zero API cost, zero data leaving your box. Seamlessly integrates with Claude or Gemini for flexible reasoning. Every document is written in-process by whichever provider you configured, with no companion service to install; an optional FastAPI offload exists for anyone who wants generation running outside the agent. Uses SQLite WAL mode for highly concurrent, safe tracking.</p>
+                        <p>Uses <strong>Ollama</strong> by default, with optional Claude or Gemini providers. Documents generate in-process unless an optional, health-checked FastAPI offload is configured.</p>
                     </div>
                 </div>
             </div>
@@ -182,8 +182,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Self-Healing DOM Mapping</strong>
-                                <span>Invalidates stale Playwright CSS selectors if a website updates its UI, forcing a localized structural re-learn.</span>
+                                <strong>Self-healing form mappings</strong>
+                                <span>Invalidates stale Playwright selectors and falls back through labels and visual recovery before giving up.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-2" id="arch-learner">
@@ -191,8 +191,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Dynamic Learner Module</strong>
-                                <span>Maps unknown ATS layouts such as Workday through a bounded LLM-assisted workflow, then caches the reviewed blueprint.</span>
+                                <strong>Bounded ATS learning</strong>
+                                <span>Maps unknown application layouts through the configured model, then caches the local blueprint for later runs.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-3" id="arch-network">
@@ -200,8 +200,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Resolver-Bound Outbound Networking</strong>
-                                <span>Strict net/url IP-binding algorithm automatically prevents DNS rebinding attacks and validates public IP endpoints.</span>
+                                <strong>Resolver-bound networking</strong>
+                                <span>Validates public IP targets and binds outbound traffic to the resolved address to resist DNS rebinding.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-4" id="arch-quarantine">
@@ -209,8 +209,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Deterministic Prompt-Injection Quarantine</strong>
-                                <span>Secure text-parsing layer neutralizes malicious indirect prompt injections embedded in external job descriptions, with a conservative allowlist for legitimate ATS boilerplate so real postings aren't discarded alongside real attacks.</span>
+                                <strong>Prompt-injection quarantine</strong>
+                                <span>Checks posting text and browser DOM before any model call, with local auditing and a conservative ATS boilerplate allowlist.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-5" id="arch-stealth">
@@ -218,8 +218,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Document Quality Guardrails</strong>
-                                <span>Produces tailored, readable documents with explicit review boundaries and without pretending to bypass employer controls.</span>
+                                <strong>Human-controlled handoffs</strong>
+                                <span>Can stop before submission, preserve tailored documents, and queue the exact next step for a human reviewer.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-6" id="arch-graph">
@@ -227,8 +227,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Stateful Graph Pipeline</strong>
-                                <span>Processes complex multi-step application forms using a robust, state-machine driven graph architecture.</span>
+                                <strong>Stateful application flow</strong>
+                                <span>Processes multi-step forms through explicit states, preserving clear failure reasons and resumable handoffs.</span>
                             </div>
                         </li>
                         <li class="feature-item fade-in-up delay-7" id="arch-ai-concurrency">
@@ -236,8 +236,8 @@
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                             </div>
                             <div class="feature-text">
-                                <strong>Concurrent Processing Pipeline</strong>
-                                <span>Splits monolithic generation into concurrent processes, and utilizes bounded worker pools and parallel IO streams for high-speed scraping and inference.</span>
+                                <strong>Bounded concurrent pipeline</strong>
+                                <span>Uses worker limits, parallel I/O, and SQLite WAL storage to keep discovery and inference observable under load.</span>
                             </div>
                         </li>
                     </ul>

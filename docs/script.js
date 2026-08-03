@@ -10,12 +10,22 @@ document.addEventListener('DOMContentLoaded', () => {
         htmlElement.setAttribute('data-theme', 'light');
     }
 
+    function updateThemeToggleLabel() {
+        if (!themeToggle) return;
+        const isLight = htmlElement.getAttribute('data-theme') === 'light';
+        themeToggle.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+        themeToggle.setAttribute('aria-pressed', String(isLight));
+    }
+
+    updateThemeToggleLabel();
+
     if (themeToggle) {
         themeToggle.addEventListener('click', () => {
             const currentTheme = htmlElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
             htmlElement.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
+            updateThemeToggleLabel();
         });
     }
 
