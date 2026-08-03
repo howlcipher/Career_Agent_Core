@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-02 local-delegation run and groom.** #486 is Done: a framework-independent local-Ollama contract now produces strict, bounded investigation proposals and reviewed candidate patch artifacts without any apply or tool authority. The six remaining free Pending rows were re-verified against current code and retain their scores: #492, #487, #472, and #473 are 0.75; #485 is 0.67; and #497 is exactly 0.5. There are no Pending bugs. Paywalled #424 and #17 remain key-gated; #14 remains the only below-floor user decision. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.
+**2026-08-02 queue-SLA and interface refresh.** #492 is Done: `DISCOVERED` jobs receive the existing urgency boost at seven days, expire through the agent's scheduled queue-cycle sweep at 30 days, and are bounded to 25 pending rows per identified discovery source. The implementation preserves the fit-ranking formula and records cap/expiry reasons in the funnel. Synthetic 0/1/7/14/30-day and admission-cap coverage passed; the baseline real-data p50/p90 (4.8/11.7 days) deliberately remains a future read-only observation after normal operation produces new attempts. The dashboard and GitHub Pages now share a restrained retro-industrial command-deck presentation. Remaining free Pending rows are #487, #472, and #473 (0.75), #485 (0.67), and #497 (0.5); no Pending bugs exist. Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -57,7 +57,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 511 | [Assisted Apply Queue with resumable human handoff and legacy-job backfill](#511-assisted-apply-queue-with-resumable-human-handoff-and-legacy-job-backfill) | Done (2026-08-02) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #511 for the full account. |
 | 479 | [A permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status](#479-a-permanent-dns-failure-spends-the-full-retrybackoff-budget-instead-of-failing-fast-to-a-terminal-status) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #479 for the full account. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Done (2026-08-02) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #486 for the full account. |
-| 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Pending | 0.75 = 6×0.5÷4 | standard | #481/#482 already shipped; no admission cap or proactive first-attempt sweep exists. |
+| 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #492 for the full account. |
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Pending | 0.75 = 3×1.0÷4 | standard | Deterministic classification still covers part of the proposed surface; no safe 4B evaluation has been run. |
 | 472 | [Extend bug #467's target-closed browser recovery to the security-code resubmit click](#472-extend-bug-467s-target-closed-browser-recovery-to-the-security-code-resubmit-click) | Pending | 0.75 = 3×0.5÷2 | standard | The one-time-code resubmit path still bypasses target-closed recovery. |
 | 473 | [Extend bug #467's target-closed browser recovery to the Vision submission paths](#473-extend-bug-467s-target-closed-browser-recovery-to-the-vision-submission-paths) | Pending | 0.75 = 3×0.5÷2 | standard | Vision fallback still has no target-closed recovery of its own. |
@@ -262,21 +262,7 @@ Confirmed no unanswered-question logging, answer map, or per-question memory exi
 
 ### 492. Explicit first-attempt SLA and bounded fresh-queue admission
 
-**Filed 2026-08-01**, mission-alignment audit (seeded candidate B).
-
-Bug #481 (Done) stops an aged `DISCOVERED` row from being outscored forever by forcing it to the front past a 10-day urgency threshold — but sets no proactive first-attempt deadline, and confirmed no periodic sweep of stale rows or per-source/per-provider admission cap exists anywhere in the codebase (`AddToFunnel` inserts unconditionally with `discovered_at = CURRENT_TIMESTAMP`; ranking/expiry logic only ever runs synchronously when the queue is read, never on a schedule).
-
-**Live-measured evidence this is a real, separate gap from #481:** a `job_funnel`↔`application_attempts` join (538 rows) found discovery-to-first-attempt timing of min = 8.1h, p50 = 4.8 days, p90 = 11.7 days, max = 18.4 days — **nothing under 6 hours**. #481 guarantees a stale row eventually wins a ranking comparison; it does not guarantee a *fast* first attempt.
-
-**Proposed direction, per the brief:** an explicit first-attempt deadline (e.g. a configurable SLA measured against `discovered_at`); a periodic sweep of stale `DISCOVERED` rows rather than only on-read ranking (would also give bugs.md #482's breezy.hr rows, and any future excluded-source rows, a real terminal path instead of accumulating forever); a bounded number of pending jobs per source once #499 exists to identify one. Test with deterministic job ages at 0/1/7/14/30 days, and both a small queue and one exceeding the per-cycle processing cap, per the brief's own acceptance-criteria list.
-
-**Acceptance criteria:** a synthetic queue with jobs at each of the five ages above demonstrates the SLA/sweep correctly prioritizing or expiring rows at the intended boundaries; a queue larger than the per-cycle cap does not let admission outpace processing.
-
-**Automated tests:** deterministic age-bucket tests as above; a test proving the periodic sweep terminates already-excluded-source rows (e.g. breezy.hr) instead of leaving them in `DISCOVERED` forever.
-
-**Safe live verification:** after shipping, re-run this row's own discovery-to-first-attempt query against a read-only copy of the real database and confirm the p50/p90 figures have materially improved from this audit's baseline (4.8/11.7 days).
-
-**Boundaries:** does not change the ranking formula itself (that's #493); scoped to admission/sweep/deadline mechanics on top of the existing ranker.
+Closed — full account archived in `documentation/backlog_history/improvements_done_details.md`.
 
 ### 484. Local-model benchmark and routing-evidence harness
 

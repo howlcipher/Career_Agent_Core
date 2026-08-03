@@ -93,6 +93,7 @@ type careerRAGInitialization struct {
 
 type agentCycleDependencies struct {
 	loadDiscovered     func() ([]storage.FunnelJob, error)
+	sweepDiscovered    func(time.Time) (int64, error)
 	discoverJobs       func(context.Context, chan<- scraper.Job) error
 	processJobs        func(context.Context, <-chan scraper.Job)
 	targetJobURLs      map[string]bool
@@ -631,6 +632,13 @@ func runAgentQueueCycle(
 	if deps.loadDiscovered == nil || deps.processJobs == nil {
 		return errors.New("agent queue dependencies are incomplete")
 	}
+	if deps.sweepDiscovered != nil {
+		if swept, err := deps.sweepDiscovered(time.Now().UTC()); err != nil {
+			return fmt.Errorf("sweep stale discovered jobs: %w", err)
+		} else if swept > 0 {
+			log.Printf("[Agent] Terminalized %d stale or excluded DISCOVERED row(s).", swept)
+		}
+	}
 
 	discoveredJobs, err := deps.loadDiscovered()
 	if err != nil {
@@ -1092,7 +1100,8 @@ func main() {
 		log.Println("[Agent] Batch execution complete!")
 	}
 	cycleDeps := agentCycleDependencies{
-		loadDiscovered: storage.GetDiscoveredJobs,
+		loadDiscovered:  storage.GetDiscoveredJobs,
+		sweepDiscovered: storage.SweepStaleDiscoveredJobs,
 		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
 			return scraper.NewFunnelEngine(prof.Roles).DiscoverJobs(ctx, jobChan)
 		},

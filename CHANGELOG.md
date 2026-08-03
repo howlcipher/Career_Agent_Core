@@ -1,5 +1,10 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Fresh queue control and an operator-first interface
+
+* **Improvement (#492):** `DISCOVERED` jobs now receive priority at seven days, expire at 30 days through the scheduled agent-cycle sweep, and are capped at 25 pending rows per identified discovery source. Cap and expiry outcomes are recorded explicitly; fit ranking itself is unchanged.
+* **Design:** The local dashboard and GitHub Pages presentation now use an accessible, restrained retro-industrial command-deck system: flat steel panels, high-contrast amber/cyan state cues, visible focus rings, responsive controls, and less decorative visual noise.
+
 ## 2026-08-02 — Local-model delegation now has a reviewed, default-deny boundary
 
 * **Improvement (#486):** Added `cmd/localdelegate` and a framework-independent contract for bounded local-Ollama delegation. The first phase accepts only a size-limited, sanitized brief and returns a strictly validated JSON proposal; unknown fields, sensitive paths, missing test plans, and obvious credential markers are rejected. A separate patch phase requires an explicit reviewer identifier and the SHA-256 digest of the exact reviewed proposal, accepts changes only for the reviewed file list, and writes a candidate diff artifact without applying it. The command cannot run tools, apply patches, access Git, credentials, browsers, email, application data, or the production database. Documentation records the two-phase workflow and the reviewer responsibilities.

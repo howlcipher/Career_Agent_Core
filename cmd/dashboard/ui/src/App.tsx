@@ -411,7 +411,14 @@ function App() {
 
   return (
     <main>
-      <h1>🚀 Career Agent Live Metrics</h1>
+      <header className="command-header">
+        <p className="eyebrow">CAREER AGENT CORE // COMMAND DECK</p>
+        <div className="command-title-row">
+          <h1>Operations Console</h1>
+          <span className={agentRunning ? 'system-state online' : 'system-state standby'}>{agentRunning ? 'SYSTEM ACTIVE' : 'SYSTEM STANDBY'}</span>
+        </div>
+        <p className="command-subtitle">Queue telemetry, human handoffs, and bounded agent control from one local console.</p>
+      </header>
       <div className="agent-control">
         <button className="btn btn-start" onClick={handleStart} disabled={agentRunning}>▶ Start Agent</button>
         <button className="btn btn-stop" onClick={handleStop} disabled={!agentRunning}>🛑 Stop Agent</button>

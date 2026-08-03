@@ -7,6 +7,29 @@
   max-width: 1200px;
 }
 
+/* Retro-industrial command deck override: structural panels, limited signals,
+   and no glass, gradient, or decorative motion. */
+main { width: min(1280px, 100%); }
+.command-header { max-width: 1200px; margin: 0 auto 24px; padding: 24px 0 20px; border-bottom: 2px solid var(--card-border); }
+.eyebrow { margin: 0 0 10px; color: var(--neon-yellow); font: 700 .73rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .14em; }
+.command-title-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.command-title-row h1 { margin: 0; background: none; -webkit-text-fill-color: currentColor; color: var(--text-main); text-align: left; text-shadow: none; font: 800 clamp(2rem, 5vw, 3.8rem)/1.02 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.07em; }
+.command-subtitle { max-width: 660px; margin: 14px 0 0; color: var(--text-muted); line-height: 1.55; }
+.system-state { border: 1px solid currentColor; padding: 7px 10px; color: var(--text-muted); font: 700 .68rem/1 ui-monospace, monospace; letter-spacing: .11em; white-space: nowrap; }
+.system-state.online { color: var(--neon-green); background: rgba(159,190,120,.12); }.system-state.standby { color: var(--neon-yellow); background: rgba(230,184,102,.1); }
+.agent-control { justify-content: flex-start; margin: 0 auto 16px; }
+.btn, .text-button { border-radius: 0; font-family: ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; box-shadow: none; }
+.btn { padding: 11px 16px; border: 1px solid var(--card-border); background: #23323e; transition: background .15s ease, border-color .15s ease, transform .15s ease; }
+.btn:hover:not(:disabled), .text-button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: none; }
+.btn-start { background: #344a36; border-color: var(--neon-green); }.btn-stop { background: #493139; border-color: var(--neon-red); }.btn-assisted, .text-button { background: transparent; border-color: var(--neon-blue); color: var(--text-main); }
+.assisted-banner, .assisted-queue, .assisted-job, .detail, .card, .conversion-breakdown { border-radius: 0; border-color: var(--card-border); background: var(--card-bg); backdrop-filter: none; }
+.assisted-banner { max-width: 1200px; border-left: 4px solid var(--neon-yellow); }.assisted-queue { border-top: 4px solid var(--neon-blue); }.assisted-job { background: #162029; }.assisted-instruction { border-left-color: var(--neon-yellow); background: #202c35; }.assisted-instruction h4, .detail h3 { color: var(--neon-yellow); }
+.grid { gap: 12px; }.card { padding: 20px; text-align: left; min-height: 148px; transition: border-color .15s ease, transform .15s ease; }.card::before { height: 6px; }.card:hover { transform: translateY(-3px); background: #202d37; box-shadow: none; }.card h2 { font: 800 2.45rem/1 ui-monospace, monospace; text-shadow: none; color: var(--text-main); }.card p { font: 700 .72rem/1.3 ui-monospace, monospace; letter-spacing: .1em; }.card-reason { font-size: .78rem; }
+.detail-grid { gap: 12px; margin-top: 12px; }.detail { padding: 20px; }.detail h3 { font-family: ui-monospace, monospace; }.mission-metrics { border-top: 4px solid var(--neon-yellow); }.mission-metrics dl { gap: 18px; }.mission-metrics dd { font-family: ui-monospace, monospace; }.conversion-breakdown { overflow-x: auto; margin-top: 14px; padding: 4px; }.conversion-breakdown table { min-width: 640px; }
+.action-error, .poll-warning, .watchdog-alert { max-width: 1200px; margin: 12px auto; border-radius: 0; text-align: left; }.watchdog-alert { border-left: 4px solid var(--neon-orange); background: #3a3026; }
+.confirm-dialog { border-radius: 0; background: #18232c; border-color: var(--neon-yellow); }
+@media (max-width: 700px) { .command-title-row { align-items: flex-start; flex-direction: column; }.agent-control { display: grid; grid-template-columns: 1fr 1fr; }.btn { justify-content: center; padding: 12px 8px; font-size: .75rem; } }
+
 .assisted-banner, .assisted-queue, .assisted-job {
   border: 1px solid rgba(0, 240, 255, 0.35);
   background: rgba(0, 240, 255, 0.08);

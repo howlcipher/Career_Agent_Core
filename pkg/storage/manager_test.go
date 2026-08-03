@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/csv"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,6 +123,72 @@ func TestExcludedSourceRowsAreTerminalAndNeverQueued(t *testing.T) {
 
 	if jobs, err := GetDiscoveredJobs(); err != nil || len(jobs) != 0 {
 		t.Fatalf("excluded row reached automatic queue: jobs=%d err=%v", len(jobs), err)
+	}
+}
+
+func TestSourceAdmissionCapAndFirstAttemptSweep(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	for i := 0; i < maxPendingPerSource; i++ {
+		url := fmt.Sprintf("https://jobs.example.com/%d", i)
+		inserted, err := AddToFunnel("Example", "Engineer", url, "DISCOVERED", "example_feed")
+		if err != nil || !inserted {
+			t.Fatalf("seed %d: inserted=%v err=%v", i, inserted, err)
+		}
+	}
+	inserted, err := AddToFunnel("Example", "Overflow", "https://jobs.example.com/overflow", "DISCOVERED", "example_feed")
+	if err != nil || inserted {
+		t.Fatalf("overflow: inserted=%v err=%v", inserted, err)
+	}
+	var status, reason string
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", "https://jobs.example.com/overflow").Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonSourceAdmissionCap {
+		t.Fatalf("overflow = %s/%s, want SKIPPED/%s", status, reason, SkippedReasonSourceAdmissionCap)
+	}
+
+	now := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	for _, row := range []struct {
+		url string
+		age time.Duration
+	}{
+		{"https://age.example/zero", 0},
+		{"https://age.example/one", 24 * time.Hour},
+		{"https://age.example/seven", firstAttemptSLAPriorityAge},
+		{"https://age.example/fourteen", 14 * 24 * time.Hour},
+		{"https://age.example/thirty", firstAttemptExpiryAge},
+	} {
+		if _, err := db.Exec("INSERT INTO job_funnel (url, status, discovered_at) VALUES (?, 'DISCOVERED', ?)", row.url, now.Add(-row.age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if swept, err := SweepStaleDiscoveredJobs(now); err != nil || swept != 1 {
+		t.Fatalf("SweepStaleDiscoveredJobs() = %d, %v; want 1, nil", swept, err)
+	}
+	if err := db.QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", "https://age.example/thirty").Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SKIPPED" || reason != SkippedReasonFirstAttemptExpired {
+		t.Fatalf("30-day row = %s/%s, want SKIPPED/%s", status, reason, SkippedReasonFirstAttemptExpired)
+	}
+	jobs, err := GetDiscoveredJobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range jobs {
+		if job.URL == "https://age.example/thirty" {
+			t.Fatal("30-day row remained eligible")
+		}
+	}
+	for _, url := range []string{"https://age.example/zero", "https://age.example/one", "https://age.example/seven", "https://age.example/fourteen"} {
+		if err := db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", url).Scan(&status); err != nil {
+			t.Fatalf("read retained row %q: %v", url, err)
+		}
+		if status != "DISCOVERED" {
+			t.Fatalf("row %q = %s, want DISCOVERED", url, status)
+		}
 	}
 }
 

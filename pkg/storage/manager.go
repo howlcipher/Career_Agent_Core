@@ -33,6 +33,22 @@ const SkippedReasonExcludedSource = "excluded_source"
 // complete location and remote metadata rather than guessing equivalence.
 const SkippedReasonDuplicateCooldown = "duplicate_cooldown"
 
+// SkippedReasonFirstAttemptExpired marks a job that never received a first
+// attempt during its 30-day intake window. It is distinct from a posting that
+// was checked and found expired: this is queue-lifecycle evidence only.
+const SkippedReasonFirstAttemptExpired = "first_attempt_sla_expired"
+
+// SkippedReasonSourceAdmissionCap records a deliberate queue-admission limit,
+// rather than pretending a discovery result was low-fit or malformed.
+const SkippedReasonSourceAdmissionCap = "source_pending_cap"
+
+const (
+	firstAttemptSLAPriorityDays = 7
+	firstAttemptSLAPriorityAge  = firstAttemptSLAPriorityDays * 24 * time.Hour
+	firstAttemptExpiryAge       = 30 * 24 * time.Hour
+	maxPendingPerSource         = 25
+)
+
 func InitDB() error {
 	return InitDBWithPath(DefaultDatabasePath)
 }
@@ -1451,6 +1467,16 @@ func AddToFunnel(company, title, url, status string, discoverySources ...string)
 		return false, fmt.Errorf("begin funnel insert transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if status == "DISCOVERED" && discoverySource != "" {
+		var pending int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM job_funnel WHERE status = 'DISCOVERED' AND discovery_source = ?`, discoverySource).Scan(&pending); err != nil {
+			return false, fmt.Errorf("count pending source rows: %w", err)
+		}
+		if pending >= maxPendingPerSource {
+			status = "SKIPPED"
+			statusReason = SkippedReasonSourceAdmissionCap
+		}
+	}
 	result, err := tx.Exec(`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, discovery_source, discovered_at, last_updated)
 		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), CURRENT_TIMESTAMP, CASE WHEN ? = '' THEN NULL ELSE ? END)
 		ON CONFLICT(url) DO NOTHING`, company, title, url, status, statusReason, discoverySource, statusReason, time.Now().UTC())
@@ -1475,7 +1501,7 @@ func AddToFunnel(company, title, url, status string, discoverySources ...string)
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit funnel insert transaction: %w", err)
 	}
-	return rowsAffected > 0 && !excluded, nil
+	return rowsAffected > 0 && status == "DISCOVERED", nil
 }
 
 // GetDiscoverySource returns the channel that inserted a funnel row. The
@@ -1521,6 +1547,32 @@ func SkipExcludedSourceDiscoveredJobs() (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// SweepStaleDiscoveredJobs performs the periodic first-attempt lifecycle
+// maintenance. It first terminalizes legacy excluded-source rows, then marks
+// only rows that have remained unattempted for 30 days as SKIPPED. Recent and
+// SLA-priority rows remain eligible; this function never changes fit ranking.
+func SweepStaleDiscoveredJobs(now time.Time) (int64, error) {
+	if db == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	excluded, err := SkipExcludedSourceDiscoveredJobs()
+	if err != nil {
+		return 0, err
+	}
+	result, err := db.Exec(`UPDATE job_funnel
+		SET status = 'SKIPPED', status_reason = ?, last_updated = ?
+		WHERE status = 'DISCOVERED' AND discovered_at IS NOT NULL AND discovered_at <= ?`,
+		SkippedReasonFirstAttemptExpired, now.UTC(), now.UTC().Add(-firstAttemptExpiryAge))
+	if err != nil {
+		return 0, fmt.Errorf("expire stale discovered rows: %w", err)
+	}
+	expired, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return excluded + expired, nil
 }
 
 func UpdateFunnelStatus(url, status string) error {

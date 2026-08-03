@@ -2,6 +2,14 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 492. Explicit first-attempt SLA and bounded fresh-queue admission
+
+**Completed 2026-08-02.** The fresh queue now uses an explicit, bounded policy without changing the fit-ranking formula: jobs receive the existing urgency treatment at seven days, each agent queue cycle terminalizes `DISCOVERED` rows that have not received a first attempt by 30 days, and each identified discovery source is limited to 25 pending rows. Over-cap rows remain auditable as `SKIPPED` with `source_pending_cap`; expired rows are `SKIPPED` with `first_attempt_sla_expired`. The sweep also retains excluded-source terminalization, so excluded rows cannot accumulate indefinitely.
+
+Storage and agent-cycle tests cover the 0/1/7/14/30-day synthetic age set, source admission at and above the cap, and the scheduled sweep. Full Go and dashboard verification passed. The prior real-data baseline (4.8-day p50 and 11.7-day p90 from discovery to first attempt) is not claimed to have improved yet: it needs a future read-only measurement after normal, user-controlled operation creates new attempts.
+
+---
+
 ## 510. Record discovery-source request failures and circuit-open skips in refresh health
 
 **Completed 2026-08-02.** Yahoo discovery now records its outbound request attempts, final request failures after retries, and queries skipped while its circuit breaker is open. These privacy-safe numeric counters persist with the existing source insertion outcomes in `discovery_refresh.source_counts_json`; no posting URL, title, company, request text, or raw provider error is retained. The dashboard API and React health message surface the failure and skip totals so an empty queue can be distinguished from a healthy no-results refresh.

@@ -9,7 +9,7 @@ import (
 )
 
 // urgentAgeDays is the point at which a DISCOVERED job is treated as at risk
-// of expiring before it is ever attempted. bugs.md #481: with no aging
+// of expiring before it is ever attempted. With no aging
 // override, a job's score-based rank only ever falls as it gets older
 // (freshnessMultiplier below), so a low-scoring row (weak source, weak fit)
 // can keep losing to freshly discovered jobs indefinitely once the daily
@@ -17,7 +17,7 @@ import (
 // that expired 2026-08-01 had all sat in DISCOVERED for ~19 days. A job at or
 // past this age bypasses normal score ranking and the exploration/exploit
 // split entirely so it gets attempted with real headroom before that.
-const urgentAgeDays = 10
+const urgentAgeDays = firstAttemptSLAPriorityDays
 
 // RankableJob is a generic interface for jobs that can be ranked.
 type RankableJob interface {
