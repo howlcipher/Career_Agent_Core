@@ -1014,7 +1014,7 @@ func checkCurrentAssistedPage(ctx context.Context, conn *sql.DB, jobID string) e
 	}
 	request.Header.Set("Accept", "text/html,application/xhtml+xml")
 	response, err := security.NewNetworkGuard().HTTPClient(12 * time.Second).Do(request)
-	state := "current_page_review"
+	state := "unavailable"
 	if err != nil {
 		state = "unreachable"
 	} else {
@@ -1025,8 +1025,8 @@ func checkCurrentAssistedPage(ctx context.Context, conn *sql.DB, jobID string) e
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 			if readErr != nil {
 				state = "unreachable"
-			} else if currentPageShowsCaptcha(string(body)) {
-				state = "captcha_confirmed"
+			} else {
+				state = classifyCurrentApplicationPage(string(body), info.Role)
 			}
 		}
 	}
@@ -1034,6 +1034,35 @@ func checkCurrentAssistedPage(ctx context.Context, conn *sql.DB, jobID string) e
 		return recordErr
 	}
 	return nil
+}
+
+func classifyCurrentApplicationPage(html, role string) string {
+	if currentPageShowsCaptcha(html) {
+		return "captcha_confirmed"
+	}
+	if currentPageMatchesRole(html, role) && currentPageHasApplicationEntry(html) {
+		return "application_ready"
+	}
+	return "unavailable"
+}
+
+func currentPageMatchesRole(html, role string) bool {
+	role = normalizePageText(role)
+	return role != "" && strings.Contains(normalizePageText(html), role)
+}
+
+func currentPageHasApplicationEntry(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "<form") ||
+		strings.Contains(lower, "application-form") ||
+		strings.Contains(lower, "apply now") ||
+		strings.Contains(lower, "apply for this job")
+}
+
+func normalizePageText(value string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	}), " ")
 }
 
 // currentPageShowsCaptcha requires a direct challenge, not a widget name or

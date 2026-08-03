@@ -53,6 +53,21 @@ func TestCurrentPageShowsCaptcha_RequiresChallengeLanguage(t *testing.T) {
 	}
 }
 
+func TestClassifyCurrentApplicationPage_RequiresRoleAndEntryPoint(t *testing.T) {
+	for _, tc := range []struct {
+		name, html, role, want string
+	}{
+		{"matching application", "<h1>AI Field Engineer</h1><button>Apply now</button>", "AI Field Engineer", "application_ready"},
+		{"wrong role", "<h1>Assistant Manager - Ops</h1><button>Apply for this job</button>", "DevOps Engineer", "unavailable"},
+		{"blank shell", "<div class=spinner></div>", "AI Architect", "unavailable"},
+		{"captcha", "<p>Verify you are human</p>", "AI Architect", "captcha_confirmed"},
+	} {
+		if got := classifyCurrentApplicationPage(tc.html, tc.role); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func setupTestDB(t *testing.T) {
 	t.Helper()
 	var err error

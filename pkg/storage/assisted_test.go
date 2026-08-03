@@ -103,7 +103,7 @@ func TestAssistedRevalidation_GatesBrowserLaunchAndPersistsSafeOutcome(t *testin
 	if _, err := GetAssistedLaunchInfo(GetDB(), id); err == nil {
 		t.Fatal("unrevalidated job must not be launchable")
 	}
-	if err := RecordAssistedRevalidation(GetDB(), id, "current_page_review", time.Now()); err != nil {
+	if err := RecordAssistedRevalidation(GetDB(), id, "application_ready", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := GetAssistedLaunchInfo(GetDB(), id); err != nil {
@@ -113,8 +113,33 @@ func TestAssistedRevalidation_GatesBrowserLaunchAndPersistsSafeOutcome(t *testin
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("queue = %#v, %v", jobs, err)
 	}
-	if jobs[0].NextAction.Code != "review_current_page" || jobs[0].NextAction.PrimaryButton != "Open Current Page" {
+	if jobs[0].NextAction.Code != "open_verified_application" || jobs[0].NextAction.PrimaryButton != "Open Verified Application" {
 		t.Fatalf("reviewed next action = %+v", jobs[0].NextAction)
+	}
+}
+
+func TestEnsureAssistedSchema_ResetsObsoleteCurrentPageReview(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Legacy Review Co", "Engineer", "https://review.example/jobs/legacy", "AWAITING_REVIEW"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetDB().Exec("UPDATE assisted_applications SET revalidation_state = 'current_page_review', revalidated_at = CURRENT_TIMESTAMP"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedSchema(GetDB()); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var revalidatedAt any
+	if err := GetDB().QueryRow("SELECT revalidation_state, revalidated_at FROM assisted_applications").Scan(&state, &revalidatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "required" || revalidatedAt != nil {
+		t.Fatalf("obsolete review state = %q, revalidated_at = %#v", state, revalidatedAt)
 	}
 }
 

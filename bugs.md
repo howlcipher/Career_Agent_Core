@@ -46,6 +46,7 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
+| 512 | [Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs](#512-assisted-apply-presents-stale-mismatched-and-blank-employer-pages-as-actionable-human-handoffs) | Major | Done (2026-08-02) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #512 for the full account. |
 |---|---|---|---|---|---|---|
 | 508 | [Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails](#508-discovery-has-no-independent-current-listings-fallback-when-serpapi-quota-is-exhausted-and-yahoo-search-fails) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account. |
 | 502 | [`encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window](#502-encodinggos-homoglyph-branch-is-a-third-zero-evidence-heuristic-threat-source-outside-489s-fix-window) | Minor | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #502 for the full account. |
@@ -211,6 +212,10 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 512. Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs
+
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #512.
 
 ### 489. `promptsec.Moderate()` still quarantines roughly half of everything discovered, disproportionately on Lever and Greenhouse
 

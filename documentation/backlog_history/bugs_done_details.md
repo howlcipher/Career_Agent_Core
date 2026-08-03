@@ -2,6 +2,16 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 512. Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs
+
+**Completed 2026-08-02.** Three guarded, read-only live checks contained neither a CAPTCHA nor a fillable application form: a blank BambooHR shell, a Meesho listing for a different role, and an unhydrated ATS shell. The prior current-page check treated any reachable non-CAPTCHA response as a browser-ready review, so it surfaced those unverified destinations as actionable human handoffs.
+
+The revalidation check now permits browser launch only for a direct CAPTCHA challenge or for a response containing both the stored role and a conservative application-entry signal. Other responses are explicitly unavailable and retain a safe `Check Current Page Again` action; no browser is opened. The schema upgrade resets every obsolete `current_page_review` state to `required`, so earlier false-positive reviews must be checked again. The check remains read-only and does not retain page content.
+
+**Regression coverage:** dashboard tests cover matching application, mismatched role, blank shell, and direct CAPTCHA classification; storage tests cover launch gating and the legacy-state reset. `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal`, dashboard UI tests and build, and `git diff --check` passed. No architectural decision record changed: the behavior is a local assisted-handoff eligibility rule, not an infrastructure or persistence-architecture decision.
+
+---
+
 ## 502. `encoding.go`'s homoglyph branch is a third zero-evidence heuristic threat source, outside #489's fix window
 
 **Completed 2026-08-01 — closed as a measured non-issue.** The installed `promptsec@v0.1.0` source confirms the reported branch exists: `guard/heuristic/encoding.go` emits an unlocated heuristic `encoding_attack` at severity 0.7 when `HasSuspiciousConfusables` detects a suspicious script. The source fact alone did not justify broadening #489's narrowly scoped release rule, so this task measured the real audit trail before changing any security behavior.

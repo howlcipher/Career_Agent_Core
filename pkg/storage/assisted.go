@@ -77,6 +77,7 @@ type AssistedLaunchInfo struct {
 type AssistedRevalidationInfo struct {
 	JobID string
 	URL   string
+	Role  string
 }
 
 // AssistedDocument is a resolved private file, never a client-supplied path.
@@ -125,7 +126,7 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	if status != original || !isAssistedEligibleStatus(status) {
 		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
 	}
-	if revalidationState != "captcha_confirmed" && revalidationState != "current_page_review" {
+	if revalidationState != "captcha_confirmed" && revalidationState != "application_ready" {
 		return AssistedLaunchInfo{}, errors.New("assisted job must be revalidated before opening a browser")
 	}
 	return info, nil
@@ -136,11 +137,11 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 func GetAssistedRevalidationInfo(conn *sql.DB, jobID string) (AssistedRevalidationInfo, error) {
 	var info AssistedRevalidationInfo
 	var status, original string
-	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.url, jf.status, aa.original_status
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.url, COALESCE(jf.job_title, ''), jf.status, aa.original_status
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
 		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
-		Scan(&info.JobID, &info.URL, &status, &original)
+		Scan(&info.JobID, &info.URL, &info.Role, &status, &original)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssistedRevalidationInfo{}, errors.New("assisted job is not available to revalidate")
 	}
@@ -157,7 +158,7 @@ func GetAssistedRevalidationInfo(conn *sql.DB, jobID string) (AssistedRevalidati
 // page text, HTTP status, and provider errors remain server-only.
 func RecordAssistedRevalidation(conn *sql.DB, jobID, state string, now time.Time) error {
 	switch state {
-	case "captcha_confirmed", "current_page_review", "unreachable":
+	case "captcha_confirmed", "application_ready", "unavailable", "unreachable":
 	default:
 		return errors.New("unsupported assisted revalidation state")
 	}
@@ -319,6 +320,11 @@ func EnsureAssistedSchema(conn *sql.DB) error {
 			return fmt.Errorf("add assisted schema column %s: %w", column.name, err)
 		}
 	}
+	// #512: the prior release labelled a reachable page as reviewable without
+	// proving it was the intended role or even an application entry point.
+	if _, err := conn.Exec("UPDATE assisted_applications SET revalidation_state = 'required', revalidated_at = NULL WHERE revalidation_state = 'current_page_review'"); err != nil {
+		return fmt.Errorf("reset obsolete assisted review state: %w", err)
+	}
 	return nil
 }
 
@@ -341,8 +347,10 @@ func actionForRevalidation(status, reason, state string) AssistedNextAction {
 	switch state {
 	case "captcha_confirmed":
 		return actionForLegacy(status, reason)
-	case "current_page_review":
-		return AssistedNextAction{"review_current_page", "Current page needs review", "The current public page did not show a CAPTCHA. Open it only to review the employer's current application flow.", "Open Current Page", true, false, false, false}
+	case "application_ready":
+		return AssistedNextAction{"open_verified_application", "Application ready", "The current page matches this role and shows an application entry point. Review it before providing any information or submitting.", "Open Verified Application", true, false, false, false}
+	case "unavailable":
+		return AssistedNextAction{"revalidate_current_page", "Current application is not ready", "The current page did not verify this role and an application entry point. No browser was opened.", "Check Current Page Again", false, false, false, false}
 	case "unreachable":
 		return AssistedNextAction{"revalidate_current_page", "Could not check current page", "The public employer page could not be checked. Try the safe check again later; no browser was opened.", "Check Current Page Again", false, false, false, false}
 	default:

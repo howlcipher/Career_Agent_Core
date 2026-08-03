@@ -3,7 +3,8 @@
 ## 2026-08-02 — Assisted Apply preserves safe human handoffs
 
 * **Improvement (#511):** The loopback dashboard now has a visible Assisted Apply queue for interrupted and legacy human handoffs. It uses private resumable plans, plain-language next actions, atomic browser leases, guarded visible Chromium sessions, validated per-job document access, explicit manual receipt confirmation, and sequential batch guidance. CAPTCHA challenges, credentials, legal questions, and employer acceptance remain human actions; nothing is marked applied merely because a browser opened or a button was clicked.
-* **Fix:** Historic Assisted Apply rows now require an explicit, guarded current-page check before they can be opened. The check does not launch Chromium, fill a form, or retain page content; it labels only a direct current challenge as a CAPTCHA and otherwise asks the user to review the current employer flow.
+* **Fix:** Historic Assisted Apply rows now require an explicit, guarded current-page check before they can be opened. The check does not launch Chromium, fill a form, or retain page content; it labels only a direct current challenge as a CAPTCHA and otherwise leaves the handoff non-launchable for a safe recheck.
+* **Fix (bug #512):** Assisted Apply now opens a revalidated employer page only for a direct CAPTCHA or when the page matches the stored role and exposes an application entry point. Blank, stale, mismatched, and unhydrated pages remain non-launchable and can be safely checked again.
 
 ## 2026-08-02 — Discovery degradation and dead DNS records no longer hide capacity loss
 
