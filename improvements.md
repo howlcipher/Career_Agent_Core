@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-02 queue-SLA and interface refresh.** #492 is Done: `DISCOVERED` jobs receive the existing urgency boost at seven days, expire through the agent's scheduled queue-cycle sweep at 30 days, and are bounded to 25 pending rows per identified discovery source. The implementation preserves the fit-ranking formula and records cap/expiry reasons in the funnel. Synthetic 0/1/7/14/30-day and admission-cap coverage passed; the baseline real-data p50/p90 (4.8/11.7 days) deliberately remains a future read-only observation after normal operation produces new attempts. The dashboard and GitHub Pages now share a restrained retro-industrial command-deck presentation. Remaining free Pending rows are #487, #472, and #473 (0.75), #485 (0.67), and #497 (0.5); no Pending bugs exist. Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.
+**2026-08-02 groom pass.** #487 is Done after a live 4B schema-reliability check and a bounded, opt-in read-only triage implementation. Re-verification confirms #472 and #473 still lack target-closed recovery in their security-code and Vision paths; #485 still has no shared inference scheduler; #497 still has no approved-answer store; and outcome data is still insufficient for #493. Scores remain #472/#473 0.75, #485 0.67, #497 0.5, #493 0.33 ⚠️, and #488 0.4 ⚠️. The Usability Gate remains MET and no journal is outstanding. Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
