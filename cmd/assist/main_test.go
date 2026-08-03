@@ -3,8 +3,11 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +92,114 @@ func TestContinueAssistedApplicationKeepsBrowserOpenForManualReview(t *testing.T
 func TestAssistedBrowserProfileDirRejectsEmptyCacheDirectory(t *testing.T) {
 	if _, err := assistedBrowserProfileDir(""); err == nil {
 		t.Fatal("expected empty cache directory to be rejected")
+	}
+}
+
+func TestAssistedBrowserLaunchOptionsSuppressAutomationSignals(t *testing.T) {
+	proxy := &playwright.Proxy{Server: "http://127.0.0.1:1234"}
+	options := assistedBrowserLaunchOptions(proxy)
+	if options.Proxy != proxy || options.Headless == nil || *options.Headless {
+		t.Fatalf("proxy/headless options = %+v", options)
+	}
+	if len(options.IgnoreDefaultArgs) != 1 || options.IgnoreDefaultArgs[0] != "--enable-automation" {
+		t.Fatalf("ignored default args = %#v", options.IgnoreDefaultArgs)
+	}
+	found := false
+	for _, argument := range options.Args {
+		if argument == "--disable-blink-features=AutomationControlled" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("launch args = %#v", options.Args)
+	}
+}
+
+func TestDirectAssistedBrowserArgumentsStartBlankBehindGuardedProxy(t *testing.T) {
+	arguments := directAssistedBrowserArguments(
+		"/private/profile",
+		"/private/extension",
+		"http://127.0.0.1:4321",
+	)
+	joined := strings.Join(arguments, "\n")
+	for _, required := range []string{
+		"--user-data-dir=/private/profile",
+		"--proxy-server=http://127.0.0.1:4321",
+		"--proxy-bypass-list=127.0.0.1;localhost",
+		"--disable-quic",
+		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+		"--disable-extensions-except=/private/extension",
+		"--load-extension=/private/extension",
+		"about:blank",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("browser arguments omit %q: %#v", required, arguments)
+		}
+	}
+}
+
+func TestWriteProxyAuthenticationExtensionUsesPrivateEphemeralCredentials(t *testing.T) {
+	guard := security.NewNetworkGuard()
+	proxy, err := guard.StartHTTPProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+
+	target := "https://apply.workable.com/example/j/ABC/apply/"
+	readyURL := "http://127.0.0.1:54321/ready/token"
+	extensionDir, err := writeProxyAuthenticationExtension(t.TempDir(), proxy, target, "Example Engineer", readyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(extensionDir)
+	info, err := os.Stat(extensionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != security.PrivateDirMode {
+		t.Fatalf("extension directory mode = %o", info.Mode().Perm())
+	}
+	background, err := os.ReadFile(filepath.Join(extensionDir, "background.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, _ := url.Parse(proxy.URL())
+	for _, expected := range []string{proxyURL.Hostname(), proxyURL.Port(), proxy.Username(), proxy.Password(), "details.isProxy", target, "example engineer", readyURL, "webNavigation.onCompleted"} {
+		if !strings.Contains(string(background), expected) {
+			t.Fatalf("proxy extension omits expected guarded value")
+		}
+	}
+	for _, name := range []string{"manifest.json", "background.js"} {
+		fileInfo, err := os.Stat(filepath.Join(extensionDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fileInfo.Mode().Perm() != security.PrivateFileMode {
+			t.Fatalf("%s mode = %o", name, fileInfo.Mode().Perm())
+		}
+	}
+}
+
+func TestDirectBrowserReadinessRequiresPrivateCompletionURL(t *testing.T) {
+	readyURL, ready, server, err := startDirectBrowserReadiness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	response, err := http.Get(readyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("readiness status = %d", response.StatusCode)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("readiness listener did not signal completion")
 	}
 }
 

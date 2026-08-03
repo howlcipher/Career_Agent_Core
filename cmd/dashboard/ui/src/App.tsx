@@ -269,7 +269,10 @@ function App() {
   }, []);
 
 	useEffect(() => {
-		if (showAssisted) fetchAssisted();
+		if (!showAssisted) return;
+		fetchAssisted();
+		const assistedInterval = setInterval(fetchAssisted, 2000);
+		return () => clearInterval(assistedInterval);
 	}, [showAssisted]);
 
   const handleStart = async () => {
@@ -322,13 +325,14 @@ function App() {
 		}
 	};
 
-	const launchAssisted = async (job: AssistedJob) => {
+	const launchAssisted = async (job: AssistedJob): Promise<boolean> => {
 		setActionError(null);
 		try {
 			const res = await fetch('/api/assisted/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job.id }) });
 			if (!res.ok) throw new Error('launch rejected');
 			await fetchAssisted();
-		} catch (e) { console.error(e); setActionError('Could not open the assisted application. It may already be active.'); }
+			return true;
+		} catch (e) { console.error(e); setActionError('Could not open the assisted application. Close any current assisted browser, then try again.'); return false; }
 	};
 
 	const revalidateAssisted = async (job: AssistedJob) => {
@@ -345,18 +349,21 @@ function App() {
 
 	const toggleSelected = (id: string) => setSelectedJobs((ids) => ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]);
 	const startSelected = async () => {
-		if (selectedJobs.length === 0) return;
+		if (selectedJobs.length === 0 || assistedBrowserOpen) return;
 		setBatchIndex(0); setStopAfterCurrent(false);
 		const first = assistedJobs.find((job) => job.id === selectedJobs[0]);
-		if (first) await launchAssisted(first);
+		if (!first || !await launchAssisted(first)) setBatchIndex(null);
 	};
 	const nextSelected = async () => {
 		if (batchIndex === null || stopAfterCurrent) { setBatchIndex(null); return; }
+		if (assistedBrowserOpen) {
+			setActionError('Close the current assisted browser before opening the next selected application.');
+			return;
+		}
 		const nextIndex = batchIndex + 1;
 		if (nextIndex >= selectedJobs.length) { setBatchIndex(null); return; }
-		setBatchIndex(nextIndex);
 		const next = assistedJobs.find((job) => job.id === selectedJobs[nextIndex]);
-		if (next) await launchAssisted(next);
+		if (next && await launchAssisted(next)) setBatchIndex(nextIndex);
 	};
 
 	const openDocument = (job: AssistedJob, kind: 'resume' | 'cover_letter') => {
@@ -457,7 +464,7 @@ function App() {
 			{showAssisted && (
 				<section className="assisted-queue" aria-labelledby="assisted-heading">
 					<div className="assisted-heading"><h2 id="assisted-heading">Assisted Apply</h2><button className="text-button" onClick={() => setShowAssisted(false)}>Return to dashboard</button></div>
-					{assistedJobs.length > 0 && <div className="batch-controls"><button className="btn btn-assisted" onClick={startSelected} disabled={selectedJobs.length === 0 || batchIndex !== null}>Start Selected Applications</button>{batchIndex !== null && <><span>Application {batchIndex + 1} of {selectedJobs.length}</span><button className="text-button" onClick={() => setStopAfterCurrent(true)}>Stop After This Application</button><button className="text-button" onClick={nextSelected}>Open Next Selected Application</button></>}</div>}
+					{assistedJobs.length > 0 && <div className="batch-controls"><button className="btn btn-assisted" onClick={startSelected} disabled={selectedJobs.length === 0 || batchIndex !== null || assistedBrowserOpen}>Start Selected Applications</button>{batchIndex !== null && <><span>Application {batchIndex + 1} of {selectedJobs.length}</span><button className="text-button" onClick={() => setStopAfterCurrent(true)}>Stop After This Application</button><button className="text-button" onClick={nextSelected} disabled={assistedBrowserOpen}>{assistedBrowserOpen ? 'Close Current Application First' : 'Open Next Selected Application'}</button></>}</div>}
 					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
 						<article className="assisted-job" key={job.id}>
 							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null || !job.next_action.requires_browser} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>

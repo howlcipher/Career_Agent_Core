@@ -1057,6 +1057,233 @@ func clickApplyIfPresent(page playwright.Page) {
 	page.WaitForTimeout(2000)
 }
 
+// AssistedDestination names the verified human-action surface reached by an
+// assisted browser. A public job description is deliberately not a
+// destination: the browser must expose a form, an account gate, or a CAPTCHA
+// before the dashboard reports that it opened successfully.
+type AssistedDestination string
+
+const (
+	AssistedDestinationApplication AssistedDestination = "application"
+	AssistedDestinationAccount     AssistedDestination = "account"
+	AssistedDestinationCaptcha     AssistedDestination = "captcha"
+)
+
+const assistedApplicationEntrySelector = "button:has-text('Apply now'), a:has-text('Apply now'), button:has-text('Apply for this job'), a:has-text('Apply for this job'), button:has-text(\"I'm interested\"), a:has-text(\"I'm interested\"), button:has-text('Apply'), a:has-text('Apply')"
+
+// ReachAssistedDestination advances a verified posting to the first actual
+// human-action surface. It never fills a field or clicks a submit control.
+// A successful Apply click is insufficient by itself: the resulting page
+// must structurally prove that a form, account gate, or CAPTCHA is present.
+func ReachAssistedDestination(page playwright.Page) (playwright.Page, AssistedDestination, error) {
+	postingPage := page
+	if destination := assistedDestination(page); destination != "" {
+		return page, destination, nil
+	}
+
+	browserContext := page.Context()
+	dismissCookieBanner(page)
+	entries := page.Locator(assistedApplicationEntrySelector)
+	count, err := entries.Count()
+	if err != nil {
+		return nil, "", fmt.Errorf("inspect application entry: %w", err)
+	}
+	if count == 0 {
+		return nil, "", errors.New("verified posting has no reachable application entry")
+	}
+	entry := firstVisibleLocator(entries, count)
+	href := assistedEntryHref(entry)
+	if href == "" {
+		href = workableAssistedEntryURL(page.URL())
+	}
+	if href != "" {
+		target, err := resolveAssistedEntryURL(page.URL(), href)
+		if err != nil {
+			return nil, "", err
+		}
+		page, err = navigateAssistedEntry(page, browserContext, target)
+		if err != nil {
+			return nil, "", err
+		}
+		log.Printf("[Assisted] Navigated a guarded tab to the application entry")
+	} else if err := entry.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(10000)}); err != nil {
+		return nil, "", fmt.Errorf("open application entry: %w", err)
+	} else {
+		log.Printf("[Assisted] Clicked an in-page application entry")
+	}
+
+	for range 20 {
+		if page.IsClosed() {
+			page = newestOpenAssistedPage(browserContext)
+			if page == nil {
+				return nil, "", errors.New("application entry closed its posting without opening a usable page")
+			}
+		} else {
+			page.WaitForTimeout(500)
+		}
+		if destination := assistedDestination(page); destination != "" {
+			if postingPage != page && !postingPage.IsClosed() {
+				_ = postingPage.Close()
+			}
+			return page, destination, nil
+		}
+	}
+	return nil, "", errors.New("application entry did not reveal a form, account gate, or CAPTCHA")
+}
+
+func navigateAssistedEntry(page playwright.Page, browserContext playwright.BrowserContext, target string) (playwright.Page, error) {
+	destinationPage := page
+	if browserContext != nil {
+		created, err := browserContext.NewPage()
+		if err != nil {
+			return nil, fmt.Errorf("create application destination page: %w", err)
+		}
+		destinationPage = created
+	}
+	if _, err := destinationPage.Goto(target, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
+		if destinationPage != page {
+			_ = destinationPage.Close()
+		}
+		return nil, fmt.Errorf("navigate to application entry: %w", err)
+	}
+	return destinationPage, nil
+}
+
+// AssistedApplicationEntryURL returns a deterministic application route when
+// the ATS publishes one in its posting URL. An empty result means the posting
+// must be inspected interactively to discover its application entry.
+func AssistedApplicationEntryURL(currentURL string) string {
+	return workableAssistedEntryURL(currentURL)
+}
+
+func workableAssistedEntryURL(currentURL string) string {
+	parsed, err := url.Parse(currentURL)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "apply.workable.com") {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) >= 4 && segments[len(segments)-1] == "apply" && segments[len(segments)-3] == "j" {
+		parsed.Path = "/" + strings.Join(segments, "/") + "/"
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return parsed.String()
+	}
+	if len(segments) < 3 || segments[len(segments)-2] != "j" || segments[len(segments)-1] == "" {
+		return ""
+	}
+	parsed.Path = "/" + strings.Join(segments, "/") + "/apply/"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func assistedEntryHref(entry playwright.Locator) string {
+	if href, err := entry.GetAttribute("href"); err == nil && strings.TrimSpace(href) != "" {
+		return strings.TrimSpace(href)
+	}
+	value, err := entry.Evaluate(`element => {
+		const anchor = element.closest('a[href]');
+		return anchor ? anchor.href : '';
+	}`, nil)
+	if err != nil {
+		return ""
+	}
+	href, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(href)
+}
+
+func resolveAssistedEntryURL(currentURL, href string) (string, error) {
+	base, err := url.Parse(currentURL)
+	if err != nil {
+		return "", errors.New("current assisted page URL is invalid")
+	}
+	reference, err := url.Parse(strings.TrimSpace(href))
+	if err != nil {
+		return "", errors.New("application entry URL is invalid")
+	}
+	target := base.ResolveReference(reference)
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return "", errors.New("application entry must use HTTP or HTTPS")
+	}
+	if target.Hostname() == "" {
+		return "", errors.New("application entry has no host")
+	}
+	return target.String(), nil
+}
+
+func newestOpenAssistedPage(browserContext playwright.BrowserContext) playwright.Page {
+	if browserContext == nil {
+		return nil
+	}
+	pages := browserContext.Pages()
+	for i := len(pages) - 1; i >= 0; i-- {
+		if pages[i] != nil && !pages[i].IsClosed() {
+			return pages[i]
+		}
+	}
+	created, err := browserContext.WaitForEvent("page", playwright.BrowserContextWaitForEventOptions{Timeout: playwright.Float(5000)})
+	if err != nil {
+		return nil
+	}
+	page, ok := created.(playwright.Page)
+	if ok && page != nil && !page.IsClosed() {
+		return page
+	}
+	return nil
+}
+
+func assistedDestination(page playwright.Page) AssistedDestination {
+	content, err := page.Content()
+	if err != nil {
+		return ""
+	}
+	if isCaptchaBlocked(page, content) {
+		return AssistedDestinationCaptcha
+	}
+	passwords := page.Locator("input[type='password']")
+	if visibleAssistedLocatorCount(passwords, 2) > 0 && looksLikeAuthWallContent(content) {
+		return AssistedDestinationAccount
+	}
+	strongFields := page.Locator("input[type='file'], input[type='email'], textarea")
+	if visibleAssistedLocatorCount(strongFields, 4) > 0 {
+		return AssistedDestinationApplication
+	}
+	fields := page.Locator("input:not([type='hidden']):not([type='search']), textarea, select")
+	if visibleAssistedLocatorCount(fields, 3) >= 2 {
+		return AssistedDestinationApplication
+	}
+	for _, frame := range page.Frames() {
+		if frame == page.MainFrame() {
+			continue
+		}
+		frameFields := frame.Locator("input:not([type='hidden']):not([type='search']), textarea, select")
+		if visibleAssistedLocatorCount(frameFields, 3) >= 2 {
+			return AssistedDestinationApplication
+		}
+	}
+	return ""
+}
+
+func visibleAssistedLocatorCount(locator playwright.Locator, limit int) int {
+	count, err := locator.Count()
+	if err != nil || count == 0 {
+		return 0
+	}
+	if count > limit {
+		count = limit
+	}
+	visible := 0
+	for i := 0; i < count; i++ {
+		if ok, err := locator.Nth(i).IsVisible(); err == nil && ok {
+			visible++
+		}
+	}
+	return visible
+}
+
 // resolveFillTarget picks the top-level page if it already contains form
 // inputs, otherwise scans child frames for the first one that does (the
 // common case for embedded-widget ATS platforms). Falls back to the page

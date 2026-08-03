@@ -190,9 +190,12 @@ asking you to start again.
 9. Submit when requested, then mark Applied only after the employer confirms receipt.
 
 The dashboard does not mark a browser launch successful until the visible Career
-Agent browser confirms that the expected employer page is open. If a browser
-process crashes, its lease becomes available again after a short heartbeat
-timeout. Once it is open, the dashboard exposes **I completed this step —
+Agent browser confirms that the expected employer action page is open. A public
+job description is not enough: Career Agent follows the Apply entry and waits
+for an application form, account gate, or CAPTCHA. Workable handoffs open their
+stable `/apply/` route in a guarded browser when that site rejects a
+Playwright-controlled tab. If a browser process crashes, its lease becomes
+available again after a short heartbeat timeout. Once it is open, the dashboard exposes **I completed this step —
 Continue**; the browser stays open while known fields are refilled so you can
 review and submit manually before confirming receipt. When running a compiled
 dashboard binary outside the checkout, keep `career_assist_bin` beside it;
@@ -215,7 +218,8 @@ whether a live browser exists or the session will be recreated, and offers
 only documents belonging to that job. CAPTCHA solving, password capture,
 legal attestations, and submission confirmation are intentionally left to
 you. Select multiple jobs for a sequential batch; the dashboard opens one
-application at a time and lets you stop after the current one.
+application at a time, keeps Next disabled until the current browser closes,
+and lets you stop after the current one.
 
 Follow these steps after the platform setup.
 

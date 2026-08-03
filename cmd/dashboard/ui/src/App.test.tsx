@@ -444,6 +444,55 @@ describe('Assisted Apply workflow', () => {
     expect(screen.getByRole('button', { name: /mark applied/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /continue/i })).not.toBeInTheDocument();
   });
+
+  it('waits for the current browser to close before enabling the next selected application', async () => {
+    vi.useFakeTimers();
+    try {
+      let assistedCalls = 0;
+      const launched: string[] = [];
+      const job = (id: string, company: string, live_browser: boolean) => ({
+        id, company, role: 'Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-03T12:00:00Z', resume_ready: false, cover_letter_ready: false, mapping_ready: false, completed_work: 'Job validated.', legacy: true, live_browser, assisted_attempt_count: 0, priority_reason: 'Ready', next_action: { code: 'open_verified_application', title: 'Application ready', instruction: 'Open it.', primary_button: 'Open Verified Application', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: false },
+      });
+      installFetch((input, init) => {
+        const url = String(input);
+        if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 2 }));
+        if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+        if (url === '/api/assisted') {
+          assistedCalls += 1;
+          return Promise.resolve(jsonResponse({ jobs: [
+            job('41', 'First Co', assistedCalls === 2),
+            job('42', 'Second Co', false),
+          ] }));
+        }
+        if (url === '/api/assisted/launch' && init?.method === 'POST') {
+          launched.push(JSON.parse(String(init.body)).job_id);
+          return Promise.resolve(jsonResponse({ status: 'open' }));
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      render(<App />);
+      await flush();
+      fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+      await flush();
+      for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+      fireEvent.click(screen.getByRole('button', { name: 'Start Selected Applications' }));
+      await flush();
+
+      expect(launched).toEqual(['41']);
+      expect(screen.getByRole('button', { name: 'Close Current Application First' })).toBeDisabled();
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await flush();
+      const nextButton = screen.getByRole('button', { name: 'Open Next Selected Application' });
+      expect(nextButton).toBeEnabled();
+      fireEvent.click(nextButton);
+      await flush();
+      expect(launched).toEqual(['41', '42']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('mission metrics (improvement #491)', () => {

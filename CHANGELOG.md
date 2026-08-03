@@ -1,5 +1,16 @@
 # Career Agent Core - Changelog
 
+## 2026-08-03 — Assisted Apply opens every selected application at its actionable destination
+
+* **Fix:** Sequential batches now poll the live browser lease, disable Next
+  until the current browser closes, and advance only after the next launch is
+  acknowledged. A failed or premature launch no longer skips a selected job.
+* **Fix:** Assisted browsers now follow the verified Apply entry and require an
+  application form, account gate, or CAPTCHA before reporting success. Workable
+  handoffs open the stable `/apply/` route in a guarded direct browser when the
+  site closes a Playwright-controlled tab; authenticated proxy enforcement,
+  role-title verification, and explicit human submission remain intact.
+
 ## 2026-08-03 — Assisted Apply continuation stays open through review
 
 * **Fix:** A live verified application now exposes Continue. Successful
