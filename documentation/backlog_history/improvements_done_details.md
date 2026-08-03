@@ -2,6 +2,14 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 472. Extend bug #467's target-closed browser recovery to the security-code resubmit click
+
+**Completed 2026-08-02.** The emailed security-code resubmit click now classifies Playwright target-closed errors and passes them to the existing shared recovery block. That block releases the crashed page/context, recreates the browser context once, and repeats the normal form flow without repeating document generation. Ordinary click failures still retain the established `ErrNeedsEmailVerification` handoff, while a second crash remains bounded and surfaces as an error instead of retrying indefinitely.
+
+Focused regression coverage guards the resubmit-to-recovery wiring and the existing post-click confirmation invariant. `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal`, and `git diff --check` passed in the closing verification. No production browser, mailbox, or application data was accessed.
+
+---
+
 ## 487. Lightweight 4B log triage and context compression
 
 **Completed 2026-08-02.** `cmd/logtriage` is an explicit opt-in, stdin-to-stdout, read-only utility backed by `internal/logtriage`. It applies deterministic email, phone, credential-shaped-value, and URL-query redaction before retaining any line or making an optional local-model request. It bounds input to 100 events and 500 bytes per event, caps model context/output and the call deadline, groups repeated deterministic failure classes, and emits a compact JSON packet with confidence and model/fallback provenance. Invalid, oversized, timed-out, or unavailable model responses return the deterministic packet rather than untrusted partial output.

@@ -3965,6 +3965,43 @@ func TestNoUnpolledPostClickConfirmationChecks(t *testing.T) {
 	}
 }
 
+// improvements.md #472: the email-code resubmit sits outside the normal
+// validation-resubmit statement that assigns execErr. Keep its target-closed
+// failure connected to the same bounded recovery label, or a future local
+// cleanup can silently turn a renderer crash back into NEEDS_EMAIL_VERIFICATION.
+func TestSecurityCodeResubmitTargetClosedUsesSharedRecovery(t *testing.T) {
+	src, err := os.ReadFile("browser.go")
+	if err != nil {
+		t.Fatalf("read browser.go: %v", err)
+	}
+
+	const resubmit = "Entered the emailed security code"
+	const recovery = "recoverTarget:"
+	text := string(src)
+	resubmitStart := strings.Index(text, resubmit)
+	if resubmitStart < 0 {
+		t.Fatalf("security-code resubmit marker %q not found", resubmit)
+	}
+	recoveryStart := strings.Index(text, recovery)
+	if recoveryStart < 0 {
+		t.Fatalf("shared target recovery label %q not found", recovery)
+	}
+	if recoveryStart < resubmitStart {
+		t.Fatalf("shared target recovery must follow the security-code resubmit")
+	}
+
+	resubmitBlock := text[resubmitStart:recoveryStart]
+	for _, want := range []string{
+		"isTargetClosedErr(clickErr)",
+		"execErr = clickErr",
+		"goto recoverTarget",
+	} {
+		if !strings.Contains(resubmitBlock, want) {
+			t.Errorf("security-code resubmit must route target-closed failures to shared recovery; missing %q", want)
+		}
+	}
+}
+
 // bugs.md #117: a single mailbox fetch misses a code that has been sent but not
 // yet indexed. Measured on ClickHouse: Greenhouse sent the code at 08:48:11 and
 // a fetch at 08:48:21 still returned nothing, so the agent concluded the submit

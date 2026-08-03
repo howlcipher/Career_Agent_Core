@@ -59,7 +59,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Done (2026-08-02) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #486 for the full account. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #492 for the full account. |
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #487 for the full account. |
-| 472 | [Extend bug #467's target-closed browser recovery to the security-code resubmit click](#472-extend-bug-467s-target-closed-browser-recovery-to-the-security-code-resubmit-click) | Pending | 0.75 = 3×0.5÷2 | standard | The one-time-code resubmit path still bypasses target-closed recovery. |
+| 472 | [Extend bug #467's target-closed browser recovery to the security-code resubmit click](#472-extend-bug-467s-target-closed-browser-recovery-to-the-security-code-resubmit-click) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #472 for the full account. |
 | 473 | [Extend bug #467's target-closed browser recovery to the Vision submission paths](#473-extend-bug-467s-target-closed-browser-recovery-to-the-vision-submission-paths) | Pending | 0.75 = 3×0.5÷2 | standard | Vision fallback still has no target-closed recovery of its own. |
 | 485 | [Resource-aware local inference admission control](#485-resource-aware-local-inference-admission-control) | Pending | 0.67 = 4×1.0÷6 | deep-reasoning | Existing one-model limit prevents OOM; contention remains an unobserved risk. |
 | 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | No data-driven approved-answer store exists; historic observed volume remains low. |
@@ -322,9 +322,7 @@ Two new tests in `pkg/submitter/browser_test.go` cover both branches, seeding a 
 
 ### 472. Extend bug #467's target-closed browser recovery to the security-code resubmit click
 
-**Found 2026-07-31** while fixing bug #467. The post-security-code resubmit click inside `AttemptSubmit`'s `parser.DetectSecurityCodeChallenge`/`emailedCode` branch clicks the submit control after filling an emailed one-time code, and on failure returns directly (`fmt.Errorf("%w: %s (code entered, no confirmation)", ErrNeedsEmailVerification, ...)`) rather than setting `execErr` — so it never reaches #467's recovery check, which only guards the loop's own `execErr`-setting sites. Narrower value than #471: this path only exists on ATS platforms that gate submission behind an emailed code, a smaller slice of traffic, and by this point in the flow the code itself has already been consumed (`waitForSecurityCode`'s 90-second budget is not free to repeat).
-
-**Fix direction:** either route this click's error through the same `execErr`/recovery machinery (requires restructuring this branch to fall through to the common post-loop check rather than returning early), or accept it as a smaller, standalone recovery given the code-reuse constraint — recovering here cannot simply re-click, since the code field must be re-entered against a fresh page and the code may no longer be valid for reuse depending on the ATS.
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #472.
 
 ### 473. Extend bug #467's target-closed browser recovery to the Vision submission paths
 

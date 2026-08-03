@@ -1710,6 +1710,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 								return nil
 							}
 							log.Printf("[Auto-Submit] Resubmit after the security code did not confirm for %s (%s)", companyName, reason)
+						} else if isTargetClosedErr(clickErr) {
+							// Improvement #472: this click happens outside the ordinary
+							// validation-resubmit path, but a renderer crash has the same
+							// remedy.  Hand it to the common, one-recreation recovery block
+							// below instead of misclassifying an already-entered code as an
+							// email-verification failure.
+							execErr = clickErr
+							goto recoverTarget
 						}
 					}
 				}
@@ -1851,6 +1859,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			}
 		}
 
+	recoverTarget:
 		// bugs.md #467: a crashed browser target (Playwright reports "target
 		// closed"; the same live session also logged a Chromium headless
 		// crash) leaves every later call against page/target failing the same

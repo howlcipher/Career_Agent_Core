@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Security-code resubmission survives one browser crash
+
+* **Improvement (#472):** If Playwright reports that its target closed while resubmitting an emailed security code, the submitter now follows the established one-context-recreation recovery path instead of immediately misclassifying the attempt as an email-verification failure. Recovery remains strictly bounded; a second target-closed failure surfaces normally.
+
 ## 2026-08-02 — Read-only local log triage has a privacy boundary
 
 * **Improvement (#487):** Added `cmd/logtriage`, an opt-in stdin-to-stdout utility for compact daemon context packets. It redacts common direct identifiers, credential-shaped values, and URL query strings before retaining or optionally sending any event to the local 4B model; caps events, lines, model context, output, and duration; validates model JSON; and falls back deterministically on any failure. It has no application, database, browser, email, filesystem, Git, or submission authority.
