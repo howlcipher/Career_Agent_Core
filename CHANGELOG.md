@@ -8,6 +8,10 @@
   records employer receipt. Compiled dashboards now resolve the checkout or a
   sibling `career_assist_bin` instead of silently failing when started outside
   the repository.
+* **Fix:** Missing documents, PII, or a usable form mapping no longer close the
+  browser immediately after Continue. The queue enters a truthful manual-review
+  state, keeps the verified employer page open, and offers explicit confirmation
+  without claiming that automatic refill succeeded.
 
 ## 2026-08-03 — Assisted Apply actions now acknowledge real browser state
 

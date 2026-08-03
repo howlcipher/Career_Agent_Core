@@ -200,6 +200,12 @@ otherwise start the dashboard from the repository so it can run
 `./cmd/assist` directly. Rebuild both binaries after upgrading Career Agent so
 the embedded UI and launch behavior match the source checkout.
 
+If prepared documents, PII, or a healthy form mapping are unavailable after
+Continue, the browser stays open and the card changes to **Complete application
+manually**. Finish the verified employer form in that browser, then mark it
+Applied only after the employer confirms receipt. Career Agent does not claim
+that fields were refilled when this fallback is active.
+
 Legacy `AWAITING_REVIEW`, `MANUAL_REQUIRED`, and `BLOCKED_CAPTCHA` jobs can
 be safely backfilled with `go run ./cmd/assist-migrate` (dry run) and
 `go run ./cmd/assist-migrate -confirm`. The migration preserves original

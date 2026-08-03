@@ -285,6 +285,22 @@ func RecordAssistedRefill(conn *sql.DB, jobID, owner string, now time.Time) erro
 	return nil
 }
 
+// RecordAssistedManualReview preserves a live browser when deterministic
+// refill cannot run. The user can still complete the verified employer form
+// manually, but the queue must not claim that documents or fields were ready.
+func RecordAssistedManualReview(conn *sql.DB, jobID, owner string, now time.Time) error {
+	result, err := conn.Exec(`UPDATE assisted_applications SET assisted_state = 'manual_review', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'continue_requested' AND lease_owner = ? AND lease_expires_at > ?`,
+		now.UTC(), jobID, owner, now.UTC())
+	if err != nil {
+		return fmt.Errorf("record assisted manual review: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted manual-review lease is no longer active")
+	}
+	return nil
+}
+
 func ReleaseAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) error {
 	result, err := conn.Exec(`UPDATE assisted_applications SET lease_owner = '', lease_expires_at = NULL,
 		assisted_state = CASE WHEN assisted_state = 'continue_requested' THEN 'waiting_human' ELSE assisted_state END,
@@ -413,6 +429,16 @@ func actionForReview() AssistedNextAction {
 		"Known fields were refilled in the visible browser. Review the form, complete any remaining human fields, and click Submit yourself. Then confirm that the employer received the application.",
 		"Assisted Application Open", true, true, true, false,
 	}
+}
+
+func actionForManualReview(liveBrowser bool) AssistedNextAction {
+	instruction := "Automatic refill could not complete. Reopen the verified application, fill the required fields, and submit it yourself. Confirm only after the employer reports that it was received."
+	button := "Reopen Verified Application"
+	if liveBrowser {
+		instruction = "Automatic refill could not complete. The verified application remains open. Fill the required fields and submit it yourself, then confirm only after the employer reports that it was received."
+		button = "Assisted Application Open"
+	}
+	return AssistedNextAction{"manual_review", "Complete application manually", instruction, button, true, false, true, false}
 }
 
 func supportedAssistedStatuses(statuses []string) ([]string, error) {
@@ -591,8 +617,12 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			v := int(fit.Int64)
 			job.FitScore = &v
 		}
+		now := time.Now().UTC()
+		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && parseAssistedTime(leaseUpdated.String).After(now.Add(-assistedLeaseHeartbeatTimeout))
 		if assistedState == "review_and_submit" {
 			job.NextAction = actionForReview()
+		} else if assistedState == "manual_review" {
+			job.NextAction = actionForManualReview(job.LiveBrowser)
 		} else {
 			job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
 		}
@@ -600,8 +630,6 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
 		job.PriorityReason = priorityReason(job.NextAction.Code)
-		now := time.Now().UTC()
-		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && parseAssistedTime(leaseUpdated.String).After(now.Add(-assistedLeaseHeartbeatTimeout))
 		if job.NextAction.Code == "open_verified_application" && job.LiveBrowser {
 			job.NextAction.CanContinue = true
 			job.NextAction.Instruction = "The verified application is open in the assisted browser. Complete the stated human step, then return here and click Continue."
