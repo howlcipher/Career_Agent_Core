@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -274,6 +275,59 @@ func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) 
 	}
 	if err := RequestAssistedContinue(GetDB(), id, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("continuation without live browser must fail")
+	}
+}
+
+func TestRecordAssistedManualReview_KeepsLiveBrowserAvailableForConfirmation(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Manual Review Co", "Engineer", "https://manual-review.example/jobs/1", "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Manual Review Co'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "owner", now); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := RequestAssistedContinue(GetDB(), id, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordAssistedManualReview(GetDB(), id, "other-owner", now.Add(2*time.Second)); err == nil {
+		t.Fatal("different owner advanced assisted plan")
+	}
+	if err := RecordAssistedManualReview(GetDB(), id, "owner", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if !job.LiveBrowser || job.NextAction.Code != "manual_review" || !job.NextAction.RequiresExplicitSubmit || job.NextAction.CanContinue {
+		t.Fatalf("manual review projection = %+v, live=%v", job.NextAction, job.LiveBrowser)
+	}
+	if job.NextAction.DocumentsReady {
+		t.Fatal("manual review must not claim unavailable documents are ready")
+	}
+	if err := ReleaseAssistedLease(GetDB(), id, "owner", now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err = GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = jobs[0]
+	if job.LiveBrowser || job.NextAction.PrimaryButton != "Reopen Verified Application" || strings.Contains(job.NextAction.Instruction, "remains open") {
+		t.Fatalf("closed manual review projection = %+v, live=%v", job.NextAction, job.LiveBrowser)
 	}
 }
 

@@ -25,6 +25,14 @@ import (
 	"github.com/mxschmitt/playwright-go"
 )
 
+var (
+	loadAssistedDocument       = storage.GetAssistedDocument
+	loadAssistedPII            = config.LoadPII
+	fillAssistedPage           = submitter.FillAssistedMappedPage
+	recordAssistedRefill       = storage.RecordAssistedRefill
+	recordAssistedManualReview = storage.RecordAssistedManualReview
+)
+
 func main() {
 	jobID := flag.String("job", "", "stable assisted job identifier")
 	databasePath := flag.String("db", storage.DefaultDatabasePath, "SQLite database path")
@@ -173,23 +181,42 @@ waitForSignal:
 	}
 
 continueFill:
-	resume, resumeErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "resume")
-	cover, coverErr := storage.GetAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
-	pii, piiErr := config.LoadPII("pii.yaml")
+	if !continueAssistedApplication(page, info, owner) {
+		return
+	}
+	goto waitForSignal
+}
+
+// continueAssistedApplication handles the deterministic refill attempt while
+// preserving the visible browser as the user's safe fallback. Returning true
+// means the browser must stay open; false means the lease transition itself
+// failed and the session can no longer be represented truthfully.
+func continueAssistedApplication(page playwright.Page, info storage.AssistedLaunchInfo, owner string) bool {
+	resume, resumeErr := loadAssistedDocument(storage.GetDB(), info.JobID, "resume")
+	cover, coverErr := loadAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
+	pii, piiErr := loadAssistedPII("pii.yaml")
 	if resumeErr != nil || coverErr != nil || piiErr != nil {
-		log.Print("Continuation requested. Documents or PII are unavailable, so the form remains ready for your review.")
-		return
+		if err := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+			log.Printf("Continuation inputs were unavailable and manual review could not be preserved: %v", err)
+			return false
+		}
+		log.Print("Continuation inputs are unavailable. The verified application remains open for manual completion and review.")
+		return true
 	}
-	if err := submitter.FillAssistedMappedPage(page, security.NewQuarantineLayer(), info.Company, info.URL, resume.Path, cover.Path, pii); err != nil {
-		log.Printf("Assisted refill stopped safely: %v", err)
-		return
+	if err := fillAssistedPage(page, security.NewQuarantineLayer(), info.Company, info.URL, resume.Path, cover.Path, pii); err != nil {
+		if stateErr := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); stateErr != nil {
+			log.Printf("Assisted refill stopped and manual review could not be preserved: %v", stateErr)
+			return false
+		}
+		log.Printf("Assisted refill stopped safely; the verified application remains open for manual completion: %v", err)
+		return true
 	}
-	if err := storage.RecordAssistedRefill(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+	if err := recordAssistedRefill(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
 		log.Printf("Assisted refill completed but could not preserve the review state: %v", err)
-		return
+		return false
 	}
 	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit. The browser remains open until you confirm the employer received the application or close it.")
-	goto waitForSignal
+	return true
 }
 
 // assistedPageTitleMatchesRole makes the browser handoff fail closed when an

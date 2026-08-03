@@ -424,6 +424,26 @@ describe('Assisted Apply workflow', () => {
     const waitingButton = screen.getByRole('button', { name: 'Finish Open Application First' });
     expect(waitingButton).toBeDisabled();
   });
+
+  it('shows a truthful manual completion action when automatic refill stops', async () => {
+    installFetch((input) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+        id: '43', company: 'Manual Co', role: 'Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-03T12:00:00Z', resume_ready: false, cover_letter_ready: false, mapping_ready: false, completed_work: 'Job validated.', legacy: true, live_browser: true, assisted_attempt_count: 1, priority_reason: 'Ready for the next human step', next_action: { code: 'manual_review', title: 'Complete application manually', instruction: 'Automatic refill could not complete. The verified application remains open.', primary_button: 'Assisted Application Open', requires_browser: true, documents_ready: false, requires_explicit_submit: true, can_continue: false },
+      }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+    expect(screen.getByText(/Automatic refill could not complete/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Assisted Application Open' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /mark applied/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /continue/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('mission metrics (improvement #491)', () => {
