@@ -1500,3 +1500,10 @@ SQLite receives idempotent `job_location` and `is_remote` columns without backfi
 # 483. Confirm whether zombie `career_agent_bin` processes need reaping
 
 **Closed 2026-08-01.** A fresh `ps` scan found no live or zombie `career_agent_bin` process. The previously observed zombies therefore did not persist as a process-table leak. No code or operational-documentation change is warranted from this one observation; reopen only if a future scan finds a zombie with a still-live parent that does not reap it.
+## 486. Safe local-model delegation harness
+
+**Completed 2026-08-02.** Added `cmd/localdelegate` and `internal/delegation`, a framework-independent, local-Ollama-only boundary for bounded repository work. Phase one accepts a sanitized brief up to 32 KiB and returns a strict proposal JSON document containing the finding, root cause, planned paths, implementation summary, success and failure tests, risks, questions, and readiness. Unknown fields, malformed or oversized responses, missing tests, unsafe paths, and obvious credential markers are rejected.
+
+Phase two requires the SHA-256 digest of the exact reviewed proposal plus a reviewer identifier. It can write only a candidate unified-diff artifact, validates that every path is in the reviewed proposal, and never applies that diff. The command contains no shell, Git, browser, email, production-database, application-data, or credential capability. It also refuses whenever the production agent lock is held, so background delegation yields to application work without a force override. Focused contract and command lock tests plus the full Go build, vet, test, formatting, and diff checks pass. Documentation in `README.md` and `documentation/local_delegation.md` records the operating contract and reviewer responsibilities.
+
+---

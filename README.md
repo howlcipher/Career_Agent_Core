@@ -488,3 +488,7 @@ go run ./cmd/modelbench -models qwen3:4b-instruct -reps 2   # benchmark one mode
 ```
 
 Like `cmd/rankjobs`, it shares the same local Ollama instance the agent uses, and it refuses to start while `cmd/agent`'s single-instance lock is held so it never competes with a live application attempt. See [`documentation/model_benchmark.md`](documentation/model_benchmark.md) for the full task set, how to interpret cold/warm timing and schema failures, and the current routing hypothesis.
+
+### Producing a reviewed local-model change proposal
+
+`cmd/localdelegate` is an intentionally narrow, local-Ollama-only delegation harness. It first produces a strict, bounded JSON investigation proposal. A second request can produce a candidate patch only after a reviewer supplies the digest of that exact proposal; the command validates the patch and writes it as an artifact, never applies it. It refuses to run while the production agent owns its lock, and has no shell, Git, browser, email, credentials, or application-database capability. See [`documentation/local_delegation.md`](documentation/local_delegation.md) for the two-phase workflow and safe usage.

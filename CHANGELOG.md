@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Local-model delegation now has a reviewed, default-deny boundary
+
+* **Improvement (#486):** Added `cmd/localdelegate` and a framework-independent contract for bounded local-Ollama delegation. The first phase accepts only a size-limited, sanitized brief and returns a strictly validated JSON proposal; unknown fields, sensitive paths, missing test plans, and obvious credential markers are rejected. A separate patch phase requires an explicit reviewer identifier and the SHA-256 digest of the exact reviewed proposal, accepts changes only for the reviewed file list, and writes a candidate diff artifact without applying it. The command cannot run tools, apply patches, access Git, credentials, browsers, email, application data, or the production database. Documentation records the two-phase workflow and the reviewer responsibilities.
+
 ## 2026-08-02 — Assisted Apply preserves safe human handoffs
 
 * **Improvement (#511):** The loopback dashboard now has a visible Assisted Apply queue for interrupted and legacy human handoffs. It uses private resumable plans, plain-language next actions, atomic browser leases, guarded visible Chromium sessions, validated per-job document access, explicit manual receipt confirmation, and sequential batch guidance. CAPTCHA challenges, credentials, legal questions, and employer acceptance remain human actions; nothing is marked applied merely because a browser opened or a button was clicked.
