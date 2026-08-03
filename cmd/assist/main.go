@@ -8,12 +8,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,14 +94,35 @@ func main() {
 		return
 	}
 	defer proxy.Close()
-	browserContext, err := pw.Chromium.LaunchPersistentContext(profileDir, playwright.BrowserTypeLaunchPersistentContextOptions{
-		Headless: playwright.Bool(false), Proxy: &playwright.Proxy{Server: proxy.URL(), Bypass: playwright.String("<-loopback>"), Username: playwright.String(proxy.Username()), Password: playwright.String(proxy.Password())},
-	})
+	if target := submitter.AssistedApplicationEntryURL(info.URL); target != "" {
+		executable, commandPrefix, directProfileDir, err := assistedDirectBrowserLaunch(pw.Chromium.ExecutablePath(), profileDir)
+		if err != nil {
+			log.Printf("prepare direct assisted browser: %v", err)
+			return
+		}
+		if err := runDirectAssistedBrowser(executable, commandPrefix, directProfileDir, target, proxy, info, owner); err != nil {
+			log.Printf("open exact assisted destination: %v", err)
+		}
+		return
+	}
+	browserProxy := &playwright.Proxy{Server: proxy.URL(), Bypass: playwright.String("<-loopback>"), Username: playwright.String(proxy.Username()), Password: playwright.String(proxy.Password())}
+	browserContext, err := pw.Chromium.LaunchPersistentContext(profileDir, assistedBrowserLaunchOptions(browserProxy))
 	if err != nil {
 		log.Printf("launch visible assisted browser: %v", err)
 		return
 	}
 	defer browserContext.Close()
+	if err := browserContext.AddInitScript(playwright.Script{
+		Content: playwright.String(`
+			Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+			window.chrome = { runtime: {} };
+			Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+			Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+		`),
+	}); err != nil {
+		log.Printf("install assisted browser compatibility script: %v", err)
+		return
+	}
 	pages := browserContext.Pages()
 	var page playwright.Page
 	if len(pages) > 0 {
@@ -106,15 +134,7 @@ func main() {
 			return
 		}
 	}
-	if err := page.Route("**/*", func(route playwright.Route) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := guard.ValidateURL(ctx, route.Request().URL()); err != nil {
-			_ = route.Abort("accessdenied")
-			return
-		}
-		_ = route.Continue()
-	}); err != nil {
+	if err := installAssistedContextGuard(browserContext, guard); err != nil {
 		log.Printf("install browser network guard: %v", err)
 		return
 	}
@@ -139,11 +159,19 @@ func main() {
 		log.Printf("refusing assisted application page whose title %q does not match expected role %q", title, info.Role)
 		return
 	}
+	destinationPage, destination, err := submitter.ReachAssistedDestination(page)
+	if err != nil {
+		log.Printf("open exact assisted destination: %v", err)
+		return
+	}
+	if destinationPage != page {
+		page = destinationPage
+	}
 	if page.IsClosed() {
 		log.Print("open assisted application: browser page closed before it became usable")
 		return
 	}
-	log.Print("Assisted application is open. Complete the stated human step, then return to the dashboard and click Continue. Closing this browser releases the assisted lease.")
+	log.Printf("Assisted application is open. Verified destination: %s. Complete the stated human step, then return to the dashboard and click Continue. Closing this browser releases the assisted lease.", destination)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -185,6 +213,309 @@ continueFill:
 		return
 	}
 	goto waitForSignal
+}
+
+type directAssistedBrowser struct {
+	command      *exec.Cmd
+	done         chan error
+	ready        chan struct{}
+	readyServer  *http.Server
+	extensionDir string
+	profileDir   string
+}
+
+func runDirectAssistedBrowser(executable string, commandPrefix []string, profileDir, target string, proxy *security.HTTPProxy, info storage.AssistedLaunchInfo, owner string) error {
+	browser, err := launchDirectAssistedBrowser(executable, commandPrefix, profileDir+"-direct", target, info.Role, proxy)
+	if err != nil {
+		return err
+	}
+	defer browser.close()
+
+	select {
+	case err := <-browser.done:
+		if err == nil {
+			return errors.New("direct assisted browser exited before it became usable")
+		}
+		return fmt.Errorf("direct assisted browser exited before it became usable: %w", err)
+	case <-browser.ready:
+		_ = browser.readyServer.Close()
+	case <-time.After(30 * time.Second):
+		return errors.New("direct assisted browser did not complete the verified destination")
+	}
+	log.Print("Assisted application is open. Verified destination: application. Complete the stated human step, then return to the dashboard and click Continue. Closing this browser releases the assisted lease.")
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-signals:
+			log.Print("Assisted application stopped; releasing its lease.")
+			return nil
+		case err := <-browser.done:
+			log.Printf("Assisted browser closed; releasing its lease: %v", err)
+			return nil
+		case <-ticker.C:
+			if err := storage.RenewAssistedLease(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+				return fmt.Errorf("assisted browser lease expired: %w", err)
+			}
+			var state string
+			if err := storage.GetDB().QueryRow("SELECT assisted_state FROM assisted_applications WHERE job_id = ?", info.JobID).Scan(&state); err != nil {
+				return fmt.Errorf("read assisted browser state: %w", err)
+			}
+			switch state {
+			case "completed":
+				log.Print("Assisted application was confirmed; closing the browser.")
+				return nil
+			case "continue_requested":
+				if err := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+					return fmt.Errorf("preserve direct assisted manual review: %w", err)
+				}
+				log.Print("The application remains open for manual completion and review. Career Agent will not click Submit.")
+			}
+		}
+	}
+}
+
+func launchDirectAssistedBrowser(executable string, commandPrefix []string, profileDir, target, role string, proxy *security.HTTPProxy) (*directAssistedBrowser, error) {
+	if strings.TrimSpace(executable) == "" {
+		return nil, fmt.Errorf("Chromium executable is empty")
+	}
+	if proxy == nil {
+		return nil, fmt.Errorf("browser security proxy is nil")
+	}
+	targetURL, err := url.Parse(target)
+	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Hostname() == "" {
+		return nil, fmt.Errorf("assisted destination URL is invalid")
+	}
+	profileDir, err = os.MkdirTemp(filepath.Dir(profileDir), "assisted-direct-profile-")
+	if err != nil {
+		return nil, fmt.Errorf("prepare direct browser profile: %w", err)
+	}
+	if err := os.Chmod(profileDir, security.PrivateDirMode); err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, fmt.Errorf("secure direct browser profile: %w", err)
+	}
+	readyURL, ready, readyServer, err := startDirectBrowserReadiness()
+	if err != nil {
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	extensionDir, err := writeProxyAuthenticationExtension(filepath.Dir(profileDir), proxy, target, role, readyURL)
+	if err != nil {
+		_ = readyServer.Close()
+		_ = os.RemoveAll(profileDir)
+		return nil, err
+	}
+	arguments := directAssistedBrowserArguments(profileDir, extensionDir, proxy.URL())
+	arguments = append(append([]string{}, commandPrefix...), arguments...)
+	command := exec.Command(executable, arguments...)
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		_ = readyServer.Close()
+		_ = os.RemoveAll(extensionDir)
+		_ = os.RemoveAll(profileDir)
+		return nil, fmt.Errorf("launch direct assisted browser: %w", err)
+	}
+	browser := &directAssistedBrowser{command: command, done: make(chan error, 1), ready: ready, readyServer: readyServer, extensionDir: extensionDir, profileDir: profileDir}
+	go func() { browser.done <- command.Wait() }()
+	return browser, nil
+}
+
+func startDirectBrowserReadiness() (string, chan struct{}, *http.Server, error) {
+	token, err := randomOwner()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("start direct browser readiness listener: %w", err)
+	}
+	ready := make(chan struct{})
+	path := "/ready/" + token
+	server := &http.Server{ReadHeaderTimeout: 2 * time.Second}
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(responseWriter http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			http.Error(responseWriter, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		select {
+		case <-ready:
+		default:
+			close(ready)
+		}
+		responseWriter.WriteHeader(http.StatusNoContent)
+	})
+	server.Handler = mux
+	go func() { _ = server.Serve(listener) }()
+	return "http://" + listener.Addr().String() + path, ready, server, nil
+}
+
+func assistedDirectBrowserLaunch(playwrightExecutable, profileDir string) (string, []string, string, error) {
+	if flatpak, err := exec.LookPath("flatpak"); err == nil {
+		if commandErr := exec.Command(flatpak, "info", "com.google.Chrome").Run(); commandErr == nil {
+			homeDir, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return "", nil, "", homeErr
+			}
+			root := filepath.Join(homeDir, ".var", "app", "com.google.Chrome", "cache", "career-agent")
+			if err := ensurePrivateDirectory(root); err != nil {
+				return "", nil, "", err
+			}
+			browserRoot := filepath.Dir(filepath.Dir(playwrightExecutable))
+			prefix := []string{
+				"run",
+				"--filesystem=" + browserRoot + ":ro",
+				"--command=" + playwrightExecutable,
+				"com.google.Chrome",
+				// Chrome for Testing cannot create its inner user-namespace
+				// sandbox from inside Flatpak. The outer Flatpak sandbox remains
+				// active and grants only network, display, and the read-only
+				// browser bundle needed for this process.
+				"--no-sandbox",
+			}
+			return flatpak, prefix, filepath.Join(root, "assisted-browser-profile-direct"), nil
+		}
+	}
+	for _, name := range []string{"chromium", "chromium-browser"} {
+		if candidate, err := exec.LookPath(name); err == nil {
+			return candidate, nil, profileDir, nil
+		}
+	}
+	return playwrightExecutable, nil, profileDir, nil
+}
+
+func directAssistedBrowserArguments(profileDir, extensionDir, proxyURL string) []string {
+	return []string{
+		"--user-data-dir=" + profileDir,
+		"--proxy-server=" + proxyURL,
+		"--proxy-bypass-list=127.0.0.1;localhost",
+		"--disable-quic",
+		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+		"--disable-extensions-except=" + extensionDir,
+		"--load-extension=" + extensionDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+}
+
+func writeProxyAuthenticationExtension(parentDir string, proxy *security.HTTPProxy, target, role, readyURL string) (string, error) {
+	proxyURL, err := url.Parse(proxy.URL())
+	if err != nil || proxyURL.Hostname() == "" {
+		return "", fmt.Errorf("browser security proxy URL is invalid")
+	}
+	port, err := strconv.Atoi(proxyURL.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", fmt.Errorf("browser security proxy port is invalid")
+	}
+	extensionDir, err := os.MkdirTemp(parentDir, "assisted-proxy-auth-")
+	if err != nil {
+		return "", fmt.Errorf("create private proxy extension: %w", err)
+	}
+	if err := os.Chmod(extensionDir, security.PrivateDirMode); err != nil {
+		_ = os.RemoveAll(extensionDir)
+		return "", err
+	}
+	manifest := map[string]any{
+		"manifest_version": 3,
+		"name":             "Career Agent guarded proxy",
+		"version":          "1.0.0",
+		"permissions":      []string{"proxy", "tabs", "webNavigation", "webRequest", "webRequestAuthProvider"},
+		"host_permissions": []string{"<all_urls>"},
+		"background":       map[string]string{"service_worker": "background.js"},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		_ = os.RemoveAll(extensionDir)
+		return "", err
+	}
+	hostJSON, _ := json.Marshal(proxyURL.Hostname())
+	usernameJSON, _ := json.Marshal(proxy.Username())
+	passwordJSON, _ := json.Marshal(proxy.Password())
+	targetJSON, _ := json.Marshal(target)
+	roleJSON, _ := json.Marshal(normalizeAssistedTitle(role))
+	readyURLJSON, _ := json.Marshal(readyURL)
+	background := fmt.Sprintf(`const config = {mode: 'fixed_servers', rules: {singleProxy: {scheme: 'http', host: %s, port: %d}, bypassList: ['127.0.0.1', 'localhost']}};
+chrome.webRequest.onAuthRequired.addListener(
+  details => details.isProxy ? {authCredentials: {username: %s, password: %s}} : {},
+  {urls: ['<all_urls>']},
+  ['blocking']
+);
+chrome.proxy.settings.set({value: config, scope: 'regular'}, () => {
+  chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+    if (tabs.length > 0) chrome.tabs.update(tabs[0].id, {url: %s});
+  });
+});
+chrome.webNavigation.onCompleted.addListener(details => {
+  if (details.frameId !== 0 || !details.url.startsWith(%s)) return;
+  chrome.tabs.get(details.tabId, tab => {
+    const title = (tab.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if ((' ' + title + ' ').includes(' ' + %s + ' ')) fetch(%s);
+  });
+});
+`, hostJSON, port, usernameJSON, passwordJSON, targetJSON, targetJSON, roleJSON, readyURLJSON)
+	for name, contents := range map[string][]byte{"manifest.json": manifestBytes, "background.js": []byte(background)} {
+		if err := os.WriteFile(filepath.Join(extensionDir, name), contents, security.PrivateFileMode); err != nil {
+			_ = os.RemoveAll(extensionDir)
+			return "", fmt.Errorf("write private proxy extension: %w", err)
+		}
+	}
+	return extensionDir, nil
+}
+
+func (browser *directAssistedBrowser) close() {
+	if browser == nil {
+		return
+	}
+	if browser.command != nil && browser.command.Process != nil {
+		_ = browser.command.Process.Signal(syscall.SIGTERM)
+	}
+	select {
+	case <-browser.done:
+	case <-time.After(2 * time.Second):
+		if browser.command != nil && browser.command.Process != nil {
+			_ = browser.command.Process.Kill()
+		}
+		select {
+		case <-browser.done:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if browser.readyServer != nil {
+		_ = browser.readyServer.Close()
+	}
+	if browser.extensionDir != "" {
+		_ = os.RemoveAll(browser.extensionDir)
+	}
+	if browser.profileDir != "" {
+		_ = os.RemoveAll(browser.profileDir)
+	}
+}
+
+func assistedBrowserLaunchOptions(proxy *playwright.Proxy) playwright.BrowserTypeLaunchPersistentContextOptions {
+	return playwright.BrowserTypeLaunchPersistentContextOptions{
+		Headless:          playwright.Bool(false),
+		Proxy:             proxy,
+		Args:              []string{"--disable-blink-features=AutomationControlled"},
+		IgnoreDefaultArgs: []string{"--enable-automation"},
+	}
+}
+
+func installAssistedContextGuard(browserContext playwright.BrowserContext, guard *security.NetworkGuard) error {
+	return browserContext.Route("**/*", func(route playwright.Route) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := guard.ValidateURL(ctx, route.Request().URL()); err != nil {
+			_ = route.Abort("accessdenied")
+			return
+		}
+		_ = route.Continue()
+	})
 }
 
 // continueAssistedApplication handles the deterministic refill attempt while

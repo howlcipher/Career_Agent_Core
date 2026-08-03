@@ -173,7 +173,8 @@ type MockPage struct {
 	// closed records whether Close was called on this specific page, so a
 	// test can assert a crashed page was actually released rather than just
 	// abandoned in favor of a new one (bugs.md #467's recovery path).
-	closed bool
+	closed  bool
+	context playwright.BrowserContext
 }
 
 func (m *MockPage) Evaluate(expression string, arg ...interface{}) (interface{}, error) {
@@ -183,10 +184,11 @@ func (m *MockPage) Evaluate(expression string, arg ...interface{}) (interface{},
 	return nil, nil
 }
 
-func (m *MockPage) MainFrame() playwright.Frame { return m.mainFrame }
-func (m *MockPage) Frames() []playwright.Frame  { return m.frames }
-func (m *MockPage) URL() string                 { return m.urlValue }
-func (m *MockPage) Content() (string, error)    { return m.contentValue, nil }
+func (m *MockPage) MainFrame() playwright.Frame        { return m.mainFrame }
+func (m *MockPage) Frames() []playwright.Frame         { return m.frames }
+func (m *MockPage) URL() string                        { return m.urlValue }
+func (m *MockPage) Content() (string, error)           { return m.contentValue, nil }
+func (m *MockPage) Context() playwright.BrowserContext { return m.context }
 func (m *MockPage) WaitForLoadState(options ...playwright.PageWaitForLoadStateOptions) error {
 	return nil
 }
@@ -240,6 +242,7 @@ func (m *MockPage) Close(options ...playwright.PageCloseOptions) error {
 	m.closed = true
 	return nil
 }
+func (m *MockPage) IsClosed() bool { return m.closed }
 func (m *MockPage) Screenshot(options ...playwright.PageScreenshotOptions) ([]byte, error) {
 	if m.screenshotFunc != nil {
 		return m.screenshotFunc()
@@ -290,7 +293,8 @@ type MockLocator struct {
 	pressFunc func(key string) error
 	// typeFunc backs the real keystrokes an autocomplete needs to open and
 	// filter its menu (bugs.md #78).
-	typeFunc func(text string) error
+	typeFunc         func(text string) error
+	getAttributeFunc func(name string) (string, error)
 }
 
 func (m *MockLocator) Type(text string, options ...playwright.LocatorTypeOptions) error {
@@ -305,6 +309,13 @@ func (m *MockLocator) Press(key string, options ...playwright.LocatorPressOption
 		return m.pressFunc(key)
 	}
 	return nil
+}
+
+func (m *MockLocator) GetAttribute(name string, options ...playwright.LocatorGetAttributeOptions) (string, error) {
+	if m.getAttributeFunc != nil {
+		return m.getAttributeFunc(name)
+	}
+	return "", nil
 }
 
 func (m *MockLocator) First() playwright.Locator { return m }
@@ -837,6 +848,290 @@ func TestClickApplyIfPresent_ClicksWhenFound(t *testing.T) {
 	}
 }
 
+func TestReachAssistedDestination_ClicksApplyAndRequiresApplicationSurface(t *testing.T) {
+	phase := "posting"
+	applyLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	fieldLocator := &MockLocator{countFunc: func() (int, error) {
+		if phase == "application" {
+			return 3, nil
+		}
+		return 0, nil
+	}}
+	applyLocator.clickFunc = func(options ...playwright.LocatorClickOptions) error {
+		phase = "application"
+		return nil
+	}
+	page := &MockPage{
+		contentValue: "<html><title>Engineer</title><body>Job description</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			switch {
+			case strings.Contains(selector, "Apply") || strings.Contains(selector, "interested"):
+				return applyLocator
+			case strings.Contains(selector, "input") || strings.Contains(selector, "textarea") || strings.Contains(selector, "select"):
+				return fieldLocator
+			default:
+				return emptyLocator
+			}
+		},
+	}
+
+	_, destination, err := ReachAssistedDestination(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != AssistedDestinationApplication || applyLocator.clickCalls != 1 {
+		t.Fatalf("destination=%q apply clicks=%d", destination, applyLocator.clickCalls)
+	}
+}
+
+func TestReachAssistedDestination_RejectsPostingWithoutReachableApplication(t *testing.T) {
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	page := &MockPage{
+		contentValue: "<html><title>Engineer</title><body>Job description only</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return emptyLocator
+		},
+	}
+	if _, _, err := ReachAssistedDestination(page); err == nil {
+		t.Fatal("posting page without an application entry was accepted")
+	}
+}
+
+func TestReachAssistedDestination_AcceptsCaptchaWithoutClickingApply(t *testing.T) {
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	page := &MockPage{
+		contentValue: "<html><body>Please verify you are human before continuing.</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return emptyLocator
+		},
+	}
+	_, destination, err := ReachAssistedDestination(page)
+	if err != nil || destination != AssistedDestinationCaptcha {
+		t.Fatalf("destination=%q err=%v", destination, err)
+	}
+}
+
+func TestReachAssistedDestination_RejectsApplyClickThatStaysOnPosting(t *testing.T) {
+	applyLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	page := &MockPage{
+		contentValue: "<html><title>Engineer</title><body>Job description only</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "Apply") || strings.Contains(selector, "interested") {
+				return applyLocator
+			}
+			return emptyLocator
+		},
+	}
+	if _, _, err := ReachAssistedDestination(page); err == nil {
+		t.Fatal("Apply click without a resulting form, account gate, or CAPTCHA was accepted")
+	}
+}
+
+type MockBrowserContext struct {
+	playwright.BrowserContext
+	pages   []playwright.Page
+	newPage playwright.Page
+}
+
+func (m *MockBrowserContext) Pages() []playwright.Page { return m.pages }
+func (m *MockBrowserContext) NewPage() (playwright.Page, error) {
+	return m.newPage, nil
+}
+
+func TestReachAssistedDestination_AdoptsApplicationPopup(t *testing.T) {
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	applicationFields := &MockLocator{countFunc: func() (int, error) { return 3, nil }}
+	replacement := &MockPage{
+		contentValue: "<html><body><form><input name='first'><input name='last'><input type='email'></form></body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "input") || strings.Contains(selector, "textarea") || strings.Contains(selector, "select") {
+				return applicationFields
+			}
+			return emptyLocator
+		},
+	}
+	context := &MockBrowserContext{pages: []playwright.Page{replacement}}
+	applyLocator := &MockLocator{countFunc: func() (int, error) { return 1, nil }}
+	posting := &MockPage{
+		contentValue: "<html><body>Job description</body></html>",
+		context:      context,
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "Apply") || strings.Contains(selector, "interested") {
+				return applyLocator
+			}
+			return emptyLocator
+		},
+	}
+	applyLocator.clickFunc = func(options ...playwright.LocatorClickOptions) error {
+		posting.closed = true
+		return nil
+	}
+
+	activePage, destination, err := ReachAssistedDestination(posting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activePage != playwright.Page(replacement) || destination != AssistedDestinationApplication {
+		t.Fatalf("page=%T destination=%q", activePage, destination)
+	}
+}
+
+func TestReachAssistedDestination_NavigatesApplyHrefInGuardedPage(t *testing.T) {
+	phase := "posting"
+	applyLocator := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		getAttributeFunc: func(name string) (string, error) {
+			if name == "href" {
+				return "/jobs/1/apply/", nil
+			}
+			return "", nil
+		},
+	}
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	fieldLocator := &MockLocator{countFunc: func() (int, error) {
+		if phase == "application" {
+			return 3, nil
+		}
+		return 0, nil
+	}}
+	var navigated string
+	page := &MockPage{
+		urlValue:     "https://jobs.example/jobs/1",
+		contentValue: "<html><body>Job description</body></html>",
+		gotoFunc: func(target string, options ...playwright.PageGotoOptions) (playwright.Response, error) {
+			navigated = target
+			phase = "application"
+			return nil, nil
+		},
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			switch {
+			case strings.Contains(selector, "Apply") || strings.Contains(selector, "interested"):
+				return applyLocator
+			case strings.Contains(selector, "input") || strings.Contains(selector, "textarea") || strings.Contains(selector, "select"):
+				return fieldLocator
+			default:
+				return emptyLocator
+			}
+		},
+	}
+	_, destination, err := ReachAssistedDestination(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if navigated != "https://jobs.example/jobs/1/apply/" || destination != AssistedDestinationApplication || applyLocator.clickCalls != 0 {
+		t.Fatalf("navigated=%q destination=%q clickCalls=%d", navigated, destination, applyLocator.clickCalls)
+	}
+}
+
+func TestReachAssistedDestination_UsesAncestorApplicationHref(t *testing.T) {
+	phase := "posting"
+	applyLocator := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expression string) (interface{}, error) {
+			return "https://jobs.example/jobs/2/apply/", nil
+		},
+	}
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	fieldLocator := &MockLocator{countFunc: func() (int, error) {
+		if phase == "application" {
+			return 3, nil
+		}
+		return 0, nil
+	}}
+	var navigated string
+	page := &MockPage{
+		urlValue:     "https://jobs.example/jobs/2",
+		contentValue: "<html><body>Job description</body></html>",
+		gotoFunc: func(target string, options ...playwright.PageGotoOptions) (playwright.Response, error) {
+			navigated = target
+			phase = "application"
+			return nil, nil
+		},
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "Apply") || strings.Contains(selector, "interested") {
+				return applyLocator
+			}
+			if strings.Contains(selector, "input") || strings.Contains(selector, "textarea") || strings.Contains(selector, "select") {
+				return fieldLocator
+			}
+			return emptyLocator
+		},
+	}
+	_, destination, err := ReachAssistedDestination(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if navigated != "https://jobs.example/jobs/2/apply/" || destination != AssistedDestinationApplication || applyLocator.clickCalls != 0 {
+		t.Fatalf("navigated=%q destination=%q clickCalls=%d", navigated, destination, applyLocator.clickCalls)
+	}
+}
+
+func TestWorkableAssistedEntryURL(t *testing.T) {
+	tests := []struct {
+		current string
+		want    string
+	}{
+		{"https://apply.workable.com/koin-limited/j/0BA83F6D6F", "https://apply.workable.com/koin-limited/j/0BA83F6D6F/apply/"},
+		{"https://apply.workable.com/webook/j/B73794CB19/", "https://apply.workable.com/webook/j/B73794CB19/apply/"},
+		{"https://apply.workable.com/webook/j/B73794CB19/apply/", "https://apply.workable.com/webook/j/B73794CB19/apply/"},
+		{"https://jobs.example/jobs/1", ""},
+		{"https://apply.workable.com/company", ""},
+	}
+	for _, test := range tests {
+		if got := workableAssistedEntryURL(test.current); got != test.want {
+			t.Errorf("workableAssistedEntryURL(%q) = %q, want %q", test.current, got, test.want)
+		}
+	}
+}
+
+func TestReachAssistedDestination_NavigatesEntryInFreshContextPage(t *testing.T) {
+	phase := "posting"
+	applyLocator := &MockLocator{
+		countFunc:        func() (int, error) { return 1, nil },
+		getAttributeFunc: func(string) (string, error) { return "/jobs/3/apply/", nil },
+	}
+	emptyLocator := &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+	applicationFields := &MockLocator{countFunc: func() (int, error) {
+		if phase == "application" {
+			return 3, nil
+		}
+		return 0, nil
+	}}
+	destinationPage := &MockPage{
+		gotoFunc: func(target string, options ...playwright.PageGotoOptions) (playwright.Response, error) {
+			phase = "application"
+			return nil, nil
+		},
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "input") || strings.Contains(selector, "textarea") || strings.Contains(selector, "select") {
+				return applicationFields
+			}
+			return emptyLocator
+		},
+	}
+	context := &MockBrowserContext{newPage: destinationPage}
+	posting := &MockPage{
+		urlValue:     "https://jobs.example/jobs/3",
+		contentValue: "<html><body>Job description</body></html>",
+		context:      context,
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			if strings.Contains(selector, "Apply") || strings.Contains(selector, "interested") {
+				return applyLocator
+			}
+			return emptyLocator
+		},
+	}
+	activePage, destination, err := ReachAssistedDestination(posting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activePage != playwright.Page(destinationPage) || destination != AssistedDestinationApplication || !posting.closed {
+		t.Fatalf("active=%T destination=%q postingClosed=%v", activePage, destination, posting.closed)
+	}
+}
+
 func TestSafeFill_Empty(t *testing.T) {
 	mockPage := &MockPage{}
 	target := pageTarget{mockPage}
@@ -1129,6 +1424,20 @@ func TestIsCaptchaBlocked_GenuineInterstitialWithFewMainFields(t *testing.T) {
 
 	if !isCaptchaBlocked(mockPage, "") {
 		t.Error("expected a page with zero real fields and a challenge-host frame to be treated as blocked")
+	}
+}
+
+func TestIsCaptchaBlocked_CloudflareTurnstileInterstitial(t *testing.T) {
+	mockPage := &MockPage{
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{countFunc: func() (int, error) { return 0, nil }}
+		},
+		frames: []playwright.Frame{
+			&MockFrame{url: "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/example"},
+		},
+	}
+	if !isCaptchaBlocked(mockPage, "") {
+		t.Fatal("Cloudflare Turnstile application gate was not classified as CAPTCHA")
 	}
 }
 
