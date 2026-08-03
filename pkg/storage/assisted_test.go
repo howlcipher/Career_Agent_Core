@@ -118,6 +118,42 @@ func TestAssistedRevalidationGuidesBrowserLaunchAndPersistsSafeOutcome(t *testin
 	}
 }
 
+func TestAssistedQueueExposesContinueAndReviewAfterRefill(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Live Handoff Co", "Engineer", "https://live.example/jobs/1", "MANUAL_REQUIRED"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Live Handoff Co'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordAssistedRevalidation(GetDB(), id, "application_ready", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "owner", now); err != nil || !claimed {
+		t.Fatalf("claim live handoff: claimed=%v err=%v", claimed, err)
+	}
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil || len(jobs) != 1 || !jobs[0].NextAction.CanContinue || !jobs[0].LiveBrowser {
+		t.Fatalf("live handoff action = %#v, err=%v", jobs, err)
+	}
+	if err := RequestAssistedContinue(GetDB(), id, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordAssistedRefill(GetDB(), id, "owner", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err = GetAssistedQueue(GetDB())
+	if err != nil || len(jobs) != 1 || jobs[0].NextAction.Code != "review_and_submit" || !jobs[0].NextAction.RequiresExplicitSubmit {
+		t.Fatalf("post-refill action = %#v, err=%v", jobs, err)
+	}
+}
+
 func TestEnsureAssistedSchema_ResetsObsoleteCurrentPageReview(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()

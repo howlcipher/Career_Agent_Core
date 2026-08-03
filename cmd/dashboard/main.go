@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1140,12 +1141,16 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"open"}`))
 }
 
-// launchAssistedApplication is replaceable only by handler tests. Dashboard
-// users normally start it with `go run`, so Assisted Apply works from the
-// documented development command without requiring a separately built,
-// potentially stale career_assist_bin beside the dashboard process.
+// launchAssistedApplication is replaceable only by handler tests. Prefer the
+// source checkout when one is available, but also support a compiled
+// dashboard launched from another working directory by using a sibling
+// assist binary. This prevents a valid click from becoming a silent no-op
+// merely because the dashboard was started outside the repository root.
 var launchAssistedApplication = func(jobID string) error {
-	cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
+	cmd, err := assistedApplicationCommand(jobID)
+	if err != nil {
+		return err
+	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return err
@@ -1181,6 +1186,48 @@ var launchAssistedApplication = func(jobID string) error {
 	case <-time.After(45 * time.Second):
 		_ = cmd.Process.Kill()
 		return errors.New("timed out waiting for assisted browser to open")
+	}
+}
+
+func assistedApplicationCommand(jobID string) (*exec.Cmd, error) {
+	if root := findGoModuleRoot(); root != "" {
+		cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
+		cmd.Dir = root
+		return cmd, nil
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate dashboard executable: %w", err)
+	}
+	directory := filepath.Dir(executable)
+	for _, name := range []string{"career_assist_bin", "assist"} {
+		candidate := filepath.Join(directory, name)
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(candidate, "-job", jobID), nil
+		}
+	}
+	return nil, errors.New("cannot locate assisted browser command: start the dashboard from the repository checkout or place career_assist_bin beside the dashboard binary")
+}
+
+func findGoModuleRoot() string {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	workingDirectory, err = filepath.Abs(workingDirectory)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(workingDirectory, "go.mod")); err == nil {
+			return workingDirectory
+		}
+		parent := filepath.Dir(workingDirectory)
+		if parent == workingDirectory {
+			return ""
+		}
+		workingDirectory = parent
 	}
 }
 

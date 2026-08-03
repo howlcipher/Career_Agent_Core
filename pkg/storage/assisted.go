@@ -268,6 +268,23 @@ func RequestAssistedContinue(conn *sql.DB, jobID string, now time.Time) error {
 	return nil
 }
 
+// RecordAssistedRefill advances a live handoff to the review stage after the
+// visible browser has been refilled. The browser lease remains owned by the
+// assist process so the user can review, submit manually, and confirm the
+// employer's receipt before the browser is closed.
+func RecordAssistedRefill(conn *sql.DB, jobID, owner string, now time.Time) error {
+	result, err := conn.Exec(`UPDATE assisted_applications SET assisted_state = 'review_and_submit', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'continue_requested' AND lease_owner = ? AND lease_expires_at > ?`,
+		now.UTC(), jobID, owner, now.UTC())
+	if err != nil {
+		return fmt.Errorf("record assisted refill: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted refill lease is no longer active")
+	}
+	return nil
+}
+
 func ReleaseAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) error {
 	result, err := conn.Exec(`UPDATE assisted_applications SET lease_owner = '', lease_expires_at = NULL,
 		assisted_state = CASE WHEN assisted_state = 'continue_requested' THEN 'waiting_human' ELSE assisted_state END,
@@ -387,6 +404,14 @@ func actionForRevalidation(status, reason, state string) AssistedNextAction {
 		return AssistedNextAction{"revalidate_current_page", "Could not check current page", "The public employer page could not be checked. Try the safe check again later; no browser was opened.", "Check Current Page Again", false, false, false, false}
 	default:
 		return AssistedNextAction{"revalidate_current_page", "Check current page", "This historic handoff must be checked against the employer's current public page before it is treated as a CAPTCHA or opened in a browser.", "Check Current Page", false, false, false, false}
+	}
+}
+
+func actionForReview() AssistedNextAction {
+	return AssistedNextAction{
+		"review_and_submit", "Review and submit",
+		"Known fields were refilled in the visible browser. Review the form, complete any remaining human fields, and click Submit yourself. Then confirm that the employer received the application.",
+		"Assisted Application Open", true, true, true, false,
 	}
 }
 
@@ -531,8 +556,9 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		CASE WHEN jf.url LIKE '%greenhouse%' THEN 'Greenhouse' WHEN jf.url LIKE '%lever.co%' THEN 'Lever'
 		WHEN jf.url LIKE '%workday%' THEN 'Workday' WHEN jf.url LIKE '%ashby%' THEN 'Ashby' ELSE 'Other ATS' END,
 		COALESCE(jf.status, ''), COALESCE(jf.status_reason, ''), COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
-		aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
-		COALESCE(aa.revalidation_state, 'required'),
+		 aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
+		 COALESCE(aa.revalidation_state, 'required'),
+		aa.assisted_state,
 		aa.updated_at,
 		aa.lease_owner, aa.lease_expires_at
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
@@ -555,8 +581,9 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var leaseExpiry sql.NullTime
 		var leaseUpdated sql.NullString
 		var revalidationState string
+		var assistedState string
 		var currentStatus string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &leaseUpdated, &leaseOwner, &leaseExpiry); err != nil {
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry); err != nil {
 			return nil, err
 		}
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)
@@ -564,13 +591,21 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			v := int(fit.Int64)
 			job.FitScore = &v
 		}
-		job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
+		if assistedState == "review_and_submit" {
+			job.NextAction = actionForReview()
+		} else {
+			job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
+		}
 		job.CompletedWork = completedWork(job.OriginalStatus)
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
 		job.PriorityReason = priorityReason(job.NextAction.Code)
 		now := time.Now().UTC()
 		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && parseAssistedTime(leaseUpdated.String).After(now.Add(-assistedLeaseHeartbeatTimeout))
+		if job.NextAction.Code == "open_verified_application" && job.LiveBrowser {
+			job.NextAction.CanContinue = true
+			job.NextAction.Instruction = "The verified application is open in the assisted browser. Complete the stated human step, then return here and click Continue."
+		}
 		jobs = append(jobs, job)
 	}
 	return jobs, rows.Err()

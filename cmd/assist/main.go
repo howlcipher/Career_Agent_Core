@@ -141,6 +141,7 @@ func main() {
 	defer signal.Stop(signals)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+waitForSignal:
 	for {
 		select {
 		case <-signals:
@@ -157,7 +158,15 @@ func main() {
 			}
 			var state string
 			err := storage.GetDB().QueryRow("SELECT assisted_state FROM assisted_applications WHERE job_id = ?", info.JobID).Scan(&state)
-			if err != nil || state == "continue_requested" {
+			if err != nil {
+				log.Printf("Assisted browser state could not be read: %v", err)
+				return
+			}
+			if state == "completed" {
+				log.Print("Assisted application was confirmed; closing the browser.")
+				return
+			}
+			if state == "continue_requested" {
 				goto continueFill
 			}
 		}
@@ -175,7 +184,12 @@ continueFill:
 		log.Printf("Assisted refill stopped safely: %v", err)
 		return
 	}
-	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit.")
+	if err := storage.RecordAssistedRefill(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+		log.Printf("Assisted refill completed but could not preserve the review state: %v", err)
+		return
+	}
+	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit. The browser remains open until you confirm the employer received the application or close it.")
+	goto waitForSignal
 }
 
 // assistedPageTitleMatchesRole makes the browser handoff fail closed when an

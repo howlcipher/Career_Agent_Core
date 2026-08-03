@@ -192,8 +192,13 @@ asking you to start again.
 The dashboard does not mark a browser launch successful until the visible Career
 Agent browser confirms that the expected employer page is open. If a browser
 process crashes, its lease becomes available again after a short heartbeat
-timeout. When running a compiled dashboard binary, rebuild it after upgrading
-Career Agent so the embedded UI and launch behavior match the source checkout.
+timeout. Once it is open, the dashboard exposes **I completed this step —
+Continue**; the browser stays open while known fields are refilled so you can
+review and submit manually before confirming receipt. When running a compiled
+dashboard binary outside the checkout, keep `career_assist_bin` beside it;
+otherwise start the dashboard from the repository so it can run
+`./cmd/assist` directly. Rebuild both binaries after upgrading Career Agent so
+the embedded UI and launch behavior match the source checkout.
 
 Legacy `AWAITING_REVIEW`, `MANUAL_REQUIRED`, and `BLOCKED_CAPTCHA` jobs can
 be safely backfilled with `go run ./cmd/assist-migrate` (dry run) and

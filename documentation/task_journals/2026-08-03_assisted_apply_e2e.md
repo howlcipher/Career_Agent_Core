@@ -3,7 +3,7 @@
 ## Summary
 
 - **Task:** Restore the complete Assisted Apply workflow, including current-page links, verified application launch, browser handoff, continuation, document access, and confirmation.
-- **Status:** Complete
+- **Status:** Complete — the continuation/state-machine defect found during the live audit is fixed and verified.
 - **Started:** 2026-08-03
 - **Agent and model:** Codex / GPT-5
 
@@ -31,7 +31,13 @@
 - 2026-08-03 — A controlled browser termination left the queue marked live because the original 20-minute lease had no heartbeat. Added one-second lease renewal, a 30-second stale-heartbeat reclaim window, queue liveness checks, and regression coverage for fresh versus stale owners.
 - 2026-08-03 — Targeted Go and frontend suites pass after the heartbeat change. One lease test was updated to assert that a fresh 20-second heartbeat remains exclusive while a genuinely stale owner can be reclaimed.
 - 2026-08-03 — Final live build served the rebuilt UI asset, rejected Meesho with HTTP 409, and launched European Dynamics only after returning `{"status":"open"}`; the queue reported `live_browser: true`. Terminating that test browser released the lease, and the stale-heartbeat unit path covers crash recovery. Full Go and frontend verification remains green.
+- 2026-08-03 — Continuation audit found that `application_ready` never set `can_continue` while its lease was live, so the UI had no Continue button even though the endpoint worked. It also found that successful refill immediately closed the browser, making review and manual confirmation impossible. Added live-browser-aware Continue, a `review_and_submit` state, refill persistence, completion polling, and checkout/sibling-binary launch resolution.
+- 2026-08-03 — Targeted storage, assist, and dashboard tests pass after the state-machine fix. A live source dashboard again opened the verified sample and exposed `can_continue=true` with `live_browser=true`; the safe no-document continuation path returned 200 and released the lease without submission.
+- 2026-08-03 — Full `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal`, and frontend `npm run test && npm run build && npm run lint` all pass. The staged diff contains no credentials or personal data; the two pre-existing local binaries remain intentionally untracked.
 
-## Next Step
+## Completion
 
-Restart the dashboard from the rebuilt checkout before using Assisted Apply: `go run ./cmd/dashboard` or rebuild the compiled dashboard binary.
+The source dashboard and assisted browser now cover revalidation, verified
+launch, live Continue, persistent refill review, explicit confirmation,
+document access, stale-lease recovery, and clear launch errors. Commit and push
+the reviewed changes from this journal.

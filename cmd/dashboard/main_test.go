@@ -55,6 +55,19 @@ func TestServeAssistedLaunch_RejectsUnavailablePlanBeforeStartingProcess(t *test
 	}
 }
 
+func TestAssistedApplicationCommandUsesCheckoutRoot(t *testing.T) {
+	cmd, err := assistedApplicationCommand("41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Dir == "" || !strings.HasSuffix(cmd.Dir, "Career_Agent_Core") {
+		t.Fatalf("assisted command directory = %q", cmd.Dir)
+	}
+	if len(cmd.Args) < 4 || cmd.Args[0] != "go" || cmd.Args[1] != "run" || cmd.Args[2] != "./cmd/assist" {
+		t.Fatalf("assisted command = %#v", cmd.Args)
+	}
+}
+
 func TestCurrentPageShowsCaptcha_RequiresChallengeLanguage(t *testing.T) {
 	for _, tc := range []struct {
 		page string

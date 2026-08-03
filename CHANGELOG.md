@@ -1,5 +1,14 @@
 # Career Agent Core - Changelog
 
+## 2026-08-03 — Assisted Apply continuation stays open through review
+
+* **Fix:** A live verified application now exposes Continue. Successful
+  refills enter a persistent review-and-submit state, keep the visible browser
+  open until confirmation or close, and close cleanly after the dashboard
+  records employer receipt. Compiled dashboards now resolve the checkout or a
+  sibling `career_assist_bin` instead of silently failing when started outside
+  the repository.
+
 ## 2026-08-03 — Assisted Apply actions now acknowledge real browser state
 
 * **Fix:** The dashboard now reports launch success only after the assisted child confirms that Chromium opened the expected employer page. Failed launches and queue-load failures are shown in the UI instead of appearing to do nothing.
