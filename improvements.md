@@ -58,7 +58,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 479 | [A permanent DNS failure spends the full retry/backoff budget instead of failing fast to a terminal status](#479-a-permanent-dns-failure-spends-the-full-retrybackoff-budget-instead-of-failing-fast-to-a-terminal-status) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #479 for the full account. |
 | 486 | [Safe local-model delegation harness](#486-safe-local-model-delegation-harness) | Done (2026-08-02) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #486 for the full account. |
 | 492 | [Explicit first-attempt SLA and bounded fresh-queue admission](#492-explicit-first-attempt-sla-and-bounded-fresh-queue-admission) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #492 for the full account. |
-| 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Pending | 0.75 = 3×1.0÷4 | standard | Deterministic classification still covers part of the proposed surface; no safe 4B evaluation has been run. |
+| 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #487 for the full account. |
 | 472 | [Extend bug #467's target-closed browser recovery to the security-code resubmit click](#472-extend-bug-467s-target-closed-browser-recovery-to-the-security-code-resubmit-click) | Pending | 0.75 = 3×0.5÷2 | standard | The one-time-code resubmit path still bypasses target-closed recovery. |
 | 473 | [Extend bug #467's target-closed browser recovery to the Vision submission paths](#473-extend-bug-467s-target-closed-browser-recovery-to-the-vision-submission-paths) | Pending | 0.75 = 3×0.5÷2 | standard | Vision fallback still has no target-closed recovery of its own. |
 | 485 | [Resource-aware local inference admission control](#485-resource-aware-local-inference-admission-control) | Pending | 0.67 = 4×1.0÷6 | deep-reasoning | Existing one-model limit prevents OOM; contention remains an unobserved risk. |
@@ -274,13 +274,7 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 
 ### 487. Lightweight 4B log triage and context compression
 
-**Filed 2026-08-01**, from the same session as #484.
-
-Evaluate using `qwen3:4b-instruct` — the smallest installed capable text model — as a frequent, low-cost worker for: redacting and classifying sanitized log events, normalizing error signatures, grouping repeated failures, detecting novel error classes, summarizing daemon cycles, and producing compact context packets for Claude. Required safeguards if built: deterministic redaction before any inference call, no raw PII ever reaching the model, bounded input/output, schema validation with a deterministic fallback on invalid output, a confidence field, deduplicated alerts, and explicitly no backlog edits, no Git writes, no email access, no submission authority — a read/summarize-only worker that yields to application-critical work.
-
-**Value 3, Effort 4, Decay 1.0, score 0.75.** Value is moderate rather than high because — per the brief's own instruction to check this first — **several existing mechanisms in this codebase already do deterministic classification of exactly this shape without an LLM call**: `classifyGenerationError` (`cmd/agent/pipeline.go`, bug #444) classifies generation errors by substring match; the domain/source circuit breakers (bugs.md #469/#475) already track and summarize repeated-failure streaks without a model in the loop. Before this item is built, **the actual next step is confirming how much log-triage surface deterministic parsing does *not* already cover** — the brief's own instruction ("first determine whether deterministic parsing already solves most of this more reliably") is the first unit of work here, not the model-calling implementation.
-
-**Deliberately not implemented this session.** Depends on #484's harness for any claim that `qwen3:4b-instruct` is schema-reliable enough for this use — #484's `classify_error` task is a structurally similar (if narrower) probe of exactly that question, so re-run it as a starting data point before building this rather than assuming.
+Closed — full account archived in `documentation/backlog_history/improvements_done_details.md`.
 
 ### 485. Resource-aware local inference admission control
 

@@ -2,6 +2,16 @@
 
 Full accounts for closed improvement rows, moved out of `improvements.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `improvements.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 487. Lightweight 4B log triage and context compression
+
+**Completed 2026-08-02.** `cmd/logtriage` is an explicit opt-in, stdin-to-stdout, read-only utility backed by `internal/logtriage`. It applies deterministic email, phone, credential-shaped-value, and URL-query redaction before retaining any line or making an optional local-model request. It bounds input to 100 events and 500 bytes per event, caps model context/output and the call deadline, groups repeated deterministic failure classes, and emits a compact JSON packet with confidence and model/fallback provenance. Invalid, oversized, timed-out, or unavailable model responses return the deterministic packet rather than untrusted partial output.
+
+The command has no database, application, browser, email, Git, filesystem-write, or submission integration. It therefore yields completely to application-critical work and cannot mutate user state. Existing individual deterministic classifiers remain unchanged; this fills the distinct cross-event context-compression gap rather than replacing established safety paths.
+
+Live prerequisite benchmark: `qwen3:4b-instruct` passed `classify_error` 2/2 schema-valid and correct at temperature zero (20.9s cold, 2.4s warm; no swap consumed). A synthetic two-event optional-model smoke test returned validated summary JSON with confidence 0.98, and a sensitive-pattern deterministic smoke test showed email, phone, token query, and source text redacted before output. Focused tests cover redaction, grouping, and the no-model fallback; the full Go verification loop passed in the closing commit.
+
+---
+
 ## 492. Explicit first-attempt SLA and bounded fresh-queue admission
 
 **Completed 2026-08-02.** The fresh queue now uses an explicit, bounded policy without changing the fit-ranking formula: jobs receive the existing urgency treatment at seven days, each agent queue cycle terminalizes `DISCOVERED` rows that have not received a first attempt by 30 days, and each identified discovery source is limited to 25 pending rows. Over-cap rows remain auditable as `SKIPPED` with `source_pending_cap`; expired rows are `SKIPPED` with `first_attempt_sla_expired`. The sweep also retains excluded-source terminalization, so excluded rows cannot accumulate indefinitely.

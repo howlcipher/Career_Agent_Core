@@ -1,5 +1,9 @@
 # Career Agent Core - Changelog
 
+## 2026-08-02 — Read-only local log triage has a privacy boundary
+
+* **Improvement (#487):** Added `cmd/logtriage`, an opt-in stdin-to-stdout utility for compact daemon context packets. It redacts common direct identifiers, credential-shaped values, and URL query strings before retaining or optionally sending any event to the local 4B model; caps events, lines, model context, output, and duration; validates model JSON; and falls back deterministically on any failure. It has no application, database, browser, email, filesystem, Git, or submission authority.
+
 ## 2026-08-02 — Fresh queue control and an operator-first interface
 
 * **Improvement (#492):** `DISCOVERED` jobs now receive priority at seven days, expire at 30 days through the scheduled agent-cycle sweep, and are capped at 25 pending rows per identified discovery source. Cap and expiry outcomes are recorded explicitly; fit ranking itself is unchanged.
