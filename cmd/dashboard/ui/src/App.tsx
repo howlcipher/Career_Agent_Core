@@ -241,11 +241,18 @@ function App() {
 		const seq = ++assistedSeq.current;
 		try {
 			const res = await fetch('/api/assisted');
-			if (!res.ok) return;
+			if (!res.ok) {
+				setActionError('Could not load Assisted Apply. Check the dashboard log and try again.');
+				return;
+			}
 			const data = await res.json();
-			if (seq === assistedSeq.current) setAssistedJobs(data.jobs ?? []);
+			if (seq === assistedSeq.current) {
+				setAssistedJobs(data.jobs ?? []);
+				setActionError(null);
+			}
 		} catch (e) {
 			console.error(e);
+			setActionError('Could not load Assisted Apply. Check the dashboard log and try again.');
 		}
 	};
 
@@ -316,10 +323,11 @@ function App() {
 	};
 
 	const launchAssisted = async (job: AssistedJob) => {
+		setActionError(null);
 		try {
 			const res = await fetch('/api/assisted/launch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ job_id: job.id }) });
 			if (!res.ok) throw new Error('launch rejected');
-			window.setTimeout(() => fetchAssisted(), 600);
+			await fetchAssisted();
 		} catch (e) { console.error(e); setActionError('Could not open the assisted application. It may already be active.'); }
 	};
 

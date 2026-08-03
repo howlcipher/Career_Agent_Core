@@ -151,6 +151,10 @@ func main() {
 				log.Print("Assisted browser closed; releasing its lease.")
 				return
 			}
+			if err := storage.RenewAssistedLease(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
+				log.Printf("Assisted browser lease expired: %v", err)
+				return
+			}
 			var state string
 			err := storage.GetDB().QueryRow("SELECT assisted_state FROM assisted_applications WHERE job_id = ?", info.JobID).Scan(&state)
 			if err != nil || state == "continue_requested" {

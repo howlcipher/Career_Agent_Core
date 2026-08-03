@@ -316,6 +316,69 @@ describe('Assisted Apply workflow', () => {
 		expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/assisted/launch', expect.anything());
 	});
 
+	it('shows the server error when opening the current employer page fails', async () => {
+		installFetch((input, init) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+				id: '41', company: 'Acme', role: 'Platform Engineer', provider: 'Lever', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-02T12:00:00Z', resume_ready: false, cover_letter_ready: false,
+				mapping_ready: false, completed_work: 'Historic handoff.', legacy: true, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Check before opening',
+				next_action: { code: 'open_current_employer_page', title: 'Open current employer page', instruction: 'Open it.', primary_button: 'Open Current Employer Page', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: false },
+			}] }));
+			if (url === '/api/assisted/launch' && init?.method === 'POST') return Promise.resolve(jsonResponse({}, false));
+			throw new Error(`unexpected fetch: ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: 'Open Current Employer Page' }));
+		await flush();
+		expect(screen.getByRole('alert')).toHaveTextContent('Could not open the assisted application');
+	});
+
+	it('refreshes the queue after the browser reports that the application is open', async () => {
+		let assistedCalls = 0;
+		installFetch((input, init) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve({ ...jsonResponse({ ...baseMetrics, assisted_waiting: 1 }) });
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') {
+				assistedCalls += 1;
+				return Promise.resolve(jsonResponse({ jobs: [{
+					id: '41', company: 'Acme', role: 'Platform Engineer', provider: 'Lever', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-02T12:00:00Z', resume_ready: false, cover_letter_ready: false,
+					mapping_ready: false, completed_work: 'Historic handoff.', legacy: true, live_browser: assistedCalls > 1, assisted_attempt_count: assistedCalls, priority_reason: 'Ready',
+					next_action: { code: 'solve_captcha', title: 'Solve CAPTCHA', instruction: 'Solve it.', primary_button: 'Open CAPTCHA', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: true },
+				}] }));
+			}
+			if (url === '/api/assisted/launch' && init?.method === 'POST') return Promise.resolve(jsonResponse({ status: 'launching' }));
+			throw new Error(`unexpected fetch: ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: 'Open CAPTCHA' }));
+		await flush();
+		expect(screen.getByRole('button', { name: 'Assisted Application Open' })).toBeInTheDocument();
+	});
+
+	it('shows a load error when the Assisted Apply queue endpoint fails', async () => {
+		installFetch((input) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse(baseMetrics));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') return Promise.resolve(jsonResponse({}, false));
+			throw new Error(`unexpected fetch: ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		expect(screen.getByRole('alert')).toHaveTextContent('Could not load Assisted Apply');
+	});
+
   it('exposes the queue, human instruction, and only the relevant actions', async () => {
     installFetch((input) => {
       const url = String(input);

@@ -1,5 +1,11 @@
 # Career Agent Core - Changelog
 
+## 2026-08-03 — Assisted Apply actions now acknowledge real browser state
+
+* **Fix:** The dashboard now reports launch success only after the assisted child confirms that Chromium opened the expected employer page. Failed launches and queue-load failures are shown in the UI instead of appearing to do nothing.
+* **Fix:** Assisted browser leases now heartbeat every second and become reclaimable after 30 seconds without a heartbeat, so a crashed or killed browser cannot block the queue for the full 20-minute lease.
+* **Fix:** Previous whole-document revalidation results are invalidated with the new heading-aware verification version, and the frontend refreshes immediately after a confirmed browser launch.
+
 ## 2026-08-02 — Assisted Apply verifies the actual employer page before opening it
 
 * **Fix (bug #512):** The dashboard now starts the current assisted-browser command instead of relying on a stale sibling binary, rejects an unavailable handoff before reporting that it is launching, and invalidates earlier whole-page revalidation results. A page must match the requested role in its title or heading and expose an application entry point before the visible browser opens; the browser repeats the title check after navigation. This prevents a stale or logo-only page from masquerading as the requested application while preserving an explicit human CAPTCHA, login, and submission step.

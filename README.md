@@ -189,6 +189,12 @@ asking you to start again.
 8. Return to Career Agent and click **I completed this step — Continue** when it is available.
 9. Submit when requested, then mark Applied only after the employer confirms receipt.
 
+The dashboard does not mark a browser launch successful until the visible Career
+Agent browser confirms that the expected employer page is open. If a browser
+process crashes, its lease becomes available again after a short heartbeat
+timeout. When running a compiled dashboard binary, rebuild it after upgrading
+Career Agent so the embedded UI and launch behavior match the source checkout.
+
 Legacy `AWAITING_REVIEW`, `MANUAL_REQUIRED`, and `BLOCKED_CAPTCHA` jobs can
 be safely backfilled with `go run ./cmd/assist-migrate` (dry run) and
 `go run ./cmd/assist-migrate -confirm`. The migration preserves original

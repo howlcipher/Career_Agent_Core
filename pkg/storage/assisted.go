@@ -85,12 +85,13 @@ type AssistedRevalidationInfo struct {
 type AssistedDocument struct{ Path, Name string }
 
 const AssistedLeaseDuration = 20 * time.Minute
+const assistedLeaseHeartbeatTimeout = 30 * time.Second
 
 // assistedRevalidationVersion invalidates results recorded by the original
 // whole-document matcher. Job descriptions can mention another role (as the
 // Meesho Forward Deployed Engineer posting did with "Platform Engineering"),
 // so a role must match a page heading before the dashboard calls it ready.
-const assistedRevalidationVersion = 2
+const assistedRevalidationVersion = 3
 
 // AcquireAssistedLease atomically claims the sole visible assisted browser.
 // A persistent browser profile cannot safely serve concurrent employers, so
@@ -103,17 +104,35 @@ func AcquireAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) (boo
 		SET lease_owner = ?, lease_expires_at = ?, assisted_state = 'waiting_human',
 			assisted_attempt_count = assisted_attempt_count + 1, updated_at = ?
 		WHERE job_id = ? AND assisted_state != 'completed'
-			AND (lease_owner = '' OR lease_expires_at IS NULL OR lease_expires_at <= ?)
+			AND (lease_owner = '' OR lease_expires_at IS NULL OR lease_expires_at <= ? OR updated_at <= ?)
 			AND NOT EXISTS (
 				SELECT 1 FROM assisted_applications active
 				WHERE active.job_id != ? AND active.lease_owner != '' AND active.lease_expires_at > ?
+					AND active.updated_at > ?
 			)`,
-		owner, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, now.UTC(), jobID, now.UTC())
+		owner, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, now.UTC(), now.UTC().Add(-assistedLeaseHeartbeatTimeout), jobID, now.UTC(), now.UTC().Add(-assistedLeaseHeartbeatTimeout))
 	if err != nil {
 		return false, fmt.Errorf("claim assisted application: %w", err)
 	}
 	n, err := result.RowsAffected()
 	return n == 1, err
+}
+
+// RenewAssistedLease keeps a visible browser claim alive while its process is
+// healthy. A short heartbeat window lets a crashed process be reopened soon,
+// rather than leaving the dashboard stuck behind the full lease duration.
+func RenewAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) error {
+	result, err := conn.Exec(`UPDATE assisted_applications
+		SET lease_expires_at = ?, updated_at = ?
+		WHERE job_id = ? AND lease_owner = ? AND assisted_state != 'completed'
+			AND lease_expires_at > ?`, now.UTC().Add(AssistedLeaseDuration), now.UTC(), jobID, owner, now.UTC())
+	if err != nil {
+		return fmt.Errorf("renew assisted lease: %w", err)
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return errors.New("assisted lease is no longer active")
+	}
+	return nil
 }
 
 func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
@@ -514,6 +533,7 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		COALESCE(jf.status, ''), COALESCE(jf.status_reason, ''), COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
 		aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
 		COALESCE(aa.revalidation_state, 'required'),
+		aa.updated_at,
 		aa.lease_owner, aa.lease_expires_at
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.assisted_state != 'completed'
@@ -533,9 +553,10 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var lastUpdated sql.NullString
 		var leaseOwner sql.NullString
 		var leaseExpiry sql.NullTime
+		var leaseUpdated sql.NullString
 		var revalidationState string
 		var currentStatus string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &leaseOwner, &leaseExpiry); err != nil {
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &leaseUpdated, &leaseOwner, &leaseExpiry); err != nil {
 			return nil, err
 		}
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)
@@ -548,7 +569,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
 		job.PriorityReason = priorityReason(job.NextAction.Code)
-		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(time.Now().UTC())
+		now := time.Now().UTC()
+		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && parseAssistedTime(leaseUpdated.String).After(now.Add(-assistedLeaseHeartbeatTimeout))
 		jobs = append(jobs, job)
 	}
 	return jobs, rows.Err()

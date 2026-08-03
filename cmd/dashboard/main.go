@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1135,7 +1137,7 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"launching"}`))
+	w.Write([]byte(`{"status":"open"}`))
 }
 
 // launchAssistedApplication is replaceable only by handler tests. Dashboard
@@ -1144,15 +1146,42 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 // potentially stale career_assist_bin beside the dashboard process.
 var launchAssistedApplication = func(jobID string) error {
 	cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	ready := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("serveAssistedLaunch: assisted browser exited: %v", err)
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			log.Printf("assisted browser: %s", line)
+			if strings.Contains(line, "Assisted application is open.") {
+				select {
+				case <-ready:
+				default:
+					close(ready)
+				}
+			}
 		}
+		done <- cmd.Wait()
 	}()
-	return nil
+	select {
+	case <-ready:
+		return nil
+	case err := <-done:
+		if err == nil {
+			return errors.New("assisted browser exited before it opened the application")
+		}
+		return fmt.Errorf("assisted browser exited before it opened the application: %w", err)
+	case <-time.After(45 * time.Second):
+		_ = cmd.Process.Kill()
+		return errors.New("timed out waiting for assisted browser to open")
+	}
 }
 
 func serveAssistedDocument(w http.ResponseWriter, r *http.Request) {

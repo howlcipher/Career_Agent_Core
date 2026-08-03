@@ -224,7 +224,7 @@ func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) 
 	if err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
 	}
-	if claimed, err := AcquireAssistedLease(GetDB(), id, "second", now.Add(time.Minute)); err != nil || claimed {
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "second", now.Add(20*time.Second)); err != nil || claimed {
 		t.Fatalf("second claim: claimed=%v err=%v", claimed, err)
 	}
 	if err := RequestAssistedContinue(GetDB(), id, now.Add(time.Minute)); err != nil {
@@ -266,8 +266,37 @@ func TestAssistedLease_AllowsOnlyOneVisibleBrowserAcrossPlans(t *testing.T) {
 	if claimed, err := AcquireAssistedLease(GetDB(), firstID, "first", now); err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
 	}
-	if claimed, err := AcquireAssistedLease(GetDB(), secondID, "second", now.Add(time.Minute)); err != nil || claimed {
+	if claimed, err := AcquireAssistedLease(GetDB(), secondID, "second", now.Add(20*time.Second)); err != nil || claimed {
 		t.Fatalf("second plan claim while another browser is active: claimed=%v err=%v", claimed, err)
+	}
+}
+
+func TestAssistedLease_HeartbeatRenewsAndStaleOwnerCanBeReclaimed(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Heartbeat Co", "Engineer", "https://heartbeat.example/jobs/1", "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE company_name = 'Heartbeat Co'").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	claimed, err := AcquireAssistedLease(GetDB(), id, "first", now)
+	if err != nil || !claimed {
+		t.Fatalf("initial claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := RenewAssistedLease(GetDB(), id, "first", now.Add(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "second", now.Add(20*time.Second)); err != nil || claimed {
+		t.Fatalf("fresh heartbeat should block second owner: claimed=%v err=%v", claimed, err)
+	}
+	if claimed, err := AcquireAssistedLease(GetDB(), id, "second", now.Add(2*time.Minute)); err != nil || !claimed {
+		t.Fatalf("stale heartbeat should be reclaimable: claimed=%v err=%v", claimed, err)
 	}
 }
 
