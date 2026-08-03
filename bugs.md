@@ -4,7 +4,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**MET 2026-08-02 passive-funnel audit and second groom.** There are no Pending bug rows and the zero-Blocker/Major box remains checked. Live logs show the daemon is active and its latest six eligible rows reached terminal outcomes (CAPTCHA, expiry, timeout, or quarantine), leaving the eligible queue at zero; the end-to-end audit found no additional reproducible defect. The operational gaps remain improvements #510 and #479, plus the paid CAPTCHA-solving item #17. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass.
+**MET 2026-08-02 groom.** There are no Pending bug rows and the zero-Blocker/Major box remains checked. The live dashboard now reports four eligible jobs, two applications, and zero interviews or rejections; this supersedes the prior zero-queue snapshot without exposing a reproducible defect. The outcome sample remains too small for improvement #493; #485 is the next free, above-floor enhancement. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass.
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 
