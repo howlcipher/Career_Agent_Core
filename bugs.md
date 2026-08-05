@@ -4,7 +4,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 ## 🎯 Usability Gate — what "100% usable" means
 
-**MET 2026-08-02 groom.** There are no Pending bug rows and the zero-Blocker/Major box remains checked. The live dashboard now reports four eligible jobs, two applications, and zero interviews or rejections; this supersedes the prior zero-queue snapshot without exposing a reproducible defect. The outcome sample remains too small for improvement #493; #485 is the next free, above-floor enhancement. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass.
+**MET 2026-08-05 (Assisted Apply acceptance trial).** There are no Pending bug rows and the zero-Blocker/Major box remains checked. The trial ran inside the `career-agent` distrobox against container-built binaries and was **halted at its first candidate without submitting any application**: verifying the "documents are correct" precondition exposed #515, a Blocker in which Assisted Apply would have uploaded a 116-byte placeholder note in place of the user's résumé. #515 was reproduced against a scratch database, fixed, and closed in the same session, so the box is checked on a fixed tree rather than an unexamined one. The trial's other gates all passed on fresh evidence: effective mode assisted, minimum fit 70, scoring active, automatic submit click inactive, and a live daemon that re-adopted those settings at startup. Two non-blocking observations were recorded rather than fixed — the daemon did not exit on SIGTERM and needed SIGKILL while `/api/agent/stop` reported success, and `daemon_active` is computed from a settings file with no liveness check, so it reads true when no agent is running. Applications confirmed: 0 of 5; the trial has not yet measured a real submission. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. *(prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 
@@ -46,6 +46,7 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
+| 515 | [Assisted Apply uploaded the saved reference note in place of the résumé](#515-assisted-apply-uploaded-the-saved-reference-note-in-place-of-the-résumé) | Blocker | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #515 for the full account. |
 | 513 | [Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified](#513-application-mode-hardening-is-incomplete-qualified-jobs-mutations-and-settings-activation-are-not-safely-verified) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #513 for the full account. |
 | 514 | [Qualified Jobs and operator settings contain post-hardening runtime regressions](#514-qualified-jobs-and-operator-settings-contain-post-hardening-runtime-regressions) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #514 for the full account. |
 | 512 | [Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs](#512-assisted-apply-presents-stale-mismatched-and-blank-employer-pages-as-actionable-human-handoffs) | Major | Done (2026-08-02) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #512 for the full account. |
@@ -937,6 +938,10 @@ Closed — full account archived in `documentation/backlog_history/bugs_done_det
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
 
 ### 514. Qualified Jobs and operator settings contain post-hardening runtime regressions
+
+Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+
+### 515. Assisted Apply uploaded the saved reference note in place of the résumé
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
 

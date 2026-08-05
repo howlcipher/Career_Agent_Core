@@ -3980,3 +3980,26 @@ Added a Jobicy structured-feed source before the slower RemoteOK sweep. It uses 
 `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` passed. Rebuilt the daemon and launched it through the persistent dashboard control path; its first live refresh admitted 18 relevant Jobicy postings and the next queue cycle loaded 15 jobs. The dashboard reports the daemon running.
 
 ---
+## 515. Assisted Apply uploaded the saved reference note in place of the résumé
+
+**Completed 2026-08-05.** Found during the five-application Assisted Apply acceptance trial, before any application was launched, while verifying the "documents are correct" precondition for the selected candidate.
+
+`cmd/agent` uploads `master_resume.pdf` to every ATS. Both of its document branches return that path: the untailored branch (`cmd/agent/pipeline.go:542`) and the tailored branch (`:585`, `:587`). The per-job `resume.md` written under `applications/<company>/<url-digest>/` is a saved reference document, never the upload payload — a fact the constant's own comment at `cmd/agent/main.go:35` already stated.
+
+Assisted Apply did not follow that invariant. `storage.GetAssistedDocument(conn, jobID, "resume")` resolved the résumé to `applications/<company>/<url-digest>/resume.md`, and `cmd/assist/main.go:526` passed that path into `submitter.FillAssistedMappedPage` → `handleDynamic` → `attachResume`, which reads the file and uploads it as `Name: "resume.pdf"` with no content or type validation.
+
+When `profile.yaml` sets `use_master_cover_letter: true`, no per-job tailoring is generated and `cmd/agent/pipeline.go:530` writes a fixed 116-byte note into `resume.md`: "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated." On this machine every non-legacy queued application carried exactly that file. An assisted application would therefore have uploaded a 116-byte placeholder note, renamed `resume.pdf`, to a real employer in place of the user's 66 KB résumé.
+
+The cover letter was never affected: `cmd/agent` hands the submitter `storage.CoverLetterPath(...)`, the same per-job `coverletter.txt` the assisted path resolved, so that document was already correct.
+
+Two secondary effects resolved with the same change. The dashboard's document-preview endpoint shares `GetAssistedDocument`, so the operator reviewed one artifact while a different file would have been attached; preview and attachment are now the same file. And `assistedDocumentExists` drives the queue's `resume_ready` flag, which previously reported ready because a placeholder existed rather than because a résumé did.
+
+Reproduced against a scratch database in a temporary working directory, independent of the live `applications.db`, before any code changed: the pre-fix resolution returned the 116-byte note as the upload payload while a genuine `master_resume.pdf` sat unused beside it.
+
+**Fix.** Added the exported `storage.MasterResumePath`, and `GetAssistedDocument` now resolves `kind == "resume"` to it rather than to the application folder. `cmd/agent`'s `masterResumePath` was repointed at the same constant so the automatic and assisted paths cannot drift apart again. Cover-letter resolution is unchanged. `validateAssistedDocument`'s containment check does not apply to the master résumé, which deliberately lives at the repository root, so `validateMasterResume` was added to keep the symlink, regular-file, and non-empty guarantees for it.
+
+Tests: `TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact` reconstructs the untailored save and fails if the resolved payload contains the placeholder text; `TestGetAssistedDocument_CoverLetterStaysPerJobArtifact` pins the cover letter to the per-job artifact so the fix is not over-applied.
+
+`go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. No frontend sources exist for this change to affect. The trial was halted at this defect and no application was submitted.
+
+---

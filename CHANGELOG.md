@@ -1,5 +1,20 @@
 # Career Agent Core - Changelog
 
+## 2026-08-05 — Assisted Apply attaches the real résumé
+
+* **Fix:** Assisted Apply resolved its résumé from the per-job
+  `applications/<company>/<url-digest>/resume.md`, which is a saved reference
+  document rather than the upload payload. With `use_master_cover_letter`
+  enabled that file holds only a short "master documents were used" note, so an
+  assisted application would have uploaded a 116-byte placeholder — renamed
+  `resume.pdf` — to the employer in place of the résumé. Both document branches
+  of the automatic pipeline already uploaded `master_resume.pdf`; the assisted
+  path now resolves the same file through the shared
+  `storage.MasterResumePath`, so the two submission paths cannot drift apart
+  again. Cover letters were unaffected and are still the per-job artifact. The
+  dashboard's document preview shares this resolution, so the operator now
+  reviews exactly the file that will be attached.
+
 ## 2026-08-04 — Application Mode selector and configurable fit threshold
 
 * **Feature:** Added Application Mode selector (find_only, assisted, automatic) and a configurable fit threshold to the dashboard. Legacy flags (`auto_submit`, `copilot_mode`, etc.) are gracefully inferred.

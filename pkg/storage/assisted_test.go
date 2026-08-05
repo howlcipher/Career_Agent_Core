@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -414,5 +415,92 @@ func TestEnsureAssistedPlanForURL_CreatesNewInterruptionPlanOnce(t *testing.T) {
 	}
 	if count != 1 || legacy || action != "solve_captcha" {
 		t.Fatalf("new plan count=%d legacy=%v action=%q", count, legacy, action)
+	}
+}
+
+// The résumé employers receive is master_resume.pdf for every job: cmd/agent
+// returns that path from both its tailored and its untailored document branch.
+// The per-job resume.md is a saved reference document, and when tailoring is
+// skipped it holds nothing but a short "master documents were used" note.
+// Assisted Apply resolved its upload payload from that artifact, so a real
+// application uploaded the note in place of the résumé (bugs.md #515).
+func TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const postingURL = "https://captcha.example/jobs/1"
+	if _, err := AddToFunnel("Captcha Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	const untailoredNote = "Master documents used for this application (use_master_cover_letter is enabled); no per-job tailoring was generated."
+	if _, err := SaveApplication("Captcha Co", "Engineer", "", postingURL, untailoredNote, "Dear team,", untailoredNote); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(MasterResumePath, []byte("%PDF-1.7 genuine resume"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", NormalizeURL(postingURL)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	document, err := GetAssistedDocument(GetDB(), id, "resume")
+	if err != nil {
+		t.Fatalf("resolve assisted résumé: %v", err)
+	}
+	content, err := os.ReadFile(document.Path)
+	if err != nil {
+		t.Fatalf("read resolved résumé: %v", err)
+	}
+	if strings.Contains(string(content), "no per-job tailoring") {
+		t.Fatalf("assisted résumé resolved to the saved artifact %q, so the upload payload is the placeholder note rather than the master résumé", document.Path)
+	}
+	if document.Path != MasterResumePath {
+		t.Fatalf("assisted résumé path = %q, want the master résumé %q", document.Path, MasterResumePath)
+	}
+}
+
+// The cover letter genuinely is the per-job artifact: cmd/agent hands the
+// submitter storage.CoverLetterPath. Pinning it here keeps the résumé fix from
+// being over-applied to a document that was already correct.
+func TestGetAssistedDocument_CoverLetterStaysPerJobArtifact(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const postingURL = "https://captcha.example/jobs/2"
+	if _, err := AddToFunnel("Captcha Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveApplication("Captcha Co", "Engineer", "", postingURL, "resume note", "role specific letter", "prep"); err != nil {
+		t.Fatal(err)
+	}
+
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", NormalizeURL(postingURL)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	document, err := GetAssistedDocument(GetDB(), id, "cover_letter")
+	if err != nil {
+		t.Fatalf("resolve assisted cover letter: %v", err)
+	}
+	if document.Path != CoverLetterPath("Captcha Co", postingURL) {
+		t.Fatalf("cover letter path = %q, want the per-job artifact", document.Path)
+	}
+	content, err := os.ReadFile(document.Path)
+	if err != nil {
+		t.Fatalf("read resolved cover letter: %v", err)
+	}
+	if !strings.Contains(string(content), "role specific letter") {
+		t.Fatal("cover letter no longer resolves to the role-specific artifact")
 	}
 }

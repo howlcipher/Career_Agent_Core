@@ -202,6 +202,14 @@ func RecordAssistedRevalidation(conn *sql.DB, jobID, state string, now time.Time
 	return nil
 }
 
+// MasterResumePath is the résumé every employer actually receives. cmd/agent
+// returns it from both its tailored and its untailored document branch, so the
+// per-job resume.md under applications/ is a saved reference document rather
+// than an upload payload — when tailoring is skipped it holds only a short
+// "master documents were used" note. Assisted Apply must resolve the same file
+// the automatic pipeline uploads (bugs.md #515).
+const MasterResumePath = "master_resume.pdf"
+
 func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, error) {
 	fileName := map[string]string{"resume": "resume.md", "cover_letter": "coverletter.txt"}[kind]
 	if fileName == "" {
@@ -212,11 +220,41 @@ func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, er
 	if err != nil {
 		return AssistedDocument{}, fmt.Errorf("load assisted document identity: %w", err)
 	}
+	// The résumé is deliberately not read from the application folder. Only
+	// the cover letter is a genuine per-job artifact, matching the pair
+	// cmd/agent hands the submitter.
+	if kind == "resume" {
+		if err := validateMasterResume(MasterResumePath); err != nil {
+			return AssistedDocument{}, err
+		}
+		return AssistedDocument{Path: MasterResumePath, Name: MasterResumePath}, nil
+	}
 	path := filepath.Join(applicationDir(company, postingURL), fileName)
 	if err := validateAssistedDocument(path); err != nil {
 		return AssistedDocument{}, err
 	}
 	return AssistedDocument{Path: path, Name: fileName}, nil
+}
+
+// validateMasterResume applies the symlink and regular-file guarantees
+// validateAssistedDocument gives folder artifacts. The containment check does
+// not carry over: the master résumé lives beside profile.yaml at the
+// repository root, deliberately outside applications/.
+func validateMasterResume(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect master resume: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("refusing symlinked master resume")
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("master resume is not a regular file")
+	}
+	if info.Size() == 0 {
+		return errors.New("master resume is empty")
+	}
+	return nil
 }
 
 func validateAssistedDocument(path string) error {

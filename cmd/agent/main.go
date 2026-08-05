@@ -35,7 +35,9 @@ const (
 	// masterResumePath is the file actually uploaded to every ATS. The
 	// pipeline's per-job "tailored" resume is a saved reference document, not
 	// the upload payload — this static PDF is what employers receive.
-	masterResumePath = "master_resume.pdf"
+	// Assisted Apply reads the same constant so the two submission paths
+	// cannot drift apart again (bugs.md #515).
+	masterResumePath = storage.MasterResumePath
 	// defaultMasterCoverLetterPath is the fallback for the single job-agnostic
 	// cover letter reused for every application when profile.yaml sets
 	// use_master_cover_letter, applied only when master_cover_letter_path is
