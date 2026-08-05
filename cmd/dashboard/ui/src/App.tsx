@@ -89,6 +89,28 @@ interface Metrics {
   by_variant?: VariantConversionRow[];
 }
 
+
+interface OperatorSettings {
+  application_mode: 'find_only' | 'assisted' | 'automatic';
+  minimum_fit_score: number;
+  scoring_active?: boolean;
+}
+
+interface QualifiedJob {
+  id: number;
+  company: string;
+  title: string;
+  url: string;
+  fit_score: number;
+  provider: string;
+  discovered_at: string;
+  last_updated: string;
+  salary_desc: string;
+  location: string;
+  remote: boolean;
+  reason: string;
+}
+
 interface AssistedAction {
 	code: string;
 	title: string;
@@ -192,6 +214,11 @@ function App() {
   // stale with nothing telling the user that. Counts consecutive failures;
   // any success resets it to 0. Only rendered once it crosses a small
   // threshold, so a lone miss stays silent.
+  
+  const [operatorSettings, setOperatorSettings] = useState<OperatorSettings | null>(null);
+  const [qualifiedJobs, setQualifiedJobs] = useState<QualifiedJob[]>([]);
+  const [showQualified, setShowQualified] = useState<boolean>(false);
+
   const [pollFailures, setPollFailures] = useState<number>(0);
 
   // Poll responses can resolve out of order (bug #447: a slow request can
@@ -237,6 +264,60 @@ function App() {
     }
   };
 
+	
+  const fetchOperatorSettings = async () => {
+    try {
+      const res = await fetch('/api/operator-settings');
+      if (res.ok) {
+        setOperatorSettings(await res.json());
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const fetchQualifiedJobs = async () => {
+    try {
+      const res = await fetch('/api/qualified-jobs');
+      if (res.ok) {
+        setQualifiedJobs(await res.json());
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const saveOperatorSettings = async (settings: OperatorSettings) => {
+    try {
+      const res = await fetch('/api/operator-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      if (res.ok) {
+        setOperatorSettings(await res.json());
+        setActionError(null);
+      } else {
+        setActionError("Failed to save settings");
+      }
+    } catch (e) {
+      setActionError("Error saving settings");
+    }
+  };
+
+  const qualifiedAction = async (jobId: number, action: 'open' | 'promote' | 'skip' | 'confirm') => {
+    try {
+      const res = await fetch(`/api/qualified-jobs/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId }),
+      });
+      if (res.ok) {
+        fetchQualifiedJobs();
+      } else {
+        setActionError(`Failed to ${action} job`);
+      }
+    } catch(e) {
+      setActionError(`Error performing ${action}`);
+    }
+  };
+
 	const fetchAssisted = async () => {
 		const seq = ++assistedSeq.current;
 		try {
@@ -260,6 +341,10 @@ function App() {
     const seq = ++pollSeq.current;
     fetchMetrics(seq);
     checkAgent(seq);
+
+    fetchOperatorSettings();
+    fetchQualifiedJobs();
+
   };
 
   useEffect(() => {
@@ -438,6 +523,46 @@ function App() {
         <button className="btn btn-start" onClick={handleStart} disabled={agentRunning}>▶ Start Agent</button>
         <button className="btn btn-stop" onClick={handleStop} disabled={!agentRunning}>🛑 Stop Agent</button>
       </div>
+		
+      <section className="settings-panel">
+        <h2>Application Mode</h2>
+        {operatorSettings ? (
+          <div className="operator-settings">
+            <label>
+              Mode:
+              <select
+                value={operatorSettings.application_mode}
+                onChange={(e) => saveOperatorSettings({ ...operatorSettings, application_mode: e.target.value as any })}
+              >
+                <option value="find_only">Find Only (Review every application)</option>
+                <option value="assisted">Assisted Apply (Fill form but wait to submit)</option>
+                <option value="automatic">Automatic Apply (Fully autonomous)</option>
+              </select>
+            </label>
+            <label>
+              Minimum Fit Score:
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={operatorSettings.minimum_fit_score}
+                onChange={(e) => saveOperatorSettings({ ...operatorSettings, minimum_fit_score: parseInt(e.target.value) || 0 })}
+              />
+            </label>
+            {!operatorSettings.scoring_active && (
+              <p className="warning">Scoring is disabled in your profile.yaml; fit score will be ignored.</p>
+            )}
+          </div>
+        ) : (
+          <p>Loading settings...</p>
+        )}
+      </section>
+
+      <section className="qualified-banner" aria-label="Qualified Jobs">
+        <div><strong>Qualified jobs found: {qualifiedJobs.length}</strong><span> Review jobs that met your minimum fit score.</span></div>
+        <button className="btn btn-qualified" onClick={() => setShowQualified(true)}>View Qualified Jobs</button>
+      </section>
+
 		<section className="assisted-banner" aria-label="Assisted Apply">
 			<div><strong>Assisted applications waiting: {metrics?.assisted_waiting ?? 0}</strong><span> Complete the next safe human step without restarting the application.</span></div>
 			<button className="btn btn-assisted" onClick={() => setShowAssisted(true)}>Open Assisted Apply</button>
@@ -461,6 +586,37 @@ function App() {
         )}
 
       <div className="dashboard-container" aria-live="polite" aria-atomic="false">
+			
+      {showQualified && (
+        <section className="qualified-queue">
+          <div className="assisted-heading">
+            <h2>Qualified Jobs (Find Only Mode)</h2>
+            <button className="text-button" onClick={() => setShowQualified(false)}>Return to dashboard</button>
+          </div>
+          {qualifiedJobs.length === 0 ? (
+            <p>No qualified jobs waiting.</p>
+          ) : (
+            qualifiedJobs.map(job => (
+              <article className="assisted-job" key={job.id}>
+                <div>
+                  <h3>{job.company} — {job.title}</h3>
+                  <p className="detail-meta">
+                    Fit score: {job.fit_score} · Provider: {job.provider} · Salary: {job.salary_desc || 'Unknown'} · Location: {job.location || 'Unknown'} {job.remote ? '(Remote)' : ''}
+                  </p>
+                  <p className="detail-meta">Discovered: {new Date(job.discovered_at).toLocaleString()}</p>
+                </div>
+                <div className="assisted-instruction">
+                  <button className="text-button" onClick={() => qualifiedAction(job.id, 'open')}>Open Current Job</button>
+                  <button className="btn btn-assisted" onClick={() => qualifiedAction(job.id, 'promote')}>Move to Assisted Apply</button>
+                  <button className="text-button" onClick={() => qualifiedAction(job.id, 'confirm')}>Mark Applied Manually</button>
+                  <button className="text-button text-danger" onClick={() => qualifiedAction(job.id, 'skip')}>Skip</button>
+                </div>
+              </article>
+            ))
+          )}
+        </section>
+      )}
+
 			{showAssisted && (
 				<section className="assisted-queue" aria-labelledby="assisted-heading">
 					<div className="assisted-heading"><h2 id="assisted-heading">Assisted Apply</h2><button className="text-button" onClick={() => setShowAssisted(false)}>Return to dashboard</button></div>

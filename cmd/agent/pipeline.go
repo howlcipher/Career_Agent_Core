@@ -430,9 +430,10 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			return StateEnd, nil
 		}
 
-		if state.Score < 50 {
-			log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d. Skipping because it is under 50.", workerID, job.CompanyName, state.Score)
-			if err := storage.UpdateFunnelStatusWithScore(job.URL, "SKIPPED", state.Score); err != nil {
+		minFitScore := deps.Profile.MinimumFitScore
+		if state.Score < minFitScore {
+			log.Printf("[Worker-%d] Fit Score Pipeline: %s scored %d. Skipping because it is under %d.", workerID, job.CompanyName, state.Score, minFitScore)
+			if err := storage.UpdateFunnelStatusWithReasonAndScore(job.URL, "SKIPPED", "below_minimum_fit_score", state.Score); err != nil {
 				log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
 			}
 			time.Sleep(1 * time.Second)
@@ -447,7 +448,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 		if deps.Profile.AutoSubmit {
 			return StateTailoring, nil
 		}
-		storage.UpdateFunnelStatus(job.URL, "PROCESSED_MANUAL")
+		storage.UpdateFunnelStatusWithReason(job.URL, "PROCESSED_MANUAL", "find_only_threshold_met")
 		return StateEnd, nil
 	})
 

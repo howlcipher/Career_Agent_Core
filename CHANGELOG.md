@@ -1,5 +1,10 @@
 # Career Agent Core - Changelog
 
+## 2026-08-04 — Application Mode selector and configurable fit threshold
+
+* **Feature:** Added Application Mode selector (find_only, assisted, automatic) and a configurable fit threshold to the dashboard. Legacy flags (`auto_submit`, `copilot_mode`, etc.) are gracefully inferred.
+* **Feature:** Qualified Jobs (Find Only mode) can now be reviewed, skipped, or promoted to Assisted Apply directly from the dashboard.
+
 ## 2026-08-03 — Assisted Apply opens every selected application at its actionable destination
 
 * **Fix:** Sequential batches now poll the live browser lease, disable Next

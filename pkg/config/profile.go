@@ -82,6 +82,9 @@ type Profile struct {
 	// suppressed, because guessing whether two roles are equivalent could hide
 	// a legitimate opportunity.
 	DuplicateCooldownDays int `yaml:"duplicate_cooldown_days"`
+
+	// MinimumFitScore is set dynamically via OperatorSettings
+	MinimumFitScore int `yaml:"-"`
 }
 
 // ShouldSendCoverLetter reports whether applications should include a cover
@@ -123,6 +126,8 @@ func LoadProfile(path string) (*Profile, error) {
 	if p.DuplicateCooldownDays < 0 {
 		return nil, fmt.Errorf("duplicate_cooldown_days must be zero or positive")
 	}
+
+	p.MinimumFitScore = 50 // default
 
 	return &p, nil
 }

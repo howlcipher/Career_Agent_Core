@@ -505,6 +505,13 @@ func main() {
 	mux.HandleFunc("/api/agent/start", requireSameOrigin(serveAgentStart))
 	mux.HandleFunc("/api/agent/stop", requireSameOrigin(serveAgentStop))
 
+	mux.HandleFunc("/api/operator-settings", requireSameOrigin(serveOperatorSettings))
+	mux.HandleFunc("/api/qualified-jobs", serveQualifiedJobs)
+	mux.HandleFunc("/api/qualified-jobs/open", requireSameOrigin(serveQualifiedJobsOpen))
+	mux.HandleFunc("/api/qualified-jobs/promote", requireSameOrigin(serveQualifiedJobsPromote))
+	mux.HandleFunc("/api/qualified-jobs/skip", requireSameOrigin(serveQualifiedJobsSkip))
+	mux.HandleFunc("/api/qualified-jobs/confirm", requireSameOrigin(serveQualifiedJobsConfirm))
+
 	if warning := dashboardExposureWarning(address); warning != "" {
 		log.Print(warning)
 	}

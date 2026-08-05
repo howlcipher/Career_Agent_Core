@@ -982,6 +982,14 @@ func main() {
 		log.Fatalf("Configuration error: %v", err)
 	}
 
+	opSettings, err := config.LoadOperatorSettings("applications/operator_settings.yaml")
+	if err != nil {
+		log.Fatalf("Failed to load operator settings: %v", err)
+	}
+	if err := config.ApplyOperatorSettings(prof, opSettings); err != nil {
+		log.Fatalf("Failed to apply operator settings: %v", err)
+	}
+
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(prof.HeadlessBrowser),
 		Args: []string{

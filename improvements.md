@@ -42,6 +42,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
+| 512 | [Application Mode selector and configurable fit threshold](#512-application-mode-selector-and-configurable-fit-threshold) | Done (2026-08-04) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #512 for the full account. |
 | 506 | [`/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely](#506-work_next_items-selection-rule-never-returns-to-bugsmd-once-the-gate-is-met-starving-minor-pending-bugs-indefinitely) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #506 for the full account. |
 | 500 | [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at) | Closed (2026-08-01) | — | mechanical | See `documentation/backlog_history/improvements_done_details.md` item #500 for the full account. |
 | 505 | [`storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice](#505-storedpromptinjectionthreats-and-tostoredthreats-are-the-same-field-for-field-conversion-written-twice) | Done (2026-08-01) | — | mechanical | See `documentation/backlog_history/improvements_done_details.md` item #505 for the full account. |

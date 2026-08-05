@@ -1645,6 +1645,15 @@ func UpdateFunnelStatusWithScore(url, status string, fitScore int) error {
 	return err
 }
 
+func UpdateFunnelStatusWithReasonAndScore(url, status, reason string, fitScore int) error {
+	if db == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	url = NormalizeURL(url)
+	_, err := db.Exec("UPDATE job_funnel SET status = ?, status_reason = ?, fit_score = ?, last_updated = ? WHERE url = ?", status, reason, fitScore, time.Now().UTC(), url)
+	return err
+}
+
 // MaxRetryAttempts caps how many times a retryable failure may return a
 // job_funnel row to DISCOVERED before UpdateFunnelStatusRetryable moves it
 // to the terminal RETRY_EXHAUSTED status (bugs.md #466).
