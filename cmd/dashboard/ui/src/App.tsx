@@ -94,6 +94,7 @@ interface OperatorSettings {
   application_mode: 'find_only' | 'assisted' | 'automatic';
   minimum_fit_score: number;
   scoring_active?: boolean;
+  daemon_active?: boolean;
 }
 
 interface QualifiedJob {
@@ -217,6 +218,9 @@ function App() {
   
   const [operatorSettings, setOperatorSettings] = useState<OperatorSettings | null>(null);
   const [draftSettings, setDraftSettings] = useState<OperatorSettings | null>(null);
+  const [draftScoreStr, setDraftScoreStr] = useState<string>('');
+  const [showModeConfirm, setShowModeConfirm] = useState<boolean>(false);
+  const [savingSettings, setSavingSettings] = useState<boolean>(false);
   const [qualifiedJobs, setQualifiedJobs] = useState<QualifiedJob[]>([]);
   const [showQualified, setShowQualified] = useState<boolean>(false);
 
@@ -273,6 +277,7 @@ function App() {
         const settings = await res.json();
         setOperatorSettings(settings);
         setDraftSettings(settings);
+        setDraftScoreStr(settings.minimum_fit_score.toString());
       }
     } catch (e) { console.error(e); }
   };
@@ -287,6 +292,7 @@ function App() {
   };
 
   const saveOperatorSettings = async (settings: OperatorSettings) => {
+    setSavingSettings(true);
     try {
       const res = await fetch('/api/operator-settings', {
         method: 'POST',
@@ -294,15 +300,21 @@ function App() {
         body: JSON.stringify(settings),
       });
       if (res.ok) {
-        const settings = await res.json();
-        setOperatorSettings(settings);
-        setDraftSettings(settings);
+        const updated = await res.json();
+        setOperatorSettings(updated);
+        setDraftSettings(updated);
+        setDraftScoreStr(updated.minimum_fit_score.toString());
+        setShowModeConfirm(false);
         setActionError(null);
       } else {
         setActionError("Failed to save settings");
       }
     } catch (e) {
       setActionError("Error saving settings");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
     }
   };
 
@@ -537,7 +549,9 @@ function App() {
               Mode:
               <select
                 value={draftSettings.application_mode}
-                onChange={(e) => setDraftSettings({ ...draftSettings, application_mode: e.target.value as any })}
+                onChange={(e) => {
+                  setDraftSettings({ ...draftSettings, application_mode: e.target.value as any });
+                }}
               >
                 <option value="find_only">Find Only (Review every application)</option>
                 <option value="assisted">Assisted Apply (Fill form but wait to submit)</option>
@@ -547,21 +561,83 @@ function App() {
             <label>
               Minimum Fit Score:
               <input
-                type="number"
-                min="0"
-                max="100"
-                value={draftSettings.minimum_fit_score}
-                onChange={(e) => setDraftSettings({ ...draftSettings, minimum_fit_score: parseInt(e.target.value) || 0 })}
+                type="text"
+                value={draftScoreStr}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setDraftScoreStr(val);
+                  const parsed = parseInt(val);
+                  if (!isNaN(parsed)) {
+                    setDraftSettings({ ...draftSettings, minimum_fit_score: parsed });
+                  }
+                }}
               />
             </label>
             {!draftSettings.scoring_active && (
               <p className="warning">Scoring is disabled in your profile.yaml; fit score will be ignored.</p>
             )}
-            {JSON.stringify(draftSettings) !== JSON.stringify(operatorSettings) && (
+            
+            {operatorSettings && !operatorSettings.daemon_active && (
+              <p className="status-message info">
+                Settings are saved but waiting for the daemon's next cycle to activate.
+              </p>
+            )}
+            {operatorSettings && operatorSettings.daemon_active && JSON.stringify(draftSettings) === JSON.stringify(operatorSettings) && draftScoreStr === operatorSettings?.minimum_fit_score.toString() && (
+              <p className="status-message success">
+                Settings are saved and currently active.
+              </p>
+            )}
+            
+            {(JSON.stringify(draftSettings) !== JSON.stringify(operatorSettings) || draftScoreStr !== (operatorSettings?.minimum_fit_score.toString() ?? '')) && (
               <div className="settings-actions">
                 <span className="unsaved-warning">You have unsaved changes.</span>
-                <button className="btn btn-primary" onClick={() => saveOperatorSettings(draftSettings)}>Apply Changes</button>
-                <button className="btn btn-secondary" onClick={() => setDraftSettings(operatorSettings)}>Cancel</button>
+                <button 
+                  className="btn btn-primary" 
+                  disabled={
+                    savingSettings || 
+                    draftScoreStr.trim() === '' || 
+                    isNaN(parseInt(draftScoreStr)) || 
+                    parseInt(draftScoreStr) < 0 || 
+                    parseInt(draftScoreStr) > 100 ||
+                    (JSON.stringify(draftSettings) === JSON.stringify(operatorSettings) && draftScoreStr === operatorSettings?.minimum_fit_score.toString())
+                  }
+                  onClick={() => setShowModeConfirm(true)}>
+                    Apply Changes
+                </button>
+                <button 
+                  className="btn btn-secondary" 
+                  disabled={savingSettings}
+                  onClick={() => {
+                    setDraftSettings(operatorSettings);
+                    setDraftScoreStr(operatorSettings?.minimum_fit_score.toString() ?? '');
+                    setShowModeConfirm(false);
+                    setActionError(null);
+                  }}>
+                    Discard Changes
+                </button>
+              </div>
+            )}
+            
+            {showModeConfirm && (
+              <div className="modal-overlay">
+                <div className="modal confirm-modal">
+                  <h3>Confirm Settings Change</h3>
+                  {draftSettings.application_mode === 'find_only' && (
+                    <p>Career Agent will find and score jobs and list qualified matches.<br/>It will not prepare documents, fill application forms, or submit applications.</p>
+                  )}
+                  {draftSettings.application_mode === 'assisted' && (
+                    <p>Career Agent will prepare qualified applications and fill supported fields.<br/>You must review and submit every application.<br/>Career Agent will never click the employer’s final Submit button.</p>
+                  )}
+                  {draftSettings.application_mode === 'automatic' && (
+                    <p><strong>Warning:</strong> Career Agent may click the employer’s Submit button on supported forms.<br/>CAPTCHA, login, legal-attestation, and unsupported cases still require you.</p>
+                  )}
+                  <div className="modal-actions">
+                    <button className="btn btn-primary" disabled={savingSettings} onClick={() => saveOperatorSettings(draftSettings)}>
+                      {savingSettings ? 'Saving...' : 'Confirm'}
+                    </button>
+                    <button className="btn btn-secondary" disabled={savingSettings} onClick={() => setShowModeConfirm(false)}>Cancel</button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

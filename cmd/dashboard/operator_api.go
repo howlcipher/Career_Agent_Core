@@ -4,67 +4,53 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/security"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"log"
 	"net/http"
 	"os/exec"
 	"time"
-
-	"github.com/howlcipher/Career_Agent_Core/pkg/config"
-	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
 const operatorSettingsPath = "applications/operator_settings.yaml"
 
+func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, req interface{}) error {
+	origin := r.Header.Get("Origin")
+	if origin != "" && origin != "http://localhost:8080" && origin != "http://127.0.0.1:8080" {
+		http.Error(w, "Forbidden origin", http.StatusForbidden)
+		return fmt.Errorf("forbidden origin")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return err
+	}
+	if dec.More() {
+		http.Error(w, "Invalid request body: trailing data", http.StatusBadRequest)
+		return fmt.Errorf("trailing data")
+	}
+	return nil
+}
+
 func serveOperatorSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		settings, err := config.LoadOperatorSettings(operatorSettingsPath)
+		effective, err := config.GetEffectiveSettings("profile.yaml", operatorSettingsPath)
 		if err != nil {
-			log.Printf("Failed to load operator settings: %v", err)
-			http.Error(w, "Failed to load operator settings", http.StatusInternalServerError)
+			log.Printf("Failed to resolve effective settings: %v", err)
+			http.Error(w, "Failed to resolve effective settings", http.StatusInternalServerError)
 			return
 		}
-
-		prof, _ := config.LoadProfile("profile.yaml")
-
-		if settings == nil {
-			settings = &config.OperatorSettings{
-				MinimumFitScore: 50,
-			}
-			if prof != nil {
-				if prof.AutoSubmit && !prof.AutoSubmitClick && prof.CopilotMode {
-					settings.ApplicationMode = config.ApplicationModeAssisted
-				} else if prof.AutoSubmit && prof.AutoSubmitClick && !prof.CopilotMode {
-					settings.ApplicationMode = config.ApplicationModeAutomatic
-				} else {
-					settings.ApplicationMode = config.ApplicationModeFindOnly
-				}
-			} else {
-				settings.ApplicationMode = config.ApplicationModeFindOnly
-			}
-		}
-
-		response := map[string]interface{}{
-			"application_mode":  settings.ApplicationMode,
-			"minimum_fit_score": settings.MinimumFitScore,
-		}
-
-		if prof != nil {
-			response["scoring_active"] = !prof.SkipScoring
-		} else {
-			response["scoring_active"] = true
-		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		json.NewEncoder(w).Encode(effective)
 		return
 	}
 
 	if r.Method == http.MethodPost {
 		var req config.OperatorSettings
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		if err := decodeBoundedJSON(w, r, &req); err != nil {
 			return
 		}
 		if err := req.Validate(); err != nil {
@@ -78,8 +64,15 @@ func serveOperatorSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		effective, err := config.GetEffectiveSettings("profile.yaml", operatorSettingsPath)
+		if err != nil {
+			log.Printf("Failed to resolve effective settings after save: %v", err)
+			http.Error(w, "Failed to resolve effective settings", http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(req)
+		json.NewEncoder(w).Encode(effective)
 		return
 	}
 
@@ -168,15 +161,10 @@ func serveQualifiedJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveQualifiedJobsOpen(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBoundedJSON(w, r, &req); err != nil {
 		return
 	}
 
@@ -186,89 +174,74 @@ func serveQualifiedJobsOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Server-side lookup, verified.
+	guard := security.NewNetworkGuard()
+	if err := guard.ValidateURL(r.Context(), u); err != nil {
+		http.Error(w, "Unsafe URL", http.StatusBadRequest)
+		return
+	}
+
 	cmd := exec.Command("xdg-open", u)
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "Failed to launch browser", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func serveQualifiedJobsPromote(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBoundedJSON(w, r, &req); err != nil {
 		return
 	}
 
-	var u string
-	if err := db.QueryRow("SELECT url FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u); err != nil {
-		http.Error(w, "Job not found", http.StatusNotFound)
+	eff, err := config.GetEffectiveSettings("profile.yaml", operatorSettingsPath)
+	if err != nil {
+		http.Error(w, "Internal configuration error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := storage.UpdateFunnelStatusWithReason(u, "DISCOVERED", "promoted"); err != nil {
-		http.Error(w, "Failed to promote job", http.StatusInternalServerError)
+	if err := storage.PromoteJobToAssisted(req.JobID, eff.MinimumFitScore); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to promote job: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func serveQualifiedJobsSkip(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBoundedJSON(w, r, &req); err != nil {
 		return
 	}
 
-	var u string
-	if err := db.QueryRow("SELECT url FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u); err != nil {
-		http.Error(w, "Job not found", http.StatusNotFound)
-		return
-	}
-
-	if err := storage.UpdateFunnelStatusWithReason(u, "SKIPPED", "manual_skip"); err != nil {
-		http.Error(w, "Failed to skip job", http.StatusInternalServerError)
+	if err := storage.SkipQualifiedJob(req.JobID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to skip job: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func serveQualifiedJobsConfirm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
-		JobID int64 `json:"job_id"`
+		JobID             int64 `json:"job_id"`
+		ConfirmedReceived bool  `json:"confirmed_received"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBoundedJSON(w, r, &req); err != nil {
 		return
 	}
 
-	var u string
-	var company, title string
-	if err := db.QueryRow("SELECT url, company_name, job_title FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u, &company, &title); err != nil {
-		http.Error(w, "Job not found", http.StatusNotFound)
+	if !req.ConfirmedReceived {
+		http.Error(w, "Missing manual confirmation acknowledgement", http.StatusBadRequest)
 		return
 	}
 
-	if err := storage.UpdateFunnelStatus(u, "APPLIED"); err != nil {
-		http.Error(w, "Failed to confirm job", http.StatusInternalServerError)
+	if err := storage.MarkJobAppliedManually(req.JobID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to confirm job: %v", err), http.StatusInternalServerError)
 		return
 	}
-	storage.RecordApplicationInDB(company, title, u)
 
 	w.WriteHeader(http.StatusOK)
 }

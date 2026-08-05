@@ -2,6 +2,15 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 513. Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified
+
+**Completed 2026-08-05.** Application Mode hardening was incomplete. Qualified Jobs mutations (promote, skip, open) were not safely verified, and settings activation wasn't durable. Unsafe transitions could have caused duplicate applications or wrong settings to be applied.
+
+Implemented durable promotion intent (`processing_intent` column in `job_funnel`), atomic `PromoteJobToAssisted`, `SkipQualifiedJob`, and `MarkJobAppliedManually` transition functions in `pkg/storage/promote.go` and enforced limits (bounded JSON body, no trailing objects, same-origin origin validation) in `cmd/dashboard/operator_api.go`. Created `config.GetEffectiveSettings` for uniform rule resolution, and a settings heartbeat pattern using `applications/active_operator_settings.json` so the UI explains correctly whether settings are pending daemon activation or currently active.
+Tests pass cleanly.
+
+---
+
 ## 512. Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs
 
 **Completed 2026-08-02.** Three guarded, read-only live checks contained neither a CAPTCHA nor a fillable application form: a blank BambooHR shell, a Meesho listing for a different role, and an unhydrated ATS shell. The prior current-page check treated any reachable non-CAPTCHA response as a browser-ready review, so it surfaced those unverified destinations as actionable human handoffs.

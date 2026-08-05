@@ -1158,9 +1158,27 @@ func main() {
 		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
 			if *daemonMode {
-				if opSettings, opErr := config.LoadOperatorSettings("applications/operator_settings.yaml"); opErr == nil {
-					config.ApplyOperatorSettings(prof, opSettings)
+				// 1. Resolve effective settings using both profile and operator settings
+				eff, effErr := config.GetEffectiveSettings("profile.yaml", "applications/operator_settings.yaml")
+				if effErr != nil {
+					log.Printf("[Agent] Error computing effective settings (preserving previous good settings): %v", effErr)
+				} else {
+					// 2. Apply effective settings to the profile for the daemon's internal use
+					// We need to load operator settings to apply them to prof
+					if opSettings, opErr := config.LoadOperatorSettings("applications/operator_settings.yaml"); opErr != nil {
+						log.Printf("[Agent] Error parsing operator settings: %v", opErr)
+					} else {
+						if err := config.ApplyOperatorSettings(prof, opSettings); err != nil {
+							log.Printf("[Agent] Error applying operator settings: %v", err)
+						} else {
+							// 3. Acknowledge settings activation
+							if err := config.AcknowledgeActiveSettings(eff, "applications/active_operator_settings.json"); err != nil {
+								log.Printf("[Agent] Error saving active settings heartbeat: %v", err)
+							}
+						}
+					}
 				}
+
 				cycleErr := runAgentQueueCycle(cycleCtx, limit, cycleDeps)
 				snapshot, snapshotErr := storage.GetDaemonWatchdogSnapshot(time.Now())
 				if snapshotErr != nil {

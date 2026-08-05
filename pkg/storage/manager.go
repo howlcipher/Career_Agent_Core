@@ -113,7 +113,8 @@ func InitDBWithPath(path string) error {
 		status_reason TEXT,
 		discovery_source TEXT,
 		job_location TEXT,
-		is_remote INTEGER
+		is_remote INTEGER,
+		processing_intent TEXT
 	);
 	CREATE TABLE IF NOT EXISTS form_mappings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,6 +230,9 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateAssistedApplications(); err != nil {
+		return err
+	}
+	if err := migrateJobFunnelProcessingIntent(); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
@@ -462,6 +466,38 @@ func migrateJobFunnelDiscoverySource() error {
 	}
 
 	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN discovery_source TEXT")
+	return err
+}
+
+// migrateJobFunnelProcessingIntent adds job_funnel.processing_intent
+func migrateJobFunnelProcessingIntent() error {
+	rows, err := db.Query("PRAGMA table_info(job_funnel)")
+	if err != nil {
+		return fmt.Errorf("failed to inspect job_funnel schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasCol := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("failed to scan job_funnel column info: %w", err)
+		}
+		if name == "processing_intent" {
+			hasCol = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasCol {
+		return nil
+	}
+
+	_, err = db.Exec("ALTER TABLE job_funnel ADD COLUMN processing_intent TEXT")
 	return err
 }
 
@@ -1819,15 +1855,16 @@ func LogExecution(jobID, url, status string, tokens int) error {
 }
 
 type FunnelJob struct {
-	CompanyName   string
-	JobTitle      string
-	URL           string
-	FitSimilarity float64
-	DiscoveredAt  time.Time
-	RankingScore  float64
-	RankingReason string
-	IsExploration bool
-	StatusReason  string
+	CompanyName      string
+	JobTitle         string
+	URL              string
+	FitSimilarity    float64
+	DiscoveredAt     time.Time
+	RankingScore     float64
+	RankingReason    string
+	IsExploration    bool
+	StatusReason     string
+	ProcessingIntent string
 }
 
 func (j *FunnelJob) GetURL() string             { return j.URL }

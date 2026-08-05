@@ -46,6 +46,7 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
+| 513 | [Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified](#513-application-mode-hardening-is-incomplete-qualified-jobs-mutations-and-settings-activation-are-not-safely-verified) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #513 for the full account. |
 | 512 | [Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs](#512-assisted-apply-presents-stale-mismatched-and-blank-employer-pages-as-actionable-human-handoffs) | Major | Done (2026-08-02) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #512 for the full account. |
 |---|---|---|---|---|---|---|
 | 508 | [Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails](#508-discovery-has-no-independent-current-listings-fallback-when-serpapi-quota-is-exhausted-and-yahoo-search-fails) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account. |
@@ -927,5 +928,9 @@ The database connection strings in `pkg/storage/manager.go` and `cmd/dashboard/m
 The `go-rod` prototype in `cmd/prototype_go_rod/main.go` utilizes `.MustWaitLoad()`, `page.Element()`, and `.MustInput()` without configuring a page timeout. If an element is missing from the page or the network stalls, these methods will block and hang indefinitely. Fix: Apply a timeout context (e.g., `page.Timeout(15 * time.Second)`) before performing DOM selections and waits.
 
 ### 414. Enforce single-instance execution to prevent DB corruption and stuck jobs
+
+Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+
+### 513. Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
@@ -41,10 +42,17 @@ func LoadOperatorSettings(path string) (*OperatorSettings, error) {
 		return nil, fmt.Errorf("failed to read operator settings: %w", err)
 	}
 
-	// Use unmarshal strict to reject unknown fields
 	var settings OperatorSettings
-	if err := yaml.Unmarshal(data, &settings); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&settings); err != nil {
 		return nil, fmt.Errorf("failed to parse operator settings: %w", err)
+	}
+
+	// reject trailing document
+	var dummy interface{}
+	if err := dec.Decode(&dummy); err == nil {
+		return nil, fmt.Errorf("failed to parse operator settings: trailing document found")
 	}
 
 	if err := settings.Validate(); err != nil {

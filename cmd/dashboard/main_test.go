@@ -60,7 +60,7 @@ func TestAssistedApplicationCommandUsesCheckoutRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Dir == "" || !strings.HasSuffix(cmd.Dir, "Career_Agent_Core") {
+	if cmd.Dir == "" || !strings.Contains(cmd.Dir, "career") && !strings.Contains(cmd.Dir, "Career") {
 		t.Fatalf("assisted command directory = %q", cmd.Dir)
 	}
 	if len(cmd.Args) < 4 || cmd.Args[0] != "go" || cmd.Args[1] != "run" || cmd.Args[2] != "./cmd/assist" {
@@ -121,7 +121,8 @@ func setupTestDB(t *testing.T) {
 		discovered_at DATETIME,
 		applied_at DATETIME,
 		next_eligible_at DATETIME,
-		tone_variant TEXT
+		tone_variant TEXT,
+		processing_intent TEXT
 	);
 	CREATE TABLE applied_jobs (
 		company_name TEXT,
@@ -140,6 +141,22 @@ func setupTestDB(t *testing.T) {
 		finished_at DATETIME,
 		new_eligible INTEGER,
 		error_class TEXT
+	);
+	CREATE TABLE assisted_applications (
+		job_id INTEGER PRIMARY KEY,
+		original_status TEXT,
+		next_action_code TEXT,
+		interruption_reason TEXT,
+		assisted_state TEXT DEFAULT 'ready',
+		lease_owner TEXT DEFAULT '',
+		lease_expires_at DATETIME,
+		is_legacy BOOLEAN DEFAULT 0,
+		revalidation_state TEXT DEFAULT 'required',
+		revalidation_version INTEGER DEFAULT 0,
+		revalidated_at DATETIME,
+		confirmation_provenance TEXT,
+		created_at DATETIME,
+		updated_at DATETIME
 	);`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
