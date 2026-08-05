@@ -17,12 +17,8 @@ var (
 )
 
 // PromoteJobToAssisted atomically promotes a qualified job to assisted apply mode.
-func PromoteJobToAssisted(jobID int64, minScore int) error {
-	if db == nil {
-		return fmt.Errorf("db not initialized")
-	}
-
-	tx, err := db.Begin()
+func PromoteJobToAssisted(conn *sql.DB, jobID int64, minScore int) error {
+	tx, err := conn.Begin()
 	if err != nil {
 		return err
 	}
@@ -34,7 +30,7 @@ func PromoteJobToAssisted(jobID int64, minScore int) error {
 	var processingIntent sql.NullString
 
 	err = tx.QueryRow(`SELECT url, status, COALESCE(status_reason, ''), fit_score, discovered_at, processing_intent 
-		FROM job_funnel WHERE rowid = ?`, jobID).Scan(&u, &status, &reason, &fitScore, &discoveredAt, &processingIntent)
+		FROM job_funnel WHERE id = ?`, jobID).Scan(&u, &status, &reason, &fitScore, &discoveredAt, &processingIntent)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ErrJobNotFound
@@ -84,7 +80,7 @@ func PromoteJobToAssisted(jobID int64, minScore int) error {
 		    status = 'DISCOVERED',
 		    status_reason = 'promoted',
 		    last_updated = ?
-		WHERE rowid = ?`, time.Now().UTC(), jobID)
+		WHERE id = ?`, time.Now().UTC(), jobID)
 	if err != nil {
 		return err
 	}
@@ -92,19 +88,15 @@ func PromoteJobToAssisted(jobID int64, minScore int) error {
 	return tx.Commit()
 }
 
-func SkipQualifiedJob(jobID int64) error {
-	if db == nil {
-		return fmt.Errorf("db not initialized")
-	}
-
-	tx, err := db.Begin()
+func SkipQualifiedJob(conn *sql.DB, jobID int64) error {
+	tx, err := conn.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	var u, status string
-	err = tx.QueryRow(`SELECT url, status FROM job_funnel WHERE rowid = ?`, jobID).Scan(&u, &status)
+	err = tx.QueryRow(`SELECT url, status FROM job_funnel WHERE id = ?`, jobID).Scan(&u, &status)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ErrJobNotFound
@@ -126,7 +118,7 @@ func SkipQualifiedJob(jobID int64) error {
 		    status_reason = 'manual_skip',
 		    processing_intent = NULL,
 		    last_updated = ?
-		WHERE rowid = ?`, time.Now().UTC(), jobID)
+		WHERE id = ?`, time.Now().UTC(), jobID)
 	if err != nil {
 		return err
 	}
@@ -134,19 +126,15 @@ func SkipQualifiedJob(jobID int64) error {
 	return tx.Commit()
 }
 
-func MarkJobAppliedManually(jobID int64) error {
-	if db == nil {
-		return fmt.Errorf("db not initialized")
-	}
-
-	tx, err := db.Begin()
+func MarkJobAppliedManually(conn *sql.DB, jobID int64) error {
+	tx, err := conn.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	var u, status string
-	err = tx.QueryRow(`SELECT url, status FROM job_funnel WHERE rowid = ?`, jobID).Scan(&u, &status)
+	var u, status, reason string
+	err = tx.QueryRow(`SELECT url, status, status_reason FROM job_funnel WHERE id = ?`, jobID).Scan(&u, &status, &reason)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ErrJobNotFound
@@ -154,12 +142,25 @@ func MarkJobAppliedManually(jobID int64) error {
 		return err
 	}
 
-	if status != "PROCESSED_MANUAL" && status != "AWAITING_REVIEW" && status != "MANUAL_REQUIRED" && status != "DISCOVERED" && status != "APPLIED" {
+	if status == "APPLIED" {
+		if reason == "manual_user_confirmation" {
+			return tx.Commit()
+		}
+		return fmt.Errorf("conflicting application record exists")
+	}
+
+	if status != "PROCESSED_MANUAL" || reason != "find_only_threshold_met" {
 		return ErrJobNotQualified
 	}
 
-	if status == "APPLIED" {
-		return nil
+	// Verify no conflicting application record exists
+	var conflictCount int
+	err = tx.QueryRow(`SELECT COUNT(*) FROM applied_jobs WHERE url = ?`, u).Scan(&conflictCount)
+	if err != nil {
+		return err
+	}
+	if conflictCount > 0 {
+		return fmt.Errorf("conflicting application record exists")
 	}
 
 	now := time.Now().UTC()
@@ -171,14 +172,20 @@ func MarkJobAppliedManually(jobID int64) error {
 		    processing_intent = NULL,
 		    applied_at = CASE WHEN applied_at IS NULL THEN ? ELSE applied_at END,
 		    last_updated = ?
-		WHERE rowid = ?`, now, now, jobID)
+		WHERE id = ?`, now, now, jobID)
 	if err != nil {
 		return err
 	}
 
 	// Insert into applied_jobs (dedup record)
-	_, err = tx.Exec(`INSERT OR IGNORE INTO applied_jobs (url, applied_at, role_name, company_name) 
-		SELECT url, ?, job_title, company_name FROM job_funnel WHERE rowid = ?`, now, jobID)
+	_, err = tx.Exec(`INSERT INTO applied_jobs (url, applied_at, job_title, company_name) 
+		SELECT url, ?, job_title, company_name FROM job_funnel WHERE id = ?`, now, jobID)
+	if err != nil {
+		return err
+	}
+
+	// Preserve a durable confirmation provenance field when the existing schema supports it.
+	_, err = tx.Exec(`UPDATE assisted_applications SET confirmation_provenance = 'manual_user_confirmation' WHERE job_id = ?`, jobID)
 	if err != nil {
 		return err
 	}

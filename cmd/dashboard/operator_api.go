@@ -7,6 +7,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"io"
 	"log"
 	"net/http"
 	"os/exec"
@@ -28,7 +29,8 @@ func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, req interface{}) 
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return err
 	}
-	if dec.More() {
+	var dummy interface{}
+	if err := dec.Decode(&dummy); err != io.EOF {
 		http.Error(w, "Invalid request body: trailing data", http.StatusBadRequest)
 		return fmt.Errorf("trailing data")
 	}
@@ -83,12 +85,10 @@ type QualifiedJob struct {
 	ID           int64  `json:"id"`
 	Company      string `json:"company"`
 	Title        string `json:"title"`
-	URL          string `json:"url"`
 	FitScore     int    `json:"fit_score"`
 	Provider     string `json:"provider"`
 	DiscoveredAt string `json:"discovered_at"`
 	LastUpdated  string `json:"last_updated"`
-	SalaryDesc   string `json:"salary_desc"`
 	Location     string `json:"location"`
 	Remote       bool   `json:"remote"`
 	Reason       string `json:"reason"`
@@ -101,8 +101,8 @@ func serveQualifiedJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.Query(`
-		SELECT rowid, company_name, title, url, fit_score, discovery_source,
-			discovered_at, updated_at, salary_desc, location, remote, status_reason
+		SELECT id, company_name, job_title, fit_score, discovery_source,
+			discovered_at, last_updated, job_location, is_remote, status_reason
 		FROM job_funnel
 		WHERE status = 'PROCESSED_MANUAL' AND status_reason = 'find_only_threshold_met'
 		ORDER BY fit_score DESC, discovered_at DESC
@@ -118,12 +118,12 @@ func serveQualifiedJobs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var j QualifiedJob
 		var discoveredAt, updatedAt sql.NullTime
-		var salary, location, reason, source sql.NullString
+		var location, reason, source sql.NullString
 		var fitScore sql.NullInt64
 		var remote sql.NullBool
 
-		if err := rows.Scan(&j.ID, &j.Company, &j.Title, &j.URL, &fitScore, &source,
-			&discoveredAt, &updatedAt, &salary, &location, &remote, &reason); err != nil {
+		if err := rows.Scan(&j.ID, &j.Company, &j.Title, &fitScore, &source,
+			&discoveredAt, &updatedAt, &location, &remote, &reason); err != nil {
 			log.Printf("serveQualifiedJobs scan error: %v", err)
 			continue
 		}
@@ -140,9 +140,6 @@ func serveQualifiedJobs(w http.ResponseWriter, r *http.Request) {
 		if updatedAt.Valid {
 			j.LastUpdated = updatedAt.Time.Format(time.RFC3339)
 		}
-		if salary.Valid {
-			j.SalaryDesc = salary.String
-		}
 		if location.Valid {
 			j.Location = location.String
 		}
@@ -156,11 +153,25 @@ func serveQualifiedJobs(w http.ResponseWriter, r *http.Request) {
 		jobs = append(jobs, j)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Printf("serveQualifiedJobs iteration error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if jobs == nil {
+		jobs = []QualifiedJob{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jobs)
 }
 
 func serveQualifiedJobsOpen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
@@ -169,7 +180,7 @@ func serveQualifiedJobsOpen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var u string
-	if err := db.QueryRow("SELECT url FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u); err != nil {
+	if err := db.QueryRow("SELECT url FROM job_funnel WHERE id = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u); err != nil {
 		http.Error(w, "Job not found", http.StatusNotFound)
 		return
 	}
@@ -189,6 +200,10 @@ func serveQualifiedJobsOpen(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveQualifiedJobsPromote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
@@ -202,7 +217,7 @@ func serveQualifiedJobsPromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := storage.PromoteJobToAssisted(req.JobID, eff.MinimumFitScore); err != nil {
+	if err := storage.PromoteJobToAssisted(db, req.JobID, eff.MinimumFitScore); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to promote job: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -210,6 +225,10 @@ func serveQualifiedJobsPromote(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveQualifiedJobsSkip(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req struct {
 		JobID int64 `json:"job_id"`
 	}
@@ -217,7 +236,7 @@ func serveQualifiedJobsSkip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := storage.SkipQualifiedJob(req.JobID); err != nil {
+	if err := storage.SkipQualifiedJob(db, req.JobID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to skip job: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -225,6 +244,10 @@ func serveQualifiedJobsSkip(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveQualifiedJobsConfirm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req struct {
 		JobID             int64 `json:"job_id"`
 		ConfirmedReceived bool  `json:"confirmed_received"`
@@ -238,7 +261,7 @@ func serveQualifiedJobsConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := storage.MarkJobAppliedManually(req.JobID); err != nil {
+	if err := storage.MarkJobAppliedManually(db, req.JobID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to confirm job: %v", err), http.StatusInternalServerError)
 		return
 	}

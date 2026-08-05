@@ -1,5 +1,11 @@
 package config
 
+import (
+	"errors"
+	"fmt"
+	"os"
+)
+
 type EffectiveSettings struct {
 	ApplicationMode            ApplicationMode `json:"application_mode"`
 	MinimumFitScore            int             `json:"minimum_fit_score"`
@@ -10,8 +16,16 @@ type EffectiveSettings struct {
 
 func GetEffectiveSettings(profilePath string, operatorPath string) (*EffectiveSettings, error) {
 	p, err := LoadProfile(profilePath)
-	if err != nil && err.Error() != "profile not found" {
-		// If profile not found, we can proceed with defaults if we want, but usually it exists.
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to load profile: %w", err)
+	}
+
+	if p == nil {
+		p = &Profile{}
+	} else {
+		// Clone profile to safely apply operator settings
+		cloned := *p
+		p = &cloned
 	}
 
 	op, err := LoadOperatorSettings(operatorPath)
@@ -24,33 +38,27 @@ func GetEffectiveSettings(profilePath string, operatorPath string) (*EffectiveSe
 			MinimumFitScore: 50,
 			ApplicationMode: ApplicationModeFindOnly,
 		}
-		if p != nil {
-			if p.AutoSubmit && !p.AutoSubmitClick && p.CopilotMode {
-				op.ApplicationMode = ApplicationModeAssisted
-			} else if p.AutoSubmit && p.AutoSubmitClick && !p.CopilotMode {
-				op.ApplicationMode = ApplicationModeAutomatic
-			}
+		if p.AutoSubmit && !p.AutoSubmitClick && p.CopilotMode {
+			op.ApplicationMode = ApplicationModeAssisted
+		} else if p.AutoSubmit && p.AutoSubmitClick && !p.CopilotMode {
+			op.ApplicationMode = ApplicationModeAutomatic
 		}
+	}
+
+	if err := ApplyOperatorSettings(p, op); err != nil {
+		return nil, err
 	}
 
 	effective := &EffectiveSettings{
 		ApplicationMode:            op.ApplicationMode,
 		MinimumFitScore:            op.MinimumFitScore,
-		ScoringActive:              true,
-		AutomaticSubmitClickActive: false,
-	}
-
-	if p != nil {
-		effective.ScoringActive = !p.SkipScoring
-	}
-
-	if effective.ApplicationMode == ApplicationModeAutomatic {
-		effective.AutomaticSubmitClickActive = true
+		ScoringActive:              !p.SkipScoring,
+		AutomaticSubmitClickActive: p.AutoSubmitClick,
 	}
 
 	active, err := LoadActiveSettings("applications/active_operator_settings.json")
 	if err == nil && active != nil {
-		effective.DaemonActive = (active.ApplicationMode == effective.ApplicationMode && active.MinimumFitScore == effective.MinimumFitScore)
+		effective.DaemonActive = (active.ApplicationMode == effective.ApplicationMode && active.MinimumFitScore == effective.MinimumFitScore && active.ScoringActive == effective.ScoringActive && active.AutomaticSubmitClickActive == effective.AutomaticSubmitClickActive)
 	}
 
 	return effective, nil

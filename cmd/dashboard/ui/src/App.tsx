@@ -101,12 +101,10 @@ interface QualifiedJob {
   id: number;
   company: string;
   title: string;
-  url: string;
   fit_score: number;
   provider: string;
   discovered_at: string;
   last_updated: string;
-  salary_desc: string;
   location: string;
   remote: boolean;
   reason: string;
@@ -206,6 +204,7 @@ function App() {
 	const [assistedJobs, setAssistedJobs] = useState<AssistedJob[]>([]);
 	const [showAssisted, setShowAssisted] = useState<boolean>(false);
 	const [confirmJob, setConfirmJob] = useState<AssistedJob | null>(null);
+	const [confirmQualifiedJob, setConfirmQualifiedJob] = useState<QualifiedJob | null>(null);
 	const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
 	const [batchIndex, setBatchIndex] = useState<number | null>(null);
 	const [stopAfterCurrent, setStopAfterCurrent] = useState<boolean>(false);
@@ -223,6 +222,14 @@ function App() {
   const [savingSettings, setSavingSettings] = useState<boolean>(false);
   const [qualifiedJobs, setQualifiedJobs] = useState<QualifiedJob[]>([]);
   const [showQualified, setShowQualified] = useState<boolean>(false);
+
+  const opRef = useRef<OperatorSettings | null>(null);
+  const draftRef = useRef<OperatorSettings | null>(null);
+  const scoreRef = useRef<string>('');
+
+  useEffect(() => { opRef.current = operatorSettings; }, [operatorSettings]);
+  useEffect(() => { draftRef.current = draftSettings; }, [draftSettings]);
+  useEffect(() => { scoreRef.current = draftScoreStr; }, [draftScoreStr]);
 
   const [pollFailures, setPollFailures] = useState<number>(0);
 
@@ -275,9 +282,18 @@ function App() {
       const res = await fetch('/api/operator-settings');
       if (res.ok) {
         const settings = await res.json();
+        const prevOp = opRef.current;
+        const prevDraft = draftRef.current;
+        const prevScore = scoreRef.current;
+        
+        const isDirty = prevOp != null && prevDraft != null && 
+            (JSON.stringify(prevDraft) !== JSON.stringify(prevOp) || prevScore !== prevOp.minimum_fit_score.toString());
+        
         setOperatorSettings(settings);
-        setDraftSettings(settings);
-        setDraftScoreStr(settings.minimum_fit_score.toString());
+        if (!isDirty || prevOp == null) {
+          setDraftSettings(settings);
+          setDraftScoreStr(settings.minimum_fit_score.toString());
+        }
       }
     } catch (e) { console.error(e); }
   };
@@ -310,6 +326,7 @@ function App() {
         setActionError("Failed to save settings");
       }
     } catch (e) {
+      console.error(e);
       setActionError("Error saving settings");
     } finally {
       setSavingSettings(false);
@@ -330,6 +347,7 @@ function App() {
         setActionError(`Failed to ${action} job`);
       }
     } catch(e) {
+      console.error(e);
       setActionError(`Error performing ${action}`);
     }
   };
@@ -688,14 +706,14 @@ function App() {
                 <div>
                   <h3>{job.company} — {job.title}</h3>
                   <p className="detail-meta">
-                    Fit score: {job.fit_score} · Provider: {job.provider} · Salary: {job.salary_desc || 'Unknown'} · Location: {job.location || 'Unknown'} {job.remote ? '(Remote)' : ''}
+                    Fit score: {job.fit_score} · Provider: {job.provider} · Location: {job.location || 'Unknown'} {job.remote ? '(Remote)' : ''}
                   </p>
                   <p className="detail-meta">Discovered: {new Date(job.discovered_at).toLocaleString()}</p>
                 </div>
                 <div className="assisted-instruction">
                   <button className="text-button" onClick={() => qualifiedAction(job.id, 'open')}>Open Current Job</button>
                   <button className="btn btn-assisted" onClick={() => qualifiedAction(job.id, 'promote')}>Move to Assisted Apply</button>
-                  <button className="text-button" onClick={() => qualifiedAction(job.id, 'confirm')}>Mark Applied Manually</button>
+                  <button className="text-button" onClick={() => setConfirmQualifiedJob(job)}>Mark Applied Manually</button>
                   <button className="text-button text-danger" onClick={() => qualifiedAction(job.id, 'skip')}>Skip</button>
                 </div>
               </article>
@@ -720,6 +738,29 @@ function App() {
 				</section>
 			)}
 			{confirmJob && <div className="confirm-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">Confirm application received</h2><p>Only mark this applied if the employer’s site showed that your application was received or successfully submitted.</p><div><button className="btn btn-assisted" onClick={confirmApplied}>Confirmed — Mark Applied</button><button className="text-button" onClick={() => setConfirmJob(null)}>Not confirmed</button></div></section></div>}
+			{confirmQualifiedJob && (
+				<div className="confirm-backdrop" role="presentation">
+					<section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-qualified-title">
+						<h2 id="confirm-qualified-title">Mark this job applied?</h2>
+						<p>Only continue if the employer showed that your application was received or successfully submitted.</p>
+						<div>
+							<button className="text-button" onClick={() => setConfirmQualifiedJob(null)}>Cancel</button>
+							<button className="btn btn-assisted" onClick={async () => {
+								try {
+									const res = await fetch(`/api/qualified-jobs/confirm`, {
+										method: 'POST',
+										headers: { 'Content-Type': 'application/json' },
+										body: JSON.stringify({ job_id: confirmQualifiedJob.id, confirmed_received: true }),
+									});
+									if (res.ok) fetchQualifiedJobs();
+									else setActionError('Failed to confirm job');
+								} catch(e) { console.error(e); setActionError('Error confirming job'); }
+								setConfirmQualifiedJob(null);
+							}}>Confirmed — Mark Applied</button>
+						</div>
+					</section>
+				</div>
+			)}
         <div className="grid">
           <div className="card discovered">
             <h2>{metrics?.discovered || 0}</h2>

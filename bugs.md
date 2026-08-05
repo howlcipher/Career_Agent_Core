@@ -47,6 +47,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 | 513 | [Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified](#513-application-mode-hardening-is-incomplete-qualified-jobs-mutations-and-settings-activation-are-not-safely-verified) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #513 for the full account. |
+| 514 | [Qualified Jobs and operator settings contain post-hardening runtime regressions](#514-qualified-jobs-and-operator-settings-contain-post-hardening-runtime-regressions) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #514 for the full account. |
 | 512 | [Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs](#512-assisted-apply-presents-stale-mismatched-and-blank-employer-pages-as-actionable-human-handoffs) | Major | Done (2026-08-02) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #512 for the full account. |
 |---|---|---|---|---|---|---|
 | 508 | [Discovery has no independent current-listings fallback when SerpApi quota is exhausted and Yahoo search fails](#508-discovery-has-no-independent-current-listings-fallback-when-serpapi-quota-is-exhausted-and-yahoo-search-fails) | Major | Done (2026-08-01) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #508 for the full account. |
@@ -934,3 +935,8 @@ Closed — full account archived in `documentation/backlog_history/bugs_done_det
 ### 513. Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+
+### 514. Qualified Jobs and operator settings contain post-hardening runtime regressions
+
+Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+
