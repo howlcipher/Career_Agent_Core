@@ -29,6 +29,7 @@ type Job struct {
 	Salary      int
 	Remote      bool
 	Description string
+	Intent      string
 }
 
 type Engine struct {

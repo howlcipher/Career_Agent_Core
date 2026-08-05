@@ -1827,6 +1827,7 @@ type FunnelJob struct {
 	RankingScore  float64
 	RankingReason string
 	IsExploration bool
+	StatusReason  string
 }
 
 func (j *FunnelJob) GetURL() string             { return j.URL }
@@ -1877,7 +1878,7 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	// next_eligible_at IS NULL covers every row that has never been retried
 	// (the overwhelming majority); rows UpdateFunnelStatusRetryable has
 	// backed off are excluded until their delay elapses (bugs.md #466).
-	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at FROM job_funnel
+	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at, status_reason FROM job_funnel
 		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
 		AND (next_eligible_at IS NULL OR next_eligible_at <= ?)`, time.Now().UTC())
 	if err != nil {
@@ -1889,9 +1890,13 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	for rows.Next() {
 		var j FunnelJob
 		var discoveredAt sql.NullTime
-		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL, &j.FitSimilarity, &discoveredAt); err != nil {
+		var statusReason sql.NullString
+		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL, &j.FitSimilarity, &discoveredAt, &statusReason); err != nil {
 			log.Printf("[Storage] Error scanning discovered job row: %v", err)
 			continue
+		}
+		if statusReason.Valid {
+			j.StatusReason = statusReason.String
 		}
 		if discoveredAt.Valid {
 			j.DiscoveredAt = discoveredAt.Time

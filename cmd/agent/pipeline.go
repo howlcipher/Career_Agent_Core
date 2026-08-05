@@ -445,7 +445,7 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			log.Printf("[Worker-%d] Failed to record fit score for %s: %v", workerID, job.CompanyName, err)
 		}
 
-		if deps.Profile.AutoSubmit {
+		if deps.Profile.AutoSubmit || job.Intent == "promoted" {
 			return StateTailoring, nil
 		}
 		storage.UpdateFunnelStatusWithReason(job.URL, "PROCESSED_MANUAL", "find_only_threshold_met")

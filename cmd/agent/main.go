@@ -659,6 +659,7 @@ func runAgentQueueCycle(
 			URL:         discovered.URL,
 			Salary:      deps.targetCompensation,
 			Remote:      true,
+			Intent:      discovered.StatusReason,
 		})
 	}
 
@@ -1157,6 +1158,9 @@ func main() {
 		*daemonCycleInterval,
 		func(cycleCtx context.Context, limit int) error {
 			if *daemonMode {
+				if opSettings, opErr := config.LoadOperatorSettings("applications/operator_settings.yaml"); opErr == nil {
+					config.ApplyOperatorSettings(prof, opSettings)
+				}
 				cycleErr := runAgentQueueCycle(cycleCtx, limit, cycleDeps)
 				snapshot, snapshotErr := storage.GetDaemonWatchdogSnapshot(time.Now())
 				if snapshotErr != nil {

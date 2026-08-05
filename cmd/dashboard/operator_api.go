@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"time"
 
@@ -73,47 +72,10 @@ func serveOperatorSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		pid, running, _ := agentPID()
-		if running && pid > 0 {
-			if proc, findErr := os.FindProcess(pid); findErr == nil {
-				if sigErr := proc.Signal(os.Interrupt); sigErr != nil {
-					log.Printf("serveOperatorSettings: failed to signal pid %d: %v", pid, sigErr)
-				}
-			}
-			// Wait for lock to be released
-			for i := 0; i < 50; i++ {
-				time.Sleep(100 * time.Millisecond)
-				_, stillRunning, _ := agentPID()
-				if !stillRunning {
-					break
-				}
-			}
-			_, stillRunning, _ := agentPID()
-			if stillRunning {
-				http.Error(w, "failed to stop running agent", http.StatusInternalServerError)
-				return
-			}
-		}
-
 		if err := config.SaveOperatorSettings(operatorSettingsPath, &req); err != nil {
 			log.Printf("Failed to save operator settings: %v", err)
 			http.Error(w, "Failed to save operator settings", http.StatusInternalServerError)
 			return
-		}
-
-		if running {
-			// Restart agent
-			cmd := exec.Command(
-				"./career_agent_bin",
-				"-daemon",
-				"-cycle-limit", "15",
-				"-cycle-interval", "1m",
-			)
-			if err := cmd.Start(); err != nil {
-				log.Printf("Failed to restart agent: %v", err)
-				http.Error(w, "Settings saved, but failed to restart agent", http.StatusInternalServerError)
-				return
-			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -249,7 +211,7 @@ func serveQualifiedJobsPromote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := storage.UpdateFunnelStatus(u, "PROCESSING"); err != nil {
+	if err := storage.UpdateFunnelStatusWithReason(u, "DISCOVERED", "promoted"); err != nil {
 		http.Error(w, "Failed to promote job", http.StatusInternalServerError)
 		return
 	}
@@ -270,7 +232,7 @@ func serveQualifiedJobsSkip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var u string
-	if err := db.QueryRow("SELECT url FROM job_funnel WHERE rowid = ?", req.JobID).Scan(&u); err != nil {
+	if err := db.QueryRow("SELECT url FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u); err != nil {
 		http.Error(w, "Job not found", http.StatusNotFound)
 		return
 	}
@@ -297,7 +259,7 @@ func serveQualifiedJobsConfirm(w http.ResponseWriter, r *http.Request) {
 
 	var u string
 	var company, title string
-	if err := db.QueryRow("SELECT url, company_name, title FROM job_funnel WHERE rowid = ?", req.JobID).Scan(&u, &company, &title); err != nil {
+	if err := db.QueryRow("SELECT url, company_name, job_title FROM job_funnel WHERE rowid = ? AND status = 'PROCESSED_MANUAL'", req.JobID).Scan(&u, &company, &title); err != nil {
 		http.Error(w, "Job not found", http.StatusNotFound)
 		return
 	}

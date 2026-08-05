@@ -216,6 +216,7 @@ function App() {
   // threshold, so a lone miss stays silent.
   
   const [operatorSettings, setOperatorSettings] = useState<OperatorSettings | null>(null);
+  const [draftSettings, setDraftSettings] = useState<OperatorSettings | null>(null);
   const [qualifiedJobs, setQualifiedJobs] = useState<QualifiedJob[]>([]);
   const [showQualified, setShowQualified] = useState<boolean>(false);
 
@@ -269,7 +270,9 @@ function App() {
     try {
       const res = await fetch('/api/operator-settings');
       if (res.ok) {
-        setOperatorSettings(await res.json());
+        const settings = await res.json();
+        setOperatorSettings(settings);
+        setDraftSettings(settings);
       }
     } catch (e) { console.error(e); }
   };
@@ -291,7 +294,9 @@ function App() {
         body: JSON.stringify(settings),
       });
       if (res.ok) {
-        setOperatorSettings(await res.json());
+        const settings = await res.json();
+        setOperatorSettings(settings);
+        setDraftSettings(settings);
         setActionError(null);
       } else {
         setActionError("Failed to save settings");
@@ -526,13 +531,13 @@ function App() {
 		
       <section className="settings-panel">
         <h2>Application Mode</h2>
-        {operatorSettings ? (
+        {draftSettings ? (
           <div className="operator-settings">
             <label>
               Mode:
               <select
-                value={operatorSettings.application_mode}
-                onChange={(e) => saveOperatorSettings({ ...operatorSettings, application_mode: e.target.value as any })}
+                value={draftSettings.application_mode}
+                onChange={(e) => setDraftSettings({ ...draftSettings, application_mode: e.target.value as any })}
               >
                 <option value="find_only">Find Only (Review every application)</option>
                 <option value="assisted">Assisted Apply (Fill form but wait to submit)</option>
@@ -545,12 +550,19 @@ function App() {
                 type="number"
                 min="0"
                 max="100"
-                value={operatorSettings.minimum_fit_score}
-                onChange={(e) => saveOperatorSettings({ ...operatorSettings, minimum_fit_score: parseInt(e.target.value) || 0 })}
+                value={draftSettings.minimum_fit_score}
+                onChange={(e) => setDraftSettings({ ...draftSettings, minimum_fit_score: parseInt(e.target.value) || 0 })}
               />
             </label>
-            {!operatorSettings.scoring_active && (
+            {!draftSettings.scoring_active && (
               <p className="warning">Scoring is disabled in your profile.yaml; fit score will be ignored.</p>
+            )}
+            {JSON.stringify(draftSettings) !== JSON.stringify(operatorSettings) && (
+              <div className="settings-actions">
+                <span className="unsaved-warning">You have unsaved changes.</span>
+                <button className="btn btn-primary" onClick={() => saveOperatorSettings(draftSettings)}>Apply Changes</button>
+                <button className="btn btn-secondary" onClick={() => setDraftSettings(operatorSettings)}>Cancel</button>
+              </div>
             )}
           </div>
         ) : (
