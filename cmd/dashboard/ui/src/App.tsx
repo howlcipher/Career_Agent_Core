@@ -315,8 +315,7 @@ function App() {
       setSavingSettings(false);
     }
   };
-    }
-  };
+
 
   const qualifiedAction = async (jobId: number, action: 'open' | 'promote' | 'skip' | 'confirm') => {
     try {
