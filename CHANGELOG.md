@@ -1,5 +1,38 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Assisted Apply prefills Greenhouse, Lever, and Ashby
+
+* **Fix:** Assisted Apply could not prefill anything on Greenhouse or Lever —
+  the only two ATSes it is used with. `FillAssistedMappedPage` knew how to
+  replay a cached form mapping and nothing else, but cached mappings are
+  produced only by the Learner Module; Greenhouse, Lever, and Ashby are filled
+  by hand-written handlers that never save one. Every assisted refill on those
+  boards failed with "no reusable form mapping", so all five applications in
+  the acceptance trial were typed by hand despite the pipeline having already
+  filled each form successfully.
+* The assisted path now routes through the same dedicated handlers the
+  automatic path uses, via a single shared `dedicatedATSHandler` router, and
+  keeps the cached mapping as the fallback for every other ATS.
+* **Assisted mode still never clicks Submit.** Each handler consults
+  `submitGate` before touching a submit control, and the assisted path treats a
+  handler returning a bare `nil` — which would mean it ran past that gate — as
+  a failure rather than a successful refill. Verified live against a real
+  Greenhouse posting and a real Lever posting: fields, location, country, and
+  documents were prefilled, the URL never changed, and no submission
+  confirmation appeared.
+* **Fix, found during that live verification:** the modern Greenhouse board
+  renders its upload control as `<input type="file" id="resume">` with no
+  `name` attribute, so `handleGreenhouse`'s `name='resume'` selector matched
+  nothing and applications went out with no résumé attached. The three
+  dedicated handlers now use `attachResume`'s fallback chain (mapped selector,
+  then résumé-named selectors, then the sole non-cover file input), which the
+  mapped dynamic path already had. Ashby additionally stops grabbing the form's
+  first file input outright, which on a form with a cover-letter upload could
+  be the wrong control.
+* Added `scripts/verify_assisted_prefill.go`, which drives the assisted fill
+  against a live posting with a synthetic identity and reports what landed in
+  the form, without ever submitting it.
+
 ## 2026-08-06 — Submitted applications can be marked applied again
 
 * **Fix:** the dashboard's "I saw a confirmation — Mark Applied" control never

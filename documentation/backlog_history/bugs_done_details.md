@@ -2,6 +2,26 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 519. Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with
+
+**Completed 2026-08-06.** Raised by the operator after all five acceptance-trial applications had to be typed by hand.
+
+**Mechanism.** `AttemptSubmit` routed Greenhouse, Lever, and Ashby to dedicated, hand-written handlers. Those handlers fill the form successfully — the trial logged `form filled — awaiting human review` for all six jobs processed — but they never call `SaveFormMapping`; only the Learner Module path does. So `form_mappings` held 80 rows and **zero** for Greenhouse or Lever after four successful Greenhouse fills. `FillAssistedMappedPage` knew how to replay a cached dynamic mapping and nothing else, so on precisely the two platforms the feature is used with, Continue could never refill and logged "refill stopped safely" instead. Compounding it, the pipeline's fill happens in a throwaway headless browser whose state dies with the process, and the assisted browser opens a fresh, blank session. Net effect: the agent filled each form, discarded the work, and the operator retyped it.
+
+**Fix.** The Greenhouse/Lever/Ashby domain match is now one shared router, `dedicatedATSHandler(applyURL) (atsFillHandler, string)`, consulted by both paths — `AttemptSubmit`'s three near-identical branches collapsed into one, and `FillAssistedMappedPage` routes through the same handlers with `copilotMode: true`, keeping the cached mapping as the fallback for every other ATS. A newly supported ATS now reaches both paths at once instead of one of them.
+
+**The submit gate, which was this fix's shipping condition.** The handlers were written for the automatic path, where they also click Submit, so a regression here would press Submit inside the operator's visible browser — the one thing assisted mode must never do. Three things now hold that line:
+
+1. All three handlers consult `submitGate` *before* resolving any submit control, so under `copilotMode` they return `ErrAwaitingHumanReview` without ever locating a button.
+2. `assistedFillOutcome` translates that sentinel into success and treats a bare `nil` as a **failure** — under copilot mode a nil can only mean a handler ran past the gate, so a future handler that forgets it cannot read as a healthy refill.
+3. Tests assert zero clicks across every selector, and that the three submit selectors are never even resolved.
+
+**Verified live**, not only against mocks: `scripts/verify_assisted_prefill.go` (added by this fix) drove `FillAssistedMappedPage` against a real Greenhouse posting and a real Lever posting with a synthetic identity. Fields, location, country, and documents were prefilled; the URL was identical before and after; no submission confirmation appeared; nothing was submitted.
+
+**Second defect found by that live run, fixed here.** The modern Greenhouse board renders its upload control as `<input type="file" id="resume">` with **no `name` attribute**, so `handleGreenhouse`'s own `input[type='file'][name='resume']` selector matched nothing and the resume was silently never attached — on the automatic path as well as the assisted one. The three dedicated handlers now use `attachResume`'s fallback chain (mapped selector → resume-named selectors → the sole non-cover file input), which bug #118 had already built for the mapped dynamic path but never wired into these handlers. Ashby additionally stops grabbing the form's first file input outright, which on a form with a cover-letter upload could be the wrong control. This is the same structural defect class the repo has hit repeatedly: a capability wired into one fill path and missed in the others.
+
+**Not addressed here:** #520 (Lever submissions fail inside the assisted browser) is a separate, still-open cause — this fix makes the Lever form arrive prefilled, but does not change whether Lever accepts a submission from that browser.
+
 ## 518. A revalidated, already-submitted application cannot be confirmed from the dashboard
 
 **Completed 2026-08-06.** Found immediately after the acceptance trial's first successful submission (job 301657, Grafana Labs). The operator submitted the application, the employer accepted it, and the dashboard offered no way to record that.

@@ -1605,7 +1605,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
 				urlBeforeSubmitClick = page.URL()
 				execErr = handleLinkedIn(page, resumePath, pii, copilotMode, autoSubmitClick)
-			} else if strings.Contains(urlLower, "greenhouse.io") || strings.Contains(urlLower, "boards.greenhouse.io") {
+			} else if handler, atsName := dedicatedATSHandler(applyURL); handler != nil {
 				// Bug #47: the dedicated handlers were never wired to
 				// bug #8's click-to-reveal step, unlike the Learner Module
 				// path — invisible until bug #45's CAPTCHA-detection fix
@@ -1626,42 +1626,9 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					companyName,
 					target,
 				); err != nil {
-					return fmt.Errorf("Greenhouse form rejected before use: %w", err)
+					return fmt.Errorf("%s form rejected before use: %w", atsName, err)
 				}
-				execErr = handleGreenhouse(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
-			} else if strings.Contains(urlLower, "lever.co") || strings.Contains(urlLower, "jobs.lever.co") {
-				// Bug #47, same reasoning as the Greenhouse branch above.
-				clickApplyIfPresent(page)
-				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
-					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
-				}
-				urlBeforeSubmitClick = page.URL()
-				target := resolveFillTarget(page)
-				if err := quarantineFillTargetDOM(
-					filter,
-					applyURL,
-					companyName,
-					target,
-				); err != nil {
-					return fmt.Errorf("Lever form rejected before use: %w", err)
-				}
-				execErr = handleLever(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
-			} else if strings.Contains(urlLower, "ashbyhq.com") {
-				clickApplyIfPresent(page)
-				if postClickContent, cErr := page.Content(); cErr == nil && isCaptchaBlocked(page, postClickContent) {
-					return fmt.Errorf("%w at %s", ErrCaptchaBlocked, ExtractDomain(applyURL))
-				}
-				urlBeforeSubmitClick = page.URL()
-				target := resolveFillTarget(page)
-				if err := quarantineFillTargetDOM(
-					filter,
-					applyURL,
-					companyName,
-					target,
-				); err != nil {
-					return fmt.Errorf("Ashby form rejected before use: %w", err)
-				}
-				execErr = handleAshby(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
+				execErr = handler(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
 				clickApplyIfPresent(page)
@@ -2271,6 +2238,36 @@ func fillPreMappedATSSelectors(target fillTarget, pii *config.PII, ats string) {
 	}
 }
 
+// atsFillHandler fills an application form on an ATS this project has a
+// hand-written handler for. Every implementation consults submitGate before
+// touching the form's final submit control, so a handler invoked with
+// copilotMode set fills and stops.
+type atsFillHandler func(target fillTarget, resumePath, coverPath string, pii *config.PII, copilotMode, autoSubmitClick bool) error
+
+// dedicatedATSHandler returns the hand-written handler for applyURL's ATS
+// and a display name for it, or (nil, "") when no dedicated handler covers
+// the domain and the caller should fall back to a learned form mapping.
+//
+// This exists as one shared decision rather than a branch per caller
+// (bugs.md #519): the automatic path routed Greenhouse/Lever/Ashby here
+// while Assisted Apply knew only about cached mappings, which these three
+// platforms never produce — so the feature could not prefill on precisely
+// the two ATSes it is used with. A single router means a newly supported
+// ATS reaches both paths at once.
+func dedicatedATSHandler(applyURL string) (atsFillHandler, string) {
+	lowered := strings.ToLower(applyURL)
+	switch {
+	case strings.Contains(lowered, "greenhouse.io"):
+		return handleGreenhouse, "Greenhouse"
+	case strings.Contains(lowered, "lever.co"):
+		return handleLever, "Lever"
+	case strings.Contains(lowered, "ashbyhq.com"):
+		return handleAshby, "Ashby"
+	default:
+		return nil, ""
+	}
+}
+
 func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PII, copilotMode, autoSubmitClick bool) error {
 	log.Printf("[Auto-Submit] Detected Ashby ATS. Filling out fields...")
 
@@ -2307,17 +2304,15 @@ func handleAshby(target fillTarget, resumePath, coverPath string, pii *config.PI
 		fillPreMappedATSSelectors(target, pii, "ashby")
 	}
 
-	// Resume upload
-	fileInput := target.Loc("input[type='file']").First()
-	if count, _ := fileInput.Count(); count > 0 && resumePath != "" {
-		fileBytes, err := os.ReadFile(resumePath)
-		if err == nil {
-			if err := fileInput.SetInputFiles([]playwright.InputFile{{
-				Name:   "resume.pdf",
-				Buffer: fileBytes,
-			}}); err != nil {
-				return fmt.Errorf("failed to set resume file: %w", err)
-			}
+	// Resume upload. Ashby exposes no stable resume-specific id, so this used
+	// to grab the form's first file input outright — which on a form that
+	// also takes a cover letter can be the wrong control entirely.
+	// attachResume's fallback chain prefers resume-named inputs and only
+	// falls back to a lone file input that is provably not the cover-letter
+	// one (bugs.md #519).
+	if resumePath != "" {
+		if err := attachResume(target, "", resumePath, false); err != nil {
+			return err
 		}
 	}
 
@@ -2384,19 +2379,17 @@ func handleGreenhouse(target fillTarget, resumePath, coverPath string, pii *conf
 		fillPreMappedATSSelectors(target, pii, "greenhouse")
 	}
 
-	// Upload resume
-	fileInput := target.Loc("input[type='file'][name='resume']")
-	if count, _ := fileInput.Count(); count > 0 {
-		fileBytes, err := os.ReadFile(resumePath)
-		if err == nil {
-			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
-				Name:   "resume.pdf",
-				Buffer: fileBytes,
-			}}); err != nil {
-				return fmt.Errorf("failed to set resume file: %w", err)
-			}
-		} else {
-			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
+	// Upload resume. bugs.md #519 (found live 2026-08-06 on
+	// job-boards.greenhouse.io/smartsheet): the modern board renders the
+	// control as <input type="file" id="resume"> with no name attribute at
+	// all, so this handler's own name='resume' selector matched nothing and
+	// the applicant's resume was silently never attached. attachResume tries
+	// that selector first, then the resume-named fallbacks (#118), then the
+	// sole-non-cover-file-input rule, and stays best-effort so a form with no
+	// upload control is unaffected.
+	if resumePath != "" {
+		if err := attachResume(target, "input[type='file'][name='resume']", resumePath, false); err != nil {
+			return err
 		}
 	}
 
@@ -2463,18 +2456,13 @@ func handleLever(target fillTarget, resumePath, coverPath string, pii *config.PI
 		fillPreMappedATSSelectors(target, pii, "lever")
 	}
 
-	fileInput := target.Loc("input[type='file'][id='resume-upload-input']")
-	if count, _ := fileInput.Count(); count > 0 {
-		fileBytes, err := os.ReadFile(resumePath)
-		if err == nil {
-			if err := fileInput.First().SetInputFiles([]playwright.InputFile{{
-				Name:   "resume.pdf",
-				Buffer: fileBytes,
-			}}); err != nil {
-				return fmt.Errorf("failed to set resume file: %w", err)
-			}
-		} else {
-			log.Printf("[Auto-Submit] Failed to read resume for upload: %v", err)
+	// Same fallback chain as the Greenhouse handler above (bugs.md #519):
+	// Lever's own id is tried first, then the resume-named selectors, then
+	// the sole-non-cover-file-input rule, so a template that renames the
+	// control still gets the resume attached.
+	if resumePath != "" {
+		if err := attachResume(target, "input[type='file'][id='resume-upload-input']", resumePath, false); err != nil {
+			return err
 		}
 	}
 
@@ -4155,9 +4143,18 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 	return nil
 }
 
-// FillAssistedMappedPage resumes only a healthy cached mapping in an already
-// visible assisted page. It never learns from raw DOM, answers unknown/legal
-// questions, solves CAPTCHA, or clicks Submit.
+// FillAssistedMappedPage refills the fields this project already knows how to
+// fill on an already visible assisted page. It never learns from raw DOM,
+// answers unknown/legal questions, solves CAPTCHA, or clicks Submit.
+//
+// bugs.md #519: this used to resolve a cached dynamic mapping and nothing
+// else. Cached mappings only ever exist for ATSes the Learner Module has
+// mapped, and Greenhouse/Lever/Ashby are routed to hand-written handlers
+// that never call SaveFormMapping — so on precisely the two platforms
+// Assisted Apply is used with, every refill failed with "no reusable form
+// mapping" and the operator retyped a form the pipeline had already filled.
+// Route through the same dedicated handlers the automatic path uses, and
+// keep the cached mapping as the fallback for everything else.
 func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLayer, companyName, applyURL, resumePath, coverPath string, pii *config.PII) error {
 	content, err := page.Content()
 	if err != nil {
@@ -4172,6 +4169,18 @@ func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLay
 	if err := quarantineCareerPageDOM(filter, applyURL, companyName, content); err != nil {
 		return err
 	}
+	// Deliberately no clickApplyIfPresent here, unlike the automatic path:
+	// ReachAssistedDestination has already advanced this browser to a
+	// verified form surface, so a second Apply-labeled click inside the
+	// operator's visible window would risk navigating away from the very
+	// form they are about to review and submit by hand.
+	target := resolveFillTarget(page)
+	if handler, atsName := dedicatedATSHandler(applyURL); handler != nil {
+		if err := quarantineFillTargetDOM(filter, applyURL, companyName, target); err != nil {
+			return fmt.Errorf("%s form rejected before use: %w", atsName, err)
+		}
+		return assistedFillOutcome(handler(target, resumePath, coverPath, pii, true, false))
+	}
 	domain := ExtractDomain(applyURL)
 	mapping, err := storage.GetFormMapping(domain)
 	if err != nil {
@@ -4181,9 +4190,27 @@ func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLay
 	if err != nil || !healthy {
 		return errors.New("form mapping is not healthy enough to reuse")
 	}
-	err = handleDynamic(resolveFillTarget(page), resumePath, coverPath, pii, mapping, true, false)
+	return assistedFillOutcome(handleDynamic(target, resumePath, coverPath, pii, mapping, true, false))
+}
+
+// assistedFillOutcome translates a copilot-mode fill result into the assisted
+// caller's contract: a form that filled cleanly and stopped at the submit
+// gate is a success, and anything else is reported so cmd/assist preserves
+// the page for manual completion.
+//
+// A bare nil is deliberately treated as a failure. Under copilotMode every
+// fill handler must return submitGate's ErrAwaitingHumanReview, so a nil
+// means one of them ran past the gate and clicked the employer's Submit
+// control on the operator's behalf — the one thing assisted mode must never
+// do. Nothing can undo that click, but reporting it truthfully is the only
+// correct remaining action, and it keeps a future handler that forgets the
+// gate from silently reading as a healthy refill.
+func assistedFillOutcome(err error) error {
 	if errors.Is(err, ErrAwaitingHumanReview) {
 		return nil
+	}
+	if err == nil {
+		return errors.New("assisted fill did not stop at the copilot submit gate")
 	}
 	return err
 }
