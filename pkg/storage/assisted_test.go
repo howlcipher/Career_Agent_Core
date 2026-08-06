@@ -533,3 +533,62 @@ func TestActionForRevalidation_OtherStatusesUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// Bug #521: four Veeva postings of one role in four cities rendered as
+// identical cards, and confirming the wrong one wrote a false APPLIED record.
+// The projection must carry something the operator can check, and must say how
+// many rows it could be confused with.
+func TestGetAssistedQueue_DistinguishesPostingsSharingCompanyAndRole(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	for _, tc := range []struct{ company, title, url string }{
+		{"Veeva", "Senior Software Engineer - Python", "https://boards.greenhouse.io/veeva/jobs/293750"},
+		{"Veeva", "Senior Software Engineer - Python", "https://boards.greenhouse.io/veeva/jobs/293752"},
+		{"Solo Co", "Platform Engineer", "https://boards.greenhouse.io/solo/jobs/11"},
+	} {
+		if _, err := AddToFunnel(tc.company, tc.title, tc.url, "AWAITING_REVIEW"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Only one of the two duplicates has been backfilled with a location
+	// (bug #524 backfills the rest); the other must still be distinguishable.
+	if err := UpdateFunnelIdentity("https://boards.greenhouse.io/veeva/jobs/293750", "Raleigh, NC", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("queue length = %d", len(jobs))
+	}
+	byRequisition := map[string]AssistedJob{}
+	for _, job := range jobs {
+		if job.RequisitionID == "" {
+			t.Fatalf("job %+v carries no requisition id", job)
+		}
+		byRequisition[job.RequisitionID] = job
+	}
+	if len(byRequisition) != 3 {
+		t.Fatalf("requisition ids are not unique: %+v", byRequisition)
+	}
+	if got := byRequisition["293750"]; got.Location != "Raleigh, NC" || got.DuplicateSiblings != 1 {
+		t.Fatalf("located duplicate = %+v", got)
+	}
+	if got := byRequisition["293752"]; got.Location != "" || got.DuplicateSiblings != 1 {
+		t.Fatalf("unlocated duplicate = %+v", got)
+	}
+	if got := byRequisition["11"]; got.DuplicateSiblings != 0 {
+		t.Fatalf("unique row reported %d siblings", got.DuplicateSiblings)
+	}
+	// The posting URL itself stays server-side for a row Career Agent can open
+	// on the operator's behalf; only the derived identifier is projected.
+	for _, job := range jobs {
+		if job.ApplyURL != "" {
+			t.Fatalf("job %s leaked a posting URL", job.ID)
+		}
+	}
+}

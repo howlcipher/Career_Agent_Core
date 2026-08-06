@@ -49,6 +49,19 @@ type AssistedJob struct {
 	AttemptCount     int                `json:"assisted_attempt_count"`
 	PriorityReason   string             `json:"priority_reason"`
 	NextAction       AssistedNextAction `json:"next_action"`
+	// Location and RequisitionID exist so two postings of the same role at the
+	// same company are never rendered as identical cards (bug #521). Both are
+	// public employer data, and both are empty when the posting carries
+	// neither -- an absent distinguisher is reported honestly rather than
+	// filled with something the operator cannot check against the posting.
+	Location      string `json:"location,omitempty"`
+	RequisitionID string `json:"requisition_id,omitempty"`
+	// DuplicateSiblings counts the other rows in this same queue that share
+	// this row's normalized company and role. Ambiguous reports that those
+	// siblings cannot be told apart from this row by what the queue knows, so
+	// the operator has to open the posting before confirming anything.
+	DuplicateSiblings int  `json:"duplicate_siblings,omitempty"`
+	Ambiguous         bool `json:"ambiguous,omitempty"`
 	// ApplyURL is populated only when NextAction.Code is
 	// "open_in_own_browser"; it is empty for every other row.
 	ApplyURL string `json:"apply_url,omitempty"`
@@ -652,7 +665,7 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		aa.assisted_state,
 		aa.updated_at,
 		aa.lease_owner, aa.lease_expires_at,
-		COALESCE(jf.url, '')
+		COALESCE(jf.url, ''), COALESCE(jf.job_location, '')
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.assisted_state != 'completed'
 		ORDER BY CASE aa.next_action_code WHEN 'review_and_submit' THEN 1 WHEN 'solve_captcha' THEN 2 WHEN 'complete_legal_attestation' THEN 3 WHEN 'login_or_create_account' THEN 4 ELSE 5 END,
@@ -676,9 +689,14 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var assistedState string
 		var currentStatus string
 		var postingURL string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry, &postingURL); err != nil {
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry, &postingURL, &job.Location); err != nil {
 			return nil, err
 		}
+		job.Location = strings.TrimSpace(job.Location)
+		// The requisition id is derived from the posting URL rather than
+		// exposing the URL itself, which this projection deliberately withholds
+		// for every row Career Agent can open on the operator's behalf.
+		job.RequisitionID = AssistedRequisitionID(postingURL)
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)
 		if fit.Valid {
 			v := int(fit.Int64)
@@ -713,7 +731,14 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		}
 		jobs = append(jobs, job)
 	}
-	return jobs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Duplicate marking runs over the assembled queue rather than in SQL,
+	// because the comparison is the same normalization the confirmed-duplicate
+	// matcher applies, not a string equality SQLite could do (bug #521).
+	markAssistedDuplicates(jobs)
+	return jobs, nil
 }
 
 func assistedDocumentExists(conn *sql.DB, jobID, kind string) bool {

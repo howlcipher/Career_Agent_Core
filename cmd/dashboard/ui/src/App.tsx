@@ -142,7 +142,28 @@ interface AssistedJob {
 	// Present only when next_action.code is 'open_in_own_browser' — an ATS
 	// that rejects the assisted browser, so the operator needs the link.
 	apply_url?: string;
+	// Bug #521: the distinguishers that tell two postings of the same role at
+	// the same company apart. Either can be absent when the posting carries it.
+	location?: string;
+	requisition_id?: string;
+	// How many other queued rows share this row's company and role, and whether
+	// the queue can actually tell this row apart from them.
+	duplicate_siblings?: number;
+	ambiguous?: boolean;
 }
+
+// Bug #521: four Veeva cards for the same role in four cities rendered
+// identically, and one misclick marked a posting applied that was never
+// submitted. Every card carries whatever the operator can check against the
+// posting open in front of them — the advertised location, the ATS requisition
+// id, or both.
+const assistedDistinguisher = (job: AssistedJob): string =>
+	[job.location, job.requisition_id && `Req ${job.requisition_id}`].filter(Boolean).join(' · ');
+
+const assistedJobLabel = (job: AssistedJob): string => {
+	const distinguisher = assistedDistinguisher(job);
+	return distinguisher ? `${job.company} — ${job.role} (${distinguisher})` : `${job.company} — ${job.role}`;
+};
 
 // ConversionTable renders one conversion breakdown. The <caption> and the
 // six scope="col" headers are not decoration: they are improvement #34's
@@ -731,7 +752,14 @@ function App() {
 					{assistedJobs.length > 0 && <div className="batch-controls"><button className="btn btn-assisted" onClick={startSelected} disabled={selectedJobs.length === 0 || batchIndex !== null || assistedBrowserOpen}>Start Selected Applications</button>{batchIndex !== null && <><span>Application {batchIndex + 1} of {selectedJobs.length}</span><button className="text-button" onClick={() => setStopAfterCurrent(true)}>Stop After This Application</button><button className="text-button" onClick={nextSelected} disabled={assistedBrowserOpen}>{assistedBrowserOpen ? 'Close Current Application First' : 'Open Next Selected Application'}</button></>}</div>}
 					{assistedJobs.length === 0 ? <p className="detail-meta">There is nothing to complete right now. New handoffs will appear here when human action is needed.</p> : assistedJobs.map((job) => (
 						<article className="assisted-job" key={job.id}>
-							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null || !job.next_action.requires_browser} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
+							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null || !job.next_action.requires_browser} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3>{assistedDistinguisher(job) && <p className="assisted-distinguisher">{assistedDistinguisher(job)}</p>}{(job.duplicate_siblings ?? 0) > 0 && (
+								<p className="assisted-duplicate-warning" role="note">
+									{`${job.duplicate_siblings} other queued application${job.duplicate_siblings === 1 ? ' shares' : 's share'} this company and role.`}
+									{job.ambiguous
+										? ' Career Agent cannot tell them apart from the queue alone, so open the posting and check which one this is before confirming it.'
+										: ' Check the line above against the posting before confirming this one.'}
+								</p>
+							)}<p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
 							<ol className="assisted-stepper" aria-label="Application progress"><li className="done">Prepared</li><li className="active">Human action</li><li>Continue filling</li><li className={job.next_action.requires_explicit_submit ? 'active' : ''}>Review and submit</li><li>Confirmed</li></ol>
 						<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p>{job.apply_url ? (
 							// This ATS refuses the assisted browser, so there is nothing
@@ -747,7 +775,25 @@ function App() {
 					))}
 				</section>
 			)}
-			{confirmJob && <div className="confirm-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title">Confirm application received</h2><p>Only mark this applied if the employer’s site showed that your application was received or successfully submitted.</p><div><button className="btn btn-assisted" onClick={confirmApplied}>Confirmed — Mark Applied</button><button className="text-button" onClick={() => setConfirmJob(null)}>Not confirmed</button></div></section></div>}
+			{confirmJob && (
+				<div className="confirm-backdrop" role="presentation">
+					<section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+						<h2 id="confirm-title">Confirm application received</h2>
+						{/* Bug #521: the dialog named no job at all, so a misclick on one of
+						    several identical cards was unrecoverable — this record is what
+						    removes the job from the queue for good. Name it, and say so
+						    explicitly when another queued row could be confused with it. */}
+						<p className="confirm-subject">{assistedJobLabel(confirmJob)}</p>
+						{(confirmJob.duplicate_siblings ?? 0) > 0 && (
+							<p className="assisted-duplicate-warning" role="alert">
+								{`${confirmJob.duplicate_siblings} other queued application${confirmJob.duplicate_siblings === 1 ? ' shares' : 's share'} this company and role. Marking the wrong one applied removes it from the queue permanently and blocks a future attempt, so make sure this is the posting you actually submitted.`}
+							</p>
+						)}
+						<p>Only mark this applied if the employer’s site showed that your application was received or successfully submitted.</p>
+						<div><button className="btn btn-assisted" onClick={confirmApplied}>Confirmed — Mark Applied</button><button className="text-button" onClick={() => setConfirmJob(null)}>Not confirmed</button></div>
+					</section>
+				</div>
+			)}
 			{confirmQualifiedJob && (
 				<div className="confirm-backdrop" role="presentation">
 					<section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-qualified-title">

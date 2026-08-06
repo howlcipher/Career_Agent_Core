@@ -523,6 +523,61 @@ describe('Assisted Apply workflow', () => {
       vi.useRealTimers();
     }
   });
+
+	// Bug #521: Veeva listed one role in four cities, the queue rendered four
+	// identical cards, and the operator confirmed two of them 8 seconds apart
+	// after submitting one. The card must distinguish them, and the dialog that
+	// writes the irreversible APPLIED record must name what it is about to mark.
+	it('distinguishes duplicate postings and names the job it is about to mark applied', async () => {
+		const duplicate = (id: string, requisition?: string, location?: string) => ({
+			id, company: 'Veeva', role: 'Senior Software Engineer - Python', provider: 'Greenhouse', original_status: 'AWAITING_REVIEW',
+			interruption: '', last_updated: '2026-08-06T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+			mapping_ready: true, completed_work: 'Documents prepared.', legacy: false, live_browser: false, assisted_attempt_count: 0,
+			priority_reason: 'Ready for the next human step', requisition_id: requisition, location, duplicate_siblings: 2, ambiguous: !requisition && !location,
+			next_action: { code: 'review_and_submit', title: 'Review and submit', instruction: 'Review the form, then submit it.', primary_button: 'Open Application', requires_browser: true, documents_ready: true, requires_explicit_submit: true, can_continue: false },
+		});
+		const confirmed: string[] = [];
+		installFetch((input, init) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 2 }));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			// The third is a pre-#516 row on a careers page whose URL carries no
+			// requisition either: it cannot be distinguished, and must say so.
+			if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [duplicate('293750', '293750', 'Raleigh, NC'), duplicate('293752', '293752'), duplicate('legacy'), { ...duplicate('globex', 'GBX-1'), company: 'Globex', duplicate_siblings: 1 }] }));
+			if (url === '/api/assisted/confirm' && init?.method === 'POST') {
+				confirmed.push(JSON.parse(String(init?.body)).job_id);
+				return Promise.resolve(jsonResponse({ status: 'confirmed' }));
+			}
+			throw new Error(`unexpected fetch ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+
+		// The two cards are no longer interchangeable on screen.
+		expect(screen.getByText('Raleigh, NC · Req 293750')).toBeInTheDocument();
+		expect(screen.getByText('Req 293752')).toBeInTheDocument();
+		// Each says how many rows it can be confused with, and the one with no
+		// advertised location says the operator has to open the posting.
+		const warnings = screen.getAllByRole('note');
+		expect(warnings).toHaveLength(4);
+		expect(warnings[0]).toHaveTextContent('2 other queued applications share this company and role.');
+		expect(warnings[0]).toHaveTextContent('Check the line above against the posting');
+		expect(warnings[2]).toHaveTextContent('cannot tell them apart from the queue alone');
+		// A pair reads as a pair, not as "1 other queued application share".
+		expect(warnings[3]).toHaveTextContent('1 other queued application shares this company and role.');
+
+		fireEvent.click(screen.getAllByRole('button', { name: /I saw a confirmation/ })[1]);
+		await flush();
+		// The dialog names the job, so a misclick on the queue is still visible
+		// before the record is written.
+		expect(screen.getByRole('dialog')).toHaveTextContent('Veeva — Senior Software Engineer - Python (Req 293752)');
+		expect(screen.getByRole('alert')).toHaveTextContent('Marking the wrong one applied removes it from the queue permanently');
+		fireEvent.click(screen.getByRole('button', { name: 'Confirmed — Mark Applied' }));
+		await flush();
+		expect(confirmed).toEqual(['293752']);
+	});
 });
 
 describe('mission metrics (improvement #491)', () => {

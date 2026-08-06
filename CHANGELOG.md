@@ -1,5 +1,24 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Duplicate applications can no longer be confirmed by mistake
+
+* **Fix (bugs.md #521):** Veeva listed the same "Senior Software Engineer -
+  Python" requisition in four cities, and the Assisted Apply queue rendered
+  them as four identical cards. After submitting one, the operator confirmed
+  two of them 8 seconds apart; the second wrote an `APPLIED` record for a
+  posting that had never been submitted, which removes a real opportunity from
+  the queue for good and blocks any future attempt at it.
+* Every queue card now carries whatever tells it apart from its siblings: the
+  advertised location, the requisition identifier parsed from the posting URL,
+  or both. Against the live queue that is 517 of 524 rows.
+* A card that shares a company and role with another queued row says so, and
+  says how many. When Career Agent genuinely cannot tell them apart — no
+  location, no requisition, or the same ones as a sibling — it says that
+  instead of showing a distinguisher that looks like it matches.
+* The confirmation dialog now names the job it is about to mark applied and
+  repeats the duplicate warning, so a misclick in the queue is still visible
+  before the irreversible record is written.
+
 ## 2026-08-06 — Lever applications hand off to your own browser
 
 * **Fix (bugs.md #520):** Lever rejected every application submitted from the
