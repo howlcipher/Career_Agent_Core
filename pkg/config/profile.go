@@ -83,6 +83,15 @@ type Profile struct {
 	// a legitimate opportunity.
 	DuplicateCooldownDays int `yaml:"duplicate_cooldown_days"`
 
+	// AllowedCountries restricts discovery to postings advertised in these
+	// ISO-3166 alpha-2 countries. remote_only says a role may be worked
+	// remotely but says nothing about where from, so without this an
+	// India-only posting is indistinguishable from a US one — which is exactly
+	// how one reached a live Assisted Apply attempt (bug #516). Empty disables
+	// the gate, preserving the behavior of profiles written before it existed;
+	// a posting that publishes no location is always allowed through.
+	AllowedCountries []string `yaml:"allowed_countries"`
+
 	// MinimumFitScore is set dynamically via OperatorSettings
 	MinimumFitScore int `yaml:"-"`
 }

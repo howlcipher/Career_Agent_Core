@@ -45,12 +45,25 @@ type greenhouseJobsResponse struct {
 	Jobs []struct {
 		AbsoluteURL string `json:"absolute_url"`
 		Title       string `json:"title"`
+		Location    struct {
+			Name string `json:"name"`
+		} `json:"location"`
 	} `json:"jobs"`
 }
 
+// leverPosting captures the location fields the feed has always published and
+// this parser used to discard (bug #516). "country" is an ISO-3166 alpha-2 code
+// and is the highest-confidence signal available; categories.location and
+// allLocations are free text and are used only when the code is absent.
 type leverPosting struct {
-	HostedURL string `json:"hostedUrl"`
-	Text      string `json:"text"`
+	HostedURL  string `json:"hostedUrl"`
+	Text       string `json:"text"`
+	Country    string `json:"country"`
+	Categories struct {
+		Location     string   `json:"location"`
+		AllLocations []string `json:"allLocations"`
+	} `json:"categories"`
+	WorkplaceType string `json:"workplaceType"`
 }
 
 // discoverWithATSFeeds polls the board feeds of companies already known to use
@@ -100,6 +113,14 @@ type boardParser func(body []byte) ([]feedJob, error)
 type feedJob struct {
 	Title string
 	URL   string
+
+	// Location is the posting's advertised location as free text, and
+	// CountryCodes holds any ISO-3166 alpha-2 codes the feed stated outright.
+	// Either may be empty: not every board publishes them, and an empty pair
+	// means "no evidence", never "not allowed" (bug #516).
+	Location     string
+	CountryCodes []string
+	Remote       bool
 }
 
 var retryBackoffBase = time.Second
@@ -157,13 +178,44 @@ func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, di
 		if !f.titleLooksRelevant(j.Title) {
 			continue
 		}
+		// Geographic gate (bug #516). The same free-filter reasoning as the
+		// title check applies: an India-only posting costs a full fit-scoring
+		// call and can reach a live Assisted Apply attempt, and the feed
+		// already told us the country. Rejects only on positive evidence, so a
+		// board that publishes no location is unaffected.
+		if allowed, reason := LocationAllowed(j.Location, j.CountryCodes, f.AllowedCountries); !allowed {
+			log.Printf("[FunnelEngine] Skipping %s posting outside the configured region: %s", company, reason)
+			continue
+		}
 		isNew, err := f.addToFunnelCounted(discoverySource, company, j.Title, j.URL, "DISCOVERED")
 		if err != nil {
 			continue
 		}
-		if isNew && jobChan != nil {
-			found++
-			jobChan <- Job{CompanyName: company, Title: j.Title, URL: j.URL}
+		if isNew {
+			// Retain what the feed said about location so the queue, the
+			// dashboard and the duplicate matcher can all screen on it. Before
+			// #516 this was only ever written when a duplicate cooldown was
+			// configured, which it is not, leaving the column empty for all
+			// 12,902 rows.
+			if j.Location != "" || len(j.CountryCodes) > 0 {
+				identity := j.Location
+				if identity == "" {
+					identity = strings.Join(j.CountryCodes, ", ")
+				}
+				if err := storage.UpdateFunnelIdentity(j.URL, identity, j.Remote); err != nil {
+					log.Printf("[FunnelEngine] Could not record advertised location for a %s posting: %v", company, err)
+				}
+			}
+			if jobChan != nil {
+				found++
+				jobChan <- Job{
+					CompanyName: company,
+					Title:       j.Title,
+					URL:         j.URL,
+					Location:    j.Location,
+					Remote:      j.Remote,
+				}
+			}
 		}
 	}
 	return found
@@ -194,7 +246,13 @@ func parseGreenhouseBoard(body []byte) ([]feedJob, error) {
 	}
 	out := make([]feedJob, 0, len(parsed.Jobs))
 	for _, j := range parsed.Jobs {
-		out = append(out, feedJob{Title: strings.TrimSpace(j.Title), URL: strings.TrimSpace(j.AbsoluteURL)})
+		location := strings.TrimSpace(j.Location.Name)
+		out = append(out, feedJob{
+			Title:    strings.TrimSpace(j.Title),
+			URL:      strings.TrimSpace(j.AbsoluteURL),
+			Location: location,
+			Remote:   strings.Contains(strings.ToLower(location), "remote"),
+		})
 	}
 	return out, nil
 }
@@ -206,7 +264,21 @@ func parseLeverBoard(body []byte) ([]feedJob, error) {
 	}
 	out := make([]feedJob, 0, len(parsed))
 	for _, p := range parsed {
-		out = append(out, feedJob{Title: strings.TrimSpace(p.Text), URL: strings.TrimSpace(p.HostedURL)})
+		location := strings.TrimSpace(p.Categories.Location)
+		if location == "" && len(p.Categories.AllLocations) > 0 {
+			location = strings.TrimSpace(strings.Join(p.Categories.AllLocations, ", "))
+		}
+		var codes []string
+		if code := strings.TrimSpace(p.Country); code != "" {
+			codes = append(codes, code)
+		}
+		out = append(out, feedJob{
+			Title:        strings.TrimSpace(p.Text),
+			URL:          strings.TrimSpace(p.HostedURL),
+			Location:     location,
+			CountryCodes: codes,
+			Remote:       strings.EqualFold(strings.TrimSpace(p.WorkplaceType), "remote"),
+		})
 	}
 	return out, nil
 }

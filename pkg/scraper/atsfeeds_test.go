@@ -52,6 +52,75 @@ func TestParseLeverBoard(t *testing.T) {
 	}
 }
 
+// Both parsers discarded the location the feeds publish until bug #516, which
+// is what let an India-only posting reach a live application attempt. These
+// payloads are the real shapes: Lever's was captured live from
+// api.lever.co/v0/postings/jobgether on 2026-08-05, including the exact
+// country/categories pairing of the posting that halted the trial.
+func TestParseLeverBoard_CapturesLocation(t *testing.T) {
+	body := []byte(`[
+		{"hostedUrl":"https://jobs.lever.co/jobgether/abc","text":"AI Automation Engineer",
+		 "country":"IN","workplaceType":"remote",
+		 "categories":{"location":"India","allLocations":["India"],"commitment":"Full-time"}},
+		{"hostedUrl":"https://jobs.lever.co/acme/def","text":"Platform Engineer",
+		 "country":"US","workplaceType":"onsite",
+		 "categories":{"location":"Denver, CO","allLocations":["Denver, CO"]}},
+		{"hostedUrl":"https://jobs.lever.co/acme/ghi","text":"Backend Engineer",
+		 "categories":{"allLocations":["Toronto","Vancouver"]}}
+	]`)
+	jobs, err := parseLeverBoard(body)
+	if err != nil {
+		t.Fatalf("parseLeverBoard: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected 3 jobs, got %d", len(jobs))
+	}
+	if jobs[0].Location != "India" || len(jobs[0].CountryCodes) != 1 || jobs[0].CountryCodes[0] != "IN" {
+		t.Errorf("India posting parsed as location=%q codes=%v", jobs[0].Location, jobs[0].CountryCodes)
+	}
+	if !jobs[0].Remote {
+		t.Error("workplaceType remote should set Remote")
+	}
+	if jobs[1].Remote {
+		t.Error("workplaceType onsite must not set Remote")
+	}
+	// allLocations is the fallback when categories.location is absent.
+	if jobs[2].Location != "Toronto, Vancouver" {
+		t.Errorf("allLocations fallback produced %q", jobs[2].Location)
+	}
+	if len(jobs[2].CountryCodes) != 0 {
+		t.Errorf("absent country must yield no codes, got %v", jobs[2].CountryCodes)
+	}
+
+	// The gate must reject the first and admit the others.
+	if allowed, _ := LocationAllowed(jobs[0].Location, jobs[0].CountryCodes, []string{"US", "CA"}); allowed {
+		t.Error("India posting should be rejected by a US/CA allowlist")
+	}
+	if allowed, _ := LocationAllowed(jobs[1].Location, jobs[1].CountryCodes, []string{"US", "CA"}); !allowed {
+		t.Error("US posting should be allowed")
+	}
+}
+
+func TestParseGreenhouseBoard_CapturesLocation(t *testing.T) {
+	body := []byte(`{"jobs":[
+		{"absolute_url":"https://job-boards.greenhouse.io/acme/jobs/1","title":"SRE","location":{"name":"Remote - United States"}},
+		{"absolute_url":"https://job-boards.greenhouse.io/acme/jobs/2","title":"Analyst","location":{"name":"Bengaluru, India"}}
+	]}`)
+	jobs, err := parseGreenhouseBoard(body)
+	if err != nil {
+		t.Fatalf("parseGreenhouseBoard: %v", err)
+	}
+	if jobs[0].Location != "Remote - United States" || !jobs[0].Remote {
+		t.Errorf("US remote posting parsed as location=%q remote=%v", jobs[0].Location, jobs[0].Remote)
+	}
+	if allowed, _ := LocationAllowed(jobs[0].Location, jobs[0].CountryCodes, []string{"US", "CA"}); !allowed {
+		t.Error("Remote - United States should be allowed")
+	}
+	if allowed, _ := LocationAllowed(jobs[1].Location, jobs[1].CountryCodes, []string{"US", "CA"}); allowed {
+		t.Error("Bengaluru, India should be rejected")
+	}
+}
+
 // A board that returns something unexpected must produce an error rather than
 // silently contributing zero jobs, so the cause is visible in the log.
 func TestParseBoards_RejectMalformedPayloads(t *testing.T) {

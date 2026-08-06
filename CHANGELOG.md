@@ -1,5 +1,28 @@
 # Career Agent Core - Changelog
 
+## 2026-08-05 — Discovery filters postings by country
+
+* **Fix:** Discovery had no geographic filter of any kind. `profile.yaml`
+  offered only `remote_only`, which says a role can be worked remotely but
+  nothing about where from, and `job_funnel.job_location`/`is_remote` were
+  empty for all 12,902 rows because their only writer ran solely when a
+  duplicate cooldown was configured — and none was. An India-only Lever
+  posting consequently scored 100 and opened a real, verified application in
+  the assisted browser before the region was noticed on the employer page. No
+  application was submitted.
+* **Added:** `allowed_countries` in `profile.yaml` (ISO-3166 alpha-2, set to
+  `US`/`CA`). The Lever and Greenhouse board parsers now capture the advertised
+  location, country code, and remote status they previously discarded, and
+  discovery rejects postings outside the allowlist before they can consume a
+  fit-scoring call or reach an application attempt. Discovery also records the
+  advertised location so the queue and dashboard can be screened on real data.
+* **Note:** the gate rejects only on positive evidence and always admits a
+  posting that publishes no location, so a board without location data behaves
+  exactly as before. Against the live jobgether feed it rejected 1,952 of 2,993
+  postings as outside US/CA, with none admitted through the fail-open path.
+  Existing queue rows discovered before this change carry no location and are
+  not retroactively screened.
+
 ## 2026-08-05 — Assisted Apply attaches the real résumé
 
 * **Fix:** Assisted Apply resolved its résumé from the per-job

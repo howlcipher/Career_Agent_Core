@@ -1,6 +1,14 @@
 salary_floor: 105000
 target_compensation: 135000
 remote_only: true
+# remote_only says a role can be worked remotely, not where from. Without this
+# allowlist an India-only "Remote" posting is indistinguishable from a US one,
+# and one reached a live Assisted Apply attempt (bugs.md #516). ISO-3166
+# alpha-2 codes; add MX to include Mexico. Empty disables the gate, and a
+# posting that publishes no location is always allowed through.
+allowed_countries:
+  - US
+  - CA
 roles:
   - "Software Engineer"
   - "Senior Software Engineer"

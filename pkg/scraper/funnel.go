@@ -101,6 +101,11 @@ type FunnelEngine struct {
 	TargetATS []string
 	Roles     []string
 
+	// AllowedCountries is an ISO-3166 alpha-2 allowlist applied to feed
+	// postings that publish a location. Empty disables the gate entirely.
+	// See LocationAllowed for the fail-open policy (bug #516).
+	AllowedCountries []string
+
 	// yahooClient is shared across every discoverWithYahooHTML call made by
 	// this engine instance (one per DiscoverJobs run, see NewFunnelEngine's
 	// call site) so its cookie jar accumulates across queries instead of

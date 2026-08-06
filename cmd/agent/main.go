@@ -582,6 +582,16 @@ func runAgentSchedule(
 // runDaemonDiscoveryLoop refreshes the backlog independently of queue
 // consumption. Discovery can be slow when search providers throttle requests;
 // keeping it separate prevents that work from blocking already-discovered jobs.
+// newDiscoveryEngine builds the funnel engine every discovery path uses, so
+// the profile's geographic allowlist cannot be applied on one code path and
+// forgotten on another. Both the one-shot cycle and the daemon's background
+// discovery loop go through here (bugs.md #516).
+func newDiscoveryEngine(prof *config.Profile) *scraper.FunnelEngine {
+	engine := scraper.NewFunnelEngine(prof.Roles)
+	engine.AllowedCountries = prof.AllowedCountries
+	return engine
+}
+
 func runDaemonDiscoveryLoop(
 	ctx context.Context,
 	discoveryInterval time.Duration,
@@ -1114,7 +1124,7 @@ func main() {
 		loadDiscovered:  storage.GetDiscoveredJobs,
 		sweepDiscovered: storage.SweepStaleDiscoveredJobs,
 		discoverJobs: func(ctx context.Context, jobChan chan<- scraper.Job) error {
-			return scraper.NewFunnelEngine(prof.Roles).DiscoverJobs(ctx, jobChan)
+			return newDiscoveryEngine(prof).DiscoverJobs(ctx, jobChan)
 		},
 		processJobs:        processJobs,
 		targetJobURLs:      targetJobURLs,
@@ -1127,7 +1137,7 @@ func main() {
 			func(discoveryCtx context.Context) error {
 				startedAt := time.Now().UTC()
 				before, beforeErr := storage.CountEligibleDiscoveryRows(startedAt)
-				engine := scraper.NewFunnelEngine(prof.Roles)
+				engine := newDiscoveryEngine(prof)
 				result, err := engine.DiscoverJobsWithCounts(discoveryCtx, nil)
 				after, afterErr := storage.CountEligibleDiscoveryRows(time.Now().UTC())
 				newEligible := 0

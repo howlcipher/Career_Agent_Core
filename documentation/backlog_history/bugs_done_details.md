@@ -2,6 +2,26 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 516. Discovery has no geographic gate, so an India-only role reached a live application attempt
+
+**Completed 2026-08-05.** Found during the five-application Assisted Apply acceptance trial. Job 259800 (jobgether, "AI Automation Engineer", fit score 100) opened a real, verified application in the assisted browser; the employer page showed the role was scoped to **India**. The user requires US/Canada/North America remote roles. The trial was halted at this candidate, the lease was released cleanly, and **no application was submitted**.
+
+**Measured state before the fix, not assumed:**
+
+- `job_funnel.job_location` and `is_remote` were empty for **all 12,902 rows**, including all 520 assisted-queue rows.
+- `profile.yaml` carried only `remote_only: true`. That says a role may be worked remotely; it says nothing about *where from*, so an India-only "Remote" posting was indistinguishable from a US one.
+- `UpdateFunnelIdentity` (`cmd/agent/pipeline.go:149`) was the sole writer of those columns and ran **only when `DuplicateCooldownDays > 0`**. `duplicate_cooldown_days` is absent from `profile.yaml`, so it was 0 and the write never executed — the mechanism behind the 100% empty columns.
+- `parseLeverBoard` and `parseGreenhouseBoard` discarded location outright, keeping only title and URL, even though the feeds publish it. The live Lever response for this exact posting returned `country: "IN"`, `categories.location: "India"`, `categories.allLocations`, and `workplaceType: "remote"`. We fetched that payload and threw the answer away.
+- Fit score 100 was computed from text similarity alone (`fit_similarity` 0.70) with no location input, which is the concrete mechanism behind the separately-noted "fit saturated at 100" symptom.
+
+**Fix.** Both board parsers now capture the advertised location, any ISO-3166 alpha-2 country code, and remote status into `feedJob`. A new `pkg/scraper/location.go` resolves country evidence (explicit feed codes win; otherwise free text is matched against a partial country-name table) and applies an allowlist from the new `allowed_countries` profile key, set to `US`/`CA`. The gate sits in `pollBoard` beside the existing `titleLooksRelevant` check, on the same reasoning: it is free, and the alternative is a full fit-scoring call plus a possible live application attempt. `newDiscoveryEngine` in `cmd/agent/main.go` is now the single construction point for the funnel engine so the one-shot cycle and the daemon's background discovery loop cannot apply the allowlist on one path and forget it on the other. Discovery also now persists the advertised location unconditionally, so the queue, dashboard, and duplicate matcher can screen on real data.
+
+**The gate fails open, deliberately.** It rejects only on positive evidence that every country a posting names is outside the allowlist; no location evidence always passes. Two reasons: all 12,902 existing rows carry no location, so a fail-closed gate would discard the entire corpus; and this file already records the governing lesson from the CAPTCHA pre-skip decision — *"skipping a job that would have submitted is strictly worse than wasting inference, because the goal is applications, not throughput."*
+
+**Verification.** 26 unit tests cover the gate, including a dedicated word-boundary guard: a naive substring match would read **Indiana** as **India** and silently discard every posting in that state. Parser tests are pinned to the real feed shapes, with the Lever payload captured live from `api.lever.co/v0/postings/jobgether` on 2026-08-05 including the exact `country`/`categories` pairing of the posting that halted the trial. End to end against that live feed: **2,993 postings, all 2,993 carrying location, 1,952 (65%) rejected as outside US/CA, and zero admitted through the fail-open path** — the feed supplied full evidence for every posting. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all clean.
+
+**Known limitation, not fixed here.** The gate only protects postings discovered from this point on. The 520 existing assisted rows still carry no location and are not retroactively screened; until they are, each candidate's advertised location must be confirmed on the employer page before launching. A backfill pass over the existing queue is the obvious follow-up.
+
 ## 514. Qualified Jobs and operator settings contain post-hardening runtime regressions
 
 **Completed 2026-08-05.** Resumed from an uncommitted, journal-less working tree left by an interrupted prior session (bug #513's hardening commit had already landed; this row and the code changes below were mid-flight but never committed or logged). Verified the existing uncommitted diff against the live schema and test suite before continuing, then found and fixed two further runtime-only regressions that neither `go build`/`go vet`/`go test` nor the prior session's unit tests could catch:
