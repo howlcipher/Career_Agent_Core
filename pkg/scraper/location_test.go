@@ -101,3 +101,49 @@ func TestCountryCodesFor(t *testing.T) {
 		})
 	}
 }
+
+// jobgether is an aggregator whose Lever apply form is broken (see
+// storage.excludedLeverBoards). Exclusion is by board slug, not host, because
+// every one of its postings lives under jobs.lever.co like any other employer.
+func TestIsExcludedSourceURLScraper_LeverBoards(t *testing.T) {
+	excluded := []string{
+		"https://jobs.lever.co/jobgether/5493c241-c7f3-44f7-915c-6bb09e0c9215/apply",
+		"https://jobs.lever.co/jobgether/abc",
+		"https://api.lever.co/v0/postings/jobgether?mode=json",
+		"https://JOBS.LEVER.CO/JobGether/xyz",
+		"https://breezy.hr/p/123",
+		"https://acme.breezy.hr/p/123",
+	}
+	for _, raw := range excluded {
+		if !isExcludedSourceURLScraper(raw) {
+			t.Errorf("expected %q to be excluded", raw)
+		}
+	}
+
+	allowed := []string{
+		"https://jobs.lever.co/smarsh/abc-123",
+		"https://jobs.lever.co/egen/def",
+		// Must not match on a prefix: a different board whose slug merely
+		// begins with the excluded one is a different employer.
+		"https://jobs.lever.co/jobgetherx/abc",
+		"https://job-boards.greenhouse.io/grafanalabs/jobs/1",
+	}
+	for _, raw := range allowed {
+		if isExcludedSourceURLScraper(raw) {
+			t.Errorf("expected %q to be allowed", raw)
+		}
+	}
+}
+
+func TestIsExcludedBoardSlug(t *testing.T) {
+	for _, slug := range []string{"jobgether", "JobGether", "  jobgether  "} {
+		if !IsExcludedBoardSlug(slug) {
+			t.Errorf("expected %q to be an excluded board slug", slug)
+		}
+	}
+	for _, slug := range []string{"grafanalabs", "smarsh", "jobgetherx", ""} {
+		if IsExcludedBoardSlug(slug) {
+			t.Errorf("expected %q to be pollable", slug)
+		}
+	}
+}

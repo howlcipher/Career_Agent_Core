@@ -98,6 +98,12 @@ func (f *FunnelEngine) discoverWithATSFeeds(jobChan chan<- Job) {
 	}
 	for _, slug := range lv {
 		s := slug
+		if IsExcludedBoardSlug(s) {
+			// Skip the fetch outright: an excluded aggregator board is a
+			// ~2,988-posting download whose rows AddToFunnel would reject
+			// anyway.
+			continue
+		}
 		eg.Go(func() error {
 			f := f.pollBoard(s, fmt.Sprintf(leverBoardAPI, s), parseLeverBoard, "atsfeed:lever", jobChan)
 			atomic.AddInt32(&found, int32(f))

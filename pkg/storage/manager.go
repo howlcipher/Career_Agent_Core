@@ -1558,13 +1558,37 @@ func GetDiscoverySource(rawURL string) (string, bool, error) {
 	return source.String, source.Valid, nil
 }
 
+// excludedLeverBoards names Lever board slugs whose postings are never worth
+// admitting. jobgether is an aggregator, not an employer: it republishes the
+// same role across many countries (the identical "AI Automation Engineer"
+// posting exists for India, the US, Portugal, and Brazil) and carries ~2,988
+// live postings. Across 1,642 rows it produced 792 prompt-injection
+// quarantines, 589 invalid URLs, 54 failed submits, and zero applications,
+// and its Lever apply form fails with "There was an error verifying your
+// application" for two different reqs — reproduced in an ordinary browser
+// outside this agent entirely, so the flow is broken on their side. Same
+// treatment breezy.hr got, on stronger evidence.
+var excludedLeverBoards = map[string]struct{}{
+	"jobgether": {},
+}
+
 func isExcludedSourceURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
 	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	return host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr")
+	if host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr") {
+		return true
+	}
+	if host == "lever.co" || strings.HasSuffix(host, ".lever.co") {
+		for _, segment := range strings.Split(strings.ToLower(parsed.Path), "/") {
+			if _, excluded := excludedLeverBoards[segment]; excluded {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SkipExcludedSourceDiscoveredJobs terminalizes legacy rows that were written
@@ -1577,7 +1601,8 @@ func SkipExcludedSourceDiscoveredJobs() (int64, error) {
 	}
 	result, err := db.Exec(`UPDATE job_funnel
 		SET status = 'SKIPPED', status_reason = ?, last_updated = ?
-		WHERE status = 'DISCOVERED' AND lower(url) LIKE '%breezy.hr%'`,
+		WHERE status = 'DISCOVERED'
+		  AND (lower(url) LIKE '%breezy.hr%' OR lower(url) LIKE '%lever.co/jobgether/%')`,
 		SkippedReasonExcludedSource, time.Now().UTC())
 	if err != nil {
 		return 0, err

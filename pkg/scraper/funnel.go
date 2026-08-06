@@ -175,13 +175,37 @@ func (f *FunnelEngine) addToFunnelCounted(source, company, title, rawURL, status
 // isExcludedSourceURLScraper is the scraper-package copy of the storage-level
 // breezy.hr exclusion check. Duplicated to avoid a circular import; must stay
 // in sync with storage.isExcludedSourceURL.
+// excludedLeverBoardsScraper mirrors storage.excludedLeverBoards; see that
+// declaration for why jobgether is excluded. Must stay in sync.
+var excludedLeverBoardsScraper = map[string]struct{}{
+	"jobgether": {},
+}
+
 func isExcludedSourceURLScraper(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	return host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr")
+	if host == "breezy.hr" || strings.HasSuffix(host, ".breezy.hr") {
+		return true
+	}
+	if host == "lever.co" || strings.HasSuffix(host, ".lever.co") {
+		for _, segment := range strings.Split(strings.ToLower(u.Path), "/") {
+			if _, excluded := excludedLeverBoardsScraper[segment]; excluded {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsExcludedBoardSlug reports whether an ATS board slug should never be polled.
+// discoverWithATSFeeds uses it to skip the feed fetch entirely, so an excluded
+// aggregator does not cost a 2,988-posting download every discovery pass.
+func IsExcludedBoardSlug(slug string) bool {
+	_, excluded := excludedLeverBoardsScraper[strings.ToLower(strings.TrimSpace(slug))]
+	return excluded
 }
 
 // DiscoverJobsWithCounts is identical to DiscoverJobs but also returns a

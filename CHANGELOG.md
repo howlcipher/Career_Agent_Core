@@ -1,5 +1,25 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Exclude the jobgether aggregator board
+
+* **Changed:** `jobgether` is now an excluded discovery source, the same
+  treatment `breezy.hr` received. It is an aggregator rather than an employer:
+  ~2,988 live Lever postings, republishing the identical role across countries
+  (the same "AI Automation Engineer" exists for India, the US, Portugal, and
+  Brazil). Across 1,642 rows it produced 792 prompt-injection quarantines, 589
+  invalid URLs, 54 failed submits, and zero applications, while accounting for
+  47 of one day's 78 discoveries.
+* **Why now:** its Lever apply form fails with "There was an error verifying
+  your application" on submit, reproduced on two separate reqs — and
+  reproduced in an ordinary browser with no automation, proxy, or agent
+  involvement, so the flow is broken on their side and no amount of retrying
+  through this tool would fix it.
+* Exclusion is by board slug rather than host, since its postings live under
+  `jobs.lever.co` like any other employer's, and prefix matches are rejected so
+  a different board is never caught by accident. `discoverWithATSFeeds` also
+  skips the board outright, avoiding a ~2,988-posting download every pass, and
+  existing `DISCOVERED` rows are terminalized as `SKIPPED` on the next start.
+
 ## 2026-08-05 — Discovery filters postings by country
 
 * **Fix:** Discovery had no geographic filter of any kind. `profile.yaml`
