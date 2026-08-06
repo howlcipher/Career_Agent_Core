@@ -21,7 +21,15 @@ agent_run_batch.pid
 /career-agent
 /agent
 career_agent_bin
+# dashboard_bin was the name bug #461 gitignored, but nothing builds it any
+# more: the dashboard is built as career_dashboard_bin, and cmd/dashboard's
+# assistedApplicationCommand looks for a sibling career_assist_bin. Both were
+# left untracked and showed up in every `git status` during the 2026-08-06
+# acceptance trial, one rebuild away from riding along in a commit at 17MB and
+# 19MB. Kept the old entry so an older local build stays ignored too.
 dashboard_bin
+career_dashboard_bin
+career_assist_bin
 
 Omni_CoverLetter.pdf
 
