@@ -2572,3 +2572,71 @@ func TestGetDiscoveredJobs_SkipsRowsNotYetEligible(t *testing.T) {
 		t.Fatalf("expected both jobs once the backoff elapsed, got %v", jobs)
 	}
 }
+
+// MoveToManualApply renames applications/<company>/<digest> into
+// applications/needs_manual_apply/<digest>, so any reader that only consults
+// applicationDir misses the documents once a job needs a human — which in
+// assisted/copilot mode is every job (bugs.md #517).
+func TestResolveApplicationDir(t *testing.T) {
+	const company = "grafanalabs"
+	const postingURL = "https://job-boards.greenhouse.io/grafanalabs/jobs/6135686004"
+
+	t.Run("prefers the company directory when it exists", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		want := applicationDir(company, postingURL)
+		if err := os.MkdirAll(want, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if got := ResolveApplicationDir(company, postingURL); got != want {
+			t.Errorf("ResolveApplicationDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("finds documents moved to needs_manual_apply", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		digest := filepath.Base(applicationDir(company, postingURL))
+		want := filepath.Join("applications", "needs_manual_apply", digest)
+		if err := os.MkdirAll(want, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if got := ResolveApplicationDir(company, postingURL); got != want {
+			t.Errorf("ResolveApplicationDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("finds a suffixed collision directory", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		digest := filepath.Base(applicationDir(company, postingURL))
+		want := filepath.Join("applications", "needs_manual_apply", digest+"-2")
+		if err := os.MkdirAll(want, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if got := ResolveApplicationDir(company, postingURL); got != want {
+			t.Errorf("ResolveApplicationDir = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to the company path when nothing exists", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		want := applicationDir(company, postingURL)
+		if got := ResolveApplicationDir(company, postingURL); got != want {
+			t.Errorf("ResolveApplicationDir = %q, want %q", got, want)
+		}
+	})
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(previous) })
+}

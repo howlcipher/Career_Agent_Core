@@ -229,7 +229,7 @@ func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, er
 		}
 		return AssistedDocument{Path: MasterResumePath, Name: MasterResumePath}, nil
 	}
-	path := filepath.Join(applicationDir(company, postingURL), fileName)
+	path := filepath.Join(ResolveApplicationDir(company, postingURL), fileName)
 	if err := validateAssistedDocument(path); err != nil {
 		return AssistedDocument{}, err
 	}

@@ -1087,6 +1087,42 @@ func applicationDir(companyName, postingURL string) string {
 	return filepath.Join("applications", safeCompanyDirName(companyName), fmt.Sprintf("%x", digest[:8]))
 }
 
+// ResolveApplicationDir returns the directory that actually holds a job's saved
+// documents. SaveApplication writes applications/<company>/<digest>, but
+// MoveToManualApply *renames* that directory into
+// applications/needs_manual_apply/<digest> as soon as a job needs a human —
+// which in assisted/copilot mode is every job — leaving an empty company
+// folder behind. Readers that only consult applicationDir therefore miss the
+// documents entirely: the assisted dashboard served HTTP 404 for every
+// copilot-path cover letter and reported cover_letter_ready false (bugs.md
+// #517). Falls back to the original path when neither home exists, so callers
+// still get a meaningful path in their error.
+func ResolveApplicationDir(companyName, postingURL string) string {
+	primary := applicationDir(companyName, postingURL)
+	if isExistingDir(primary) {
+		return primary
+	}
+	digest := filepath.Base(primary)
+	if moved := filepath.Join(manualApplyBase, digest); isExistingDir(moved) {
+		return moved
+	}
+	// MoveToManualApply appends a numeric suffix rather than overwriting when
+	// the destination already exists. That only happens when the same posting
+	// URL is moved more than once, so the scan is deliberately shallow.
+	for i := 2; i < 10; i++ {
+		candidate := filepath.Join(manualApplyBase, fmt.Sprintf("%s-%d", digest, i))
+		if isExistingDir(candidate) {
+			return candidate
+		}
+	}
+	return primary
+}
+
+func isExistingDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 // CoverLetterPath returns the exact role-specific cover letter saved for a
 // posting. Company names alone are not a stable artifact key (bugs.md #128).
 func CoverLetterPath(companyName, postingURL string) string {

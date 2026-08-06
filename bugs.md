@@ -46,6 +46,7 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
+| 517 | [Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply](#517-assisted-apply-serves-404-for-every-cover-letter-once-documents-move-to-needs_manual_apply) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #517 for the full account. |
 | 516 | [Discovery has no geographic gate, so an India-only role reached a live application attempt](#516-discovery-has-no-geographic-gate-so-an-india-only-role-reached-a-live-application-attempt) | Blocker | Done (2026-08-05) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #516 for the full account. |
 | 515 | [Assisted Apply uploaded the saved reference note in place of the résumé](#515-assisted-apply-uploaded-the-saved-reference-note-in-place-of-the-résumé) | Blocker | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #515 for the full account. |
 | 513 | [Application Mode hardening is incomplete: Qualified Jobs mutations and settings activation are not safely verified](#513-application-mode-hardening-is-incomplete-qualified-jobs-mutations-and-settings-activation-are-not-safely-verified) | Major | Done (2026-08-05) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #513 for the full account. |
@@ -939,6 +940,10 @@ Closed — full account archived in `documentation/backlog_history/bugs_done_det
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
 
 ### 514. Qualified Jobs and operator settings contain post-hardening runtime regressions
+
+Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+
+### 517. Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
 

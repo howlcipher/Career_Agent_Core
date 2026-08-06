@@ -1,5 +1,21 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Assisted Apply finds cover letters again
+
+* **Fix:** the assisted dashboard returned HTTP 404 for every cover letter and
+  reported `cover_letter_ready: false`. `SaveApplication` writes
+  `applications/<company>/<digest>`, but `MoveToManualApply` renames that
+  directory into `applications/needs_manual_apply/<digest>` as soon as a job
+  needs a human — which in assisted/copilot mode is every job — and document
+  resolution only ever looked under the company name. The operator could
+  therefore never review the cover letter before applying.
+* `storage.ResolveApplicationDir` now checks the company directory, then the
+  moved location, then the numeric-suffix variants created on collision. The
+  résumé was unaffected, since it already resolves to the shared master path
+  outside `applications/`.
+* Verified live: job 301657's cover letter went from 404 to HTTP 200, and 40 of
+  527 queue rows now resolve one.
+
 ## 2026-08-06 — Exclude the jobgether aggregator board
 
 * **Changed:** `jobgether` is now an excluded discovery source, the same

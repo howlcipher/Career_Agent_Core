@@ -2,6 +2,18 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 517. Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply
+
+**Completed 2026-08-06.** Found while verifying the documents precondition for the acceptance trial's third candidate (job 301657, Grafana Labs, fit 85). The dashboard reported `cover_letter_ready: false` and `/api/assisted/document?kind=cover_letter` returned **HTTP 404**, even though the agent had just logged writing the documents for that job.
+
+**Mechanism.** `SaveApplication` writes `applications/<company>/<digest>`. `MoveToManualApply` then *renames* that directory to `applications/needs_manual_apply/<digest>` as soon as the job needs a human — which in assisted/copilot mode is every job — leaving an empty company folder behind. `GetAssistedDocument` always recomputed `applicationDir(company, url)` and never looked in the moved location, so it resolved to a path that no longer existed. Confirmed by digest: the expected directory `applications/grafanalabs/93d8b2244a2f90ce` was absent while `applications/needs_manual_apply/93d8b2244a2f90ce` held the cover letter, and `applications/grafanalabs/` existed but was empty.
+
+This is the same class as #515 — assisted document resolution diverging from where the documents actually are — and it was systematic rather than per-job: **every** copilot-path cover letter was unreachable from the dashboard, so the operator could never review the letter before applying. `assistedDocumentExists` delegates to the same function, which is why the queue's `cover_letter_ready` flag was false too.
+
+**Fix.** New `storage.ResolveApplicationDir` checks the company directory first, then `needs_manual_apply/<digest>`, then the numeric-suffix variants `MoveToManualApply` creates on collision, falling back to the original path so a genuine miss still produces a meaningful error. `GetAssistedDocument` resolves through it. The résumé path is unaffected: #515 already routed it to the shared `MasterResumePath` outside `applications/`. `validateAssistedDocument`'s containment root is `applications/`, not `applications/<company>/`, so the moved location passes its escape and symlink checks unchanged.
+
+**Verification.** Four unit tests cover directory preference, the moved location, a suffixed collision, and the fallback. Live against the real database and a dashboard rebuilt from the fix, the cover letter for job 301657 went from HTTP 404 to **HTTP 200 (2,151 bytes)** and its `cover_letter_ready` flag flipped to true; 40 of 527 queue rows now resolve a cover letter. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all clean.
+
 ## 516. Discovery has no geographic gate, so an India-only role reached a live application attempt
 
 **Completed 2026-08-05.** Found during the five-application Assisted Apply acceptance trial. Job 259800 (jobgether, "AI Automation Engineer", fit score 100) opened a real, verified application in the assisted browser; the employer page showed the role was scoped to **India**. The user requires US/Canada/North America remote roles. The trial was halted at this candidate, the lease was released cleanly, and **no application was submitted**.
