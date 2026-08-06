@@ -504,3 +504,32 @@ func TestGetAssistedDocument_CoverLetterStaysPerJobArtifact(t *testing.T) {
 		t.Fatal("cover letter no longer resolves to the role-specific artifact")
 	}
 }
+
+// A revalidated AWAITING_REVIEW handoff must still expose the explicit-submit
+// affordance. Without it the dashboard never renders "I saw a confirmation —
+// Mark Applied", so an application the operator genuinely submitted cannot be
+// confirmed from the UI once its browser closes (bugs.md #518). Revalidation
+// is routine before every launch, so this affected every assisted application.
+func TestActionForRevalidation_AwaitingReviewAllowsConfirmation(t *testing.T) {
+	action := actionForRevalidation("AWAITING_REVIEW", "", "application_ready")
+	if action.Code != "open_verified_application" {
+		t.Errorf("Code = %q, want open_verified_application", action.Code)
+	}
+	if !action.RequiresExplicitSubmit {
+		t.Error("RequiresExplicitSubmit = false; the Mark Applied control would not render")
+	}
+	if !action.RequiresBrowser {
+		t.Error("RequiresBrowser = false, want true")
+	}
+}
+
+// Other statuses must not gain a confirmation affordance they never had: a
+// CAPTCHA-blocked page has no prepared form to have been submitted.
+func TestActionForRevalidation_OtherStatusesUnchanged(t *testing.T) {
+	for _, status := range []string{"BLOCKED_CAPTCHA", "MANUAL_REQUIRED", ""} {
+		action := actionForRevalidation(status, "", "application_ready")
+		if action.RequiresExplicitSubmit {
+			t.Errorf("status %q: RequiresExplicitSubmit = true, want false", status)
+		}
+	}
+}

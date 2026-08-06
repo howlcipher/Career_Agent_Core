@@ -2,6 +2,18 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 518. A revalidated, already-submitted application cannot be confirmed from the dashboard
+
+**Completed 2026-08-06.** Found immediately after the acceptance trial's first successful submission (job 301657, Grafana Labs). The operator submitted the application, the employer accepted it, and the dashboard offered no way to record that.
+
+**Mechanism.** The confirmation control — `I saw a confirmation — Mark Applied` — renders only when `next_action.requires_explicit_submit` is true. `actionForRevalidation`'s `application_ready` branch hardcoded that flag to false, and revalidating a candidate before launch is routine, so the flag was false for **every** assisted application. Once the assisted browser closed, `live_browser` went false, the queue projection fell back to `open_verified_application`, and the only control that can mark a job applied disappeared. The underlying `AWAITING_REVIEW` status means the pipeline had already filled the form and stopped before submitting, so submission and confirmation were the only steps left — exactly the case the control exists for.
+
+**Fix.** `application_ready` now sets `RequiresExplicitSubmit` when the original status is `AWAITING_REVIEW`, and carries an instruction naming the real remaining steps: submit it yourself, then mark applied only after the employer confirms receipt. Other statuses are deliberately unchanged — a CAPTCHA-blocked page has no prepared form that could have been submitted, so it gains no confirmation affordance.
+
+**Verification.** Two unit tests: one asserting the affordance appears for `AWAITING_REVIEW`, one asserting `BLOCKED_CAPTCHA`, `MANUAL_REQUIRED`, and the empty status are untouched. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all clean.
+
+**Note on the first confirmed application.** Job 301657 was confirmed through `/api/assisted/confirm` directly, because the button was unreachable at the time. That is the same endpoint the button calls, and the record carries the same `manual_user_confirmation` provenance; the confirmation was still an explicit human decision reported by the operator, never inferred from a Submit click.
+
 ## 517. Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply
 
 **Completed 2026-08-06.** Found while verifying the documents precondition for the acceptance trial's third candidate (job 301657, Grafana Labs, fit 85). The dashboard reported `cover_letter_ready: false` and `/api/assisted/document?kind=cover_letter` returned **HTTP 404**, even though the agent had just logged writing the documents for that job.

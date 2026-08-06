@@ -1,5 +1,16 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Submitted applications can be marked applied again
+
+* **Fix:** the dashboard's "I saw a confirmation — Mark Applied" control never
+  rendered for a revalidated application. `actionForRevalidation`'s
+  `application_ready` branch hardcoded `requires_explicit_submit` to false, and
+  revalidation runs before every launch, so an application the operator had
+  genuinely submitted could not be confirmed from the UI once its browser
+  closed. It now sets the flag when the underlying status is `AWAITING_REVIEW`,
+  meaning the form was already prepared and only the operator's submit and
+  confirmation remain. Other statuses are unchanged.
+
 ## 2026-08-06 — Assisted Apply finds cover letters again
 
 * **Fix:** the assisted dashboard returned HTTP 404 for every cover letter and
