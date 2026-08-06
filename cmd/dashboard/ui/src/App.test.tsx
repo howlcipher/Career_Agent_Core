@@ -316,6 +316,36 @@ describe('Assisted Apply workflow', () => {
 		expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/assisted/launch', expect.anything());
 	});
 
+	// Bug #520: Lever refuses applications submitted from the assisted browser,
+	// so the hand-off row must give the operator a real link to their own
+	// browser and must never call /api/assisted/launch.
+	it('hands an ATS that rejects the assisted browser to the operator as a link', async () => {
+		installFetch((input) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+				id: '41', company: 'Veeva', role: 'Platform Engineer', provider: 'Lever', original_status: 'AWAITING_REVIEW', interruption: '', last_updated: '2026-08-06T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+				mapping_ready: true, completed_work: 'Documents prepared.', legacy: false, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Needs your own browser: this ATS rejects the assisted browser',
+				apply_url: 'https://jobs.lever.co/veeva/abc-123',
+				next_action: { code: 'open_in_own_browser', title: 'Finish in your own browser', instruction: 'Open it yourself.', primary_button: 'Open in Your Own Browser', requires_browser: false, documents_ready: true, requires_explicit_submit: true, can_continue: false },
+			}] }));
+			throw new Error(`unexpected fetch ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		const handoff = screen.getByRole('link', { name: 'Open in Your Own Browser' });
+		expect(handoff).toHaveAttribute('href', 'https://jobs.lever.co/veeva/abc-123');
+		expect(handoff).toHaveAttribute('rel', 'noopener noreferrer');
+		// The confirmation path stays available: the operator still submits it.
+		expect(screen.getByRole('button', { name: /I saw a confirmation/ })).toBeInTheDocument();
+		fireEvent.click(handoff);
+		await flush();
+		expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/assisted/launch', expect.anything());
+	});
+
 	it('shows the server error when opening the current employer page fails', async () => {
 		installFetch((input, init) => {
 			const url = String(input);

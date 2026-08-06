@@ -1,5 +1,33 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Lever applications hand off to your own browser
+
+* **Fix (bugs.md #520):** Lever rejected every application submitted from the
+  assisted browser with "There was an error verifying your application. Please
+  try again.", while Greenhouse succeeded 4 of 4 and the same Lever posting
+  submitted successfully in the operator's ordinary Chrome. Lever is roughly
+  half the ATS market, so this made half the queue unusable through Assisted
+  Apply.
+* **Career Agent does not try to disguise its browser to get past a site's
+  verification.** When an ATS legitimately refuses an automated browser, the
+  honest answer is to hand the operator the link. Assisted Apply now does that
+  automatically instead of relying on the operator to work it out after a
+  failed submission.
+* A Lever row in the Assisted Apply queue now shows "Finish in your own
+  browser" with a real link to the posting, keeps the prepared résumé and cover
+  letter available, and keeps the "I saw a confirmation — Mark Applied"
+  confirmation path so the application still becomes an `APPLIED` record.
+* No assisted browser can be opened for such a posting by any route: the
+  refusal lives in `GetAssistedLaunchInfo`, the single gate both the dashboard
+  handler and `cmd/assist` pass through, so a stale UI or a direct CLI
+  invocation cannot spawn a browser whose submission is already known to fail.
+  The dashboard reports the working next step rather than "no longer
+  available".
+* The registry (`pkg/storage/assisted_handoff.go`) is deliberately small and
+  evidence-backed — one entry, `lever.co`, matched on host so `notlever.co`
+  cannot match. Every other ATS keeps the guarded assisted browser, and keeps
+  its posting URL server-side.
+
 ## 2026-08-06 — Assisted Apply prefills Greenhouse, Lever, and Ashby
 
 * **Fix:** Assisted Apply could not prefill anything on Greenhouse or Lever —

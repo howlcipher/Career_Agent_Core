@@ -2,6 +2,36 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 520. Lever submissions fail inside the assisted browser but succeed in an ordinary one
+
+**Completed 2026-08-06.** Found during the acceptance trial and only correctly diagnosed on the fifth application.
+
+**Evidence carried forward from the open row.** Inside the assisted browser, Greenhouse succeeded 4 of 4 (Grafana Labs, Affirm, Smartsheet, Temporal) while Lever failed every time with *"There was an error verifying your application. Please try again."* The same Veeva posting then submitted successfully in the operator's own Chrome, so the variable is the assisted browser combined with Lever specifically. Three earlier conclusions were retracted on evidence: the `NetworkGuard` proxy blocking CAPTCHA infrastructure, jobgether being uniquely broken, and Lever being broken platform-wide for this environment.
+
+**Re-verification of the mechanism before fixing.** Two claims in the open row were checked against the current code rather than trusted:
+
+- Lever takes the **Playwright** path, not the direct-Chrome path. `cmd/assist/main.go:98` routes to the direct browser only when `submitter.AssistedApplicationEntryURL` returns non-empty, and `pkg/submitter/browser.go:1155` implements that solely for `apply.workable.com`. So a Lever posting is driven by `LaunchPersistentContext` with the `AddInitScript` fingerprint spoof at `cmd/assist/main.go:115` — including `navigator.plugins` returning `[1, 2, 3, 4, 5]`, integers where a real `PluginArray` holds `Plugin` objects, which is itself a detection tell.
+- The network guard is **not** a plausible cause of a content-verification failure. `pkg/security/network.go:527` `serveConnect` hijacks the connection and relays raw TCP in both directions after `200 Connection Established`, so it cannot observe or alter an HTTPS request body. Only the plain-HTTP path (`serveHTTP`) rewrites headers, and Lever is HTTPS throughout.
+
+**Why the root cause was not pursued further.** Establishing which specific signal Lever's verification rejects would require submitting real applications to real employers as experiments, which is not an acceptable test. More importantly, the row's own **Constraint on any fix** rules the evasion route out: "Do not pursue this by making the browser harder to detect. If a site's verification legitimately refuses an automated browser, the correct answer is to hand the operator a direct link to open themselves — which is exactly how the trial's fifth application was completed." The fix implements that hand-off as automatic behavior instead of operator folklore.
+
+**Fix.** New `pkg/storage/assisted_handoff.go` holds an evidence-backed registry of ATSes whose submission verification refuses the assisted browser, currently one entry: `lever.co`. `AssistedBrowserRejectionReason` matches on the parsed hostname, exactly or as a parent domain, so `jobs.lever.co` matches and `notlever.co` does not; a URL that fails to parse, carries no host, or is not HTTP(S) yields no match.
+
+- **The refusal lives at one gate.** `GetAssistedLaunchInfo` (`pkg/storage/assisted.go:145`) is the single function both `serveAssistedLaunch` and `cmd/assist` pass through, so it returns `ErrAssistedBrowserRejected` there rather than in each caller. A stale dashboard tab, a direct `career_assist_bin -job N` invocation, and the batch runner are all covered by that one check, and none of them can spawn a browser whose submission is already known to fail.
+- **The dashboard says what actually works.** `serveAssistedLaunch` matches the sentinel with `errors.Is` and answers 409 with "this ATS rejects the assisted browser; finish this application in your own browser" instead of the generic "no longer available", which would have read as an outage. `cmd/assist` logs the same guidance and exits without `log.Fatal` — there is simply nothing to open.
+- **The queue row becomes actionable, not dead.** `GetAssistedQueue` overrides the next action to `open_in_own_browser` ("Finish in your own browser") for matching rows. `RequiresBrowser` is false so nothing tries to launch; `RequiresExplicitSubmit` is true so "I saw a confirmation — Mark Applied" stays available and the application can still become an `APPLIED` record; `CanContinue` is false because there is no assisted browser to continue in. The prepared résumé and cover letter remain reachable through the existing document endpoint.
+- **One deliberate privacy exception.** `AssistedJob` is documented as withholding the canonical URL, and it still does for every other row. A hand-off row sets `ApplyURL` because there is no other way to get the operator into their own browser; the value is a public employer posting URL. The dashboard renders it as a real `<a target="_blank" rel="noopener noreferrer">`, not a fetch — clicking it opens the operator's own browser, which is the entire point.
+
+**Tests.** `TestAssistedBrowserRejectionReason_MatchesRegisteredATSOnly` covers eleven host cases including the `notlever.co` lookalike, `lever.co` appearing as a path segment, case-insensitivity, a fully-qualified trailing-dot host, a non-HTTP scheme, and an unparseable URL. `TestGetAssistedLaunchInfo_RefusesATSThatRejectsTheAssistedBrowser` proves a fully revalidated Lever plan still cannot launch, and `TestGetAssistedLaunchInfo_StillLaunchesUnaffectedATS` proves the refusal did not widen into a general Assisted Apply outage. `TestGetAssistedQueue_HandsRejectedATSToTheOperatorsOwnBrowser` asserts both halves in one queue: the Lever row gets the hand-off action and its URL, the Greenhouse row keeps the guarded browser and leaks nothing. `TestServeAssistedLaunch_RefusesATSThatRejectsTheAssistedBrowser` proves no child process starts and the operator-facing message names the working next step. The Vitest case asserts the rendered link's `href` and `rel`, that the confirmation button survives, and that clicking it never calls `/api/assisted/launch`.
+
+The dashboard test schema gained an `id INTEGER` column on `job_funnel`; it had been omitted, and the real schema has it.
+
+**Verification.** `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all pass. `npm test` passes 20 of 20 in `cmd/dashboard/ui`, and `npm run build` + `npm run lint` are clean; the embedded `ui/dist` bundle was rebuilt and committed, since `//go:embed ui/dist` means an un-rebuilt bundle ships the old UI. No ADR describes the assisted-launch gate or claims Lever works in the assisted browser, so none went stale.
+
+**Not fixed, and deliberately so.** The `AddInitScript` fingerprint spoof is left in place. Removing it is defensible on the grounds that `plugins: [1,2,3,4,5]` is a worse tell than no spoof at all, but it is unverifiable without the live submissions this fix exists to avoid, and changing it would be a step along exactly the axis the constraint forbids.
+
+---
+
 ## 519. Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with
 
 **Completed 2026-08-06.** Raised by the operator after all five acceptance-trial applications had to be typed by hand.

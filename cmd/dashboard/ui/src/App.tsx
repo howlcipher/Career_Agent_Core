@@ -139,6 +139,9 @@ interface AssistedJob {
 	assisted_attempt_count: number;
 	priority_reason: string;
 	next_action: AssistedAction;
+	// Present only when next_action.code is 'open_in_own_browser' — an ATS
+	// that rejects the assisted browser, so the operator needs the link.
+	apply_url?: string;
 }
 
 // ConversionTable renders one conversion breakdown. The <caption> and the
@@ -730,7 +733,14 @@ function App() {
 						<article className="assisted-job" key={job.id}>
 							<div><label className="batch-select"><input type="checkbox" checked={selectedJobs.includes(job.id)} onChange={() => toggleSelected(job.id)} disabled={batchIndex !== null || !job.next_action.requires_browser} /> Select for sequential batch</label><h3>{job.company} — {job.role}</h3><p className="detail-meta">{job.priority_reason}{job.fit_score !== undefined && ` · Fit score ${job.fit_score}`} · ATS: {job.provider} · Original status: {job.original_status}{job.legacy && ' · Legacy handoff'} · Updated {new Date(job.last_updated).toLocaleString()}</p></div>
 							<ol className="assisted-stepper" aria-label="Application progress"><li className="done">Prepared</li><li className="active">Human action</li><li>Continue filling</li><li className={job.next_action.requires_explicit_submit ? 'active' : ''}>Review and submit</li><li>Confirmed</li></ol>
-						<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p><button className="btn btn-assisted" onClick={() => job.next_action.requires_browser ? launchAssisted(job) : revalidateAssisted(job)} disabled={job.next_action.requires_browser && assistedBrowserOpen}>{job.next_action.requires_browser && job.live_browser ? 'Assisted Application Open' : job.next_action.requires_browser && assistedBrowserOpen ? 'Finish Open Application First' : job.next_action.primary_button}</button>{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
+						<div className="assisted-instruction"><h4>What you need to do</h4><p>{job.next_action.instruction}</p>{job.apply_url ? (
+							// This ATS refuses the assisted browser, so there is nothing
+							// to launch — the operator opens the posting themselves. A
+							// real anchor, not a fetch, is the point of the hand-off.
+							<a className="btn btn-assisted" href={job.apply_url} target="_blank" rel="noopener noreferrer">{job.next_action.primary_button}</a>
+						) : (
+							<button className="btn btn-assisted" onClick={() => job.next_action.requires_browser ? launchAssisted(job) : revalidateAssisted(job)} disabled={job.next_action.requires_browser && assistedBrowserOpen}>{job.next_action.requires_browser && job.live_browser ? 'Assisted Application Open' : job.next_action.requires_browser && assistedBrowserOpen ? 'Finish Open Application First' : job.next_action.primary_button}</button>
+						)}{job.next_action.can_continue && <button className="text-button" onClick={() => requestContinue(job)} disabled={!job.live_browser}>I completed this step — Continue</button>}{job.next_action.requires_explicit_submit && <button className="text-button" onClick={() => setConfirmJob(job)}>I saw a confirmation — Mark Applied</button>}</div>
 							<details><summary>Career Agent already completed</summary><p>{job.completed_work}</p><p className="detail-meta">Résumé: {job.resume_ready ? 'ready' : 'will be prepared when safe'} · Cover letter: {job.cover_letter_ready ? 'ready' : 'will be prepared when safe'} · Form mapping: {job.mapping_ready ? 'ready' : 'not yet confirmed'} · Assisted attempts: {job.assisted_attempt_count}</p>{job.resume_ready && <button className="text-button" onClick={() => openDocument(job, 'resume')}>View Résumé</button>}{job.cover_letter_ready && <button className="text-button" onClick={() => openDocument(job, 'cover_letter')}>View Cover Letter</button>}</details>
 							<p className="detail-meta">What happens next: {job.next_action.can_continue ? 'return here after the human step and continue filling.' : 'confirm the employer accepted the application before marking it applied.'}</p>
 						</article>

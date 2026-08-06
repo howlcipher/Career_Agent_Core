@@ -55,6 +55,46 @@ func TestServeAssistedLaunch_RejectsUnavailablePlanBeforeStartingProcess(t *test
 	}
 }
 
+// Bug #520: a Lever plan can be complete and fully revalidated and still must
+// not spawn an assisted browser, because that ATS refuses the resulting
+// submission. The operator needs to be told what actually works, not that the
+// application has gone missing.
+func TestServeAssistedLaunch_RefusesATSThatRejectsTheAssistedBrowser(t *testing.T) {
+	setupTestDB(t)
+	previous := launchAssistedApplication
+	t.Cleanup(func() { launchAssistedApplication = previous })
+	started := false
+	launchAssistedApplication = func(string) error {
+		started = true
+		return nil
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO job_funnel (url, id, company_name, job_title, status, discovered_at)
+		VALUES (?, 41, 'Veeva', 'Platform Engineer', 'AWAITING_REVIEW', ?)`,
+		"https://jobs.lever.co/veeva/abc-123", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO assisted_applications
+		(job_id, original_status, next_action_code, assisted_state, revalidation_state, revalidation_version, created_at, updated_at)
+		VALUES (41, 'AWAITING_REVIEW', 'review_and_submit', 'waiting_human', 'application_ready', 3, ?, ?)`,
+		now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/assisted/launch", bytes.NewBufferString(`{"job_id":"41"}`))
+	rec := httptest.NewRecorder()
+	serveAssistedLaunch(rec, req)
+	if started {
+		t.Fatal("no assisted browser process may start for an ATS that rejects it")
+	}
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "your own browser") {
+		t.Fatalf("operator message must name the working next step, got %q", rec.Body.String())
+	}
+}
+
 func TestAssistedApplicationCommandUsesCheckoutRoot(t *testing.T) {
 	cmd, err := assistedApplicationCommand("41")
 	if err != nil {
@@ -113,6 +153,7 @@ func setupTestDB(t *testing.T) {
 	schema := `
 	CREATE TABLE job_funnel (
 		url TEXT PRIMARY KEY,
+		id INTEGER,
 		company_name TEXT,
 		job_title TEXT,
 		status TEXT,

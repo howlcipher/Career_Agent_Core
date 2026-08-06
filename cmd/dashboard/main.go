@@ -1136,6 +1136,13 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 	// made a broken launch indistinguishable from a browser that was opening.
 	if _, err := storage.GetAssistedLaunchInfo(db, request.JobID); err != nil {
 		log.Printf("serveAssistedLaunch: %v", err)
+		// A rejected ATS is not an outage and must not read like one: the
+		// operator's next step is a real, working one (finish it in their own
+		// browser), so say that instead of "no longer available" (bug #520).
+		if errors.Is(err, storage.ErrAssistedBrowserRejected) {
+			http.Error(w, "this ATS rejects the assisted browser; finish this application in your own browser", http.StatusConflict)
+			return
+		}
 		http.Error(w, "assisted application is no longer available", http.StatusConflict)
 		return
 	}

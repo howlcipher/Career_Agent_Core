@@ -56,6 +56,15 @@ func main() {
 	defer storage.CloseDB()
 	info, err := storage.GetAssistedLaunchInfo(storage.GetDB(), *jobID)
 	if err != nil {
+		// Bug #520: this ATS refuses applications completed in the assisted
+		// browser. Career Agent does not try to disguise the browser to get
+		// past that; it tells the operator to finish in their own, which is
+		// how such applications actually get submitted. Not a fatal error --
+		// the run simply has nothing to open.
+		if errors.Is(err, storage.ErrAssistedBrowserRejected) {
+			log.Printf("No assisted browser was opened: %v Open this posting in your own browser and submit it there; the prepared resume and cover letter remain available from the dashboard.", err)
+			return
+		}
 		log.Fatal(err)
 	}
 	owner, err := randomOwner()

@@ -26,7 +26,11 @@ type AssistedNextAction struct {
 }
 
 // AssistedJob is the privacy-safe queue projection served to the dashboard.
-// The canonical URL and local document paths remain server-side only.
+// Local document paths and page content remain server-side only, and so does
+// the canonical URL for every row Career Agent can open itself. ApplyURL is
+// the single deliberate exception: a row whose ATS refuses the assisted
+// browser has no other way to reach the operator's own browser, so its
+// posting URL -- already a public employer page -- is included.
 type AssistedJob struct {
 	ID               string             `json:"id"`
 	Company          string             `json:"company"`
@@ -45,6 +49,9 @@ type AssistedJob struct {
 	AttemptCount     int                `json:"assisted_attempt_count"`
 	PriorityReason   string             `json:"priority_reason"`
 	NextAction       AssistedNextAction `json:"next_action"`
+	// ApplyURL is populated only when NextAction.Code is
+	// "open_in_own_browser"; it is empty for every other row.
+	ApplyURL string `json:"apply_url,omitempty"`
 }
 
 // AssistedMigrationOptions deliberately defaults to dry run. Statuses are
@@ -156,6 +163,14 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	if revalidationVersion != assistedRevalidationVersion ||
 		(revalidationState != "captcha_confirmed" && revalidationState != "application_ready") {
 		return AssistedLaunchInfo{}, errors.New("assisted job must be revalidated before opening a browser")
+	}
+	// Refuse here rather than in each caller: this is the one gate both the
+	// dashboard handler and cmd/assist pass through, so a posting whose ATS
+	// rejects the assisted browser (bug #520) cannot open one by any route.
+	// Opening it would waste the operator's time on a submission the employer
+	// is going to refuse, and would look like a Career Agent failure.
+	if reason := AssistedBrowserRejectionReason(info.URL); reason != "" {
+		return AssistedLaunchInfo{}, fmt.Errorf("%w: %s", ErrAssistedBrowserRejected, reason)
 	}
 	return info, nil
 }
@@ -636,7 +651,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		 COALESCE(aa.revalidation_state, 'required'),
 		aa.assisted_state,
 		aa.updated_at,
-		aa.lease_owner, aa.lease_expires_at
+		aa.lease_owner, aa.lease_expires_at,
+		COALESCE(jf.url, '')
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.assisted_state != 'completed'
 		ORDER BY CASE aa.next_action_code WHEN 'review_and_submit' THEN 1 WHEN 'solve_captcha' THEN 2 WHEN 'complete_legal_attestation' THEN 3 WHEN 'login_or_create_account' THEN 4 ELSE 5 END,
@@ -659,7 +675,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var revalidationState string
 		var assistedState string
 		var currentStatus string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry); err != nil {
+		var postingURL string
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry, &postingURL); err != nil {
 			return nil, err
 		}
 		job.LastUpdated = parseAssistedTime(lastUpdated.String)
@@ -683,6 +700,16 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		if job.NextAction.Code == "open_verified_application" && job.LiveBrowser {
 			job.NextAction.CanContinue = true
 			job.NextAction.Instruction = "The verified application is open in the assisted browser. Complete the stated human step, then return here and click Continue."
+		}
+		// An ATS that refuses the assisted browser (bug #520) overrides every
+		// other next action, because every one of them ends in a submission
+		// that ATS will reject. The posting URL is exposed for exactly these
+		// rows so the operator has something to click; it is withheld for all
+		// others, where opening the guarded browser is still the safe path.
+		if reason := AssistedBrowserRejectionReason(postingURL); reason != "" {
+			job.NextAction = actionForOperatorBrowser(reason)
+			job.ApplyURL = postingURL
+			job.PriorityReason = priorityReason(job.NextAction.Code)
 		}
 		jobs = append(jobs, job)
 	}
@@ -769,6 +796,9 @@ func priorityReason(action string) string {
 	}
 	if action == "solve_captcha" {
 		return "Quick completion: human verification is blocking progress"
+	}
+	if action == "open_in_own_browser" {
+		return "Needs your own browser: this ATS rejects the assisted browser"
 	}
 	return "Ready for the next human step"
 }
