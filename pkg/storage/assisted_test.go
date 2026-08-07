@@ -1020,3 +1020,107 @@ func TestGetAssistedQueue_ServesRealTimestampsForRowsWrittenByGo(t *testing.T) {
 		t.Errorf("LastUpdated = %v, want a time at or after the write at %v", jobs[0].LastUpdated, before)
 	}
 }
+
+// The projection-level counterpart to
+// TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter, which
+// had to drive the helper directly because this test could not be written at
+// all before bug #527: GetAssistedQueue resolves both readiness fields from
+// inside its own open rows iteration, and under the old `:memory:` harness
+// every such nested lookup failed, so both fields were unconditionally false
+// and any assertion here would have been an assertion about the failure path.
+func TestGetAssistedQueue_ReadinessFieldsFollowTheDocumentsOnDisk(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const masterCoverLetter = "Omni_CoverLetter.pdf"
+	const postingURL = "https://captcha.example/jobs/queue-readiness"
+	origResolver := resolveMasterCoverLetter
+	defer func() { resolveMasterCoverLetter = origResolver }()
+	resolveMasterCoverLetter = func() string { return masterCoverLetter }
+
+	if _, err := AddToFunnel("Readiness Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Neither master document exists yet, so both fields must be false for a
+	// reason the queue can act on rather than because the lookup errored.
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length = %d, want 1", len(jobs))
+	}
+	if jobs[0].ResumeReady {
+		t.Error("ResumeReady = true with no master résumé on disk")
+	}
+	if jobs[0].CoverLetterReady {
+		t.Error("CoverLetterReady = true with no master cover letter on disk")
+	}
+
+	if err := os.WriteFile(MasterResumePath, []byte("%PDF-1.7 master resume content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(masterCoverLetter, []byte("%PDF-1.7 master cover letter content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err = GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length = %d, want 1", len(jobs))
+	}
+	if !jobs[0].ResumeReady {
+		t.Error("ResumeReady = false after the master résumé was written; the card would refuse a document it has")
+	}
+	if !jobs[0].CoverLetterReady {
+		t.Error("CoverLetterReady = false after the master cover letter was written; the card would refuse a document it has")
+	}
+}
+
+// Canary for bug #527's harness invariant. setupTestDB must hand every
+// connection in the pool the same schema, which a `:memory:` database cannot
+// do — a second connection opens its own empty database instead. The failure
+// mode is silent: nothing errors at setup, and a test whose assertions happen
+// to expect "not found" keeps passing while covering nothing. This asserts the
+// invariant directly so a future return to `:memory:` fails here, loudly and
+// in one place, rather than quietly weakening every test that reads from
+// inside an open iteration.
+func TestSetupTestDB_ServesQueriesNestedInsideAnOpenIteration(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	if _, err := AddToFunnel("Nested Co", "Engineer", "https://nested.example/jobs/1", "DISCOVERED"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := GetDB().Query(`SELECT url FROM job_funnel`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			t.Fatal(err)
+		}
+		// Issued while rows is still open, so it must take a second pooled
+		// connection — the exact shape GetAssistedQueue uses for its readiness
+		// lookups.
+		var count int
+		if err := GetDB().QueryRow(`SELECT COUNT(*) FROM job_funnel WHERE url = ?`, url).Scan(&count); err != nil {
+			t.Fatalf("nested query failed, so setupTestDB is not sharing one schema across the pool (bug #527): %v", err)
+		}
+		if count != 1 {
+			t.Errorf("nested count for %s = %d, want 1", url, count)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}

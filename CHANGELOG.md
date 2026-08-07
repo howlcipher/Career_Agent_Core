@@ -1,5 +1,25 @@
 # Career Agent Core - Changelog
 
+## 2026-08-07 — Assisted Apply's document-readiness fields are actually covered by tests
+
+* **Fix (bugs.md #527):** no production behaviour changed — this is a test-harness
+  defect, and the coverage it cost was real. `pkg/storage`'s tests opened a
+  `:memory:` database, which belongs to a single connection while `db` is a
+  pool. Any query issued from inside an open result set took a second
+  connection, found an empty schema, and failed `no such table` — silently,
+  with nothing erroring at setup.
+* `GetAssistedQueue` resolves `resume_ready` and `cover_letter_ready` from
+  inside its own row loop, so under that harness both were unconditionally
+  false and every test asserting them would have been asserting the failure
+  path. **A regression in either field would have passed CI.** Both are now
+  covered against the real projection, in both the ready and not-ready states.
+* Tests open a per-test file database instead, and a canary test asserts the
+  invariant directly so a return to `:memory:` fails loudly in one place rather
+  than quietly weakening every test that reads from inside an iteration. The
+  same trap in `cmd/agent`'s three pipeline tests was removed with it.
+* ADR-003 records the rule and why the bounded connection pool is what makes
+  `:memory:` unsafe here.
+
 ## 2026-08-07 — Queue cards show when a job was last touched instead of year 0001
 
 * **Fix (bugs.md #531):** most Assisted Apply cards reported `last_updated` as

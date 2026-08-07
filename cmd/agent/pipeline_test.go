@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -118,8 +119,13 @@ func (publicResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr
 	return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
 }
 
+// The three tests below open a file database rather than `:memory:` for the
+// reason documented on storage.setupTestDB (bug #527): `:memory:` is private to
+// one connection, so any query issued from inside an open result set takes a
+// second pooled connection, finds an empty schema, and fails `no such table` —
+// silently, with no setup error to notice.
 func TestStateInit_DuplicateCooldownSkipsBeforeNetworkWork(t *testing.T) {
-	if err := storage.InitDBWithPath(":memory:"); err != nil {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
 	defer storage.CloseDB()
@@ -162,7 +168,7 @@ func TestStateInit_DuplicateCooldownSkipsBeforeNetworkWork(t *testing.T) {
 }
 
 func TestStateInit_DNSNotFoundTerminalizesWithoutRetry(t *testing.T) {
-	if err := storage.InitDBWithPath(":memory:"); err != nil {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
 	defer func() {
@@ -217,7 +223,7 @@ func TestStateInit_DNSNotFoundTerminalizesWithoutRetry(t *testing.T) {
 }
 
 func TestStateInit_TemporaryDNSFailureRemainsRetryable(t *testing.T) {
-	if err := storage.InitDBWithPath(":memory:"); err != nil {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
 	defer storage.CloseDB()

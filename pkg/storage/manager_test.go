@@ -12,8 +12,26 @@ import (
 	"time"
 )
 
+// setupTestDB opens a private database for one test, as a file rather than as
+// `:memory:` (bug #527).
+//
+// A `:memory:` SQLite database belongs to the single connection that opened it,
+// and `db` is a *sql.DB — a pool. Any query issued while another result set is
+// still open takes a second connection from that pool, which opens its own
+// separate, empty in-memory database and fails with `no such table`. Production
+// never sees this because the production database is a file that every pooled
+// connection reaches, so the effect was purely to make tests assert against a
+// failure path: GetAssistedQueue calls assistedDocumentExists from inside its
+// own `rows.Next()` loop, and under `:memory:` that lookup always failed, so
+// ResumeReady and CoverLetterReady were always false whatever the documents on
+// disk said. A real regression in those fields would have passed CI.
+//
+// `file::memory:?cache=shared` would also share one schema across the pool, but
+// that name is process-global: two tests running in parallel would land in the
+// same database. t.TempDir() is per test and is removed when the test ends.
 func setupTestDB(t *testing.T) {
-	err := InitDBWithPath(":memory:")
+	t.Helper()
+	err := InitDBWithPath(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}

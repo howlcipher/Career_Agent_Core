@@ -2,6 +2,24 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 527. The `:memory:` test database silently fails every nested query, so the assisted queue's readiness fields cannot be covered
+
+**Completed 2026-08-07.** Filed 2026-08-06 while writing #525's tests, when a straightforward test of `GetAssistedQueue`'s `cover_letter_ready` field failed against a fix that was demonstrably working.
+
+**Cause.** `setupTestDB` (`pkg/storage/manager_test.go`) called `InitDBWithPath(":memory:")`. A `:memory:` SQLite database is private to the one connection that opened it, and `db` is a `*sql.DB` — a pool. Any query issued while another result set is still open takes a *second* connection from that pool, which opens its own separate, empty in-memory database and fails `no such table`. `GetAssistedQueue` does exactly that: inside `for rows.Next()` it calls `assistedDocumentExists` twice per row, each running `conn.QueryRow` for the job's identity. Under test that lookup always failed, so `ResumeReady` and `CoverLetterReady` were always false whatever the documents on disk said.
+
+**Test-harness artifact, not a production defect** — the row verified this before the fix (a dashboard built from the tree and run against the real `applications.db` reported both fields true for all 524 queued rows, because the production database is a file every pooled connection reaches). Nothing in production behaviour changed here, and no production file was touched.
+
+**Fix.** `setupTestDB` now opens `filepath.Join(t.TempDir(), "test.db")`, so every connection in the pool finds the same schema exactly as production does, and the database is removed when the test ends. `file::memory:?cache=shared` also shares one schema across a pool but its name is process-global, so parallel tests would collide in it; that is why the file database was chosen and the reasoning is recorded on the helper rather than left implicit. The three `storage.InitDBWithPath(":memory:")` call sites in `cmd/agent/pipeline_test.go` were converted the same way in the same commit — they carried the identical latent trap, and leaving three untouched copies of a defect the same commit documents is how one of them later goes wrong.
+
+**Reproduced before and after, not assumed.** Both new tests were run against the old `:memory:` harness and fail there — `TestGetAssistedQueue_ReadinessFieldsFollowTheDocumentsOnDisk` reports both readiness fields false after the master documents were written, and the canary reports `SQL logic error: no such table: job_funnel (1)` — then pass against the file harness.
+
+**Tests.** `TestGetAssistedQueue_ReadinessFieldsFollowTheDocumentsOnDisk` (`pkg/storage/assisted_test.go`) is the projection-level test that could not be written before: it drives the real `GetAssistedQueue` over a queued job and asserts both fields false with no master documents on disk and both true once they are written. It is the counterpart to #525's `TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter`, which had to drive the helper directly for exactly this reason. `TestSetupTestDB_ServesQueriesNestedInsideAnOpenIteration` is a canary asserting the harness invariant directly — a query issued from inside an open `rows.Next()` loop must succeed — so a future return to `:memory:` fails loudly in one place instead of silently weakening every test that reads from inside an iteration.
+
+**No test had been passing against the failure path.** The full suite was green before the change and green after it, and the reason was checked rather than assumed: no test anywhere in the repo asserted `ResumeReady` or `CoverLetterReady` before this one, so there was nothing to re-baseline. The fix direction's warning about mechanically re-baselining fallout turned out not to apply, but it was the reason this row was worked in Claude Code rather than delegated headlessly.
+
+**ADR-003 decision 7** records the harness rule and why the bounded connection pool (decision 2) is what makes `:memory:` unsafe in the first place.
+
 ## 523. The assisted browser's network guard aborts requests silently
 
 **Completed 2026-08-06.** Filed 2026-08-05 during the Assisted Apply acceptance trial, where a failing submission made the network guard a prime suspect and the log could not confirm or clear it. Ruling it out took a full synthetic-reproduction cycle against a real browser and the live CAPTCHA hosts.
