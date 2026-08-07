@@ -4140,6 +4140,28 @@ Tests: `TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact` reconstruc
 `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. No frontend sources exist for this change to affect. The trial was halted at this defect and no application was submitted.
 
 ---
+## 530. A posting that has died still occupies a queue card, because the assisted queue never reads the funnel status it selects
+
+**Completed 2026-08-07.** Filed 2026-08-06 during #524's backfill work, which asked each board directly about every queued posting and found 18 had been taken down. All 18 kept their card and stayed clickable.
+
+**Cause.** `GetAssistedQueue` filtered on `aa.assisted_state != 'completed'` and nothing else. It *selected* `COALESCE(jf.status, '')` and scanned it into a local `currentStatus` that was never read again, and `serveAssistedQueue` — its only caller — added no filter. So `assisted_state`, which only records whether the *operator* finished with a row, was standing in for a question it cannot answer: whether the posting still exists.
+
+**What re-evaluation added.** The confirm path already enforced the missing rule: `ConfirmAssistedSubmission` refuses when `status != original || !isAssistedEligibleStatus(status)`, so clicking Confirm on a dead card already failed safely with "refusing to overwrite newer job status". There was never a corruption risk — only wasted operator effort. That settled the design question the row had left open: **reuse `eligibleAssistedStatuses` rather than invent a list of terminal statuses.** An allowlist of "still workable" cannot fall behind as new failure statuses appear, whereas a denylist silently would.
+
+Checked before relying on it: the only `job_funnel.status` write anywhere on the assisted path is `ConfirmAssistedSubmission`'s `APPLIED` update, made in the same transaction that sets `assisted_state = 'completed'`. So an in-flight row still holds its original eligible status, and the filter cannot hide work genuinely in progress.
+
+**Fix.** `eligibleAssistedStatusList()` renders the existing set as a sorted SQL `IN` list, and `GetAssistedQueue` gained `AND jf.status IN (...)` bound through parameters. The queue and the confirm path now share one definition of "still workable". The dead `jf.status` select/scan was removed — reading it is now the `WHERE` condition, which is what reading it should always have meant — and with it a second dead read found in the same scan: `jf.status_reason` was selected into `job.Interruption` and then immediately overwritten by `aa.interruption_reason`. Removing it changed no value, only wasted work.
+
+**Deliberately not done: marking the rows `completed`.** In this schema `assisted_state = 'completed'` is written in exactly one place, together with `confirmation_provenance = 'manual_user_confirmation'`, and means *an application was submitted and the operator confirmed it*. Using it for a dead posting would fabricate an application record — the same class of defect as #518 and #521. The rows keep `waiting_human` and simply stop being offered as work; the funnel already records them as `INVALID_URL`/`expired`, so nothing is lost, and the dashboard's funnel metrics still count them.
+
+**Mutation-checked.** Reverting the filter makes the exclusion test fail with exactly the defect (`queue length after the posting died = 2, want 1`). Swapping two adjacent `SELECT` columns makes the alignment test fail (`OriginalStatus = "solve_captcha"`), confirming it really guards the scan realignment. One honest negative: re-introducing the duplicate `jf.status_reason` scan does **not** fail any test, and cannot — the later scan always overwrote it, so the removal changed no observable value. The test comment was corrected to stop claiming otherwise.
+
+**Verified live against the real `applications.db`.** A dashboard built from the fixed tree on `127.0.0.1:8099` served **506** rows where the pre-fix production build on `:8080` served **524** — the difference being exactly the 18 dead postings, with zero leaking through, matching the database's own count of 506 eligible rows. The 18 records survive untouched: still `waiting_human`, still no `confirmation_provenance`. Production was then restarted on the fixed build and confirmed serving 506 rows with 67 locations.
+
+**Found along the way:** bug #531 — `parseAssistedTime` has no layout for `time.Time`'s default string form, so 424 of 524 live queue rows report `last_updated` as `0001-01-01T00:00:00Z`.
+
+---
+
 ## 525. Assisted Apply attached a .txt extraction where the automatic path uploads the master cover letter
 
 **Completed 2026-08-06.** Filed 2026-08-05 during the Assisted Apply acceptance trial, alongside #515 and #517, as the least severe of the three document-resolution divergences.

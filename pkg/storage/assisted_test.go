@@ -749,3 +749,128 @@ func TestGetAssistedQueue_DistinguishesPostingsSharingCompanyAndRole(t *testing.
 		}
 	}
 }
+
+// A posting the world has moved on from must not keep a clickable card
+// (bug #530). #524's backfill asked each board directly and found 18 queued
+// postings had been taken down; every one of them stayed in the queue, because
+// this projection filtered on assisted_state alone and read jf.status only to
+// discard it.
+func TestGetAssistedQueue_ExcludesPostingsNoLongerWorkable(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const liveURL = "https://boards.greenhouse.io/live/jobs/1"
+	const deadURL = "https://boards.greenhouse.io/dead/jobs/2"
+	for _, tc := range []struct{ company, title, url string }{
+		{"Live Co", "Platform Engineer", liveURL},
+		{"Dead Co", "Platform Engineer", deadURL},
+	} {
+		if _, err := AddToFunnel(tc.company, tc.title, tc.url, "AWAITING_REVIEW"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both are workable to begin with, so the exclusion below cannot be an
+	// artefact of one of them never having been queued.
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 {
+		t.Fatalf("queue length before the posting died = %d, want 2", len(jobs))
+	}
+
+	// The posting is taken down. Its assisted_state is untouched — only the
+	// funnel status changes, exactly as cmd/backfill-location leaves it.
+	if err := UpdateFunnelStatusInvalid(deadURL, InvalidURLReasonExpired); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err = GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length after the posting died = %d, want 1", len(jobs))
+	}
+	if jobs[0].Company != "Live Co" {
+		t.Fatalf("surviving card = %q, want the live posting", jobs[0].Company)
+	}
+
+	// The row itself must survive untouched: it is still a real historical
+	// record, and nothing here may imply an application happened.
+	var assistedState, provenance string
+	if err := GetDB().QueryRow(`SELECT aa.assisted_state, COALESCE(aa.confirmation_provenance, '')
+		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
+		WHERE jf.url = ?`, deadURL).Scan(&assistedState, &provenance); err != nil {
+		t.Fatal(err)
+	}
+	if assistedState == "completed" || provenance != "" {
+		t.Fatalf("dead posting was marked completed/confirmed (state=%q provenance=%q); that would fabricate an application",
+			assistedState, provenance)
+	}
+}
+
+// The queue projection's scan is positional and was realigned when jf.status
+// and jf.status_reason left the SELECT list (bug #530). A silent off-by-one
+// there would put a timestamp in a status field and still compile, so pin the
+// fields either side of the removal.
+func TestGetAssistedQueue_ScanStaysAlignedAfterStatusColumnsRemoved(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	const alignURL = "https://boards.greenhouse.io/align/jobs/7"
+	if _, err := AddToFunnel("Align Co", "Site Reliability Engineer", alignURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateFunnelStatusWithReasonAndScore(alignURL, "BLOCKED_CAPTCHA", "captcha at plan time", 80); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Drive the two reasons apart, so Interruption pins the assisted plan's own
+	// reason rather than whatever the funnel currently says. (Removing the old
+	// duplicate jf.status_reason scan changed no value — the later
+	// aa.interruption_reason scan always overwrote it — so this does not test
+	// that removal; it tests that the surviving column is the right one.)
+	if err := UpdateFunnelStatusWithReasonAndScore(alignURL, "BLOCKED_CAPTCHA", "funnel reason changed later", 80); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length = %d", len(jobs))
+	}
+	job := jobs[0]
+	if job.Company != "Align Co" {
+		t.Errorf("Company = %q", job.Company)
+	}
+	if job.Role != "Site Reliability Engineer" {
+		t.Errorf("Role = %q", job.Role)
+	}
+	if job.Provider != "Greenhouse" {
+		t.Errorf("Provider = %q, want Greenhouse", job.Provider)
+	}
+	// The column immediately after the removal, and the one whose scan target
+	// was previously written twice.
+	if job.OriginalStatus != "BLOCKED_CAPTCHA" {
+		t.Errorf("OriginalStatus = %q, want BLOCKED_CAPTCHA", job.OriginalStatus)
+	}
+	if job.Interruption != "captcha at plan time" {
+		t.Errorf("Interruption = %q, want the assisted plan's own reason, not the funnel's current one", job.Interruption)
+	}
+	if job.RequisitionID != "7" {
+		t.Errorf("RequisitionID = %q, want 7 (posting URL still scanned last-but-one)", job.RequisitionID)
+	}
+	// LastUpdated is deliberately not asserted here. It is genuinely zero for
+	// rows whose last_updated was written by Go — parseAssistedTime cannot read
+	// time.Time's default string form, filed as bug #531 — so it would fail for
+	// a reason unrelated to alignment. The timestamp column's position is
+	// already bracketed by Provider before it and OriginalStatus after it, both
+	// asserted above, so a shift there could not pass unnoticed.
+}

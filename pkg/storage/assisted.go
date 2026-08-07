@@ -408,6 +408,26 @@ var eligibleAssistedStatuses = map[string]struct{}{
 	"AWAITING_REVIEW": {}, "MANUAL_REQUIRED": {}, "BLOCKED_CAPTCHA": {},
 }
 
+// eligibleAssistedStatusList renders the same set as a sorted SQL IN list, so
+// the queue projection and ConfirmAssistedSubmission cannot drift onto
+// different definitions of "still workable" (bug #530). Sorted purely so the
+// generated SQL is stable between runs; map order would be valid but noisy.
+func eligibleAssistedStatusList() (placeholders string, args []any) {
+	statuses := make([]string, 0, len(eligibleAssistedStatuses))
+	for status := range eligibleAssistedStatuses {
+		statuses = append(statuses, status)
+	}
+	sort.Strings(statuses)
+
+	marks := make([]string, len(statuses))
+	args = make([]any, len(statuses))
+	for i, status := range statuses {
+		marks[i] = "?"
+		args[i] = status
+	}
+	return strings.Join(marks, ", "), args
+}
+
 func migrateAssistedApplications() error {
 	if db == nil {
 		return errors.New("database not initialized")
@@ -681,10 +701,28 @@ func EnsureAssistedPlanForURL(rawURL, status string) error {
 // dashboard readers never need to initialize the storage package singleton.
 func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	masterCoverLetter := resolveMasterCoverLetter()
+	// The funnel status filter is not redundant with assisted_state (bug #530).
+	// assisted_state only says whether the *operator* finished with the row; it
+	// says nothing about whether the posting still exists. A job the world has
+	// moved on from — #524's backfill confirmed 18 queued postings had been
+	// taken down, by asking each board directly — kept its card and stayed
+	// clickable. ConfirmAssistedSubmission already refuses such a row
+	// ("refusing to overwrite newer job status"), so the only thing the card
+	// could do was waste the operator's time; this makes the queue agree with
+	// the write path instead of inviting a click that cannot succeed.
+	//
+	// Reusing eligibleAssistedStatuses rather than listing terminal statuses is
+	// deliberate: a closed set of "still workable" statuses cannot fall behind
+	// as new failure statuses appear, whereas a denylist silently would. It is
+	// also safe for in-flight work, because the only job_funnel.status write on
+	// the whole assisted path is ConfirmAssistedSubmission's APPLIED update,
+	// made in the same transaction that sets assisted_state = 'completed' — so
+	// a row being worked right now still holds its original eligible status.
+	eligible, statusArgs := eligibleAssistedStatusList()
 	rows, err := conn.Query(`SELECT jf.id, COALESCE(jf.company_name, ''), COALESCE(jf.job_title, ''), jf.fit_score,
 		CASE WHEN jf.url LIKE '%greenhouse%' THEN 'Greenhouse' WHEN jf.url LIKE '%lever.co%' THEN 'Lever'
 		WHEN jf.url LIKE '%workday%' THEN 'Workday' WHEN jf.url LIKE '%ashby%' THEN 'Ashby' ELSE 'Other ATS' END,
-		COALESCE(jf.status, ''), COALESCE(jf.status_reason, ''), COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
+		COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP),
 		 aa.original_status, aa.next_action_code, aa.interruption_reason, aa.is_legacy, aa.assisted_attempt_count,
 		 COALESCE(aa.revalidation_state, 'required'),
 		aa.assisted_state,
@@ -692,9 +730,9 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		aa.lease_owner, aa.lease_expires_at,
 		COALESCE(jf.url, ''), COALESCE(jf.job_location, '')
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
-		WHERE aa.assisted_state != 'completed'
+		WHERE aa.assisted_state != 'completed' AND jf.status IN (`+eligible+`)
 		ORDER BY CASE aa.next_action_code WHEN 'review_and_submit' THEN 1 WHEN 'solve_captcha' THEN 2 WHEN 'complete_legal_attestation' THEN 3 WHEN 'login_or_create_account' THEN 4 ELSE 5 END,
-		jf.discovered_at DESC, jf.fit_score DESC, aa.assisted_attempt_count ASC`)
+		jf.discovered_at DESC, jf.fit_score DESC, aa.assisted_attempt_count ASC`, statusArgs...)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
 			return []AssistedJob{}, nil
@@ -712,9 +750,13 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		var leaseUpdated sql.NullString
 		var revalidationState string
 		var assistedState string
-		var currentStatus string
 		var postingURL string
-		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &currentStatus, &job.Interruption, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry, &postingURL, &job.Location); err != nil {
+		// jf.status and jf.status_reason used to be selected here and then
+		// thrown away — status into a variable nothing read, status_reason into
+		// job.Interruption, which the later aa.interruption_reason scan
+		// immediately overwrote. Both are gone: the status is now a WHERE
+		// condition, which is what reading it should always have meant.
+		if err := rows.Scan(&job.ID, &job.Company, &job.Role, &fit, &job.Provider, &lastUpdated, &job.OriginalStatus, &job.NextAction.Code, &job.Interruption, &job.Legacy, &job.AttemptCount, &revalidationState, &assistedState, &leaseUpdated, &leaseOwner, &leaseExpiry, &postingURL, &job.Location); err != nil {
 			return nil, err
 		}
 		job.Location = strings.TrimSpace(job.Location)
