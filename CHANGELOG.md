@@ -1,5 +1,45 @@
 # Career Agent Core - Changelog
 
+## 2026-08-07 — Email outcomes are recorded in the stage ledger at the time they arrive
+
+* **Diagnosis (bugs.md #529): the headline was not a defect.** "49 emails
+  processed, zero outcomes recorded" read `processed_emails` as a count of
+  outcome emails. It is a count of messages the tracker has *looked at*, inside
+  a fixed 50-message fetch window, and all 49 came from two scans — 41 on
+  2026-07-22 and 8 on 2026-07-24. The tracker has not run since. The "real
+  rejection" the Usability Gate credited to that scan was written by the
+  pre-#20 binary 18 minutes before #20's fix landed, when `cmd/tracker` never
+  called `InitDB` and every database write was a guaranteed no-op — and the
+  artifact's own LLM-extracted field states the message was not a rejection.
+  Zero recorded outcomes is the correct state for the elapsed time.
+* **Fix (bugs.md #529):** the tracker's outcome write was
+  `UPDATE job_funnel SET status = ?` — status alone. The funnel stage ledger is
+  a database trigger that derives `occurred_at` from `NEW.last_updated` and
+  `reason_code` from `NEW.status_reason`, so **every outcome the tracker
+  recorded was ledgered backdated to the application's submission time and
+  labelled with the submission's own reason code.** A rejection arriving weeks
+  after applying was written down as occurring at submission with
+  `reason_code = "submitted_ok"`. The funnel status was always correct; the
+  event record of it — the thing the outcome feedback loop consumes — was not.
+* `tracker.applyOutcome` now stamps `status`, `status_reason` and
+  `last_updated` together, carrying the bounded codes
+  `outcome_email_rejected` / `outcome_email_interview`. They are fixed
+  constants rather than anything derived from the message, because the trigger
+  copies `status_reason` into the ledger verbatim and the ledger holds state
+  metadata only — no email body, subject, address or credential reaches it.
+* Matching was deliberately **not** widened; bug #20 was caused by this
+  classifier being too eager. Ambiguous outcome emails still roll back rather
+  than pick a row, and unmatched ones still write nothing.
+* Tests: the six-scenario chain `classifyEmail` → `matchTrackedCompany` →
+  persistence had no end-to-end coverage at all — every prior test called the
+  writer with the company already resolved, which is what let this row be filed
+  as an open question. Three tests added, all confirmed to fail against the
+  previous behaviour.
+* ADR-003 decision 5's claim that the ledger records "elapsed duration" is
+  corrected: `stage_duration_ms` is NULL for all 1,385 rows ever written,
+  because the trigger measures with `julianday()` over a format decision 6
+  already documents SQLite cannot parse. Filed as bugs.md #532.
+
 ## 2026-08-07 — Assisted Apply's document-readiness fields are actually covered by tests
 
 * **Fix (bugs.md #527):** no production behaviour changed — this is a test-harness

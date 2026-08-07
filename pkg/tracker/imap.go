@@ -1,10 +1,12 @@
 package tracker
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
@@ -231,6 +233,47 @@ type trackCandidate struct {
 	url   string
 }
 
+// Bounded status_reason codes for outcomes the tracker records. They must
+// stay free of email content: the funnel stage ledger copies status_reason
+// into reason_code verbatim, and that ledger is explicitly documented to hold
+// "only state metadata, never job content".
+const (
+	OutcomeReasonRejected  = "outcome_email_rejected"
+	OutcomeReasonInterview = "outcome_email_interview"
+)
+
+func outcomeReason(status string) string {
+	if status == "REJECTED" {
+		return OutcomeReasonRejected
+	}
+	return OutcomeReasonInterview
+}
+
+// applyOutcome writes the outcome onto exactly one funnel row.
+//
+// Bug #529: this used to set status alone. The stage ledger is a database
+// trigger (storage.createFunnelStageLedgerTrigger) that derives its
+// occurred_at from NEW.last_updated and its reason_code from
+// NEW.status_reason, so leaving both untouched meant every outcome the
+// tracker recorded landed in the ledger backdated to the row's *submission*
+// time and labelled with the *previous* state's reason — a rejection arriving
+// weeks after the application was filed was written to the ledger as
+// occurring at submission time with reason_code "submitted_ok". The funnel
+// status itself was always correct; the event record of it was not, and the
+// event record is what the outcome feedback loop consumes.
+func applyOutcome(tx *sql.Tx, id int, status string) error {
+	if _, err := tx.Exec(
+		`UPDATE job_funnel SET status = ?, status_reason = ?, last_updated = ? WHERE id = ?`,
+		status,
+		outcomeReason(status),
+		time.Now().UTC(),
+		id,
+	); err != nil {
+		return fmt.Errorf("update tracker outcome: %w", err)
+	}
+	return nil
+}
+
 func filterCandidates(candidates []trackCandidate, subjectLower, bodyLower string) []trackCandidate {
 	combined := subjectLower + " " + bodyLower
 
@@ -337,15 +380,15 @@ func updateDBWithTrackerResult(
 		if len(candidates) == 0 {
 			result = trackerUpdateNoop
 		} else if len(candidates) == 1 {
-			if _, err := tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, status, candidates[0].id); err != nil {
-				return "", fmt.Errorf("update tracker outcome: %w", err)
+			if err := applyOutcome(tx, candidates[0].id, status); err != nil {
+				return "", err
 			}
 			result = trackerUpdateUpdated
 		} else {
 			filtered := filterCandidates(candidates, subjectLower, bodyLower)
 			if len(filtered) == 1 {
-				if _, err := tx.Exec(`UPDATE job_funnel SET status = ? WHERE id = ?`, status, filtered[0].id); err != nil {
-					return "", fmt.Errorf("update tracker outcome: %w", err)
+				if err := applyOutcome(tx, filtered[0].id, status); err != nil {
+					return "", err
 				}
 				result = trackerUpdateUpdated
 			} else {

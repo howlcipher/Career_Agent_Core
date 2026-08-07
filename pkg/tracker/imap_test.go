@@ -3,7 +3,9 @@ package tracker
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
@@ -450,4 +452,271 @@ func assertTrackerTestStatus(t *testing.T, db *sql.DB, company, want string) {
 	if got != want {
 		t.Fatalf("status = %q, want %q", got, want)
 	}
+}
+
+// TestTrackerOutcomeIsLedgeredAtArrivalTime is bug #529's regression.
+//
+// The funnel stage ledger is a database trigger, not a Go call: it derives
+// occurred_at from NEW.last_updated and reason_code from NEW.status_reason.
+// The tracker's outcome write used to set status alone, so both fields were
+// inherited from the row's previous state. A rejection arriving weeks after
+// submission was ledgered as having occurred at submission time, carrying the
+// submission's own reason code — so the one event the outcome feedback loop
+// exists to record was written down with the wrong timestamp and a label that
+// says the opposite of what happened.
+//
+// Against the pre-fix code this fails twice over: reason_code reads
+// "submitted_ok" and occurred_at reads the submission timestamp.
+func TestTrackerOutcomeIsLedgeredAtArrivalTime(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     string
+		wantReason string
+	}{
+		{"rejection", "REJECTED", OutcomeReasonRejected},
+		{"interview", "INTERVIEW_REQUESTED", OutcomeReasonInterview},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+
+			submittedAt := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+			url := "https://boards.greenhouse.io/northwind/jobs/4471102"
+			if _, err := db.Exec(
+				`INSERT INTO job_funnel (company_name, job_title, url, status, status_reason, last_updated)
+				 VALUES ('Northwind', 'Senior Platform Engineer', ?, 'DISCOVERED', '', ?)`,
+				url, submittedAt,
+			); err != nil {
+				t.Fatalf("seed funnel row: %v", err)
+			}
+			// A real prior transition, so the ledger has something to measure
+			// the outcome's stage_duration_ms against.
+			if _, err := db.Exec(
+				`UPDATE job_funnel SET status = 'APPLIED', status_reason = 'submitted_ok', last_updated = ? WHERE url = ?`,
+				submittedAt, url,
+			); err != nil {
+				t.Fatalf("seed prior transition: %v", err)
+			}
+
+			before := time.Now().UTC()
+			got, err := updateDBWithTrackerResult("<outcome-"+tc.name+"@example.com>", "Northwind", tc.status, "", "")
+			if err != nil {
+				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+			}
+			if got != trackerUpdateUpdated {
+				t.Fatalf("result = %q, want %q", got, trackerUpdateUpdated)
+			}
+			assertTrackerTestStatus(t, db, "Northwind", tc.status)
+
+			// stage_duration_ms is deliberately not asserted here: the ledger
+			// trigger computes it with julianday(), which returns NULL for the
+			// timestamp text the SQLite driver actually stores. That is a
+			// pre-existing defect affecting every writer — all 1,385 live
+			// ledger rows have a NULL duration — and is tracked separately.
+			var reason, occurredAt string
+			if err := db.QueryRow(
+				`SELECT reason_code, occurred_at FROM funnel_stage_events
+				 WHERE new_status = ? ORDER BY id DESC LIMIT 1`, tc.status,
+			).Scan(&reason, &occurredAt); err != nil {
+				t.Fatalf("the outcome produced no stage ledger event: %v", err)
+			}
+
+			if reason != tc.wantReason {
+				t.Errorf("ledger reason_code = %q, want %q — an outcome must not inherit the previous state's reason", reason, tc.wantReason)
+			}
+
+			occurred, err := time.Parse(time.RFC3339Nano, occurredAt)
+			if err != nil {
+				t.Fatalf("ledger occurred_at %q is not a parseable timestamp: %v", occurredAt, err)
+			}
+			if !occurred.After(submittedAt) {
+				t.Errorf("ledger occurred_at = %s, which is not after the submission time %s — the outcome was backdated to submission",
+					occurred, submittedAt)
+			}
+			if occurred.Before(before.Add(-time.Minute)) {
+				t.Errorf("ledger occurred_at = %s, want approximately now (%s)", occurred, before)
+			}
+		})
+	}
+}
+
+// TestTrackerOutcomeReasonCarriesNoEmailContent pins the privacy boundary the
+// bounded reason codes exist to hold. status_reason is copied verbatim into
+// the stage ledger, which is documented to store state metadata only.
+func TestTrackerOutcomeReasonCarriesNoEmailContent(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Northwind", "APPLIED", "https://example.com/privacy")
+
+	subject := "northwind — your application to the senior platform role"
+	body := "unfortunately we are not moving forward. contact hiring@northwind.example for details."
+
+	if _, err := updateDBWithTrackerResult("<privacy@example.com>", "Northwind", "REJECTED", subject, body); err != nil {
+		t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+	}
+
+	var reason, storedReason string
+	if err := db.QueryRow(`SELECT reason_code FROM funnel_stage_events ORDER BY id DESC LIMIT 1`).Scan(&reason); err != nil {
+		t.Fatalf("read ledger reason: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status_reason FROM job_funnel WHERE company_name = 'Northwind'`).Scan(&storedReason); err != nil {
+		t.Fatalf("read status_reason: %v", err)
+	}
+
+	for _, field := range []string{reason, storedReason} {
+		if field != OutcomeReasonRejected {
+			t.Errorf("persisted reason = %q, want the bounded code %q", field, OutcomeReasonRejected)
+		}
+		for _, leak := range []string{"unfortunately", "northwind.example", "hiring@", "senior platform"} {
+			if strings.Contains(strings.ToLower(field), leak) {
+				t.Errorf("persisted reason %q leaks email content %q", field, leak)
+			}
+		}
+	}
+}
+
+// TestTrackerOutcomeChainEndToEnd walks the real path an inbound message
+// takes — classifyEmail, then matchTrackedCompany, then persistence — rather
+// than calling the writer with a company already resolved. Every other test
+// in this file starts after the two decisions that actually determine whether
+// an outcome reaches the database, which is precisely the gap bug #529 was
+// filed against.
+func TestTrackerOutcomeChainEndToEnd(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+
+	insertTrackerTestJob(t, db, "Northwind", "APPLIED", "https://boards.greenhouse.io/northwind/jobs/4471102")
+	insertTrackerTestJob(t, db, "Calder", "AWAITING_REVIEW", "https://jobs.lever.co/calder/aa11bb22")
+	insertTrackerTestJob(t, db, "Tessera", "APPLIED", "https://boards.greenhouse.io/tessera/jobs/900001")
+	insertTrackerTestJob(t, db, "Tessera", "APPLIED", "https://boards.greenhouse.io/tessera/jobs/900002")
+
+	companies, err := storage.GetTrackedCompanies()
+	if err != nil {
+		t.Fatalf("GetTrackedCompanies: %v", err)
+	}
+
+	// deliver mirrors StartTracker's per-message branch exactly.
+	deliver := func(t *testing.T, messageID, senderDomain, subject, body string) (string, trackerUpdateResult) {
+		t.Helper()
+		subjectLower, bodyLower := strings.ToLower(subject), strings.ToLower(body)
+		status := classifyEmail(subjectLower, bodyLower)
+		if status == "" {
+			if err := storage.MarkEmailProcessed(messageID); err != nil {
+				t.Fatalf("mark processed: %v", err)
+			}
+			return "", ""
+		}
+		company := matchTrackedCompany(companies, senderDomain, subjectLower)
+		res, err := updateDBWithTrackerResult(messageID, company, status, subjectLower, bodyLower)
+		if err != nil {
+			t.Fatalf("persist outcome: %v", err)
+		}
+		return status, res
+	}
+
+	statusOf := func(t *testing.T, url string) string {
+		t.Helper()
+		var s string
+		if err := db.QueryRow(`SELECT status FROM job_funnel WHERE url = ?`, url).Scan(&s); err != nil {
+			t.Fatalf("read status for %s: %v", url, err)
+		}
+		return s
+	}
+
+	t.Run("rejection for a uniquely identifiable application", func(t *testing.T) {
+		status, res := deliver(t, "<e2e-reject@example.com>", "northwind.com",
+			"Northwind - Senior Platform Engineer",
+			"Thank you for applying. Unfortunately we are not moving forward with your application.")
+		if status != "REJECTED" || res != trackerUpdateUpdated {
+			t.Fatalf("status=%q result=%q, want REJECTED/updated", status, res)
+		}
+		if got := statusOf(t, "https://boards.greenhouse.io/northwind/jobs/4471102"); got != "REJECTED" {
+			t.Errorf("funnel status = %q, want REJECTED", got)
+		}
+	})
+
+	t.Run("recruiter response for a hand-off application", func(t *testing.T) {
+		status, res := deliver(t, "<e2e-interview@example.com>", "calder.com",
+			"Calder - Backend Engineer",
+			"We would love to schedule an interview. What is your availability next week?")
+		if status != "INTERVIEW_REQUESTED" || res != trackerUpdateUpdated {
+			t.Fatalf("status=%q result=%q, want INTERVIEW_REQUESTED/updated", status, res)
+		}
+		if got := statusOf(t, "https://jobs.lever.co/calder/aa11bb22"); got != "INTERVIEW_REQUESTED" {
+			t.Errorf("funnel status = %q, want INTERVIEW_REQUESTED", got)
+		}
+	})
+
+	t.Run("unrelated email touches nothing", func(t *testing.T) {
+		status, _ := deliver(t, "<e2e-unrelated@example.com>", "golangweekly.com",
+			"Go Weekly Digest #412", "A generics deep dive and a new release.")
+		if status != "" {
+			t.Fatalf("unrelated newsletter classified as %q", status)
+		}
+		if !storage.WasEmailProcessed("<e2e-unrelated@example.com>") {
+			t.Error("an unrelated email must still be acknowledged so it is not rescanned forever")
+		}
+	})
+
+	t.Run("ambiguous match fails safe", func(t *testing.T) {
+		_, res := deliver(t, "<e2e-ambiguous@example.com>", "tessera.com",
+			"Tessera - an update on your application",
+			"Unfortunately we are not moving forward at this time.")
+		if res != trackerUpdateAmbiguous {
+			t.Fatalf("result = %q, want %q — two open roles at one company must not resolve to an arbitrary pick",
+				res, trackerUpdateAmbiguous)
+		}
+		for _, u := range []string{
+			"https://boards.greenhouse.io/tessera/jobs/900001",
+			"https://boards.greenhouse.io/tessera/jobs/900002",
+		} {
+			if got := statusOf(t, u); got != "APPLIED" {
+				t.Errorf("%s moved to %q on an ambiguous email; it must stay APPLIED", u, got)
+			}
+		}
+	})
+
+	t.Run("outcome for a job that is not in the database", func(t *testing.T) {
+		_, res := deliver(t, "<e2e-unknown@example.com>", "acmeunrelated.com",
+			"Acmeunrelated - your application",
+			"Unfortunately we are not moving forward.")
+		if res != trackerUpdateUnmatched {
+			t.Fatalf("result = %q, want %q", res, trackerUpdateUnmatched)
+		}
+		var outcomes int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM job_funnel WHERE status IN ('REJECTED','INTERVIEW_REQUESTED')`,
+		).Scan(&outcomes); err != nil {
+			t.Fatalf("count outcomes: %v", err)
+		}
+		if outcomes != 2 {
+			t.Errorf("outcome rows = %d, want the 2 written by earlier subtests — an unknown company must write nothing", outcomes)
+		}
+	})
+
+	t.Run("redelivery of an already-processed message is idempotent", func(t *testing.T) {
+		var ledgerBefore int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM funnel_stage_events`).Scan(&ledgerBefore); err != nil {
+			t.Fatalf("count ledger: %v", err)
+		}
+
+		// StartTracker skips any Message-ID it has already acknowledged.
+		if !storage.WasEmailProcessed("<e2e-reject@example.com>") {
+			t.Fatal("the first delivery was never acknowledged, so redelivery would be reprocessed")
+		}
+
+		// Even if the dedup gate were bypassed, reprocessing must not write again.
+		_, res := deliver(t, "<e2e-reject@example.com>", "northwind.com",
+			"Northwind - Senior Platform Engineer",
+			"Thank you for applying. Unfortunately we are not moving forward with your application.")
+		if res != trackerUpdateNoop {
+			t.Errorf("reprocessing result = %q, want %q — the row already holds the outcome", res, trackerUpdateNoop)
+		}
+
+		var ledgerAfter int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM funnel_stage_events`).Scan(&ledgerAfter); err != nil {
+			t.Fatalf("count ledger: %v", err)
+		}
+		if ledgerAfter != ledgerBefore {
+			t.Errorf("ledger grew from %d to %d on a duplicate message; outcome events must not be double-counted",
+				ledgerBefore, ledgerAfter)
+		}
+	})
 }

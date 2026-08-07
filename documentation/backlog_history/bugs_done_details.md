@@ -2,6 +2,90 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 529. 49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`
+
+**Completed 2026-08-07.** Filed 2026-08-06 as "a discrepancy to diagnose, not a confirmed defect". That framing was correct. The headline claim — that detections never reach `job_funnel` — is **not** a current defect: the status write works and has worked since 2026-07-22. But diagnosing it exposed a real defect on the same write path, which was fixed, plus a wider one which was filed as #532.
+
+### What the 49 processed emails actually are
+
+All 49 were handled in exactly **two scans**, not 49 separate events:
+
+| When (UTC) | Messages |
+|---|---|
+| 2026-07-22 04:21:03–04:21:04 | 41 |
+| 2026-07-24 00:17:46 | 8 |
+
+**The tracker has not run since 2026-07-24** — 14 days before this row was closed. `processed_emails` is a count of *messages the tracker has looked at*, which is bounded by `StartTracker`'s fixed "last 50 messages" fetch window. It was never a count of outcome-bearing emails, and reading it as evidence that 49 outcomes went missing was the row's central misreading.
+
+### Whether genuine outcomes were among them
+
+No. The reconciliation the row asked for resolves cleanly, and the artifact that resolves it is one the repository already had.
+
+The Usability Gate recorded that the 2026-07-22 live scan "detect[ed] a real rejection (Glimpse) and a real interview invitation". That claim traces to `applications/rejection_feedback.md`, whose mtime is **2026-07-22 00:05 local (04:05 UTC)** and which holds exactly **one** entry. Two facts about that file settle the question:
+
+1. **It was written by the pre-#20 binary, whose database writes were guaranteed no-ops.** Bug #20's fix (`a2a37b6`) landed at **2026-07-22 04:23:20 UTC**, 18 minutes *after* that file was written. Before it, `cmd/tracker/main.go` never called `storage.InitDB()`; `storage.GetDB()` returned nil and `updateDBWithTrackerResult` opened with `if db == nil { return }`. The commit message states this outright: "cmd/tracker never calling InitDB — meaning every tracker DB update in its history was a silent no-op." `logRejectionFeedback` writes a markdown file and needs no database, which is exactly why the artifact survived while the status write beside it did not.
+2. **The detection was itself a false positive, by its own record.** The entry's LLM-extracted "HR Feedback" field reads: *"The candidate was not rejected — this email is a pre-interview outreach requesting availability... There is no indication of rejection in the message."* The pre-#20 classifier was keyword-only with no negative filters and derived the company from the first label of the sender's domain. This is precisely the false-positive class bug #20 was filed for and fixed the same day.
+
+So the row's benign explanation #2 is confirmed by primary evidence rather than inferred. The 41 messages at 04:21:03 were the *verification run of the #20 fix itself*, two minutes before it was committed — the first scan in the program's history whose acknowledgements could persist at all, which is why `processed_emails` starts there and not earlier.
+
+The row's benign explanation #3 ("56 of the 58 confirmed applications were submitted within the last few days") was **wrong on the data** and is corrected here: 51 of 58 `applied_jobs` rows predate 2026-07-23. The conclusion it supported still holds for a different reason — see below.
+
+No `[Tracker]` log line survives in any of the five retained log files (0 occurrences across all of them), so logs could neither confirm nor refute persistence for those scans. The `rejection_feedback.md` mtime and the commit clock did the work instead.
+
+### Why zero outcomes is nonetheless the correct current state
+
+Beyond the classifier history, the tracker's reachable universe is far smaller than "58 confirmed applications" suggests. Joining `applied_jobs` to `job_funnel` on URL, live 2026-08-07:
+
+| `job_funnel` status of a confirmed application | Count |
+|---|---|
+| *(no funnel row at all)* | 22 |
+| FAILED_SUBMIT | 19 |
+| INVALID_URL | 10 |
+| APPLIED | 7 |
+
+`GetTrackedCompanies` only returns companies holding a row in `APPLIED` / `INTERVIEW_REQUESTED` / `MANUAL_REQUIRED` / `AWAITING_REVIEW`, so **only 7 of 58 confirmed applications are visible to the matcher at all**. The other 51 are the residue of bug #94's history (`RecordApplicationInDB` used to run at document-generation time, so a job that generated documents and then failed to submit was recorded as applied). That divergence is a real data-integrity question, but it is not a tracker defect and was deliberately left out of scope here rather than "fixed" by widening the match — the row explicitly warns that loosening matching is how #20 was created.
+
+Combined with 20 of the 21 currently trackable companies being single-word names, and the tracker being **stopped since 2026-07-24**, zero recorded outcomes is the expected state, not a symptom.
+
+### The real defect this diagnosis did find
+
+The funnel stage ledger is a **database trigger** (`createFunnelStageLedgerTrigger`, `pkg/storage/manager.go:597`), not a Go call. It derives `occurred_at` from `NEW.last_updated` and `reason_code` from `NEW.status_reason`. The tracker's outcome write was `UPDATE job_funnel SET status = ? WHERE id = ?` — **status alone**. Both ledger fields were therefore inherited from the row's *previous* state.
+
+Reproduced against a real schema before fixing. A rejection applied to a row submitted 2026-07-15 produced:
+
+```
+job_funnel.status   = REJECTED                    <- correct
+job_funnel.last_updated = 2026-07-15T12:00:00Z    <- never advanced
+ledger reason_code  = "submitted_ok"              <- the SUBMISSION's reason
+ledger occurred_at  = 2026-07-15T12:00:00Z        <- backdated to submission
+```
+
+The funnel status was always right. The *event record* of it was wrong in both the fields that make it useful: a rejection arriving weeks after submission was written into the ledger as having occurred at submission time, labelled with a reason code asserting the submission succeeded. Any consumer computing time-to-rejection would get zero, and any consumer filtering the ledger by `reason_code` would count that rejection as a submission success. Improvement #493's expected-yield ranking and `improvements_paywall.md` #14 are both sequenced behind exactly this data.
+
+**Fix.** `applyOutcome` (`pkg/tracker/imap.go`) replaces the two duplicated inline `UPDATE` statements and stamps all three columns: `status`, a bounded `status_reason`, and `last_updated = time.Now().UTC()`. Two new exported constants, `OutcomeReasonRejected` (`outcome_email_rejected`) and `OutcomeReasonInterview` (`outcome_email_interview`), carry the reason. They are deliberately bounded codes rather than anything derived from the message, because the trigger copies `status_reason` into `reason_code` verbatim and the ledger is documented to hold "only state metadata, never job content". No email body, address, subject, or credential reaches the database or the log on this path, which was already true and remains so.
+
+### Deliberately not changed
+
+- **Matching was not widened.** The row warned against it and the warning is sound. One consequence was measured and left alone: a multi-word stored company name can never match a sender domain, since domains contain no spaces. Live, this affects exactly **1 of 21** trackable companies, so the cost is negligible against the risk of recreating #20.
+- **Unmatched outcome emails are still acknowledged.** A classified email that matches no tracked application is marked processed inside the same transaction and will not be reconsidered. This is a genuine permanent-loss path and it is worth stating plainly, but the alternative — leaving it unacknowledged — recreates the unbounded rescan-and-relog churn #20 fixed, including a repeated LLM call per cycle for the rejection reason. Changing it is a design decision with a real cost on both sides, not a bug fix, and it was out of scope for a row whose fix direction says "diagnose before changing anything".
+- **The trigger itself.** `stage_duration_ms` is NULL for all 1,385 live ledger rows and `pipeline_stage` buckets outcomes under the generic `funnel` label. Both are trigger defects affecting every writer, not the tracker, and fixing them needs a `DROP`/`CREATE TRIGGER` migration for which this repo has no precedent. Filed as **#532** rather than smuggled into this fix.
+
+### Tests
+
+Three new tests in `pkg/tracker/imap_test.go`, all confirmed to **fail against the pre-fix code and pass after it** (verified by reverting `applyOutcome` to the status-only write and re-running):
+
+- `TestTrackerOutcomeIsLedgeredAtArrivalTime` — the regression proper, for both outcome statuses. Seeds a row through a real prior transition so the ledger has history, then asserts the outcome's `reason_code` is the bounded outcome code and its `occurred_at` is after the submission time and approximately now. Pre-fix it reports `reason_code = "submitted_ok"` and `occurred_at = 2026-07-15 12:00:00`.
+- `TestTrackerOutcomeReasonCarriesNoEmailContent` — pins the privacy boundary the bounded codes exist to hold, asserting both `job_funnel.status_reason` and the ledger's `reason_code` equal the constant and contain none of the subject or body text passed in.
+- `TestTrackerOutcomeChainEndToEnd` — the gap that let this row be filed. Every pre-existing test called `updateDBWithTrackerResult` with the company *already resolved* and empty subject/body, so nothing covered `classifyEmail` → `matchTrackedCompany` → persistence as one chain. This walks all six scenarios the close required against a real schema: a rejection for a uniquely identifiable application (→ `updated`, status REJECTED), a recruiter response for a hand-off application (→ `updated`, status INTERVIEW_REQUESTED), an unrelated newsletter (→ no classification, still acknowledged), an ambiguous two-role match (→ `ambiguous`, **both rows left APPLIED**, nothing written), an outcome for a company absent from the database (→ `unmatched`, no rows written), and a duplicate delivery (→ `no_op`, no second ledger row, and `WasEmailProcessed` already true so `StartTracker` would not have reached the writer at all).
+
+### Verification
+
+`go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all pass. `go test ./pkg/tracker/ -v` runs 18 tests, all passing. No real email was sent or fetched and no application was submitted; the live database was opened read-only (`file:applications.db?mode=ro`) for every diagnostic query in this account.
+
+### What will provide the first meaningful outcome sample
+
+Nothing will, until `cmd/tracker` is running again — it has been stopped for 14 days and scans only on a 15-minute loop while alive. Once it is running, the reachable population is the **7** confirmed applications currently in `APPLIED` plus the **44** rows in `MANUAL_REQUIRED` (24) and `AWAITING_REVIEW` (20), and it grows as the user confirms hand-off applications via `MarkHandoffApplied`. The 5 applications submitted 2026-08-06 are the realistic source of the first true rejection, on the ordinary two-to-six-week ATS timeline — so the first genuine outcome should be expected around **late August 2026**, not sooner.
+
 ## 527. The `:memory:` test database silently fails every nested query, so the assisted queue's readiness fields cannot be covered
 
 **Completed 2026-08-07.** Filed 2026-08-06 while writing #525's tests, when a straightforward test of `GetAssistedQueue`'s `cover_letter_ready` field failed against a fix that was demonstrably working.
