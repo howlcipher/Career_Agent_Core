@@ -100,6 +100,7 @@ func StartTracker(cfg IMAPConfig) error {
 				status,
 				subject,
 				bodyLower,
+				senderDomain,
 			)
 			if err != nil {
 				log.Printf(
@@ -140,7 +141,38 @@ func StartTracker(cfg IMAPConfig) error {
 		return err
 	}
 
+	reportUnmatchedOutcomes()
 	return nil
+}
+
+// reportUnmatchedOutcomes surfaces the outcomes that were acknowledged but
+// reached no application. Without this the record exists only in the database
+// and nothing ever points at it; bug #533's whole purpose is that a lost
+// outcome stays visible rather than merely stored. Domains are counted, not
+// listed, so a scan summary never enumerates who is emailing the user.
+func reportUnmatchedOutcomes() {
+	lost, err := storage.UnmatchedOutcomeCounts()
+	if err != nil {
+		log.Printf("[Tracker] Could not read unmatched outcomes: %v", err)
+		return
+	}
+	if len(lost) == 0 {
+		return
+	}
+	domains := make(map[string]bool, len(lost))
+	var rejected, interviews int
+	for _, l := range lost {
+		domains[l.SenderDomain] = true
+		if l.Status == "REJECTED" {
+			rejected++
+		} else {
+			interviews++
+		}
+	}
+	log.Printf(
+		"[Tracker] %d outcome email(s) across %d sender domain(s) matched no application (%d rejection-shaped, %d interview-shaped). These are recorded in unmatched_outcomes for correlation once the matching application is confirmed.",
+		len(lost), len(domains), rejected, interviews,
+	)
 }
 
 // notJobPhrases short-circuit classification: emails that are structurally
@@ -332,7 +364,8 @@ func updateDBWithTrackerResult(
 	companyExact,
 	status,
 	subjectLower,
-	bodyLower string,
+	bodyLower,
+	senderDomain string,
 ) (trackerUpdateResult, error) {
 	if status != "REJECTED" && status != "INTERVIEW_REQUESTED" {
 		return "", fmt.Errorf("unsupported tracker status %q", status)
@@ -397,6 +430,18 @@ func updateDBWithTrackerResult(
 				}
 				result = trackerUpdateAmbiguous
 			}
+		}
+	}
+
+	// Bug #533: an outcome-shaped email that reaches no application is about
+	// to be acknowledged, and StartTracker never revisits an acknowledged
+	// Message-ID. Record the fact before that happens, in this same
+	// transaction, so the evidence survives the decision to stop retrying it.
+	// trackerUpdateNoop counts too: the company was recognised and the outcome
+	// still landed nowhere.
+	if result == trackerUpdateUnmatched || result == trackerUpdateNoop {
+		if err := storage.RecordUnmatchedOutcomeTx(tx, messageID, status, senderDomain); err != nil {
+			return "", err
 		}
 	}
 

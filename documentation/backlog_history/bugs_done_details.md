@@ -2,6 +2,43 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 533. An outcome email that matches no application is acknowledged and discarded, so the evidence is unrecoverable
+
+**Completed 2026-08-07**, immediately after #529 closed. #529's account named this path explicitly and deferred it as "a design decision with a real cost on both sides, not a bug fix". That deferral was reconsidered the same day for one reason: it is the specific hazard that makes **starting the tracker destructive**, and starting the tracker is the top operational priority coming out of #529.
+
+**The path.** `updateDBWithTrackerResult` acknowledges the message in the same transaction that gives up on it. `StartTracker` skips any acknowledged Message-ID forever. So an email that classifies as a genuine rejection or interview request but resolves to `unmatched` (no company match) or `no_op` (company recognised, no open row) is written to `processed_emails` and then is gone — not deferred, discarded.
+
+**Why it matters now rather than in the abstract.** The live funnel holds **44** hand-off rows (24 `MANUAL_REQUIRED`, 20 `AWAITING_REVIEW`) against **7** confirmed applications. A hand-off row only becomes matchable once the user confirms it. Every one of those 44 is a case where a real outcome email can plausibly arrive *before* the confirmation that would let it match — and under the old behaviour that email was destroyed by the first scan that saw it. With the tracker stopped for 14 days and about to be restarted against an inbox holding two weeks of unread mail, this was hours away from being exercised in bulk.
+
+**Why acknowledging is nonetheless correct.** The obvious alternative — leave it unacknowledged and retry — recreates exactly what bug #20 fixed: `StartTracker` refetches the same trailing 50 messages every cycle, so an unacknowledged outcome email is reclassified, relogged, and (for rejections) re-runs an LLM extraction call every 15 minutes indefinitely. The acknowledgement is not the defect. Throwing away the evidence alongside it was.
+
+**Fix.** A new `unmatched_outcomes` table records the fact separately from the acknowledgement:
+
+```
+message_id TEXT PRIMARY KEY, outcome_status TEXT, sender_domain TEXT, detected_at DATETIME
+```
+
+`storage.RecordUnmatchedOutcomeTx` writes it **inside the tracker's existing transaction**, so the record and the acknowledgement commit together or not at all — the same atomicity property commit `fabe12c` established for the outcome write, and for the same reason: a half-applied outcome is worse than a retried one. `ON CONFLICT(message_id) DO NOTHING` keeps reprocessing idempotent.
+
+Both losing branches are recorded, not just `unmatched`. `no_op` means the company *was* recognised and the outcome still landed nowhere, which is if anything the more recoverable case.
+
+**Privacy.** The record holds no email content: status, sender domain, timestamp, and the opaque Message-ID already stored in `processed_emails`. No subject, body, address or display name. `reportUnmatchedOutcomes` logs **counts of domains, never the domains themselves**, so a scan summary cannot enumerate who is emailing the user. A dedicated test asserts none of the stored fields contains any of the subject or body text passed in.
+
+**Recovery surface.** `storage.UnmatchedOutcomeCounts` reads the table back, and `StartTracker` reports a one-line bounded summary at the end of each scan — "N outcome email(s) across M sender domain(s) matched no application (X rejection-shaped, Y interview-shaped)". Without that the record would exist and nothing would ever point at it, which is most of the original defect wearing a different hat. Timestamps are parsed through `assistedTimeLayouts` per ADR-003 decision 6 rather than assuming a single stored shape.
+
+**Deliberately not done.** Matching was not widened and no automatic re-correlation was built. When a lost outcome's application is later confirmed, nothing yet joins the two — the operator sees the domain count and can act. Automatic re-correlation needs a matching rule at least as strict as the one #20 forced, and inventing it speculatively on zero real outcome data is how #20 happened. The table is deliberately a record, not a queue.
+
+**Tests.** Four added to `pkg/tracker/imap_test.go`, all verified failing against the pre-fix code (recording disabled, tests re-run) and passing after:
+
+- `TestUnmatchedOutcomeIsRecoverable` — both losing branches; asserts the message is **still acknowledged** (the anti-churn property) *and* recorded with the right status and sender domain. Pre-fix: "the outcome was acknowledged but not recorded — it is unrecoverable".
+- `TestMatchedOutcomeIsNotRecordedAsUnmatched` — a successful match leaves no phantom loss record.
+- `TestUnmatchedOutcomeRecordCarriesNoEmailContent` — the privacy boundary.
+- `TestUnmatchedOutcomeRecordIsIdempotent` — reprocessing writes one row.
+
+The existing 14 `updateDBWithTrackerResult` call sites were extended for the new `senderDomain` parameter mechanically, with no assertion changes.
+
+**Verification.** `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` all pass. The new table is added via `CREATE TABLE IF NOT EXISTS` in the existing schema block, so it appears on the live database at next open with no migration step and no change to any existing table.
+
 ## 529. 49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`
 
 **Completed 2026-08-07.** Filed 2026-08-06 as "a discrepancy to diagnose, not a confirmed defect". That framing was correct. The headline claim — that detections never reach `job_funnel` — is **not** a current defect: the status write works and has worked since 2026-07-22. But diagnosing it exposed a real defect on the same write path, which was fixed, plus a wider one which was filed as #532.
@@ -43,7 +80,7 @@ Beyond the classifier history, the tracker's reachable universe is far smaller t
 | INVALID_URL | 10 |
 | APPLIED | 7 |
 
-`GetTrackedCompanies` only returns companies holding a row in `APPLIED` / `INTERVIEW_REQUESTED` / `MANUAL_REQUIRED` / `AWAITING_REVIEW`, so **only 7 of 58 confirmed applications are visible to the matcher at all**. The other 51 are the residue of bug #94's history (`RecordApplicationInDB` used to run at document-generation time, so a job that generated documents and then failed to submit was recorded as applied). That divergence is a real data-integrity question, but it is not a tracker defect and was deliberately left out of scope here rather than "fixed" by widening the match — the row explicitly warns that loosening matching is how #20 was created.
+`GetTrackedCompanies` only returns companies holding a row in `APPLIED` / `INTERVIEW_REQUESTED` / `MANUAL_REQUIRED` / `AWAITING_REVIEW`, so **only 7 of 58 confirmed applications are visible to the matcher at all**. The other 51 are the residue of bug #94's history (`RecordApplicationInDB` used to run at document-generation time, so a job that generated documents and then failed to submit was recorded as applied). **Corrected 2026-08-07, later the same day:** calling all 58 "confirmed applications" was itself wrong, and this account repeated the error before checking it. Bug #94 was resolved **2026-07-25**; before that, `RecordApplicationInDB` ran from `SaveApplication` at *document-generation* time, so a pre-#94 `applied_jobs` row means "documents were written", not "submitted". All 51 predate 2026-07-23. All 7 post-#94 rows (2026-07-29 and 2026-08-06) are APPLIED in the funnel. So `applied_jobs` and `job_funnel` do **not** contradict each other: the funnel is telling the truth and 29 of the 51 explicitly record the failure (19 FAILED_SUBMIT, 10 INVALID_URL) while 22 predate the funnel being the system of record at all. **The true confirmed-application count is 7, not 58.** There is no blind spot to reconcile and no cleanup owed: verified live, zero of the 51 stale dedup rows sits in a re-queueable status, so none is currently suppressing work the way #94's seven were. Nothing was changed on this point beyond the correction.
 
 Combined with 20 of the 21 currently trackable companies being single-word names, and the tracker being **stopped since 2026-07-24**, zero recorded outcomes is the expected state, not a symptom.
 
