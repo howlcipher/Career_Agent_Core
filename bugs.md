@@ -50,7 +50,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|---|
 | 521 | [Indistinguishable duplicate cards let one click mark a job applied that was never submitted](#521-indistinguishable-duplicate-cards-let-one-click-mark-a-job-applied-that-was-never-submitted) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #521 for the full account. |
-| 523 | [The assisted browser's network guard aborts requests silently](#523-the-assisted-browsers-network-guard-aborts-requests-silently) | Minor | Pending | 4.0 = 2×1.0÷0.5 | mechanical | One log line. Its absence cost a full synthetic-reproduction cycle chasing a wrong theory during the acceptance trial. |
+| 523 | [The assisted browser's network guard aborts requests silently](#523-the-assisted-browsers-network-guard-aborts-requests-silently) | Minor | Done (2026-08-06) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #523 for the full account. |
 | 519 | [Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with](#519-assisted-apply-cannot-prefill-on-greenhouse-or-lever-the-only-two-atses-it-is-used-with) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #519 for the full account. |
 | 525 | [Assisted Apply attaches a .txt extraction where the automatic path uploads the master cover letter PDF](#525-assisted-apply-attaches-a-txt-extraction-where-the-automatic-path-uploads-the-master-cover-letter-pdf) | Minor | Pending | 2.0 = 2×1.0÷1 | standard | Same content, wrong file: an employer expecting a document gets unformatted text. Same divergence class as #515 and #517, which were both worse. |
 | 520 | [Lever submissions fail inside the assisted browser but succeed in an ordinary one](#520-lever-submissions-fail-inside-the-assisted-browser-but-succeed-in-an-ordinary-one) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #520 for the full account. |
@@ -959,11 +959,7 @@ Closed 2026-08-06 — full account archived in `documentation/backlog_history/bu
 
 ### 523. The assisted browser's network guard aborts requests silently
 
-**Found 2026-08-05.** `installAssistedContextGuard` (`cmd/assist/main.go:509`) routes every request through `guard.ValidateURL` and calls `route.Abort("accessdenied")` on rejection **without logging anything**. A blocked request is therefore invisible: the assist log shows a clean launch and no indication that anything was refused.
-
-During the acceptance trial this cost a full investigation cycle. A submission was failing, the guard was a prime suspect, and the only way to rule it out was to build a synthetic reproduction driving the exact guard logic against a real browser and against the live CAPTCHA hosts. Both cleared it — but the log could have answered the question immediately.
-
-**Fix direction.** Log the aborted request's host and the guard's reason at the point of abort. Do not log full URLs or query strings: this path sees employer pages and must not write PII or challenge tokens into the log.
+Closed 2026-08-06 — full account archived in `documentation/backlog_history/bugs_done_details.md` item #523.
 
 ### 519. Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with
 

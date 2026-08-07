@@ -2,6 +2,27 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 523. The assisted browser's network guard aborts requests silently
+
+**Completed 2026-08-06.** Filed 2026-08-05 during the Assisted Apply acceptance trial, where a failing submission made the network guard a prime suspect and the log could not confirm or clear it. Ruling it out took a full synthetic-reproduction cycle against a real browser and the live CAPTCHA hosts.
+
+**Reproduced before fixing.** The route body in `installAssistedContextGuard` was extracted verbatim into a testable `guardAssistedRequest` and driven with a request to a host resolving to `10.0.0.7`. The guard aborted it with `accessdenied` as designed and the captured log was the empty string -- the block was correct and the evidence was absent.
+
+**Fix.** Two pieces, split by where the knowledge lives.
+
+`pkg/security` now attaches a bounded reason code to each rejection it raises. `unsafeNetworkTarget` returns a `*networkRejection` carrying the code as a field rather than as text, and resolution problems return a `*resolverFailure`; `NetworkRejectionReason(err)` reads the code back via `errors.As`, falling back to `network_guard_rejected` and never to the error's own message. Classification does not depend on matching an error string, so a reworded message degrades nothing. The codes are `invalid_url`, `disallowed_scheme`, `missing_hostname`, `url_credentials`, `invalid_port`, `loopback_hostname`, `private_address`, `private_dns_answer`, `dns_resolution_failed`, `dns_no_addresses`, `resolver_unavailable`, and the `network_guard_rejected` fallback -- each one reachable from an existing rejection site, none invented to fill out the list. Every message text is unchanged and `networkRejection` still unwraps to `ErrUnsafeNetworkTarget`, which `cmd/agent/pipeline.go:130` uses to tell a durable safety refusal from a transient outage; `resolverFailure` deliberately does not, preserving that distinction. `TestNetworkRejectionsStillWrapTheSentinel` pins both halves.
+
+`cmd/assist` logs one record at the rejection point: `Assisted network guard blocked request: host="example.com" reason="private_address"`. The host comes from `safeAssistedHost`, which parses with `net/url` and returns `Hostname()` only -- no userinfo, no port, no path, no query, no fragment. An unparseable URL, an empty hostname, one over 253 characters, or one containing anything outside the DNS alphabet returns the literal `unknown`; the raw input is never substituted, since an unparseable request URL is exactly the case where its contents are least trustworthy, and bounding the alphabet means a hostile hostname cannot break one log line into two. The guard is unchanged in what it permits: allowed requests still call `route.Continue()` with no log line and no added latency, nothing is retried, and no allowed-host or private-network policy moved.
+
+`route.Abort` was previously discarded. Its error is now checked, and a failure adds a second line naming only the safe host and the fact of the failure -- Playwright's own error can quote the request it refers to, so it is never included.
+
+**Tests.** `cmd/assist/network_guard_test.go` exercises the route callback through a hand-written `recordingRoute` (no mocking framework): six rejection classes each asserted against the exact expected log line; a privacy test using `https://user:password@example.test/application/12345?token=secret-value#private` that fails on any of the credentials, path, requisition number, query key, token value, fragment, or full URL appearing; seven malformed inputs asserting no panic, the `unknown` host, a bounded reason, a single record, and no echo of the raw value; an allowed request asserting `Continue` and total silence; an arbitrary underlying error asserting a reason from the closed set and no raw error text; one-rejection-one-record; a failed abort asserting the second line discloses neither the request nor Playwright's message; and a table pinning `safeAssistedHost` directly. `pkg/security/network_test.go` maps all nine reachable `ValidateURL` rejection paths to their codes and asserts the fallback carries no request data.
+
+The privacy tests were mutation-checked rather than assumed: reverting the log to `rawURL` and `err.Error()` fails 23 assertions across the suite.
+
+**Verification.** `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all pass, the last with empty output. No live application was launched, no employer contacted, no production record touched -- all evidence is from synthetic local URLs and a stub resolver. ADR-002 needed no change: its route-interceptor paragraph describes `installSafeBrowserRoutes` in `pkg/submitter/network.go`, the automatic path's separate guard, which `cmd/assist` does not use and which this change did not touch.
+
+---
 ## 521. Indistinguishable duplicate cards let one click mark a job applied that was never submitted
 
 **Completed 2026-08-06.** Found at the end of the five-application acceptance trial, after it had already produced one false `APPLIED` record.

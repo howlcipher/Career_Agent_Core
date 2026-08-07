@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -466,5 +467,86 @@ func TestHTTPProxyConnectUsesValidatedAddress(t *testing.T) {
 	addresses := dialer.dialedAddresses()
 	if len(addresses) != 1 || addresses[0] != "93.184.216.34:443" {
 		t.Fatalf("dialed addresses = %v, want only the public target", addresses)
+	}
+}
+
+// Every rejection a caller can log must reduce to a bounded code. Bug #523's
+// contract is that a caller never has to touch the error's own message, which
+// can quote the target URL.
+func TestNetworkRejectionReasonClassifiesGuardErrors(t *testing.T) {
+	t.Parallel()
+
+	guard := NewNetworkGuard(
+		WithResolver(staticResolver{
+			"public.test":  {mustAddress(t, "93.184.216.34")},
+			"private.test": {mustAddress(t, "10.0.0.4")},
+		}),
+	)
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   string
+	}{
+		{name: "unparseable URL", rawURL: "http://exa mple.test/jobs", want: RejectionInvalidURL},
+		{name: "unsupported scheme", rawURL: "file:///etc/passwd", want: RejectionDisallowedScheme},
+		{name: "missing host", rawURL: "https:///jobs", want: RejectionMissingHostname},
+		{name: "userinfo", rawURL: "https://u:p@public.test/jobs", want: RejectionURLCredentials},
+		{name: "invalid port", rawURL: "https://public.test:0/jobs", want: RejectionInvalidPort},
+		{name: "loopback hostname", rawURL: "http://localhost/admin", want: RejectionLoopbackHostname},
+		{name: "private literal", rawURL: "http://127.0.0.1/admin", want: RejectionPrivateAddress},
+		{name: "private DNS answer", rawURL: "https://private.test/admin", want: RejectionPrivateDNSAnswer},
+		{name: "resolution failure", rawURL: "https://missing.test/jobs", want: RejectionDNSFailed},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := guard.ValidateURL(context.Background(), test.rawURL)
+			if err == nil {
+				t.Fatalf("ValidateURL(%q) unexpectedly succeeded", test.rawURL)
+			}
+			if got := NetworkRejectionReason(err); got != test.want {
+				t.Fatalf("NetworkRejectionReason(%v) = %q, want %q", err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestNetworkRejectionReasonFallsBackWithoutTheErrorText(t *testing.T) {
+	t.Parallel()
+
+	secret := "https://example.test/application/12345?token=secret-value"
+	for _, err := range []error{
+		nil,
+		errors.New(secret),
+		fmt.Errorf("wrapped: %w", errors.New(secret)),
+	} {
+		reason := NetworkRejectionReason(err)
+		if reason != RejectionUnclassified {
+			t.Fatalf("NetworkRejectionReason(%v) = %q, want %q", err, reason, RejectionUnclassified)
+		}
+		if strings.Contains(reason, "example.test") || strings.Contains(reason, "secret") {
+			t.Fatalf("fallback reason %q carries request data", reason)
+		}
+	}
+}
+
+// The typed rejections must keep wrapping the sentinel: cmd/agent tells a
+// durable safety refusal from a transient outage by errors.Is on it.
+func TestNetworkRejectionsStillWrapTheSentinel(t *testing.T) {
+	t.Parallel()
+
+	guard := NewNetworkGuard(WithResolver(staticResolver{}))
+
+	safetyRejection := guard.ValidateURL(context.Background(), "http://127.0.0.1/admin")
+	if !errors.Is(safetyRejection, ErrUnsafeNetworkTarget) {
+		t.Fatalf("safety rejection %v no longer wraps ErrUnsafeNetworkTarget", safetyRejection)
+	}
+
+	resolverOutage := guard.ValidateURL(context.Background(), "https://missing.test/jobs")
+	if errors.Is(resolverOutage, ErrUnsafeNetworkTarget) {
+		t.Fatalf("resolver outage %v must not wrap ErrUnsafeNetworkTarget", resolverOutage)
 	}
 }

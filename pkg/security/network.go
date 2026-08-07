@@ -25,6 +25,85 @@ const maxHTTPRedirects = 10
 // callers can distinguish a durable safety rejection from a transient outage.
 var ErrUnsafeNetworkTarget = errors.New("unsafe network target")
 
+// Bounded rejection reasons. A guard error's message is not safe to log: it can
+// embed the raw target URL, and therefore an employer path, a query string, or
+// a challenge token. These codes are fixed literals carrying no request data, so
+// a caller can record *why* a request was refused without recording the request
+// (bug #523).
+const (
+	RejectionInvalidURL       = "invalid_url"
+	RejectionDisallowedScheme = "disallowed_scheme"
+	RejectionMissingHostname  = "missing_hostname"
+	RejectionURLCredentials   = "url_credentials"
+	RejectionInvalidPort      = "invalid_port"
+	RejectionLoopbackHostname = "loopback_hostname"
+	RejectionPrivateAddress   = "private_address"
+	RejectionPrivateDNSAnswer = "private_dns_answer"
+	RejectionDNSFailed        = "dns_resolution_failed"
+	RejectionUnresolvedTarget = "dns_no_addresses"
+	RejectionResolverMissing  = "resolver_unavailable"
+	// RejectionUnclassified is the fallback for an error this package did not
+	// classify. It never carries the underlying message.
+	RejectionUnclassified = "network_guard_rejected"
+)
+
+// networkRejection pairs a rejection with a bounded code. It wraps
+// ErrUnsafeNetworkTarget so existing errors.Is callers are unaffected, and
+// carries the code as a field rather than as text so classification does not
+// depend on matching an error message.
+type networkRejection struct {
+	code   string
+	reason string
+}
+
+func (rejection *networkRejection) Error() string {
+	return fmt.Sprintf("%s: %s", ErrUnsafeNetworkTarget, rejection.reason)
+}
+
+func (rejection *networkRejection) Unwrap() error {
+	return ErrUnsafeNetworkTarget
+}
+
+// resolverFailure marks an error that is a resolution or resolver problem
+// rather than a safety verdict. It deliberately does not wrap
+// ErrUnsafeNetworkTarget: callers such as cmd/agent distinguish a durable
+// safety rejection from a transient outage by that sentinel.
+type resolverFailure struct {
+	code  string
+	cause error
+}
+
+func (failure *resolverFailure) Error() string {
+	return failure.cause.Error()
+}
+
+func (failure *resolverFailure) Unwrap() error {
+	return failure.cause
+}
+
+// NetworkRejectionReason classifies a NetworkGuard error into a bounded code
+// that is safe to write to a log. Anything this package did not classify -- and
+// any nil error, which no caller should pass -- yields RejectionUnclassified
+// rather than the error's own text.
+func NetworkRejectionReason(err error) string {
+	if err == nil {
+		return RejectionUnclassified
+	}
+	var rejection *networkRejection
+	if errors.As(err, &rejection) {
+		return rejection.code
+	}
+	var failure *resolverFailure
+	if errors.As(err, &failure) {
+		return failure.code
+	}
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) {
+		return RejectionDNSFailed
+	}
+	return RejectionUnclassified
+}
+
 var blockedAddressRanges = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
@@ -136,8 +215,8 @@ func normalizeNetworkHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
-func unsafeNetworkTarget(reason string) error {
-	return fmt.Errorf("%w: %s", ErrUnsafeNetworkTarget, reason)
+func unsafeNetworkTarget(code string, reason string) error {
+	return &networkRejection{code: code, reason: reason}
 }
 
 func (guard *NetworkGuard) resolvePublicAddresses(
@@ -145,30 +224,39 @@ func (guard *NetworkGuard) resolvePublicAddresses(
 	host string,
 ) ([]netip.Addr, error) {
 	if guard == nil || guard.resolver == nil {
-		return nil, errors.New("network resolver is unavailable")
+		return nil, &resolverFailure{
+			code:  RejectionResolverMissing,
+			cause: errors.New("network resolver is unavailable"),
+		}
 	}
 	host = normalizeNetworkHost(host)
 	if host == "" {
-		return nil, unsafeNetworkTarget("missing hostname")
+		return nil, unsafeNetworkTarget(RejectionMissingHostname, "missing hostname")
 	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return nil, unsafeNetworkTarget("loopback hostname")
+		return nil, unsafeNetworkTarget(RejectionLoopbackHostname, "loopback hostname")
 	}
 
 	if literal, err := netip.ParseAddr(host); err == nil {
 		literal = literal.Unmap()
 		if !IsPublicAddress(literal) {
-			return nil, unsafeNetworkTarget("non-public address")
+			return nil, unsafeNetworkTarget(RejectionPrivateAddress, "non-public address")
 		}
 		return []netip.Addr{literal}, nil
 	}
 
 	addresses, err := guard.resolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
-		return nil, fmt.Errorf("resolve network target: %w", err)
+		return nil, &resolverFailure{
+			code:  RejectionDNSFailed,
+			cause: fmt.Errorf("resolve network target: %w", err),
+		}
 	}
 	if len(addresses) == 0 {
-		return nil, errors.New("network target resolved to no addresses")
+		return nil, &resolverFailure{
+			code:  RejectionUnresolvedTarget,
+			cause: errors.New("network target resolved to no addresses"),
+		}
 	}
 
 	unique := make([]netip.Addr, 0, len(addresses))
@@ -176,7 +264,7 @@ func (guard *NetworkGuard) resolvePublicAddresses(
 	for _, address := range addresses {
 		address = address.Unmap()
 		if !IsPublicAddress(address) {
-			return nil, unsafeNetworkTarget("non-public DNS answer")
+			return nil, unsafeNetworkTarget(RejectionPrivateDNSAnswer, "non-public DNS answer")
 		}
 		if _, exists := seen[address]; exists {
 			continue
@@ -185,7 +273,10 @@ func (guard *NetworkGuard) resolvePublicAddresses(
 		unique = append(unique, address)
 	}
 	if len(unique) == 0 {
-		return nil, errors.New("network target resolved to no usable addresses")
+		return nil, &resolverFailure{
+			code:  RejectionUnresolvedTarget,
+			cause: errors.New("network target resolved to no usable addresses"),
+		}
 	}
 	return unique, nil
 }
@@ -193,7 +284,7 @@ func (guard *NetworkGuard) resolvePublicAddresses(
 func validateNetworkPort(port string) error {
 	number, err := strconv.Atoi(port)
 	if err != nil || number < 1 || number > 65535 {
-		return unsafeNetworkTarget("invalid port")
+		return unsafeNetworkTarget(RejectionInvalidPort, "invalid port")
 	}
 	return nil
 }
@@ -203,16 +294,19 @@ func validateNetworkPort(port string) error {
 func (guard *NetworkGuard) ValidateURL(ctx context.Context, rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("%w: parse target: %v", ErrUnsafeNetworkTarget, err)
+		return unsafeNetworkTarget(
+			RejectionInvalidURL,
+			fmt.Sprintf("parse target: %v", err),
+		)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return unsafeNetworkTarget("scheme must be HTTP or HTTPS")
+		return unsafeNetworkTarget(RejectionDisallowedScheme, "scheme must be HTTP or HTTPS")
 	}
 	if parsed.Hostname() == "" {
-		return unsafeNetworkTarget("missing hostname")
+		return unsafeNetworkTarget(RejectionMissingHostname, "missing hostname")
 	}
 	if parsed.User != nil {
-		return unsafeNetworkTarget("user information is forbidden")
+		return unsafeNetworkTarget(RejectionURLCredentials, "user information is forbidden")
 	}
 	if port := parsed.Port(); port != "" {
 		if err := validateNetworkPort(port); err != nil {

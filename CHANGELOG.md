@@ -1,5 +1,25 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Blocked assisted-browser requests now say so
+
+* **Fix (bugs.md #523):** the Assisted Apply browser's network guard aborted
+  every request it refused without writing anything to the log, so a blocked
+  request was indistinguishable from an employer outage. During the acceptance
+  trial that cost a full investigation cycle: a submission was failing, the
+  guard was a prime suspect, and clearing it required building a synthetic
+  reproduction against a real browser and the live CAPTCHA hosts.
+* A refused request now writes one line — `Assisted network guard blocked
+  request: host="example.com" reason="private_address"` — at the point of
+  rejection.
+* **The log records the host and nothing else.** This path sees employer
+  application pages, so the URL's credentials, path, query string, and fragment
+  never reach the log, and neither does the guard's own error text, which can
+  quote the target. The reason is one of twelve fixed codes. An unparseable or
+  implausible hostname is recorded as `unknown` rather than echoed.
+* A failed abort is now reported too, naming only the host and the failure.
+* Nothing about what the guard permits changed: allowed requests continue
+  exactly as before, with no log line, no retry, and no policy change.
+
 ## 2026-08-06 — Duplicate applications can no longer be confirmed by mistake
 
 * **Fix (bugs.md #521):** Veeva listed the same "Senior Software Engineer -

@@ -515,15 +515,87 @@ func assistedBrowserLaunchOptions(proxy *playwright.Proxy) playwright.BrowserTyp
 	}
 }
 
+// assistedRoute is the part of playwright.Route the network guard callback
+// uses. Naming it lets the guard decision be exercised without a browser.
+type assistedRoute interface {
+	Abort(errorCode ...string) error
+	Continue(options ...playwright.RouteContinueOptions) error
+}
+
+// unknownAssistedHost stands in for a host that could not be read safely. The
+// raw value is never substituted: an unparseable request URL is exactly the
+// case where its contents are least trustworthy.
+const unknownAssistedHost = "unknown"
+
+// maxAssistedHostLength is the longest legal DNS name. Anything longer is a
+// malformed or hostile value, not a host worth naming in the log.
+const maxAssistedHostLength = 253
+
+// safeAssistedHost reduces a request URL to the one component that can be
+// logged: its hostname. Everything else this path sees -- userinfo, the
+// employer's application path, query parameters, fragments -- is either a
+// credential, a challenge token, or an answer the operator typed, and must
+// never reach the log (bug #523).
+func safeAssistedHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return unknownAssistedHost
+	}
+	host := parsed.Hostname()
+	if host == "" || len(host) > maxAssistedHostLength {
+		return unknownAssistedHost
+	}
+	// A hostname is chosen by whatever page issued the request, so bound its
+	// alphabet rather than trusting url.Parse to have rejected every value that
+	// could break a log line into two.
+	for _, character := range host {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '.', character == '-', character == ':':
+		default:
+			return unknownAssistedHost
+		}
+	}
+	return host
+}
+
+// guardAssistedRequest applies the network guard to one intercepted request and
+// makes a rejection visible without disclosing the request. It records at most
+// one rejection line per blocked request, plus a second line only if the abort
+// itself failed.
+func guardAssistedRequest(
+	ctx context.Context,
+	guard *security.NetworkGuard,
+	rawURL string,
+	route assistedRoute,
+) {
+	if err := guard.ValidateURL(ctx, rawURL); err != nil {
+		host := safeAssistedHost(rawURL)
+		log.Printf(
+			"Assisted network guard blocked request: host=%q reason=%q",
+			host,
+			security.NetworkRejectionReason(err),
+		)
+		// Playwright's abort error can quote the request it refers to, so it is
+		// reported by fact rather than by message.
+		if abortErr := route.Abort("accessdenied"); abortErr != nil {
+			log.Printf(
+				"Assisted network guard could not abort the blocked request: host=%q",
+				host,
+			)
+		}
+		return
+	}
+	_ = route.Continue()
+}
+
 func installAssistedContextGuard(browserContext playwright.BrowserContext, guard *security.NetworkGuard) error {
 	return browserContext.Route("**/*", func(route playwright.Route) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := guard.ValidateURL(ctx, route.Request().URL()); err != nil {
-			_ = route.Abort("accessdenied")
-			return
-		}
-		_ = route.Continue()
+		guardAssistedRequest(ctx, guard, route.Request().URL(), route)
 	})
 }
 
