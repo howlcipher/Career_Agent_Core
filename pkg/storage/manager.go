@@ -142,6 +142,12 @@ func InitDBWithPath(path string) error {
 		message_id TEXT PRIMARY KEY,
 		processed_at DATETIME
 	);
+	CREATE TABLE IF NOT EXISTS unmatched_outcomes (
+		message_id TEXT PRIMARY KEY,
+		outcome_status TEXT NOT NULL,
+		sender_domain TEXT NOT NULL,
+		detected_at DATETIME NOT NULL
+	);
 	CREATE TABLE IF NOT EXISTS application_attempts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		source TEXT,

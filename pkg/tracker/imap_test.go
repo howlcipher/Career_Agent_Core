@@ -158,7 +158,7 @@ func TestUpdateDBWithTrackerResultStates(t *testing.T) {
 			}
 
 			messageID := "<" + tt.name + "@example.com>"
-			got, err := updateDBWithTrackerResult(messageID, tt.company, "REJECTED", "", "")
+			got, err := updateDBWithTrackerResult(messageID, tt.company, "REJECTED", "", "", "")
 			if err != nil {
 				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
 			}
@@ -199,7 +199,7 @@ func TestUpdateDBWithTrackerResultHandoffStatuses(t *testing.T) {
 			insertTrackerTestJob(t, db, "Handoff Corp", tc.start, "https://example.com/"+tc.name)
 
 			messageID := "<" + tc.name + "@example.com>"
-			got, err := updateDBWithTrackerResult(messageID, "Handoff Corp", tc.status, "", "")
+			got, err := updateDBWithTrackerResult(messageID, "Handoff Corp", tc.status, "", "", "")
 			if err != nil {
 				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
 			}
@@ -225,7 +225,7 @@ func TestUpdateDBWithTrackerResultHandoffAmbiguity(t *testing.T) {
 	insertTrackerTestJob(t, db, "Mixed Corp", "MANUAL_REQUIRED", "https://example.com/mixed-two")
 
 	messageID := "<mixed-handoff@example.com>"
-	got, err := updateDBWithTrackerResult(messageID, "Mixed Corp", "REJECTED", "", "")
+	got, err := updateDBWithTrackerResult(messageID, "Mixed Corp", "REJECTED", "", "", "")
 	if err != nil {
 		t.Fatalf("ambiguous hand-off match returned an error: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestUpdateDBWithTrackerResultAmbiguousCompany(t *testing.T) {
 	insertTrackerTestJob(t, db, "Double Corp", "APPLIED", "https://example.com/two")
 
 	messageID := "<ambiguous@example.com>"
-	got, err := updateDBWithTrackerResult(messageID, "Double Corp", "REJECTED", "", "")
+	got, err := updateDBWithTrackerResult(messageID, "Double Corp", "REJECTED", "", "", "")
 	if err != nil {
 		t.Fatalf("ambiguous match returned an error: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestUpdateDBWithTrackerResultResolvesAmbiguity(t *testing.T) {
 	insertTrackerTestJobWithTitle(t, db, "Double Corp", "Frontend Developer", "APPLIED", "https://greenhouse.io/double/jobs/67890")
 
 	messageID1 := "<idmatch@example.com>"
-	got, err := updateDBWithTrackerResult(messageID1, "Double Corp", "REJECTED", "update on 12345", "")
+	got, err := updateDBWithTrackerResult(messageID1, "Double Corp", "REJECTED", "update on 12345", "", "")
 	if err != nil || got != trackerUpdateUpdated {
 		t.Fatalf("ID match failed: err=%v, got=%v", err, got)
 	}
@@ -305,7 +305,7 @@ func TestUpdateDBWithTrackerResultResolvesAmbiguity(t *testing.T) {
 	}
 
 	messageID2 := "<titlematch@example.com>"
-	got, err = updateDBWithTrackerResult(messageID2, "Double Corp", "INTERVIEW_REQUESTED", "frontend role next steps", "")
+	got, err = updateDBWithTrackerResult(messageID2, "Double Corp", "INTERVIEW_REQUESTED", "frontend role next steps", "", "")
 	if err != nil || got != trackerUpdateUpdated {
 		t.Fatalf("Title match failed: err=%v, got=%v", err, got)
 	}
@@ -321,7 +321,7 @@ func TestUpdateDBWithTrackerResultRejectsInvalidStatus(t *testing.T) {
 	insertTrackerTestJob(t, db, "Status Corp", "APPLIED", "https://example.com/status")
 
 	messageID := "<invalid-status@example.com>"
-	if _, err := updateDBWithTrackerResult(messageID, "Status Corp", "APPLIED", "", ""); err == nil {
+	if _, err := updateDBWithTrackerResult(messageID, "Status Corp", "APPLIED", "", "", ""); err == nil {
 		t.Fatal("unsupported tracker status must fail")
 	}
 	if storage.WasEmailProcessed(messageID) {
@@ -356,7 +356,7 @@ func TestUpdateDBWithTrackerResultRetriesAfterDatabaseLock(t *testing.T) {
 	}
 
 	messageID := "<locked@example.com>"
-	if _, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED", "", ""); err == nil {
+	if _, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED", "", "", ""); err == nil {
 		t.Fatal("locked database must return an error")
 	}
 	if storage.WasEmailProcessed(messageID) {
@@ -368,7 +368,7 @@ func TestUpdateDBWithTrackerResultRetriesAfterDatabaseLock(t *testing.T) {
 		t.Fatalf("release database write lock: %v", err)
 	}
 
-	got, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED", "", "")
+	got, err := updateDBWithTrackerResult(messageID, "Locked Corp", "REJECTED", "", "", "")
 	if err != nil {
 		t.Fatalf("retry after releasing lock failed: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestUpdateDBWithTrackerResultRetriesAfterAcknowledgementError(t *testing.T)
 	}
 
 	messageID := "<retry@example.com>"
-	if _, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED", "", ""); err == nil {
+	if _, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED", "", "", ""); err == nil {
 		t.Fatal("acknowledgement failure must return an error")
 	}
 	assertTrackerTestStatus(t, db, "Retry Corp", "APPLIED")
@@ -401,7 +401,7 @@ func TestUpdateDBWithTrackerResultRetriesAfterAcknowledgementError(t *testing.T)
 		t.Fatalf("restore processed email table: %v", err)
 	}
 
-	got, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED", "", "")
+	got, err := updateDBWithTrackerResult(messageID, "Retry Corp", "REJECTED", "", "", "")
 	if err != nil {
 		t.Fatalf("retry after restoring acknowledgement table failed: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestTrackerOutcomeIsLedgeredAtArrivalTime(t *testing.T) {
 			}
 
 			before := time.Now().UTC()
-			got, err := updateDBWithTrackerResult("<outcome-"+tc.name+"@example.com>", "Northwind", tc.status, "", "")
+			got, err := updateDBWithTrackerResult("<outcome-"+tc.name+"@example.com>", "Northwind", tc.status, "", "", "")
 			if err != nil {
 				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
 			}
@@ -549,7 +549,7 @@ func TestTrackerOutcomeReasonCarriesNoEmailContent(t *testing.T) {
 	subject := "northwind — your application to the senior platform role"
 	body := "unfortunately we are not moving forward. contact hiring@northwind.example for details."
 
-	if _, err := updateDBWithTrackerResult("<privacy@example.com>", "Northwind", "REJECTED", subject, body); err != nil {
+	if _, err := updateDBWithTrackerResult("<privacy@example.com>", "Northwind", "REJECTED", subject, body, ""); err != nil {
 		t.Fatalf("updateDBWithTrackerResult failed: %v", err)
 	}
 
@@ -604,7 +604,7 @@ func TestTrackerOutcomeChainEndToEnd(t *testing.T) {
 			return "", ""
 		}
 		company := matchTrackedCompany(companies, senderDomain, subjectLower)
-		res, err := updateDBWithTrackerResult(messageID, company, status, subjectLower, bodyLower)
+		res, err := updateDBWithTrackerResult(messageID, company, status, subjectLower, bodyLower, "")
 		if err != nil {
 			t.Fatalf("persist outcome: %v", err)
 		}
@@ -719,4 +719,134 @@ func TestTrackerOutcomeChainEndToEnd(t *testing.T) {
 				ledgerBefore, ledgerAfter)
 		}
 	})
+}
+
+// TestUnmatchedOutcomeIsRecoverable covers bug #533.
+//
+// An outcome-shaped email that reaches no application is acknowledged inside
+// the same transaction that gives up on it, and StartTracker skips an
+// acknowledged Message-ID forever. Acknowledging is right — bug #20 exists
+// because rescanning the same 50 messages every cycle re-logs them and re-runs
+// an LLM call each time — but discarding the evidence with it is not. A
+// rejection that arrives before the user confirms the hand-off application it
+// belongs to used to be unrecoverable.
+//
+// Against the pre-fix code this fails: unmatched_outcomes stays empty.
+func TestUnmatchedOutcomeIsRecoverable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		company string
+		seed    string
+		want    trackerUpdateResult
+	}{
+		{"no application at all", "", "", trackerUpdateUnmatched},
+		{"company known but no open row", "Known Corp", "REJECTED", trackerUpdateNoop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+			if tc.company != "" {
+				insertTrackerTestJob(t, db, tc.company, tc.seed, "https://example.com/"+tc.name)
+			}
+
+			messageID := "<lost-" + tc.name + "@example.com>"
+			got, err := updateDBWithTrackerResult(messageID, tc.company, "REJECTED", "", "", "careers.examplecorp.com")
+			if err != nil {
+				t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("result = %q, want %q", got, tc.want)
+			}
+
+			// The message must still be acknowledged: not reprocessing it is
+			// the whole reason recording it separately is necessary.
+			if !storage.WasEmailProcessed(messageID) {
+				t.Error("the email was not acknowledged; it would be rescanned every cycle")
+			}
+
+			var status, domain string
+			if err := db.QueryRow(
+				`SELECT outcome_status, sender_domain FROM unmatched_outcomes WHERE message_id = ?`,
+				messageID,
+			).Scan(&status, &domain); err != nil {
+				t.Fatalf("the outcome was acknowledged but not recorded — it is unrecoverable: %v", err)
+			}
+			if status != "REJECTED" {
+				t.Errorf("recorded status = %q, want REJECTED", status)
+			}
+			if domain != "careers.examplecorp.com" {
+				t.Errorf("recorded sender_domain = %q, want the sender's domain", domain)
+			}
+		})
+	}
+}
+
+// A successful match must not leave a phantom "lost outcome" behind.
+func TestMatchedOutcomeIsNotRecordedAsUnmatched(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+	insertTrackerTestJob(t, db, "Matched Corp", "APPLIED", "https://example.com/matched")
+
+	got, err := updateDBWithTrackerResult("<matched@example.com>", "Matched Corp", "REJECTED", "", "", "matchedcorp.com")
+	if err != nil {
+		t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+	}
+	if got != trackerUpdateUpdated {
+		t.Fatalf("result = %q, want updated", got)
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unmatched_outcomes`).Scan(&n); err != nil {
+		t.Fatalf("count unmatched: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("%d unmatched record(s) written for an outcome that matched", n)
+	}
+}
+
+// The record must carry no email content — same boundary the ledger holds.
+func TestUnmatchedOutcomeRecordCarriesNoEmailContent(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+
+	subject := "acme — unfortunately we are not moving forward"
+	body := "please contact hiring@acme.example if you have questions."
+
+	if _, err := updateDBWithTrackerResult("<privacy-unmatched@example.com>", "", "REJECTED", subject, body, "acme.example"); err != nil {
+		t.Fatalf("updateDBWithTrackerResult failed: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT message_id, outcome_status, sender_domain FROM unmatched_outcomes`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, b, c string
+		if err := rows.Scan(&a, &b, &c); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.ToLower(a + " " + b + " " + c)
+		for _, leak := range []string{"unfortunately", "hiring@", "not moving forward", "questions"} {
+			if strings.Contains(joined, leak) {
+				t.Errorf("unmatched record leaks email content %q", leak)
+			}
+		}
+	}
+}
+
+// Reprocessing the same lost outcome must not duplicate the record.
+func TestUnmatchedOutcomeRecordIsIdempotent(t *testing.T) {
+	db := setupTrackerTestDB(t, filepath.Join(t.TempDir(), "tracker.db"))
+
+	for i := 0; i < 2; i++ {
+		if _, err := updateDBWithTrackerResult("<dupe-lost@example.com>", "", "REJECTED", "", "", "acme.example"); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM unmatched_outcomes WHERE message_id = ?`, "<dupe-lost@example.com>").Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("record count = %d, want 1", n)
+	}
 }

@@ -1,5 +1,45 @@
 # Career Agent Core - Changelog
 
+## 2026-08-07 — A lost outcome email is recorded instead of discarded
+
+* **Fix (bugs.md #533):** an outcome-shaped email that matched no application
+  was acknowledged and thrown away in the same transaction. `StartTracker`
+  never revisits an acknowledged Message-ID, so the evidence was destroyed
+  rather than deferred. With 44 hand-off rows against 7 confirmed
+  applications — a hand-off row only becomes matchable once the user confirms
+  it — and the tracker stopped for 14 days with two weeks of unread mail
+  waiting, restarting it would have exercised this in bulk on the first scan.
+* Lost outcomes now land in a new `unmatched_outcomes` table (message id,
+  status, sender domain, timestamp) written **inside the tracker's existing
+  transaction**, so the record and the acknowledgement commit together. Both
+  losing branches are covered: no company match, and company matched with no
+  open row.
+* The message is **still acknowledged**. Leaving it unacknowledged would
+  recreate bug #20's churn — the trailing 50 messages are refetched every
+  cycle, so an unacknowledged rejection re-runs an LLM extraction every 15
+  minutes forever. Acknowledging was never the defect; discarding with it was.
+* No email content is stored, and the end-of-scan summary reports **counts of
+  domains, not the domains** — a scan summary cannot enumerate who is emailing
+  the user.
+* Matching was not widened and no automatic re-correlation was built. The
+  table is a record, not a queue; inventing a re-correlation rule on zero real
+  outcome data is how bug #20 happened.
+
+## 2026-08-07 — Correction: the confirmed-application count was 7, not 58
+
+* `bugs.md` and `improvements.md` both cited "58 confirmed applications", taken
+  from `applied_jobs`. **51 of those rows predate bug #94's 2026-07-25 fix**,
+  when `RecordApplicationInDB` still ran at document-generation time — they
+  record that documents were written, not that anything was submitted. All 7
+  post-#94 rows are `APPLIED` in the funnel.
+* So `applied_jobs` and `job_funnel` do not contradict each other: the funnel
+  is authoritative, 29 of the 51 explicitly record the failure, and 22 predate
+  the funnel being the system of record. No reconciliation is owed, and
+  verified live, **zero** stale dedup rows currently sit in a re-queueable
+  status suppressing work.
+* Corrected in both backlogs and in #529's archived account, which had
+  repeated the figure before checking it.
+
 ## 2026-08-07 — Email outcomes are recorded in the stage ledger at the time they arrive
 
 * **Diagnosis (bugs.md #529): the headline was not a defect.** "49 emails
