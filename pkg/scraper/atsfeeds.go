@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -240,9 +241,46 @@ func fetchATSFeed(endpoint string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("board feed returned HTTP %d", resp.StatusCode)
+		return nil, &FeedHTTPError{
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 	return util.ReadAll(io.LimitReader(resp.Body, 128<<20))
+}
+
+// FeedHTTPError carries the status a board feed refused with, and how long it
+// asked us to wait before asking again.
+//
+// The Retry-After half exists because a 429 is not always a brief throttle.
+// Measured live 2026-08-06: after a backfill pass polled ~210 Workable accounts,
+// apply.workable.com returned 429 for *every* path on the host with
+// `Retry-After: 84643` — 23.5 hours, a host-wide block rather than a per-request
+// rate limit. Retrying into that is worse than useless: it cannot succeed, and
+// it keeps hitting a host that has already said stop. Callers should read
+// RetryAfter and give the host up for the run rather than spending attempts.
+//
+// Error() keeps the original wording so the existing `strings.Contains(err, "HTTP 4")`
+// checks in pollBoard and cmd/backfill-location keep behaving as before.
+type FeedHTTPError struct {
+	StatusCode int
+	RetryAfter time.Duration // zero when the response named none
+}
+
+func (e *FeedHTTPError) Error() string {
+	return fmt.Sprintf("board feed returned HTTP %d", e.StatusCode)
+}
+
+// parseRetryAfter reads the delay-seconds form of the header. The HTTP-date
+// form is deliberately not handled: no board feed observed here uses it, and a
+// missing value already means "no guidance", which callers treat as a normal
+// retryable error.
+func parseRetryAfter(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func parseGreenhouseBoard(body []byte) ([]feedJob, error) {

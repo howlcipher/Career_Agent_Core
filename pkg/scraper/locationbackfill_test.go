@@ -2,7 +2,9 @@ package scraper
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseBoardRef(t *testing.T) {
@@ -383,5 +385,41 @@ func TestCountryCodesFor_BackfillAdditions(t *testing.T) {
 	codesGeorgia := CountryCodesFor("Atlanta, Georgia", nil)
 	if len(codesGeorgia) > 0 {
 		t.Errorf("CountryCodesFor('Atlanta, Georgia') = %v, want empty slice", codesGeorgia)
+	}
+}
+
+// A 429 that names a long Retry-After is a host-wide shutout, not a throttle,
+// and the caller has to be able to tell the difference — retrying into it
+// cannot succeed. Measured live: apply.workable.com answered every path with
+// Retry-After 84643 after a backfill pass polled ~210 of its accounts.
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		header string
+		want   time.Duration
+	}{
+		{"84643", 84643 * time.Second},
+		{" 120 ", 2 * time.Minute},
+		{"", 0},
+		{"0", 0},
+		{"-5", 0},
+		{"Wed, 21 Oct 2026 07:28:00 GMT", 0}, // HTTP-date form: treated as no guidance
+		{"not-a-number", 0},
+	}
+	for _, tt := range cases {
+		if got := parseRetryAfter(tt.header); got != tt.want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.header, got, tt.want)
+		}
+	}
+}
+
+func TestFeedHTTPErrorMessage(t *testing.T) {
+	err := &FeedHTTPError{StatusCode: 429, RetryAfter: 84643 * time.Second}
+	// pollBoard and cmd/backfill-location both branch on this wording, so it
+	// must not drift.
+	if got := err.Error(); got != "board feed returned HTTP 429" {
+		t.Errorf("Error() = %q", got)
+	}
+	if !strings.Contains(err.Error(), "HTTP 4") {
+		t.Errorf("Error() no longer satisfies the HTTP 4xx check callers make")
 	}
 }

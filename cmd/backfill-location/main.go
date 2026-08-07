@@ -29,9 +29,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -62,6 +64,11 @@ const (
 	maxFeedAttempts  = 4
 	retryBackoffBase = 2 * time.Second
 	rateLimitBackoff = 5 * time.Second
+
+	// longRateLimit separates "wait a moment" from "come back tomorrow". Above
+	// it, a Retry-After means the host has shut us out rather than throttled a
+	// burst, and no amount of patience within one run will change that.
+	longRateLimit = 2 * time.Minute
 )
 
 type funnelRow struct {
@@ -349,6 +356,11 @@ func fetchWithRetry(endpoint string) ([]byte, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("no feed endpoint for this board")
 	}
+	host := hostOf(endpoint)
+	if until, blocked := blockedUntil(host); blocked {
+		return nil, fmt.Errorf("board feed returned HTTP 429 (host blocked for another %s)", until.Round(time.Second))
+	}
+
 	var err error
 	for attempt := 1; attempt <= maxFeedAttempts; attempt++ {
 		var body []byte
@@ -356,21 +368,74 @@ func fetchWithRetry(endpoint string) ([]byte, error) {
 		if err == nil {
 			return body, nil
 		}
-		rateLimited := strings.Contains(err.Error(), "HTTP 429")
-		// A 4xx other than 429 is settled; retrying only wastes time.
-		if strings.Contains(err.Error(), "HTTP 4") && !rateLimited {
-			return nil, err
+
+		var httpErr *scraper.FeedHTTPError
+		if errors.As(err, &httpErr) {
+			// A host that names a long Retry-After is not throttling
+			// individual requests, it has shut us out. Retrying cannot
+			// succeed and only keeps hitting a host that said stop, so give
+			// the whole host up for this run and let every remaining row on it
+			// report as rate-limited. Measured live: Workable answered every
+			// path on apply.workable.com with Retry-After 84643 (23.5 hours).
+			if httpErr.RetryAfter > longRateLimit {
+				blockHost(host, httpErr.RetryAfter)
+				return nil, err
+			}
+			// Any other 4xx is a settled answer; retrying only wastes time.
+			if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
+				return nil, err
+			}
 		}
+
 		if attempt == maxFeedAttempts {
 			break
 		}
 		base := retryBackoffBase
-		if rateLimited {
+		if strings.Contains(err.Error(), "HTTP 429") {
 			base = rateLimitBackoff
 		}
 		time.Sleep(time.Duration(1<<(attempt-1)) * base)
 	}
 	return nil, err
+}
+
+// Hosts given up for the rest of the run, with when they said they would be
+// ready again. Shared across the concurrent feed fetches.
+var (
+	blockedHostsMu sync.Mutex
+	blockedHosts   = map[string]time.Time{}
+)
+
+func blockHost(host string, retryAfter time.Duration) {
+	if host == "" {
+		return
+	}
+	blockedHostsMu.Lock()
+	defer blockedHostsMu.Unlock()
+	if _, already := blockedHosts[host]; !already {
+		readyAt := time.Now().Add(retryAfter)
+		blockedHosts[host] = readyAt
+		log.Printf("%s is rate-limiting every request and asked for %s; skipping it for the rest of this run. Re-run after %s.",
+			host, retryAfter.Round(time.Minute), readyAt.Format(time.RFC1123))
+	}
+}
+
+func blockedUntil(host string) (time.Duration, bool) {
+	blockedHostsMu.Lock()
+	defer blockedHostsMu.Unlock()
+	readyAt, ok := blockedHosts[host]
+	if !ok {
+		return 0, false
+	}
+	return time.Until(readyAt), true
+}
+
+func hostOf(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Host)
 }
 
 // failureClass reduces a fetch error to something countable, so the report can
