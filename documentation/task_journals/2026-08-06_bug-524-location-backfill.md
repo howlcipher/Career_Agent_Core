@@ -45,7 +45,13 @@ Notes proven, not assumed:
 ## Progress Log
 
 - 2026-08-06 — Selected #524 over improvements #513 on the bugs-win-ties rule. Re-verified every claim against live code and the live database (see above); all hold. Researched and confirmed all three board APIs live before writing the delegation brief.
+- 2026-08-06 — Delegated to `agy` / `gemini-3.6-flash-high` from a clean tree. It produced `pkg/scraper/locationbackfill.go`, `pkg/scraper/locationbackfill_test.go`, `cmd/backfill-location/main.go`, the `countryNamesToCodes` additions (correctly omitting a bare `georgia`, which would read "Atlanta, Georgia" as the country), and one field added to `atsfeeds.go`'s `greenhouseJobsResponse`. Build, vet, tests and gofmt all clean on its output.
+- 2026-08-06 — **Reviewed the diff and made three changes of my own**, the first substantive:
+  1. **The delegate terminalized any posting absent from its account feed.** Absence is not proof of death — a board can carry postings reachable by direct link but not listed publicly, and writing those off is precisely the failure mode `bugs.md`'s CAPTCHA pre-skip decision forbids. Added `JobFeedURL`/`ParseJobFeed` (per-posting endpoints, all three confirmed live) so a row absent from the feed is asked directly; only an HTTP 404, or Workable's explicit non-`published` state, terminalizes it, and a live-but-unlisted posting resolves its location instead of being lost. This also handles Workable's per-job shape, which differs from the widget listing's (`remote` vs `telecommuting`, nested `location` object vs flat fields).
+  2. **Reverted the `atsfeeds.go` edit.** Declared a named `greenhouseFeedJob` in the new file instead, so shipped discovery code is untouched and one type serves both the listing and per-job parse. Also replaced the Lever branch's verbatim copy of `parseLeverBoard` with a call to it, so the two cannot drift.
+  3. The Workable no-`locations[]` fallback was pushing a country *name* into `CountryCodes`, which is a field of ISO codes; `CountryCodesFor` discarded it silently, so the free-text path happened to save it. Fixed to leave codes empty and let the free text do the work, with a test asserting `"Toronto, Ontario, Canada"` still resolves to `CA`. Also fixed counters that reported writes during a dry run and counted failed writes as successes, and made a profile that fails to load say so instead of silently reporting zero rejections.
+- 2026-08-06 — `go build`, `go vet`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` all clean. Database backed up to the session scratchpad. Live dry run started against the real `applications.db` (264 distinct board accounts to fetch).
 
 ## Next Step
 
-Write the delegation brief and launch `agy` with a clean `git status`.
+Read the dry-run report, then re-run with `-confirm` and verify the queue's location coverage in the database and on the live dashboard.
