@@ -44,3 +44,4 @@ nlp_service/venv/
 # here by default -- this just makes the documented convention (-out
 # benchmark_results/...) safe if someone follows it.
 /benchmark_results/
+tracker_bin
