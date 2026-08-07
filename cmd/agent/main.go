@@ -37,21 +37,15 @@ const (
 	// the upload payload — this static PDF is what employers receive.
 	// Assisted Apply reads the same constant so the two submission paths
 	// cannot drift apart again (bugs.md #515).
-	masterResumePath = storage.MasterResumePath
-	// defaultMasterCoverLetterPath is the fallback for the single job-agnostic
-	// cover letter reused for every application when profile.yaml sets
-	// use_master_cover_letter, applied only when master_cover_letter_path is
-	// left unset. Gitignored alongside master_resume.pdf, as any real letter
-	// carries contact details.
-	defaultMasterCoverLetterPath = "master_cover_letter.txt"
-	maxJobFetchAttempts          = 3
-	minJobDescriptionRunes       = 200
-	jobFetchBaseBackoff          = time.Second
-	jobFetchMaxBackoff           = 4 * time.Second
-	careerRAGDimensionProbe      = "dimension probe"
-	defaultDaemonCycleLimit      = 15
-	defaultDaemonCycleInterval   = 6 * time.Hour
-	defaultDiscoveryInterval     = 6 * time.Hour
+	masterResumePath           = storage.MasterResumePath
+	maxJobFetchAttempts        = 3
+	minJobDescriptionRunes     = 200
+	jobFetchBaseBackoff        = time.Second
+	jobFetchMaxBackoff         = 4 * time.Second
+	careerRAGDimensionProbe    = "dimension probe"
+	defaultDaemonCycleLimit    = 15
+	defaultDaemonCycleInterval = 6 * time.Hour
+	defaultDiscoveryInterval   = 6 * time.Hour
 )
 
 var (

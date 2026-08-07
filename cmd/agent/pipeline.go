@@ -513,13 +513,9 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 
 		generateDocsFunc := func() (string, string, error) {
 			if deps.Profile.UseMasterCoverLetter {
-				coverPath := ""
+				coverPath := deps.Profile.ResolvedMasterCoverLetterPath()
 				letterText := "Cover letters are disabled (send_cover_letter: false); none was sent with this application."
-				if deps.Profile.ShouldSendCoverLetter() {
-					coverPath = deps.Profile.MasterCoverLetterPath
-					if coverPath == "" {
-						coverPath = defaultMasterCoverLetterPath
-					}
+				if coverPath != "" {
 					text, readErr := parser.ExtractDocumentText(coverPath)
 					if readErr != nil {
 						log.Printf("[Worker-%d] Failed to read master cover letter %s: %v", workerID, coverPath, readErr)

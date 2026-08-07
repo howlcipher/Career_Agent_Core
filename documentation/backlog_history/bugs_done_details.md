@@ -4140,3 +4140,28 @@ Tests: `TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact` reconstruc
 `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. No frontend sources exist for this change to affect. The trial was halted at this defect and no application was submitted.
 
 ---
+## 525. Assisted Apply attached a .txt extraction where the automatic path uploads the master cover letter
+
+**Completed 2026-08-06.** Filed 2026-08-05 during the Assisted Apply acceptance trial, alongside #515 and #517, as the least severe of the three document-resolution divergences.
+
+`profile.yaml` sets `use_master_cover_letter: true`, so `cmd/agent` uploads the master cover letter file itself: `generateDocsFunc` resolved `Profile.MasterCoverLetterPath` (falling back to `master_cover_letter.txt`) and returned that path to the submitter. `storage.GetAssistedDocument` resolved `kind == "cover_letter"` unconditionally to the per-job `applications/<company>/<url-digest>/coverletter.txt`, which `SaveApplication` writes as the *extracted text* of that same file.
+
+Both paths hand their resolved path to the same fill handlers — `cmd/assist` passes it to `submitter.FillAssistedMappedPage`, which calls the same `dedicatedATSHandler`/`handleDynamic` functions `cmd/agent` uses — so the content was right and only the file differed. On a cover-letter textarea that is invisible. On a file-upload field the employer received an unformatted `.txt` in place of the designed PDF.
+
+**Fix.** Added `config.DefaultMasterCoverLetterPath` and `(*config.Profile).ResolvedMasterCoverLetterPath()`, which answers "which static letter does this profile actually send" once: `""` when `use_master_cover_letter` is off or `send_cover_letter` is false, the configured path when set, the default otherwise. `cmd/agent/pipeline.go`'s open-coded copy of that branch was deleted and repointed at the method, and `cmd/agent`'s own `defaultMasterCoverLetterPath` constant was removed so only one literal remains — the same drift-proofing #515 applied to the résumé.
+
+`GetAssistedDocument` now resolves the cover letter through the same method and validates the result. `validateMasterResume` was generalised to `validateMasterDocument` (symlink, regular-file and non-empty guarantees, without `validateAssistedDocument`'s `applications/` containment check, since master documents live at the repository root) and now serves both documents. A configured master letter that fails validation returns an error rather than falling back to the `.txt` — that fallback is precisely the defect, so it would convert a visible failure into a silent wrong-format upload; the error degrades safely, since the queue then reports the document as not ready and `cmd/assist` preserves the application for manual completion.
+
+`GetAssistedDocument` was split over an unexported `assistedDocument` taking the resolved path, so `GetAssistedQueue` resolves the profile **once** per queue rather than per row. That queue holds 524 rows on the live database and probes documents twice per row; a per-row resolution would have parsed `profile.yaml` over a thousand times per dashboard poll.
+
+**Mutation-checked before being trusted:** with the new cover-letter branch deleted, both new tests fail, and they fail *with the defect itself* — `cover letter path = "applications/Master_CL_Co/…/coverletter.txt", want master cover letter path "Omni_CoverLetter.pdf"`.
+
+**Verified live, before and after, against the same job on the real `applications.db`.** A dashboard built from the current tree ran on `127.0.0.1:8099`; the production instance on `:8080`, still running the pre-fix binary, provided the baseline and was never touched beyond a read. For job `297438`, the pre-fix build served `Content-Disposition: coverletter.txt`, `Content-Type: text/plain`, 2151 bytes; the fixed build served `Omni_CoverLetter.pdf`, `application/pdf`, 11055 bytes, with a SHA-256 identical to the master file on disk. All 524 queued rows reported `resume_ready` and `cover_letter_ready` true.
+
+Tests: `TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled` writes distinguishable content into the per-job artifact and asserts the served bytes are the master letter's; `TestGetAssistedDocument_InvalidMasterCoverLetterReturnsError` pins the fail-closed behaviour; `TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter` covers the queue's readiness signal; `TestResolvedMasterCoverLetterPath` covers all five cases of the new method. `TestGetAssistedDocument_CoverLetterStaysPerJobArtifact`, added by #515 to stop that fix being over-applied, still passes unchanged and now pins the no-master-letter case specifically.
+
+**Two findings filed from this work.** #527: `setupTestDB` uses a `:memory:` database, which is private per connection, so any query issued from inside an open `rows` iteration takes a second pooled connection and fails with `no such table` — `GetAssistedQueue`'s `resume_ready`/`cover_letter_ready` are therefore always false under test and cannot be covered end to end. Confirmed to be a harness artifact only, by the live 524-row check above. #528: with `send_cover_letter: false` the assisted path would attach the per-job `coverletter.txt`, whose contents in that configuration are the sentence "Cover letters are disabled…" — the last member of this divergence family, left out of scope here because fixing it requires representing "no cover letter" distinctly from "the cover letter failed to load".
+
+`go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all pass. Implementation delegated to Antigravity CLI / `gemini-3.1-pro-high`; reviewed, corrected and verified in this session.
+
+---

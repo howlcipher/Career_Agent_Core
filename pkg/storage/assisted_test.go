@@ -505,6 +505,163 @@ func TestGetAssistedDocument_CoverLetterStaysPerJobArtifact(t *testing.T) {
 	}
 }
 
+// With use_master_cover_letter enabled, cmd/agent uploads the static master
+// letter itself, while the per-job coverletter.txt holds only the extracted
+// *text* of that same file. The content matches, so a textarea field is
+// unaffected — but a file-upload field received an unformatted .txt where the
+// automatic path sent the designed PDF (bugs.md #525).
+func TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const masterPath = "Omni_CoverLetter.pdf"
+	const masterContent = "%PDF-1.7 master cover letter content"
+	if err := os.WriteFile(masterPath, []byte(masterContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origResolver := resolveMasterCoverLetter
+	defer func() { resolveMasterCoverLetter = origResolver }()
+	resolveMasterCoverLetter = func() string { return masterPath }
+
+	const postingURL = "https://captcha.example/jobs/master-cl"
+	if _, err := AddToFunnel("Master CL Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveApplication("Master CL Co", "Engineer", "", postingURL, "resume note", "distinguishable per-job text letter", "prep"); err != nil {
+		t.Fatal(err)
+	}
+
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", NormalizeURL(postingURL)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	document, err := GetAssistedDocument(GetDB(), id, "cover_letter")
+	if err != nil {
+		t.Fatalf("resolve assisted cover letter: %v", err)
+	}
+	if document.Path != masterPath {
+		t.Fatalf("cover letter path = %q, want master cover letter path %q", document.Path, masterPath)
+	}
+	if document.Name != masterPath {
+		t.Fatalf("cover letter name = %q, want %q", document.Name, masterPath)
+	}
+
+	perJobPath := CoverLetterPath("Master CL Co", postingURL)
+	if document.Path == perJobPath {
+		t.Fatalf("cover letter path = %q, must not be per-job artifact path", document.Path)
+	}
+
+	content, err := os.ReadFile(document.Path)
+	if err != nil {
+		t.Fatalf("read resolved cover letter: %v", err)
+	}
+	if string(content) != masterContent {
+		t.Fatalf("served content = %q, want master content %q", string(content), masterContent)
+	}
+	if strings.Contains(string(content), "distinguishable per-job text letter") {
+		t.Fatal("served cover letter contained per-job text artifact content instead of master letter")
+	}
+}
+
+// A configured master letter that cannot be validated must fail closed. The
+// tempting fallback — serve the per-job .txt instead — is precisely the defect
+// bugs.md #525 describes, so it would turn a visible error into the silent
+// wrong-format upload. An error degrades safely: the dashboard reports the
+// document as not ready and cmd/assist preserves the application for manual
+// completion.
+func TestGetAssistedDocument_InvalidMasterCoverLetterReturnsError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const nonExistentPath = "missing_master_cover_letter.pdf"
+
+	origResolver := resolveMasterCoverLetter
+	defer func() { resolveMasterCoverLetter = origResolver }()
+	resolveMasterCoverLetter = func() string { return nonExistentPath }
+
+	const postingURL = "https://captcha.example/jobs/invalid-master-cl"
+	if _, err := AddToFunnel("Invalid Master CL Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveApplication("Invalid Master CL Co", "Engineer", "", postingURL, "resume note", "per-job letter", "prep"); err != nil {
+		t.Fatal(err)
+	}
+
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", NormalizeURL(postingURL)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	document, err := GetAssistedDocument(GetDB(), id, "cover_letter")
+	if err == nil {
+		t.Fatalf("expected error for missing master cover letter, got path %q", document.Path)
+	}
+	perJobPath := CoverLetterPath("Invalid Master CL Co", postingURL)
+	if document.Path == perJobPath {
+		t.Fatalf("document path fell back to per-job text artifact %q on master letter validation failure", perJobPath)
+	}
+}
+
+// cover_letter_ready is what the operator reads before opening an assisted
+// application, so the queue's readiness signal has to track the same document
+// GetAssistedDocument would actually serve — a queue still probing the per-job
+// .txt would report ready even with no master letter on disk.
+//
+// This drives assistedDocumentExists directly rather than GetAssistedQueue,
+// which cannot be asserted on here: GetAssistedQueue calls this helper from
+// inside an open rows iteration, and that nested query takes a *second* pooled
+// connection. Against the `:memory:` database setupTestDB opens, every
+// connection gets its own private, empty schema, so the nested lookup fails
+// with "no such table" and both readiness fields come back false no matter
+// what the resolver returns. That is an artifact of the in-memory harness, not
+// of production, where the pool's connections all open the same file — but it
+// does mean these two fields cannot be covered end to end through the queue
+// (filed as bugs.md #527).
+func TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const masterPath = "Omni_CoverLetter.pdf"
+	const postingURL = "https://captcha.example/jobs/queue-master-cl"
+	if _, err := AddToFunnel("Queue CL Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureAssistedPlanForURL(postingURL, "BLOCKED_CAPTCHA"); err != nil {
+		t.Fatal(err)
+	}
+	// The per-job artifact is written and stays written throughout: a
+	// readiness check still pointed at it would report ready in both phases.
+	if _, err := SaveApplication("Queue CL Co", "Engineer", "", postingURL, "resume note", "per-job letter", "prep"); err != nil {
+		t.Fatal(err)
+	}
+
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", NormalizeURL(postingURL)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	if assistedDocumentExists(GetDB(), id, "cover_letter", masterPath) {
+		t.Fatal("cover letter reported ready while the configured master letter did not exist")
+	}
+	if err := os.WriteFile(masterPath, []byte("%PDF-1.7 master cover letter content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !assistedDocumentExists(GetDB(), id, "cover_letter", masterPath) {
+		t.Fatal("cover letter reported unavailable after the master letter was written")
+	}
+}
+
 // A revalidated AWAITING_REVIEW handoff must still expose the explicit-submit
 // affordance. Without it the dashboard never renders "I saw a confirmation —
 // Mark Applied", so an application the operator genuinely submitted cannot be

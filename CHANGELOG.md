@@ -1,5 +1,30 @@
 # Career Agent Core - Changelog
 
+## 2026-08-06 — Assisted Apply attaches the master cover letter, not its text extraction
+
+* **Fix (bugs.md #525):** with `use_master_cover_letter` enabled, `cmd/agent`
+  uploads the master cover letter file itself, while Assisted Apply resolved
+  the letter to the per-job `coverletter.txt` — the extracted *text* of that
+  same file. On a cover-letter textarea this made no difference; on a
+  file-upload field the employer received an unformatted `.txt` where the
+  automatic path would have sent the designed PDF.
+* Assisted Apply now resolves the same file the automatic path uploads.
+  Verified against the live database on the same queued job: the previous
+  build served `coverletter.txt`, `text/plain`, 2151 bytes; the current one
+  serves `Omni_CoverLetter.pdf`, `application/pdf`, 11055 bytes, byte-identical
+  to the master file.
+* **Both paths now resolve the letter through one function**,
+  `config.Profile.ResolvedMasterCoverLetterPath`. Two call sites resolving the
+  same document by hand is what produced this defect and its siblings (#515,
+  #517), so the duplicate resolution in `cmd/agent` was removed rather than
+  matched.
+* A configured master letter that is missing, empty, symlinked, or not a
+  regular file is now an error rather than a silent fall back to the `.txt`.
+  The queue reports the document as not ready and the application is preserved
+  for manual completion.
+* Nothing changed for tailored letters: with `use_master_cover_letter` off, the
+  per-job artifact is still the genuine payload and is still what gets served.
+
 ## 2026-08-06 — Blocked assisted-browser requests now say so
 
 * **Fix (bugs.md #523):** the Assisted Apply browser's network guard aborted

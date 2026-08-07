@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 )
 
 // AssistedNextAction is deliberately operational rather than a copy of the
@@ -238,7 +240,22 @@ func RecordAssistedRevalidation(conn *sql.DB, jobID, state string, now time.Time
 // the automatic pipeline uploads (bugs.md #515).
 const MasterResumePath = "master_resume.pdf"
 
+// resolveMasterCoverLetter reports the static letter cmd/agent uploads, or ""
+// when the per-job artifact is the genuine payload. It is a variable so tests
+// can supply a profile without writing one to disk.
+var resolveMasterCoverLetter = func() string {
+	profile, err := config.LoadProfile("profile.yaml")
+	if err != nil {
+		return ""
+	}
+	return profile.ResolvedMasterCoverLetterPath()
+}
+
 func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, error) {
+	return assistedDocument(conn, jobID, kind, resolveMasterCoverLetter())
+}
+
+func assistedDocument(conn *sql.DB, jobID, kind, masterCoverLetter string) (AssistedDocument, error) {
 	fileName := map[string]string{"resume": "resume.md", "cover_letter": "coverletter.txt"}[kind]
 	if fileName == "" {
 		return AssistedDocument{}, errors.New("unsupported assisted document")
@@ -248,14 +265,21 @@ func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, er
 	if err != nil {
 		return AssistedDocument{}, fmt.Errorf("load assisted document identity: %w", err)
 	}
-	// The résumé is deliberately not read from the application folder. Only
-	// the cover letter is a genuine per-job artifact, matching the pair
-	// cmd/agent hands the submitter.
+	// The résumé is deliberately not read from the application folder. The
+	// cover letter is a per-job artifact only when use_master_cover_letter is
+	// disabled (bugs.md #525); otherwise the static master cover letter is
+	// served so Assisted Apply attaches the exact same document as cmd/agent.
 	if kind == "resume" {
-		if err := validateMasterResume(MasterResumePath); err != nil {
+		if err := validateMasterDocument(MasterResumePath); err != nil {
 			return AssistedDocument{}, err
 		}
 		return AssistedDocument{Path: MasterResumePath, Name: MasterResumePath}, nil
+	}
+	if kind == "cover_letter" && masterCoverLetter != "" {
+		if err := validateMasterDocument(masterCoverLetter); err != nil {
+			return AssistedDocument{}, err
+		}
+		return AssistedDocument{Path: masterCoverLetter, Name: filepath.Base(masterCoverLetter)}, nil
 	}
 	path := filepath.Join(ResolveApplicationDir(company, postingURL), fileName)
 	if err := validateAssistedDocument(path); err != nil {
@@ -264,23 +288,23 @@ func GetAssistedDocument(conn *sql.DB, jobID, kind string) (AssistedDocument, er
 	return AssistedDocument{Path: path, Name: fileName}, nil
 }
 
-// validateMasterResume applies the symlink and regular-file guarantees
+// validateMasterDocument applies the symlink and regular-file guarantees
 // validateAssistedDocument gives folder artifacts. The containment check does
-// not carry over: the master résumé lives beside profile.yaml at the
-// repository root, deliberately outside applications/.
-func validateMasterResume(path string) error {
+// not carry over: master documents live beside profile.yaml at the repository
+// root, deliberately outside applications/.
+func validateMasterDocument(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("inspect master resume: %w", err)
+		return fmt.Errorf("inspect master document: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("refusing symlinked master resume")
+		return errors.New("refusing symlinked master document")
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("master resume is not a regular file")
+		return errors.New("master document is not a regular file")
 	}
 	if info.Size() == 0 {
-		return errors.New("master resume is empty")
+		return errors.New("master document is empty")
 	}
 	return nil
 }
@@ -656,6 +680,7 @@ func EnsureAssistedPlanForURL(rawURL, status string) error {
 // GetAssistedQueue reads a queue through an explicitly supplied connection so
 // dashboard readers never need to initialize the storage package singleton.
 func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
+	masterCoverLetter := resolveMasterCoverLetter()
 	rows, err := conn.Query(`SELECT jf.id, COALESCE(jf.company_name, ''), COALESCE(jf.job_title, ''), jf.fit_score,
 		CASE WHEN jf.url LIKE '%greenhouse%' THEN 'Greenhouse' WHEN jf.url LIKE '%lever.co%' THEN 'Lever'
 		WHEN jf.url LIKE '%workday%' THEN 'Workday' WHEN jf.url LIKE '%ashby%' THEN 'Ashby' ELSE 'Other ATS' END,
@@ -712,8 +737,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
 		}
 		job.CompletedWork = completedWork(job.OriginalStatus)
-		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume")
-		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter")
+		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume", masterCoverLetter)
+		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter", masterCoverLetter)
 		job.PriorityReason = priorityReason(job.NextAction.Code)
 		if job.NextAction.Code == "open_verified_application" && job.LiveBrowser {
 			job.NextAction.CanContinue = true
@@ -741,8 +766,8 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	return jobs, nil
 }
 
-func assistedDocumentExists(conn *sql.DB, jobID, kind string) bool {
-	_, err := GetAssistedDocument(conn, jobID, kind)
+func assistedDocumentExists(conn *sql.DB, jobID, kind, masterCoverLetter string) bool {
+	_, err := assistedDocument(conn, jobID, kind, masterCoverLetter)
 	return err == nil
 }
 

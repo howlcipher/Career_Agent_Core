@@ -334,3 +334,64 @@ func TestShouldSendCoverLetter_ZeroValueProfileSends(t *testing.T) {
 		t.Error("a zero-value Profile must default to sending a cover letter")
 	}
 }
+
+func TestResolvedMasterCoverLetterPath(t *testing.T) {
+	falseVal := false
+	trueVal := true
+
+	tests := []struct {
+		name    string
+		profile Profile
+		want    string
+	}{
+		{
+			name: "toggle off",
+			profile: Profile{
+				UseMasterCoverLetter: false,
+			},
+			want: "",
+		},
+		{
+			name: "toggle on with explicit path",
+			profile: Profile{
+				UseMasterCoverLetter:  true,
+				MasterCoverLetterPath: "custom_letter.pdf",
+			},
+			want: "custom_letter.pdf",
+		},
+		{
+			name: "toggle on with empty path uses default",
+			profile: Profile{
+				UseMasterCoverLetter:  true,
+				MasterCoverLetterPath: "",
+			},
+			want: DefaultMasterCoverLetterPath,
+		},
+		{
+			name: "send_cover_letter false returns empty",
+			profile: Profile{
+				UseMasterCoverLetter:  true,
+				MasterCoverLetterPath: "custom_letter.pdf",
+				SendCoverLetter:       &falseVal,
+			},
+			want: "",
+		},
+		{
+			name: "send_cover_letter true with toggle on",
+			profile: Profile{
+				UseMasterCoverLetter:  true,
+				MasterCoverLetterPath: "custom_letter.pdf",
+				SendCoverLetter:       &trueVal,
+			},
+			want: "custom_letter.pdf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.profile.ResolvedMasterCoverLetterPath(); got != tt.want {
+				t.Errorf("ResolvedMasterCoverLetterPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

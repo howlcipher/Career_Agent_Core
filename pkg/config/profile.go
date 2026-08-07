@@ -96,6 +96,30 @@ type Profile struct {
 	MinimumFitScore int `yaml:"-"`
 }
 
+// DefaultMasterCoverLetterPath is the fallback filename for the static,
+// job-agnostic cover letter attached when use_master_cover_letter is enabled
+// but master_cover_letter_path is left unset. Gitignored alongside
+// master_resume.pdf, as any real letter carries contact details.
+const DefaultMasterCoverLetterPath = "master_cover_letter.txt"
+
+// ResolvedMasterCoverLetterPath returns the static, job-agnostic letter this
+// profile sends with every application, or "" when the per-job generated
+// letter is the real payload (or when no letter is sent at all).
+//
+// Centralizing this resolution in pkg/config ensures all application paths
+// (automatic submission in cmd/agent and assisted submission in pkg/storage)
+// upload the exact same document. Resolving master documents independently in
+// multiple call sites produced bugs.md #525 and its siblings.
+func (p *Profile) ResolvedMasterCoverLetterPath() string {
+	if !p.UseMasterCoverLetter || !p.ShouldSendCoverLetter() {
+		return ""
+	}
+	if p.MasterCoverLetterPath != "" {
+		return p.MasterCoverLetterPath
+	}
+	return DefaultMasterCoverLetterPath
+}
+
 // ShouldSendCoverLetter reports whether applications should include a cover
 // letter, defaulting to true when send_cover_letter is not set.
 func (p *Profile) ShouldSendCoverLetter() bool {
