@@ -38,7 +38,7 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-02 groom pass.** #472 is Done: the security-code resubmit now enters the shared one-recreation target-closed recovery path. The same-theme decay now puts #473 at 0.38 ⚠️ below floor; its Vision path still has no recovery, but it requires explicit user confirmation to work. #485 still has no shared inference scheduler and is the next eligible item at 0.67; #497 has no approved-answer store and remains exactly at the 0.5 floor. Live dashboard metrics report four eligible jobs, two applications, and zero interviews or rejections, so #493 remains 0.33 ⚠️; #488 remains 0.4 ⚠️. Paywalled #424 and #17 still need a paid key, and #14 remains 0.43 ⚠️. No Pending bugs or task journals remain. Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.
+**2026-08-06 groom pass.** #513 was filed this pass and is now the highest-scoring Pending row here at 1.5. Every other Pending row re-verified against current code and live state. **#485 holds at 0.67:** no shared inference scheduler exists anywhere in the tree, and its premise was checked live rather than assumed — `OLLAMA_MAX_LOADED_MODELS=1` is genuinely in force (`systemctl --user show ollama` on the running MainPID, not just the unit file on disk). **#497 holds at 0.50**, exactly at the floor: no answer store, and the 26 `MANUAL_REQUIRED` rows its Value rests on are still 26. **#493 stays 0.33 ⚠️** — its "2 APPLIED rows" was stale and is corrected in its Details section (58 confirmed applications now exist), but the correction does not move the score: the binding constraint was always zero *outcomes*, and that is still zero against 49 processed emails, which this pass filed as bugs.md #529. **#473 stays 0.38 ⚠️** — all three `attemptQuarantinedVisionSubmit` call sites confirmed present with no target-closed handling. **#488 stays 0.40 ⚠️**, unchanged user decision. Three closed rows still carrying inline narratives were archived under the Working Protocol's step 8, and **#509's row pointed at an archive entry that had never been written** — the live file held the only copy, now rescued. *(Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.)*
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
@@ -62,6 +62,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 487 | [Lightweight 4B log triage and context compression](#487-lightweight-4b-log-triage-and-context-compression) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #487 for the full account. |
 | 472 | [Extend bug #467's target-closed browser recovery to the security-code resubmit click](#472-extend-bug-467s-target-closed-browser-recovery-to-the-security-code-resubmit-click) | Done (2026-08-02) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #472 for the full account. |
 | 473 | [Extend bug #467's target-closed browser recovery to the Vision submission paths](#473-extend-bug-467s-target-closed-browser-recovery-to-the-vision-submission-paths) | Pending ⚠️ below floor — same-theme decay | 0.38 = 3×0.25÷2 | standard | Vision fallback still has no target-closed recovery; work only with explicit user confirmation. |
+| 513 | [111 backlog table rows link to detail sections that no longer exist](#513-111-backlog-table-rows-link-to-detail-sections-that-no-longer-exist) | Pending | 1.5 = 3×1.0÷2 | mechanical | Every session navigates these files by clicking a row through to its Details. 92 rows in `bugs.md` and 19 in `improvements.md` land nowhere. Cheap to fix and, unlike the last two conventions that silently broke, cheap to keep fixed with a test. |
 | 485 | [Resource-aware local inference admission control](#485-resource-aware-local-inference-admission-control) | Pending | 0.67 = 4×1.0÷6 | deep-reasoning | Existing one-model limit prevents OOM; contention remains an unobserved risk. |
 | 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | No data-driven approved-answer store exists; historic observed volume remains low. |
 | 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending ⚠️ below floor — insufficient outcome data | 0.33 = 2×1.0÷6 | deep-reasoning | The live metrics endpoint is readable, but only 2 applied rows and zero outcomes exist; that cannot validate a yield-ranking change. |
@@ -159,18 +160,6 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #509.
 
-**Found 2026-08-02** during a safe live mission-status check. The running dashboard's read-only `/api/metrics` reported `eligible_queue: 0`, while `/api/agent/status` reported `running: false`. That proves no application can currently progress, but not whether the agent was intentionally stopped, discovery failed, all results were duplicates or excluded, or filters yielded no eligible jobs. The dashboard's “last skipped” record is historical and cannot answer that question. #495 deliberately suppresses its no-progress alert when the eligible queue is empty, so it cannot provide this diagnosis either.
-
-**Proposed direction:** persist a privacy-safe aggregate result for each discovery refresh (started/finished time; source-level attempted/new/duplicate/excluded/error counts; sanitized error class), expose the latest result in `/api/metrics`, and show an actionable dashboard state when the agent is stopped or the most recent refresh produced no eligible jobs. Do not retain job descriptions, URLs, resumes, application answers, raw errors, or credentials; do not start the agent, relax filters, requeue jobs, or submit applications automatically.
-
-**Acceptance criteria:** a deterministic discovery fixture can produce new eligible jobs, zero results, all-filtered or duplicate results, and a source error; the API/dashboard state distinguishes each case without leaking job or personal content. An intentionally stopped agent is visibly distinct from a running agent awaiting its next refresh.
-
-**Automated tests:** table-driven storage/API tests for the aggregate outcomes and a dashboard-handler test for the stopped/empty state.
-
-**Safe live verification:** query only the dashboard's aggregate endpoint after one controlled discovery refresh; confirm the displayed explanation agrees with the persisted aggregate without inspecting raw job data.
-
-**Boundaries:** this is observability and diagnosis, not a discovery-source rewrite (#508), queue-admission change (#492), or autonomous application-start authority. Its theme has one shipped precursor (#495), hence Decay 0.5; Value 6 and Effort 3 yield `1.0`.
-
 ### 506. `/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #506.
@@ -183,8 +172,6 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md`.
 
-**Boundaries:** pure refactor — no behavior change, no new fields.
-
 ### 491. Define authoritative mission metrics and surface them on the dashboard
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #491.
@@ -195,21 +182,7 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 
 ### 495. No-progress / dominant-failure-reason watchdog
 
-**Filed 2026-08-01**, mission-alignment audit (seeded candidate E).
-
-Confirmed no mechanism detects "the daemon is alive and processing but producing no confirmed applications" or "one failure reason has dominated several cycles." `runAgentSchedule` (`cmd/agent/main.go:518-593`) only distinguishes "cycle had work" from "no eligible jobs" for scheduling purposes; `runDaemonDiscoveryLoop` (`:598-631`) just logs per-refresh errors. The existing poll-failure banner (#447/#460) and per-domain circuit breakers (#469/#475) are both narrower, failure-triggered mechanisms — neither tracks time-since-last-confirmed-application or a dominant status/reason across cycles.
-
-**This audit is itself the evidence for this item's value:** bugs.md #489 (51% of the entire funnel quarantined, mission-critical) was only found because a human ran a manual multi-hour database audit — exactly the shape of condition ("a high percentage of jobs terminate at one stage," per the seeded brief) a watchdog should have surfaced automatically, and much sooner than a week after #394's incomplete fix.
-
-**Proposed direction, per the brief:** track eligible-fresh-queue-nonempty + cycles-continuing + no-confirmed-application-for-N-hours; a dominant terminal status or (post-bugs.md #480 broadening / #494) dominant `status_reason` across recent cycles. Emit one deduplicated actionable alert (log line + dashboard status, no email/SMS infrastructure exists to page through); create a sanitized diagnostic snapshot; never auto-relax user constraints; never auto-requeue at volume. A coarser first version can ship using only existing status counts (no dependency on #480/#494), with reason-level detail added once those land.
-
-**Acceptance criteria:** a seeded test fixture with N cycles of a dominant failure status triggers exactly one alert, not one per cycle; a fixture with healthy variety triggers none; a fixture with an empty eligible queue (nothing to attempt) triggers none.
-
-**Automated tests:** table-driven tests over the trigger conditions above.
-
-**Safe live verification:** run the watchdog against a read-only copy of the real `applications.db`'s history and confirm it would have flagged the #489 condition (QUARANTINED_PROMPT_INJECTION dominant on 2026-08-01) had it existed.
-
-**Boundaries:** detection and alerting only — no automatic recovery action (source suppression, requeue, constraint relaxation) is in this item's scope; evaluate those separately per the brief's own caution against unlimited watchdog authority.
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #495.
 
 ### 496. ATS capability and automation-success registry
 
@@ -223,7 +196,9 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 
 **Filed 2026-08-01**, mission-alignment audit (seeded candidate C).
 
-`RankJobs` (`pkg/storage/ranking.go:110-178`) already combines Bayesian-smoothed per-hostname source health (`ComputeSourceScores`), a bad-outcome `PenaltyFactor`, `fit_similarity`, the confirmed `exp(-0.02×ageDays)` freshness multiplier, bugs.md #481's 10-day urgency override, and a 20% exploration floor with sparse-source reserved slots — a real, working approximation of the brief's conceptual objective already. **Re-verified 2026-08-01:** #499 persists `discovery_source`, #496 records outcome-derived ATS capability evidence, and #494 now records future attempt-stage transitions. The ledger begins empty by design and no sufficiently large confirmation/outcome sample exists, so changing rank weights now would still be speculation. Interview-outcome data correctly is **not** used anywhere in ranking today — with only 2 `APPLIED` rows and 0 observed interview outcomes, that's trivially satisfying the brief's own "no interview outcomes until sample size is sufficient" constraint, not a gap.
+`RankJobs` (`pkg/storage/ranking.go:110-178`) already combines Bayesian-smoothed per-hostname source health (`ComputeSourceScores`), a bad-outcome `PenaltyFactor`, `fit_similarity`, the confirmed `exp(-0.02×ageDays)` freshness multiplier, bugs.md #481's 10-day urgency override, and a 20% exploration floor with sparse-source reserved slots — a real, working approximation of the brief's conceptual objective already. **Re-verified 2026-08-01:** #499 persists `discovery_source`, #496 records outcome-derived ATS capability evidence, and #494 now records future attempt-stage transitions. The ledger begins empty by design and no sufficiently large confirmation/outcome sample exists, so changing rank weights now would still be speculation. Interview-outcome data correctly is **not** used anywhere in ranking today, and that is still not a gap.
+
+**Re-verified 2026-08-06 (`/groom_backlogs`) against the live database, and the numbers this row rested on have moved — the conclusion has not.** `applied_jobs` now holds **58** confirmed applications (the row previously said 2) and `job_funnel` holds 7 `APPLIED`; the 2 that remain accurate are `application_attempts` rows with `terminal_class = 'APPLIED'`, which is the ledger a yield-ranking change would actually learn from. The other 56 were confirmed through the assisted path and never went through `RecordAttempt`. **Observed interview and rejection outcomes remain zero.** They do have a home — `cmd/tracker` writes `REJECTED` and `INTERVIEW_REQUESTED` straight into `job_funnel.status` (`pkg/tracker/imap.go:340-347`) — but the live database holds **0 rows in either status** against 49 processed emails. So the constraint this item is sequenced behind is unchanged and remains the binding one: there is still no outcome sample to rank against, and changing rank weights now would be speculation. (The zero-outcome result against 49 processed emails is filed separately as bugs.md #529; it is a discrepancy to check, not an assumption to build on.)
 
 **Proposed direction:** use #499's `discovery_source` and #496's capability evidence in `RankJobs` to weight estimated form reach and confirmation probability, alongside the existing fit/freshness/source-health signals, while preserving Bayesian smoothing, the exploration floor, and deterministic tie-breaking. **Explicitly sequenced after #494**: the newly available source and site evidence is still incomplete until attempt stages are reconstructable.
 
@@ -276,6 +251,23 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 ### 487. Lightweight 4B log triage and context compression
 
 Closed — full account archived in `documentation/backlog_history/improvements_done_details.md`.
+
+### 513. 111 backlog table rows link to detail sections that no longer exist
+
+**Found 2026-08-06** by the `/groom_backlogs` pass, while checking that this pass had not itself broken any anchors (it had broken four, since fixed).
+
+Every row in these tables is a Markdown link into a `### N.` heading in the same file. **92 rows in `bugs.md` and 19 in `improvements.md` point at headings that are not there** — clicking them scrolls nowhere. Verified rather than counted: for example `bugs.md`'s #465 row links to `#465-internalbacklogs-pending-cell-floor-was-a-historical-snapshot-and-ordinary-backlog-progress-tripped-it`, and no `### 465.` heading exists anywhere in the file.
+
+**Cause.** The 2026-08-01 restructure moved closed items' narratives into `documentation/backlog_history/`. Rows that kept a one-line pointer in the table *and* a one-line `### N.` stub survived fine; rows whose whole Details section was deleted kept a link with nothing to land on. Nothing checked, so nothing complained.
+
+**Why it is worth fixing rather than accepting.** These files exist to be navigated by a session with zero context — `/work_next_item` reads the table, picks a row, and follows its link to the Details before writing any code. A dead link means that session either scrolls the whole file or proceeds without the detail. It is also the third convention in this repo to break silently and sit broken (improvement #455's model IDs, bug #441's model list), and the established answer to that class is a test, not a promise.
+
+**Fix direction.** Two parts, and the second is the durable one:
+
+1. Give every row with a missing target a one-line `### N. <title>` stub carrying the pointer at its archive entry — the same shape #131, #24 and #37 already have. Mechanical; derive the heading text from the row's own link text so the generated slug matches by construction.
+2. **Add the check to `internal/backlog`**, beside the Tier validation. It is a pure string check over three files with no live dependency, so it is exactly the kind of convention that should be enforced by `go test ./...` rather than by a groom pass remembering. Slugging rule to implement: lowercase, drop backticks/asterisks/apostrophes/periods/slashes, non-alphanumerics that are not `_` or `-` become nothing, spaces become hyphens — note that an em dash surrounded by spaces yields a double hyphen.
+
+Scoped as `mechanical`: the transformation is deterministic and the test that guards it is a string comparison. The only judgement is what title text to use for the stubs, and the row's own link text already supplies it.
 
 ### 485. Resource-aware local inference admission control
 
@@ -548,16 +540,13 @@ Closed — full account archived in `documentation/backlog_history/improvements_
 
 Closed — full account archived in `documentation/backlog_history/improvements_done_details.md`.
 
+### 96 Filter out dead or expired job postings early
+
+Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #96.
+
 ### 37. Revalidate posting freshness before expensive document generation
 
 Closed — full account archived in `documentation/backlog_history/improvements_done_details.md`.
-
-## 96 Filter out dead or expired job postings early
-**Symptom:** Logs show 230+ `job posting is dead or expired` errors redirecting to error pages.
-**Impact:** Wasted time scoring and attempting to submit to expired jobs.
-**Fix:** Maintain a cache of dead URLs and pre-flight fetch the URL before full processing.
-
-**Status:** Done (2026-07-28). Exported `DeadRedirectReason` from the submitter package to reuse its logic in a pre-flight `checkJobAlive` check at the start of the `cmd/agent` worker loop. A lightweight HTTP GET is issued; if it hits an error-page redirect or an off-domain migration (signaling the ATS board is gone), it halts immediately, marks the URL `INVALID_URL` in storage, and skips document generation and LLM scoring entirely.
 
 ### 402. Migrate from go-sqlite3 CGO driver to pure Go modernc.org/sqlite
 

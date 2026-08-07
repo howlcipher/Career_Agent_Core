@@ -6,7 +6,7 @@ This document is the authoritative, ranked backlog for known flaws, bugs, and br
 
 **MET 2026-08-06 (Assisted Apply acceptance trial complete, last Major closed).** The trial finished: **five real applications submitted and confirmed** — Grafana Labs, Affirm, Smartsheet, and Temporal Technologies via Greenhouse, and Veeva via Lever — each with exactly one dedup record, `manual_user_confirmation` provenance, a cleared lease, and removal from the actionable queue. `applied_jobs` moved 53 → 58, one row per application. Four Blockers/Majors were found and closed during the run (#515 résumé placeholder, #516 missing location gate, #517 cover letters unreachable, #518 unconfirmable applications), plus the jobgether aggregator exclusion, and #519/#520/#521 were closed in the days after it.
 
-**The gate is now met: no open Blocker or Major rows remain.** #521, the last one, closed 2026-08-06 — the Assisted Apply queue can no longer render two postings of the same role at the same company as indistinguishable cards, and the dialog that writes the irreversible `APPLIED` record now names the job and warns when a sibling could be confused with it. Verified live against the real `applications.db`: 517 of 524 queued rows carry a requisition identifier, 130 rows across 49 duplicate groups are all warned, and no duplicate group is indistinguishable without being flagged as such. Minor rows remain open and are now ranked against `improvements.md`'s Pending rows in the normal way rather than ahead of them; #525 closed 2026-08-06 and #527/#528 were filed from that work, leaving #522, #524, #526, #527 and #528 open. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all pass, as do 20 of 20 dashboard UI tests. *(prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
+**The gate is now met: no open Blocker or Major rows remain.** #521, the last one, closed 2026-08-06 — the Assisted Apply queue can no longer render two postings of the same role at the same company as indistinguishable cards, and the dialog that writes the irreversible `APPLIED` record now names the job and warns when a sibling could be confused with it. Verified live against the real `applications.db`: 517 of 524 queued rows carry a requisition identifier, 130 rows across 49 duplicate groups are all warned, and no duplicate group is indistinguishable without being flagged as such. Minor rows remain open and are ranked against `improvements.md`'s Pending rows in the normal way rather than ahead of them. **Re-verified 2026-08-06 (`/groom_backlogs`):** still zero open Blocker or Major rows; the six open rows are #522, #524, #526, #527, #528 and #529, all Minor. #525 closed the same day, and #527/#528/#529 were filed from that work and this groom. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all pass, as do 20 of 20 dashboard UI tests. *(prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
 
 This project reaches 100% usable when every box below is checked. Until then, this is the default work queue ahead of any Pending row in `improvements.md`; everything in that file is explicitly nice-to-have and out of scope until this gate is met.
 
@@ -47,6 +47,8 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
+**2026-08-06 groom pass.** Every open row re-verified against current code, not its own prose. #522's four claims all still hold (`serveAgentStop` writes `{"status": "stopped"}` immediately after `SIGTERM` at `cmd/dashboard/main.go:1379`; `cmd.Start()` at `:1348` is never `Wait()`ed; `daemon_active` is a pure settings comparison with no liveness component at `pkg/config/effective_settings.go:61`; `go run ./cmd/assist` at `:1208` still wins over `career_assist_bin` at `:1217`). #526 confirmed at `pkg/submitter/network.go:94-100`, including its fix direction — `security.NetworkRejectionReason` is exported, `safeAssistedHost` is not. #524 confirmed against the live database: **0 of 524** queued rows carry a location, while 28 of 12,980 funnel rows now do, so #516's gate is working forward-only exactly as the row states. #528 was re-scored down from 1.5 to 1.0 (see its Details section — it was filed hours earlier with an Effort its own fix direction contradicts). #529 was filed this pass. Six legacy `## N` narrative sections were moved out of this file under the Working Protocol's step 8; three had no table row at all. *(Prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
+
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|---|
 | 521 | [Indistinguishable duplicate cards let one click mark a job applied that was never submitted](#521-indistinguishable-duplicate-cards-let-one-click-mark-a-job-applied-that-was-never-submitted) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #521 for the full account. |
@@ -54,11 +56,12 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 519 | [Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with](#519-assisted-apply-cannot-prefill-on-greenhouse-or-lever-the-only-two-atses-it-is-used-with) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #519 for the full account. |
 | 525 | [Assisted Apply attaches a .txt extraction where the automatic path uploads the master cover letter PDF](#525-assisted-apply-attaches-a-txt-extraction-where-the-automatic-path-uploads-the-master-cover-letter-pdf) | Minor | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #525 for the full account. |
 | 520 | [Lever submissions fail inside the assisted browser but succeed in an ordinary one](#520-lever-submissions-fail-inside-the-assisted-browser-but-succeed-in-an-ordinary-one) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #520 for the full account. |
-| 528 | [Assisted Apply attaches the "cover letters are disabled" note when send_cover_letter is false](#528-assisted-apply-attaches-the-cover-letters-are-disabled-note-when-send_cover_letter-is-false) | Minor | Pending | 1.5 = 3×0.5÷1 | mechanical | Last member of the #515/#517/#525 divergence family: the automatic path sends no letter, the assisted path attaches a placeholder sentence. Not live today (send_cover_letter is true), which is the only reason it is not higher. |
 | 524 | [Existing queue rows carry no location, so #516's gate cannot screen them](#524-existing-queue-rows-carry-no-location-so-516s-gate-cannot-screen-them) | Minor | Pending | 1.5 = 3×1.0÷2 | standard | #516 protects new discoveries only. The ~520 rows already queued still require the operator to check each posting's country by hand before launching. |
 | 522 | [Agent lifecycle and liveness reporting are unreliable in four distinct ways](#522-agent-lifecycle-and-liveness-reporting-are-unreliable-in-four-distinct-ways) | Minor | Pending | 1.3 = 2×1.0÷1.5 | standard | None of the four blocks work, but together they make "is the agent running?" unanswerable without checking /proc by hand, which cost time repeatedly during the trial. |
 | 527 | [The `:memory:` test database silently fails every nested query, so the assisted queue's readiness fields cannot be covered](#527-the-memory-test-database-silently-fails-every-nested-query-so-the-assisted-queues-readiness-fields-cannot-be-covered) | Minor | Pending | 1.0 = 3×1.0÷3 | standard | Found while writing #525's tests. Any lookup made from inside an open rows iteration takes a second pooled connection and hits an empty schema, so the failure path is what every test exercises and a real regression in these fields would pass CI. |
+| 529 | [49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`](#529-49-emails-processed-zero-outcomes-recorded--the-trackers-detections-may-never-be-reaching-job_funnel) | Minor | Pending | 1.0 = 3×1.0÷3 | standard | Found by the 2026-08-06 groom. A documented live detection and the current database disagree; until that is resolved, the outcome feedback loop the tracker exists to provide cannot be assumed to work. Diagnosis first — this may be benign. |
 | 526 | [The automatic submitter's network guard aborts requests silently](#526-the-automatic-submitters-network-guard-aborts-requests-silently) | Minor | Pending | 1.0 = 2×0.5÷1 | mechanical | Same defect as #523, one layer over: the automatic path's guard still blocks in silence, and its two existing log lines print Playwright errors verbatim. The classifier #523 built is already there to reuse. |
+| 528 | [Assisted Apply attaches the "cover letters are disabled" note when send_cover_letter is false](#528-assisted-apply-attaches-the-cover-letters-are-disabled-note-when-send_cover_letter-is-false) | Minor | Pending | 1.0 = 2×1.0÷2 | standard | Last member of the #515/#517/#525 divergence family. Re-scored 2026-08-06: latent, not live (send_cover_letter is true), so Value 2; and it needs a "not applicable" state threaded through storage, the queue projection and cmd/assist, so Effort 2 and standard tier — not the mechanical one-liner it was filed as. |
 | 518 | [A revalidated, already-submitted application cannot be confirmed from the dashboard](#518-a-revalidated-already-submitted-application-cannot-be-confirmed-from-the-dashboard) | Major | Done (2026-08-06) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #518 for the full account. |
 | 517 | [Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply](#517-assisted-apply-serves-404-for-every-cover-letter-once-documents-move-to-needs_manual_apply) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #517 for the full account. |
 | 516 | [Discovery has no geographic gate, so an India-only role reached a live application attempt](#516-discovery-has-no-geographic-gate-so-an-india-only-role-reached-a-live-application-attempt) | Blocker | Done (2026-08-05) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #516 for the full account. |
@@ -268,8 +271,6 @@ Done — full account archived in `documentation/backlog_history/bugs_done_detai
 Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #490.
 
 ### 482. breezy.hr postings are excluded from GetDiscoveredJobs entirely, so they accumulate in DISCOVERED forever with no terminal status
-
-**Found 2026-08-01** while live-verifying bug #481's fix against the real `applications.db`. A direct query found `job_funnel`'s `DISCOVERED` count at 185, but a second query excluding `breezy.hr` (the same filter `GetDiscoveredJobs` applies) returned **0** — every single remaining `DISCOVERED` row is a `breezy.hr` posting.
 
 Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #482.
 
@@ -890,45 +891,21 @@ Closed — full account archived in `documentation/backlog_history/bugs_done_det
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
 
+### 393 Playwright Host missing dependencies to run browsers
+
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #393.
+
+### 394 QUARANTINED_PROMPT_INJECTION has massive false positive rate on legitimate jobs
+
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #394.
+
+### 395 Validation loop times out waiting for Ollama context deadline
+
+Done — full account archived in `documentation/backlog_history/bugs_done_details.md` item #395.
+
 ### 131. ATS board polling discards truncated JSON without retry
 
 Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
-
-## 393 Playwright Host missing dependencies to run browsers
-**Symptom:** Over 1000 `Host system is missing dependencies to run browsers` warnings in `career_agent.log`.
-**Impact:** Headless browser actions fail, preventing form submission.
-**Fix:** Run `npx playwright install-deps` or add missing libraries (`libicudata.so.74`, etc.) to the environment setup.
-
-## 394 QUARANTINED_PROMPT_INJECTION has massive false positive rate on legitimate jobs
-**Symptom:** Over 400 jobs are stuck in `QUARANTINED_PROMPT_INJECTION` status in `job_funnel`.
-**Impact:** legitimate jobs (e.g., Senior Backend Engineer at Instrumentl via Lever) are never applied to.
-**Fix:** Refine the prompt injection heuristic to distinguish between actual injections and normal ATS text.
-**Status:** Done. Switched the promptsec protector from Strict to Moderate, which prevents false positives on benign ATS instructions while still catching actual injection attempts.
-
-## 395 Validation loop times out waiting for Ollama context deadline
-**Symptom:** 480 errors in `career_agent.log` with `failed to solve validation errors: ... context deadline exceeded`.
-**Impact:** Validation loop fails to resolve form errors because the API call to Ollama times out.
-**Fix:** Increase the HTTP client timeout for Ollama calls, especially during the validation phase which may pass large DOM contexts.
-**Status:** Done. Increased `defaultOllamaTimeoutMinutes` to 120 (from 45) to allow sufficient time for attention decoding of massive DOM contexts.
-
-## 399 Newly discovered jobs bypass Bayesian smoothing due to queue architecture flaw
-**Symptom:** In daemon mode, `candidates` channel interleaves the ranked backlog with newly discovered jobs pushed directly by `discoverJobs`. 
-**Impact:** Newly discovered jobs bypass `RankJobs` and get processed immediately at the tail of the channel, completely circumventing the Bayesian source-health smoothing and `FitSimilarity` ranking logic. Additionally, `cycleLimit` caused the `runAgentCycle` producer to aggressively discard thousands of ranked jobs from the channel, wasting CPU and forcing a full DB reload on every cycle.
-**Fix:** Decoupled discovery from processing. Passed a `nil` channel to `discoverJobs` so it only populates the database as `DISCOVERED` without injecting into the active queue. Limited the backlog producer loop to `cycleLimit` to prevent channel thrashing and dropping backlog items.
-**Status:** Done.
-
-## 401 Learner Module destroys form-mapping cache on transient or optional field errors
-**Symptom:** Forms that do not require an optional standard field (e.g., `phone`) caused `ErrEmptySelector` in `safeFillWithLabelFallback`, which bubbled up to `AttemptSubmit`. 
-**Impact:** `AttemptSubmit` incorrectly treated this as a stale mapping and instantly wiped the cache via `DeleteFormMapping(domain)`. This caused the agent to repeatedly trigger expensive LLM mapping generations on every visit to the same ATS, completely defeating the "learning" and caching mechanism. Furthermore, transient network timeouts also triggered instant cache wipes.
-**Fix:** Modified `handleDynamic` to gracefully tolerate `ErrEmptySelector` for standard fields `first_name`, `last_name`, `email`, and `phone`. Logged Bug B regarding transient timeouts for future improvement.
-**Status:** Done (Bug A). Bug B (transient timeouts) remains open as a known limitation of Playwright's timeout overlapping with stale selector errors.
-
-## 400 Bayesian smoothing aggregated AvgInferenceMs but never penalized slow sources
-**Symptom:** Source health tracking accurately recorded the average inference MS per source, but the actual queue ranking algorithm (`ComputeSourceScores`) completely ignored this metric when calculating the raw score.
-**Impact:** The app could not get "faster" over time because it never learned to penalize excessively slow ATS endpoints (e.g., endpoints requiring huge DOM parsing times).
-**Fix:** Added an explicit `speedPenalty` to the Bayesian `PenaltyFactor` in `pkg/storage/ranking.go`. If a source consistently takes over 20,000ms (20s) to process, its rank score is penalized up to 40%, naturally surfacing faster applications to the front of the queue.
-**Status:** Done.
-
 
 ### 412. Duplicate check in pipeline.go resets APPLIED jobs back to DISCOVERED
 
@@ -995,6 +972,31 @@ This is not hypothetical: during the trial, candidate 259800 was an India-scoped
 
 **Fix direction.** Have stop wait briefly and report truthfully; reap the child; give `daemon_active` a real liveness check (the flock already used by `agentPID` is the obvious source); and either exec the built binary or document the `go run` preference deliberately.
 
+### 529. 49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`
+
+**Found 2026-08-06** during a `/groom_backlogs` pass, while re-verifying improvement #493's claim about available outcome data. Filed as a **discrepancy to diagnose, not a confirmed defect** — there is a plausible benign explanation and it has not been ruled out.
+
+**The observation.** Against the live `applications.db`:
+
+- `processed_emails` holds **49** rows, so the tracker has genuinely scanned and acknowledged that many messages.
+- `job_funnel` holds **0** rows in `REJECTED` and **0** in `INTERVIEW_REQUESTED`.
+- `applied_jobs` holds 58 confirmed applications, and `job_funnel` holds 7 `APPLIED`.
+
+`cmd/tracker` does have a write path — `pkg/tracker/imap.go:340-347` sets `job_funnel.status` directly — so this is not a missing feature.
+
+**Why it is suspicious.** The Usability Gate's own tracker checkbox records that the 2026-07-22 live scan "detect[ed] a real rejection (Glimpse) and a real interview invitation". If those detections had reached the database, at least one row in one of those two statuses should exist today. None does.
+
+**Why it may still be benign — check these before treating it as a bug:**
+
+1. **The company match may simply not have hit.** The update is guarded by a company-name match against open applications; an outcome email from a company with no matching open row updates nothing and is still marked processed. `LogManualRequired` is called on the ambiguous-match branch (`:352`), so `applications/manual_apply_queue` may already record these.
+2. **Those two 2026-07-22 detections may have been the false positives bug #20 was filed for** — that bug was about exactly this classifier writing unrelated emails to the DB, and it was resolved 2026-07-22, the same day. The detections named in the gate box may be the ones #20 removed.
+3. **The volume may be honest.** 56 of the 58 confirmed applications were submitted within the last few days; rejections typically take weeks. Zero outcomes may simply be correct for the elapsed time.
+4. **The tracker is not currently running** (no process live at the time of this check), so nothing is scanning for new outcomes right now regardless.
+
+**Why it is worth resolving anyway.** The outcome feedback loop is the input every ranking and learning item downstream depends on — improvement #493 is explicitly sequenced behind it, and #14 in `improvements_paywall.md` is blocked on the same missing labels. Both have now been deferred for several passes citing "no outcome data" without anyone checking whether the pipeline that produces that data works end to end. If it is silently dropping matches, every one of those deferrals rests on an artifact.
+
+**Fix direction — diagnose before changing anything.** Run `cmd/tracker` for one cycle against the real inbox with the 58 confirmed applications now in place, and check three things: whether any message classifies as an outcome at all, whether the company match resolves against a real `job_funnel` row, and whether `LogManualRequired` fired instead. Only then decide whether the defect is in matching, in classification, or absent. Do not widen the matching rule speculatively — bug #20 was caused by this classifier being too eager, and loosening it is the obvious way to recreate that.
+
 ### 526. The automatic submitter's network guard aborts requests silently
 
 **Found 2026-08-06** while fixing #523, which covered only the assisted browser. `installSafeBrowserRoutes` (`pkg/submitter/network.go:80`) is the *automatic* submission path's own route guard — a separate function from the one #523 fixed — and it has the same gap: `guard.ValidateURL` rejects a request at `:94` and `route.Abort("accessdenied")` runs with **no record of the rejection**. It logs only the two failure cases around it (`:97` if the abort fails, `:105` if a continue fails), so a request that is blocked cleanly is invisible exactly as it was on the assisted path.
@@ -1031,7 +1033,9 @@ With `send_cover_letter: false`, `cmd/agent` sends no cover letter at all: `cmd/
 
 `storage.GetAssistedDocument` resolves `cover_letter` to that file whenever no master letter applies. So an assisted application would attach a one-sentence note explaining that no cover letter was sent — the same shape of defect as #515, where the résumé resolved to a "master documents were used" placeholder.
 
-**Not live on this host:** `profile.yaml` currently sets `send_cover_letter: true`, so this cannot fire today. That is the only reason it is not scored higher; it becomes an active document-fidelity defect the moment the toggle is turned off, which is a one-line profile edit.
+**Not live on this host:** `profile.yaml` currently sets `send_cover_letter: true`, so this cannot fire today. It becomes an active document-fidelity defect the moment the toggle is turned off, which is a one-line profile edit.
+
+**Re-scored 2026-08-06 (`/groom_backlogs`, the pass after it was filed):** filed the same day at `1.5 = 3×0.5÷1` and `mechanical`; corrected to `1.0 = 2×1.0÷2` and `standard`. Two changes, both against this row's own fix direction rather than against the number: Value drops to 2 because the defect is latent rather than live, and Effort rises to 2 because the fix is not a one-line path swap — it needs a "not applicable" state distinguishable from a load failure, threaded through `GetAssistedDocument`, the queue projection's `cover_letter_ready`, and `cmd/assist`'s manual-review fallback. Decay stays 1.0 per this file's rule that a defect's cost does not shrink because sibling defects were fixed; the 0.5 it was filed with was borrowed from `improvements.md`'s theme-decay rule, which bugs are explicitly exempt from.
 
 Deliberately left out of #525's scope: fixing it means teaching the assisted path to represent "no cover letter" as a distinct state from "the cover letter failed to load". Today `cmd/assist` treats any `GetAssistedDocument` error as a reason to fall back to manual review (`cmd/assist/main.go:607-616`), which would turn a correctly-configured profile into a degraded handoff on every job.
 

@@ -4165,3 +4165,36 @@ Tests: `TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled` writes disti
 `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l ./cmd ./pkg ./internal` all pass. Implementation delegated to Antigravity CLI / `gemini-3.1-pro-high`; reviewed, corrected and verified in this session.
 
 ---
+
+## 399 Newly discovered jobs bypass Bayesian smoothing due to queue architecture flaw
+
+**Legacy entry, moved out of the live backlog by the 2026-08-06 groom pass.** It carried no table row — only this inline narrative — so it was invisible to the backlog's own structure while still counting against the file's size.
+
+**Symptom:** In daemon mode, `candidates` channel interleaves the ranked backlog with newly discovered jobs pushed directly by `discoverJobs`. 
+**Impact:** Newly discovered jobs bypass `RankJobs` and get processed immediately at the tail of the channel, completely circumventing the Bayesian source-health smoothing and `FitSimilarity` ranking logic. Additionally, `cycleLimit` caused the `runAgentCycle` producer to aggressively discard thousands of ranked jobs from the channel, wasting CPU and forcing a full DB reload on every cycle.
+**Fix:** Decoupled discovery from processing. Passed a `nil` channel to `discoverJobs` so it only populates the database as `DISCOVERED` without injecting into the active queue. Limited the backlog producer loop to `cycleLimit` to prevent channel thrashing and dropping backlog items.
+**Status:** Done.
+
+---
+
+## 400 Bayesian smoothing aggregated AvgInferenceMs but never penalized slow sources
+
+**Legacy entry, moved out of the live backlog by the 2026-08-06 groom pass.** It carried no table row — only this inline narrative — so it was invisible to the backlog's own structure while still counting against the file's size.
+
+**Symptom:** Source health tracking accurately recorded the average inference MS per source, but the actual queue ranking algorithm (`ComputeSourceScores`) completely ignored this metric when calculating the raw score.
+**Impact:** The app could not get "faster" over time because it never learned to penalize excessively slow ATS endpoints (e.g., endpoints requiring huge DOM parsing times).
+**Fix:** Added an explicit `speedPenalty` to the Bayesian `PenaltyFactor` in `pkg/storage/ranking.go`. If a source consistently takes over 20,000ms (20s) to process, its rank score is penalized up to 40%, naturally surfacing faster applications to the front of the queue.
+**Status:** Done.
+
+---
+
+## 401 Learner Module destroys form-mapping cache on transient or optional field errors
+
+**Legacy entry, moved out of the live backlog by the 2026-08-06 groom pass.** It carried no table row — only this inline narrative — so it was invisible to the backlog's own structure while still counting against the file's size.
+
+**Symptom:** Forms that do not require an optional standard field (e.g., `phone`) caused `ErrEmptySelector` in `safeFillWithLabelFallback`, which bubbled up to `AttemptSubmit`. 
+**Impact:** `AttemptSubmit` incorrectly treated this as a stale mapping and instantly wiped the cache via `DeleteFormMapping(domain)`. This caused the agent to repeatedly trigger expensive LLM mapping generations on every visit to the same ATS, completely defeating the "learning" and caching mechanism. Furthermore, transient network timeouts also triggered instant cache wipes.
+**Fix:** Modified `handleDynamic` to gracefully tolerate `ErrEmptySelector` for standard fields `first_name`, `last_name`, `email`, and `phone`. Logged Bug B regarding transient timeouts for future improvement.
+**Status:** Done (Bug A). Bug B (transient timeouts) remains open as a known limitation of Playwright's timeout overlapping with stale selector errors.
+
+---

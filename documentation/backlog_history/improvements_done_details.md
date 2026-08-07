@@ -90,6 +90,26 @@ Storage tests cover old-table migrations, discovery population, successful and f
 
 ## 495. No-progress / dominant-failure-reason watchdog
 
+**Filing brief, moved out of the live backlog by the 2026-08-06 groom pass:**
+
+**Filed 2026-08-01**, mission-alignment audit (seeded candidate E).
+
+Confirmed no mechanism detects "the daemon is alive and processing but producing no confirmed applications" or "one failure reason has dominated several cycles." `runAgentSchedule` (`cmd/agent/main.go:518-593`) only distinguishes "cycle had work" from "no eligible jobs" for scheduling purposes; `runDaemonDiscoveryLoop` (`:598-631`) just logs per-refresh errors. The existing poll-failure banner (#447/#460) and per-domain circuit breakers (#469/#475) are both narrower, failure-triggered mechanisms — neither tracks time-since-last-confirmed-application or a dominant status/reason across cycles.
+
+**This audit is itself the evidence for this item's value:** bugs.md #489 (51% of the entire funnel quarantined, mission-critical) was only found because a human ran a manual multi-hour database audit — exactly the shape of condition ("a high percentage of jobs terminate at one stage," per the seeded brief) a watchdog should have surfaced automatically, and much sooner than a week after #394's incomplete fix.
+
+**Proposed direction, per the brief:** track eligible-fresh-queue-nonempty + cycles-continuing + no-confirmed-application-for-N-hours; a dominant terminal status or (post-bugs.md #480 broadening / #494) dominant `status_reason` across recent cycles. Emit one deduplicated actionable alert (log line + dashboard status, no email/SMS infrastructure exists to page through); create a sanitized diagnostic snapshot; never auto-relax user constraints; never auto-requeue at volume. A coarser first version can ship using only existing status counts (no dependency on #480/#494), with reason-level detail added once those land.
+
+**Acceptance criteria:** a seeded test fixture with N cycles of a dominant failure status triggers exactly one alert, not one per cycle; a fixture with healthy variety triggers none; a fixture with an empty eligible queue (nothing to attempt) triggers none.
+
+**Automated tests:** table-driven tests over the trigger conditions above.
+
+**Safe live verification:** run the watchdog against a read-only copy of the real `applications.db`'s history and confirm it would have flagged the #489 condition (QUARANTINED_PROMPT_INJECTION dominant on 2026-08-01) had it existed.
+
+**Boundaries:** detection and alerting only — no automatic recovery action (source suppression, requeue, constraint relaxation) is in this item's scope; evaluate those separately per the brief's own caution against unlimited watchdog authority.
+
+**Completion account follows.**
+
 **Completed 2026-08-01.** The daemon now observes a sanitized aggregate snapshot after each queue cycle. After three consecutive cycles with eligible work but no new confirmation, it alerts only when one terminal status is at least 75% of recent outcomes. Alerts are deduplicated, logged without job content or URLs, persisted as the current dashboard alert, and rendered by the React dashboard. The watchdog never requeues jobs, suppresses sources, relaxes constraints, or changes submission behavior.
 
 Table-driven coverage includes the #489-shaped `QUARANTINED_PROMPT_INJECTION` condition, healthy variety, and an empty eligible queue. The full Go build, vet, test, formatting loop, dashboard UI tests, and production UI build passed. The dashboard and daemon were rebuilt and restarted; immediately after restart the dashboard reported 128 eligible jobs and no watchdog alert, as expected before three completed cycles.
@@ -152,6 +172,8 @@ Both already use the existing `idx_job_funnel_status` index — neither is a ful
 **Table rationale cell (original):** **Fixed 2026-08-01.** See detail section for the shared `storage.ThreatsToStored` helper and the two call sites now using it
 
 ### 505. `storedPromptInjectionThreats` and `toStoredThreats` are the same field-for-field conversion, written twice
+
+**Boundaries (from the live row, moved here 2026-08-06):** pure refactor — no behavior change, no new fields.
 
 **Fixed 2026-08-01.** Added `storage.ThreatsToStored([]promptsec.Threat) []PromptInjectionThreat` (`pkg/storage/manager.go`, next to the `PromptInjectionThreat` type it builds) as the single field mapping (`Type`, `Severity`, `Message`, `Guard`, `Match`, `Start`, `End`). Chosen location over `pkg/security`: `pkg/storage` already imports `pkg/security` (for `SetPrivateUmask`/`SecurePrivateFile`/`PrivateDirMode`), so a function in `pkg/security` returning `[]storage.PromptInjectionThreat` would have created an import cycle. `pkg/storage` importing `github.com/danielthedm/promptsec` directly (already a transitive dependency via `pkg/security`) has no such problem — updated the type's doc comment to describe the real constraint (avoiding a `pkg/security` import specifically, not "any third-party dependency") rather than leave a now-inaccurate comment in place.
 
@@ -1536,3 +1558,21 @@ Phase two requires the SHA-256 digest of the exact reviewed proposal plus a revi
 
 ### 512. Application Mode selector and configurable fit threshold
 Closed — full account archived in `documentation/task_journals/2026-08-04_application_modes.md`
+
+## 509. Make an empty application queue explainable before it silently stalls applications
+
+**Completed 2026-08-02.** Filing brief and design, preserved here by the 2026-08-06 groom pass: the live backlog row pointed at this archive entry, but the entry had never actually been written, so the live file held the only copy.
+
+**Found 2026-08-02** during a safe live mission-status check. The running dashboard's read-only `/api/metrics` reported `eligible_queue: 0`, while `/api/agent/status` reported `running: false`. That proves no application can currently progress, but not whether the agent was intentionally stopped, discovery failed, all results were duplicates or excluded, or filters yielded no eligible jobs. The dashboard's “last skipped” record is historical and cannot answer that question. #495 deliberately suppresses its no-progress alert when the eligible queue is empty, so it cannot provide this diagnosis either.
+
+**Proposed direction:** persist a privacy-safe aggregate result for each discovery refresh (started/finished time; source-level attempted/new/duplicate/excluded/error counts; sanitized error class), expose the latest result in `/api/metrics`, and show an actionable dashboard state when the agent is stopped or the most recent refresh produced no eligible jobs. Do not retain job descriptions, URLs, resumes, application answers, raw errors, or credentials; do not start the agent, relax filters, requeue jobs, or submit applications automatically.
+
+**Acceptance criteria:** a deterministic discovery fixture can produce new eligible jobs, zero results, all-filtered or duplicate results, and a source error; the API/dashboard state distinguishes each case without leaking job or personal content. An intentionally stopped agent is visibly distinct from a running agent awaiting its next refresh.
+
+**Automated tests:** table-driven storage/API tests for the aggregate outcomes and a dashboard-handler test for the stopped/empty state.
+
+**Safe live verification:** query only the dashboard's aggregate endpoint after one controlled discovery refresh; confirm the displayed explanation agrees with the persisted aggregate without inspecting raw job data.
+
+**Boundaries:** this is observability and diagnosis, not a discovery-source rewrite (#508), queue-admission change (#492), or autonomous application-start authority. Its theme has one shipped precursor (#495), hence Decay 0.5; Value 6 and Effort 3 yield `1.0`.
+
+---
