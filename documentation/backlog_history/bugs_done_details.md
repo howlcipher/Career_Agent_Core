@@ -4140,6 +4140,32 @@ Tests: `TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact` reconstruc
 `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` pass. No frontend sources exist for this change to affect. The trial was halted at this defect and no application was submitted.
 
 ---
+## 531. Every queue card whose timestamp was written by Go reports `last_updated` as year 0001
+
+**Completed 2026-08-07.** Filed the same day, out of #530's scan-alignment test, which had to skip asserting `LastUpdated` because the field was reliably zero.
+
+**Measured before and after, same database, same binary shape.** A dashboard built from `HEAD` served **406 of 506** queue rows as `0001-01-01T00:00:00Z`; one built from the fixed tree served **0 of 506**, all in 2026. (The row's original 424-of-524 figure was taken before #530 removed the 18 dead postings.)
+
+**The cause is not the one the row assumed, and the difference matters.** The row said `parseAssistedTime` had no layout for `time.Time`'s default `String()` form and that this broke every Go-written timestamp. The first half is true; the second is not, and re-verification found why.
+
+`modernc.org/sqlite` stores a bound `time.Time` as `t.String()` — `conn.formatTime` falls back to it when the DSN sets no `_time_format`, which this project's DSN does not. That is the literal text in 12046 of `job_funnel`'s 12980 rows. But the same driver reads it back correctly: `rows.go` parses any column whose *declared* type is `DATE`/`DATETIME`/`TIMESTAMP` through `parseTime`, whose first branch is exactly the `t.String()` shape, and hands `database/sql` a `time.Time` that a string scan renders as RFC3339. So a bare `SELECT last_updated` was never broken.
+
+What broke was **this one projection**. `GetAssistedQueue` reads `COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP)`, and SQLite reports an empty decltype for an expression — the driver's own source names `COALESCE` in the comment on that branch. The conversion never fires, the raw `String()` text reaches Go, and with no matching layout `parseAssistedTime` returned the zero time.
+
+Confirmed by execution rather than by reading: writing through a real writer (`UpdateFunnelStatusWithReasonAndScore`) and reading the column back bare yields RFC3339, while `CAST(last_updated AS TEXT)` — which erases the decltype the same way `COALESCE` does — yields `2026-08-07 15:35:07.977083232 +0000 UTC`. The `sqlite3` CLI confirms the stored bytes are the `String()` form in both cases.
+
+**Two claims in the row were checked and are wrong.** The lease heartbeat was *not* affected: `aa.updated_at` is selected as a bare `DATETIME` column, so the driver converts it, and `TestAssistedQueueExposesContinueAndReviewAfterRefill` had been asserting `LiveBrowser == true` and passing all along. Nor is the defect "most of `job_funnel`" — the 12046 String()-form rows read fine everywhere except through an expression, and a tree-wide grep found `assisted.go:726` is the only expression-wrapped time column any Go code parses. (`scripts/check_latest.go` selects `MAX(applied_at)` but only prints it.)
+
+**Fix.** The layout list moved to a package-level `assistedTimeLayouts` with `2006-01-02 15:04:05.999999999 -0700 MST` appended, and `parseAssistedTime` now returns `(time.Time, bool)`. Handling the shape here was preferred over the driver's `_texttotime` DSN option: the defect is in a function that claims to read stored timestamps, and one of the shapes it can be handed is this one.
+
+**A parse miss is no longer silent.** This is why the bug survived nine days. `GetAssistedQueue` counts unreadable non-empty values across the scan and logs one line after it — counted, not per-row, because this backs a polled endpoint over hundreds of rows. An empty value stays silent: that is an absent timestamp, not a malformed one, and 152 rows legitimately have one.
+
+**Tests.** `TestParseAssistedTime_ReadsEveryStoredTimestampShape` is a table over every shape observed in the live database on 2026-08-07 plus both failure paths, written as literal stored strings rather than formatted times — deriving the input from the layouts under test would assume away the drift being tested. `TestGetAssistedQueue_ServesRealTimestampsForRowsWrittenByGo` drives the whole path: a real writer, a premise check on the raw stored bytes, then the projection. #530's alignment test now asserts `LastUpdated` instead of documenting why it could not.
+
+**ADR-003 gained decision 6**, recording the driver's encoding, the expression/decltype trap, and its corollary that SQLite's own `date()`/`datetime()` return NULL over these columns — the trap that produced a wrong "0 rows updated" reading during #524's verification.
+
+---
+
 ## 530. A posting that has died still occupies a queue card, because the assisted queue never reads the funnel status it selects
 
 **Completed 2026-08-07.** Filed 2026-08-06 during #524's backfill work, which asked each board directly about every queued posting and found 18 had been taken down. All 18 kept their card and stayed clickable.

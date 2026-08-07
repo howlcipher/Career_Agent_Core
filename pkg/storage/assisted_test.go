@@ -867,10 +867,156 @@ func TestGetAssistedQueue_ScanStaysAlignedAfterStatusColumnsRemoved(t *testing.T
 	if job.RequisitionID != "7" {
 		t.Errorf("RequisitionID = %q, want 7 (posting URL still scanned last-but-one)", job.RequisitionID)
 	}
-	// LastUpdated is deliberately not asserted here. It is genuinely zero for
-	// rows whose last_updated was written by Go — parseAssistedTime cannot read
-	// time.Time's default string form, filed as bug #531 — so it would fail for
-	// a reason unrelated to alignment. The timestamp column's position is
-	// already bracketed by Provider before it and OriginalStatus after it, both
-	// asserted above, so a shift there could not pass unnoticed.
+	// LastUpdated could not be asserted here until bug #531 was fixed: the row
+	// above is written by Go, and parseAssistedTime had no layout for
+	// time.Time's default string form, so the field was genuinely zero for a
+	// reason unrelated to alignment. Now that it reads, assert it — a real
+	// value here pins the timestamp column's own position rather than relying
+	// on Provider before it and OriginalStatus after it to bracket a shift.
+	if job.LastUpdated.IsZero() {
+		t.Error("LastUpdated is the zero time; the scanned column parsed to nothing (bug #531)")
+	}
+}
+
+// Every shape job_funnel.last_updated and assisted_applications.updated_at were
+// observed to hold in the live database on 2026-08-07, plus the failure path.
+// The cases are written as literal stored strings rather than as formatted
+// times, because the defect bug #531 recorded was precisely that the layout
+// list and the writers had drifted apart — deriving the input from the layouts
+// under test would assume away the thing being tested.
+func TestParseAssistedTime_ReadsEveryStoredTimestampShape(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored string
+		want   string
+		wantOK bool
+	}{
+		{
+			// The form 12046 of 12980 job_funnel rows held, and the one that
+			// had no layout: Go writers pass a time.Time to db.Exec and the
+			// driver stores its default String() form.
+			name:   "go time.Time String form",
+			stored: "2026-08-01 12:18:28.408800856 +0000 UTC",
+			want:   "2026-08-01T12:18:28.408800856Z",
+			wantOK: true,
+		},
+		{
+			// Same writer, non-UTC zone. The numeric offset drives the
+			// conversion, not the abbreviation, so this must land at 18:57Z.
+			name:   "go time.Time String form outside UTC",
+			stored: "2026-08-06 14:57:49.676108047 -0400 EDT",
+			want:   "2026-08-06T18:57:49.676108047Z",
+			wantOK: true,
+		},
+		{
+			name:   "go time.Time String form with no fractional seconds",
+			stored: "2026-08-06 14:57:49 +0000 UTC",
+			want:   "2026-08-06T14:57:49Z",
+			wantOK: true,
+		},
+		{
+			name:   "colon-separated offset",
+			stored: "2026-07-26 03:19:43.453588535+00:00",
+			want:   "2026-07-26T03:19:43.453588535Z",
+			wantOK: true,
+		},
+		{
+			// SQLite's own CURRENT_TIMESTAMP, which is UTC and zone-less.
+			name:   "sqlite CURRENT_TIMESTAMP",
+			stored: "2026-08-06 19:06:02",
+			want:   "2026-08-06T19:06:02Z",
+			wantOK: true,
+		},
+		{
+			name:   "rfc3339",
+			stored: "2026-08-06T14:57:49Z",
+			want:   "2026-08-06T14:57:49Z",
+			wantOK: true,
+		},
+		{
+			// 152 job_funnel rows hold this. It is an absent timestamp, not a
+			// malformed one, so the zero time is the right answer — but it is
+			// still reported as unread, which is what keeps the caller from
+			// logging it as a layout defect.
+			name:   "empty",
+			stored: "",
+			wantOK: false,
+		},
+		{
+			name:   "unreadable",
+			stored: "last Tuesday",
+			wantOK: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseAssistedTime(tc.stored)
+			if ok != tc.wantOK {
+				t.Fatalf("parseAssistedTime(%q) ok = %v, want %v", tc.stored, ok, tc.wantOK)
+			}
+			if !tc.wantOK {
+				if !got.IsZero() {
+					t.Fatalf("parseAssistedTime(%q) = %v on a miss, want the zero time", tc.stored, got)
+				}
+				return
+			}
+			if formatted := got.Format(time.RFC3339Nano); formatted != tc.want {
+				t.Fatalf("parseAssistedTime(%q) = %s, want %s", tc.stored, formatted, tc.want)
+			}
+			if got.Location() != time.UTC {
+				t.Errorf("parseAssistedTime(%q) location = %v, want UTC", tc.stored, got.Location())
+			}
+		})
+	}
+}
+
+// The end-to-end shape of bug #531: a row whose timestamp a real Go writer put
+// in the column must reach the queue card as a real time. The unit test above
+// pins the layouts in isolation; this pins the whole path that broke — a real
+// writer's stored bytes, read back through the projection's COALESCE, which
+// erases the decltype the driver's own time conversion depends on.
+func TestGetAssistedQueue_ServesRealTimestampsForRowsWrittenByGo(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	const url = "https://boards.greenhouse.io/timestamps/jobs/9"
+	if _, err := AddToFunnel("Timestamp Co", "Platform Engineer", url, "AWAITING_REVIEW"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().UTC().Add(-time.Minute)
+	// A Go writer, not a hand-written literal: this is the path that produced
+	// every one of the 12046 unreadable rows.
+	if err := UpdateFunnelStatusWithReasonAndScore(url, "AWAITING_REVIEW", "ready for review", 80); err != nil {
+		t.Fatal(err)
+	}
+
+	// Confirm the premise rather than assuming it — if the driver ever starts
+	// storing RFC3339 instead, this test would otherwise keep passing while
+	// covering nothing. The CAST is load-bearing: reading last_updated bare
+	// would let the driver parse the DATETIME column and hand back a time.Time,
+	// which is exactly the conversion the queue's COALESCE defeats, so the
+	// unconverted text is what has to be asserted here.
+	var stored string
+	if err := GetDB().QueryRow(`SELECT CAST(last_updated AS TEXT) FROM job_funnel WHERE url = ?`, NormalizeURL(url)).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(stored, " UTC") {
+		t.Fatalf("stored last_updated = %q, want time.Time's default String form; this test no longer covers the writer it was written for", stored)
+	}
+
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("queue length = %d, want 1", len(jobs))
+	}
+	if jobs[0].LastUpdated.IsZero() {
+		t.Fatal("LastUpdated is the zero time; the card would serve 0001-01-01T00:00:00Z (bug #531)")
+	}
+	if jobs[0].LastUpdated.Before(before) {
+		t.Errorf("LastUpdated = %v, want a time at or after the write at %v", jobs[0].LastUpdated, before)
+	}
 }

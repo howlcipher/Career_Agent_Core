@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -741,6 +742,10 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	}
 	defer rows.Close()
 	var jobs []AssistedJob
+	// Counted across the whole scan and reported once, not per row: this query
+	// backs a polled endpoint over hundreds of rows, so a per-row line would be
+	// a flood rather than a signal.
+	unreadableTimestamps := 0
 	for rows.Next() {
 		var job AssistedJob
 		var fit sql.NullInt64
@@ -764,13 +769,25 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		// exposing the URL itself, which this projection deliberately withholds
 		// for every row Career Agent can open on the operator's behalf.
 		job.RequisitionID = AssistedRequisitionID(postingURL)
-		job.LastUpdated = parseAssistedTime(lastUpdated.String)
+		var lastUpdatedRead bool
+		job.LastUpdated, lastUpdatedRead = parseAssistedTime(lastUpdated.String)
+		if !lastUpdatedRead && strings.TrimSpace(lastUpdated.String) != "" {
+			unreadableTimestamps++
+		}
 		if fit.Valid {
 			v := int(fit.Int64)
 			job.FitScore = &v
 		}
 		now := time.Now().UTC()
-		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && parseAssistedTime(leaseUpdated.String).After(now.Add(-assistedLeaseHeartbeatTimeout))
+		// Unlike the timestamp above, aa.updated_at is selected as a bare
+		// DATETIME column, so the driver converts it and this sees RFC3339.
+		// It is still routed through the same reader and counter: the shape it
+		// arrives in is a driver detail, not something this code should assume.
+		heartbeat, heartbeatRead := parseAssistedTime(leaseUpdated.String)
+		if !heartbeatRead && strings.TrimSpace(leaseUpdated.String) != "" {
+			unreadableTimestamps++
+		}
+		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && heartbeatRead && heartbeat.After(now.Add(-assistedLeaseHeartbeatTimeout))
 		if assistedState == "review_and_submit" {
 			job.NextAction = actionForReview()
 		} else if assistedState == "manual_review" {
@@ -800,6 +817,12 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if unreadableTimestamps > 0 {
+		// Bug #531 sat unnoticed because this path returned the zero time and
+		// said nothing. A stored timestamp no layout reads is a defect in
+		// assistedTimeLayouts, not in the data, and it should be visible as one.
+		log.Printf("[Storage] %d assisted queue timestamps matched no layout in assistedTimeLayouts and are being served as the zero time", unreadableTimestamps)
 	}
 	// Duplicate marking runs over the assembled queue rather than in SQL,
 	// because the comparison is the same normalization the confirmed-duplicate
@@ -864,13 +887,46 @@ func isAssistedEligibleStatus(status string) bool {
 	return ok
 }
 
-func parseAssistedTime(value string) time.Time {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05"} {
+// assistedTimeLayouts covers every shape a stored timestamp can reach Go in.
+//
+// The last entry is time.Time's default String() form, and it is the one bug
+// #531 was filed for. It is what modernc.org/sqlite actually writes into the
+// database for a bound time.Time — conn.formatTime falls back to t.String()
+// unless the DSN sets _time_format, which this project's DSN does not — so it
+// is the literal text in 12046 of job_funnel's 12980 rows.
+//
+// It normally never reaches this function, because on the way back out the same
+// driver parses a column whose *declared* type is DATE/DATETIME/TIMESTAMP and
+// hands database/sql a time.Time, which a string scan then renders as RFC3339
+// (layout 1). The exception is why the queue was broken: SQLite reports an empty
+// decltype for an expression, and this projection reads
+// COALESCE(jf.last_updated, jf.discovered_at, CURRENT_TIMESTAMP) rather than a
+// bare column, so the driver's conversion never fires and the raw String() text
+// arrives here. With no layout for it, every one of those rows fell through to
+// the zero time and the card served "0001-01-01T00:00:00Z".
+//
+// Handling the shape here rather than reaching for the driver's _texttotime DSN
+// option keeps the fix where the defect is: this function claims to read stored
+// timestamps, and one of the shapes it can be handed is this one.
+var assistedTimeLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999999-07:00",
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04:05.999999999 -0700 MST",
+}
+
+// parseAssistedTime reads a stored timestamp in any of the layouts above. The
+// second return reports whether a layout matched: an unreadable value still
+// yields the zero time, but callers can tell that apart from a genuine zero and
+// say so, rather than repeating the silent failure this function shipped with.
+func parseAssistedTime(value string) (time.Time, bool) {
+	for _, layout := range assistedTimeLayouts {
 		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed.UTC()
+			return parsed.UTC(), true
 		}
 	}
-	return time.Time{}
+	return time.Time{}, false
 }
 
 func completedWork(status string) string {

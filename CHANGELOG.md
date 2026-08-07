@@ -1,5 +1,24 @@
 # Career Agent Core - Changelog
 
+## 2026-08-07 — Queue cards show when a job was last touched instead of year 0001
+
+* **Fix (bugs.md #531):** most Assisted Apply cards reported `last_updated` as
+  `0001-01-01T00:00:00Z`. Measured against the live database with the same
+  binary before and after the change: **406 of 506 queued rows** served the zero
+  time before, **0 of 506** after.
+* The cause was a stored-timestamp shape no layout in `parseAssistedTime`
+  matched. `modernc.org/sqlite` writes a bound `time.Time` as its default
+  `String()` form, and normally parses it back itself — but only for a column
+  whose *declared* type is `DATETIME`. The queue reads
+  `COALESCE(last_updated, discovered_at, CURRENT_TIMESTAMP)`, and SQLite reports
+  no declared type for an expression, so the raw text arrived unparsed and fell
+  through to the zero time.
+* **A timestamp no layout reads is now reported rather than silently zeroed.**
+  The queue counts them across the scan and logs one line, not one per row; the
+  defect above went unnoticed for nine days because this path said nothing.
+* ADR-003 records the driver's encoding and the expression/decltype trap, which
+  also makes SQLite's own `date()`/`datetime()` return NULL over these columns.
+
 ## 2026-08-06 — Assisted Apply attaches the master cover letter, not its text extraction
 
 * **Fix (bugs.md #525):** with `use_master_cover_letter` enabled, `cmd/agent`
