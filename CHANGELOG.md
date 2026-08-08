@@ -1,5 +1,41 @@
 # Career Agent Core - Changelog
 
+## 2026-08-08 — The tracker recovers outcome mail after downtime, of any length
+
+* **Fix (bugs.md #534):** `StartTracker` fetched only the newest ~50 IMAP
+  *sequence numbers* every scan, anchored to `mbox.Messages`. Sequence
+  numbers are mailbox-relative and shift as mail is added or removed, so they
+  could never serve as a durable position, and "newest N" meant the window
+  only ever moved forward — a message that fell outside it was gone for good.
+  Found by the 2026-08-07 production validation: a 14-day outage put every
+  outcome older than ~4 hours of mail traffic permanently out of reach.
+* The tracker now tracks a durable IMAP UID checkpoint (`tracker_cursor`,
+  `pkg/storage/tracker_cursor.go`): a forward range for ordinary new mail,
+  and an independent, bounded historical catch-up range so a large backlog
+  can never starve new mail from being seen. The catch-up floor is derived
+  from live evidence — the earliest still-open application
+  (`storage.EarliestTrackableApplicationTime`) — not a hardcoded lookback
+  window, so it covers whatever the real outage was. See ADR-004 for the full
+  design, including how a `UIDVALIDITY` change is handled as a forced safe
+  resync rather than a silent skip.
+* **A second defect was found and fixed during this same task's live
+  validation, before ever being considered done:** IMAP UIDs are not
+  contiguous — deleted mail leaves gaps — so a bounded batch can legitimately
+  fetch zero messages while catch-up is far from complete. The first version
+  of this fix only advanced the checkpoint to the highest UID a real message
+  carried, which meant a gap wider than one batch stalled catch-up forever,
+  confirmed live against the real inbox. Fixed by advancing the checkpoint to
+  the end of the fetched range whenever nothing in the batch failed, gaps
+  included.
+* 10 new tests added in `pkg/tracker/uid_cursor_test.go`, run against a real
+  (not mocked) in-process `github.com/emersion/go-imap/server` instance
+  (`pkg/tracker/imap_server_test.go`), covering steady state, recovery beyond
+  the old ~50-message window, multi-batch drain, new-mail-not-starved,
+  `UIDVALIDITY` change, crash/restart mid-batch, Message-ID replay, ambiguous
+  and unmatched outcomes through the new UID path, cursor bootstrap from the
+  pre-#534 state, and the gap-stall regression above. All 22 pre-existing
+  `pkg/tracker` tests continue to pass unmodified.
+
 ## 2026-08-07 — A lost outcome email is recorded instead of discarded
 
 * **Fix (bugs.md #533):** an outcome-shaped email that matched no application

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,18 @@ import (
 	"path/filepath"
 )
 
+// trackerRangeBatchSize bounds how many messages a single scan will fetch and
+// classify from either the forward (new-mail) range or the historical
+// catch-up range. Two ranges are each bounded independently, so a scan can
+// process up to 2x this many messages. This exists so a large historical
+// backlog (bug #534) cannot turn one scan into an uncontrolled burst of LLM
+// calls, and so a crash mid-batch only has to replay a bounded amount of
+// work, not the whole remaining backlog.
+//
+// A var, not a const: tests lower it to exercise multi-batch draining
+// without creating hundreds of synthetic messages.
+var trackerRangeBatchSize uint32 = 200
+
 // IMAPConfig holds credentials for the tracker
 type IMAPConfig struct {
 	Server   string
@@ -26,7 +39,24 @@ type IMAPConfig struct {
 	Password string
 }
 
-// StartTracker connects to the IMAP server, loops continuously, and scans for application updates.
+// StartTracker connects to the IMAP server and scans for application
+// updates using a durable UID checkpoint (bug #534).
+//
+// The previous implementation re-derived its fetch window from the newest
+// ~50 mailbox sequence numbers on every scan. Sequence numbers are
+// mailbox-relative and shift as messages are added or removed, so they
+// cannot serve as a durable position, and anchoring to "the newest N" meant
+// the window only ever moved forward: mail that fell out of it during any
+// outage longer than the window was never fetched again. This version
+// tracks two independent, durable ranges keyed by IMAP UID (stable within a
+// mailbox's UIDVALIDITY generation, per storage.TrackerCursor):
+//
+//   - the forward range: ordinary new mail above the last durably-handled
+//     UID, processed every scan.
+//   - the historical catch-up range: a bounded window established once, at
+//     bootstrap, from live evidence (storage.EarliestTrackableApplicationTime)
+//     and drained in bounded batches across scans, independently of the
+//     forward range so new mail is never starved by a large backlog.
 func StartTracker(cfg IMAPConfig) error {
 	log.Printf("[Tracker] Connecting to %s...", cfg.Server)
 
@@ -41,6 +71,14 @@ func StartTracker(cfg IMAPConfig) error {
 	}
 	log.Println("[Tracker] Successfully logged in to email account.")
 
+	return scanInbox(c)
+}
+
+// scanInbox holds the IMAP protocol logic that runs once a client is
+// authenticated. It is split out from StartTracker so tests can exercise the
+// real UID fetch/search flow against an in-process IMAP server without
+// needing TLS.
+func scanInbox(c *client.Client) error {
 	mbox, err := c.Select("INBOX", false)
 	if err != nil {
 		return err
@@ -51,34 +89,225 @@ func StartTracker(cfg IMAPConfig) error {
 		return nil
 	}
 
-	// Fetch last 50 emails to evaluate (in a real scenario, use search for UNSEEN)
-	from := uint32(1)
-	to := mbox.Messages
-	if mbox.Messages > 50 {
-		from = mbox.Messages - 50
-	}
-	seqset := new(imap.SeqSet)
-	seqset.AddRange(from, to)
-
-	messages := make(chan *imap.Message, 10)
-	done := make(chan error, 1)
-
-	// Fetch ENVELOPE (subject, sender) and BODY
-	section := &imap.BodySectionName{}
-	go func() {
-		done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}, messages)
-	}()
-
 	trackedCompanies, err := storage.GetTrackedCompanies()
 	if err != nil {
 		log.Printf("[Tracker] Could not load tracked companies (DB not initialized?): %v — running detection-only, no status updates.", err)
 	}
 
+	cursor, err := storage.GetTrackerCursor()
+	if err != nil {
+		return fmt.Errorf("read tracker checkpoint: %w", err)
+	}
+	if cursor == nil || cursor.UidValidity != mbox.UidValidity {
+		// A missing cursor is the pre-#534 (or brand-new database) state. A
+		// UIDVALIDITY mismatch is IMAP's explicit signal that this mailbox's
+		// old UIDs no longer mean anything — the safe response is a fresh
+		// bounded resync, not trusting the stale numbers. processed_emails'
+		// Message-ID dedup (untouched by either case) is what prevents this
+		// from producing duplicate outcome writes if ranges overlap.
+		if cursor != nil {
+			log.Printf("[Tracker] Mailbox UID generation changed (was %d, now %d) — resynchronizing safely.", cursor.UidValidity, mbox.UidValidity)
+		}
+		built, err := bootstrapTrackerCursor(c, mbox)
+		if err != nil {
+			return fmt.Errorf("bootstrap tracker checkpoint: %w", err)
+		}
+		cursor = &built
+	}
+
+	section := &imap.BodySectionName{}
+	fetchItems := []imap.FetchItem{imap.FetchUid, imap.FetchEnvelope, section.FetchItem()}
+
+	// Forward range: ordinary new mail above the last durably-handled UID.
+	// mbox.UidNext is the UID that will be assigned to the *next* new
+	// message, so mbox.UidNext-1 is the highest UID that exists right now.
+	if mbox.UidNext > 0 && mbox.UidNext-1 > cursor.ForwardUID {
+		from := cursor.ForwardUID + 1
+		to := mbox.UidNext - 1
+		if to-from+1 > trackerRangeBatchSize {
+			to = from + trackerRangeBatchSize - 1
+		}
+		msgs, err := fetchUIDRange(c, from, to, fetchItems)
+		if err != nil {
+			return fmt.Errorf("fetch new mail: %w", err)
+		}
+		highest, complete := processMessages(msgs, section, trackedCompanies)
+		// A gap (deleted mail, or simply no new messages this batch) must
+		// still advance the checkpoint across the whole fetched range when
+		// nothing in it failed — otherwise an empty stretch of UID space
+		// re-fetches forever and never lets the checkpoint move past it.
+		if complete {
+			highest = to
+		}
+		if highest > cursor.ForwardUID {
+			if err := storage.AdvanceForwardUID(highest); err != nil {
+				return fmt.Errorf("advance forward checkpoint: %w", err)
+			}
+		}
+	}
+
+	// Historical catch-up range: bounded, independent of the forward range
+	// above, so new mail is never starved by a large backlog.
+	if !cursor.CatchupComplete {
+		from := cursor.CatchupNextUID
+		to := cursor.CatchupCeilingUID - 1
+		if to-from+1 > trackerRangeBatchSize {
+			to = from + trackerRangeBatchSize - 1
+		}
+		msgs, err := fetchUIDRange(c, from, to, fetchItems)
+		if err != nil {
+			return fmt.Errorf("fetch historical catch-up range: %w", err)
+		}
+		highest, complete := processMessages(msgs, section, trackedCompanies)
+		// Same gap-safety as the forward range above: an empty or
+		// partially-empty fetched range must still advance past the whole
+		// range once nothing in it failed, or a long stretch of deleted mail
+		// stalls catch-up forever (confirmed live 2026-08-08: a ~200-UID gap
+		// with no surviving messages froze catch-up indefinitely under the
+		// original highest-only logic).
+		if complete {
+			highest = to
+		}
+		if highest >= from {
+			nextUID := highest + 1
+			if err := storage.AdvanceCatchupUID(nextUID); err != nil {
+				return fmt.Errorf("advance catch-up checkpoint: %w", err)
+			}
+			remaining := int64(cursor.CatchupCeilingUID) - int64(nextUID)
+			if remaining <= 0 {
+				log.Println("[Tracker] Historical catch-up complete — the mailbox is fully covered by the durable checkpoint.")
+			} else {
+				log.Printf("[Tracker] Historical catch-up: %d message(s) processed this scan, approximately %d remaining.", len(msgs), remaining)
+			}
+		}
+	}
+
+	reportUnmatchedOutcomes()
+	return nil
+}
+
+// fetchUIDRange fetches [from, to] by UID and returns the messages sorted
+// ascending by UID, so the caller can process oldest-first and advance its
+// checkpoint monotonically. Returns (nil, nil) for an empty or invalid range.
+func fetchUIDRange(c *client.Client, from, to uint32, items []imap.FetchItem) ([]*imap.Message, error) {
+	if from == 0 || to == 0 || from > to {
+		return nil, nil
+	}
+	seqset := new(imap.SeqSet)
+	seqset.AddRange(from, to)
+
+	messages := make(chan *imap.Message, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.UidFetch(seqset, items, messages)
+	}()
+
+	var msgs []*imap.Message
 	for msg := range messages {
+		msgs = append(msgs, msg)
+	}
+	if err := <-done; err != nil {
+		return nil, err
+	}
+	sort.Slice(msgs, func(i, j int) bool { return msgs[i].Uid < msgs[j].Uid })
+	return msgs, nil
+}
+
+// bootstrapTrackerCursor establishes the checkpoint from scratch: on the
+// first-ever scan, and again whenever UIDVALIDITY has changed. The forward
+// range is anchored at "now" (the mailbox's current highest UID) so ordinary
+// new mail is covered starting this scan without re-fetching what already
+// exists. The historical catch-up floor comes from live evidence — the
+// earliest still-open application a real outcome email could possibly belong
+// to — rather than a hardcoded lookback window, so it naturally covers
+// whatever the actual outage was instead of one specific incident.
+func bootstrapTrackerCursor(c *client.Client, mbox *imap.MailboxStatus) (storage.TrackerCursor, error) {
+	ceiling := mbox.UidNext
+	forwardUID := uint32(0)
+	if mbox.UidNext > 0 {
+		forwardUID = mbox.UidNext - 1
+	}
+
+	cursor := storage.TrackerCursor{
+		UidValidity:       mbox.UidValidity,
+		ForwardUID:        forwardUID,
+		CatchupFloorUID:   ceiling,
+		CatchupCeilingUID: ceiling,
+		CatchupNextUID:    ceiling,
+		CatchupComplete:   true,
+	}
+
+	earliest, ok, err := storage.EarliestTrackableApplicationTime()
+	if err != nil {
+		return cursor, fmt.Errorf("determine historical catch-up floor: %w", err)
+	}
+	if ok && ceiling > 1 {
+		uids, err := c.UidSearch(&imap.SearchCriteria{Since: earliest})
+		if err != nil {
+			return cursor, fmt.Errorf("search historical catch-up floor: %w", err)
+		}
+		if len(uids) > 0 {
+			floor := uids[0]
+			for _, u := range uids[1:] {
+				if u < floor {
+					floor = u
+				}
+			}
+			if floor < ceiling {
+				cursor.CatchupFloorUID = floor
+				cursor.CatchupNextUID = floor
+				cursor.CatchupComplete = false
+			}
+		}
+	}
+
+	if err := storage.BootstrapTrackerCursor(cursor); err != nil {
+		return cursor, err
+	}
+
+	if cursor.CatchupComplete {
+		log.Println("[Tracker] Checkpoint bootstrapped. No historical catch-up needed — no open application predates this scan.")
+	} else {
+		log.Printf("[Tracker] Checkpoint bootstrapped. Historical catch-up window established, approximately %d message(s) to recover in bounded batches.", cursor.CatchupCeilingUID-cursor.CatchupFloorUID)
+	}
+	return cursor, nil
+}
+
+// processMessages handles a batch of messages already sorted ascending by
+// UID and returns the highest UID that was durably handled — acknowledged
+// via processed_emails, and if outcome-shaped, recorded — plus whether every
+// message in msgs was handled without a failure.
+//
+// The two return values matter separately. IMAP UIDs are not contiguous:
+// deleted mail leaves gaps, so a fetched range can contain far fewer
+// messages than its UID span, including zero. The caller must still be able
+// to advance its checkpoint across a gap it fetched and found empty — bug
+// #534's fix originally only advanced past the highest UID a message
+// actually carried, which meant a wide enough gap (confirmed live: a
+// ~200-UID span with no surviving messages in it) stalled catch-up forever,
+// silently re-fetching the same empty range every scan with nothing to show
+// for it. complete=true tells the caller the whole fetched range — not just
+// the highest message UID within it — is now safely covered, gaps included.
+//
+// Processing stops at the first message whose acknowledgement fails, which
+// is when complete is false (0 is returned as highest if that is the very
+// first message). This is deliberate: the checkpoint must never advance past
+// a message whose handling is not known to have succeeded, so a later
+// message in the same batch is not allowed to "skip over" an earlier one
+// that failed — the failed message, and everything after it, is retried
+// from the same UID on the next scan.
+func processMessages(msgs []*imap.Message, section *imap.BodySectionName, trackedCompanies []string) (highest uint32, complete bool) {
+	for _, msg := range msgs {
 		if msg.Envelope == nil {
+			// No Message-ID to key acknowledgement or dedup on, and nothing
+			// to classify. Treated as handled — the alternative is a
+			// malformed message permanently jamming the checkpoint, which is
+			// worse than the (rare) risk of not re-examining it.
+			highest = msg.Uid
 			continue
 		}
 		if storage.WasEmailProcessed(msg.Envelope.MessageId) {
+			highest = msg.Uid
 			continue
 		}
 		subject := strings.ToLower(msg.Envelope.Subject)
@@ -92,57 +321,55 @@ func StartTracker(cfg IMAPConfig) error {
 		bodyLower := strings.ToLower(bodyText)
 
 		status := classifyEmail(subject, bodyLower)
-		if status != "" {
-			company := matchTrackedCompany(trackedCompanies, senderDomain, subject)
-			result, err := updateDBWithTrackerResult(
-				msg.Envelope.MessageId,
-				company,
-				status,
-				subject,
-				bodyLower,
-				senderDomain,
-			)
-			if err != nil {
-				log.Printf(
-					"[Tracker] Failed to persist %s outcome for %q: %v. Email left unprocessed for retry.",
-					status,
-					company,
-					err,
-				)
-				continue
+		if status == "" {
+			if err := storage.MarkEmailProcessed(msg.Envelope.MessageId); err != nil {
+				log.Printf("[Tracker] Failed to mark email processed: %v. Stopping this batch for retry next scan.", err)
+				return highest, false
 			}
-
-			switch result {
-			case trackerUpdateUnmatched:
-				log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
-			case trackerUpdateNoop:
-				log.Printf("[Tracker] Detected %s for tracked company %q, but no APPLIED row required an update.", status, company)
-			case trackerUpdateAmbiguous:
-				log.Printf("[Tracker] Found %s for %q, but multiple APPLIED roles matched. Logged for manual review.", status, company)
-			case trackerUpdateUpdated:
-				log.Printf("[Tracker] Persisted %s for exactly one application at tracked company %q.", status, company)
-				if status == "REJECTED" {
-					llmClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
-					reason, err := llmClient.ExtractRejectionReason(bodyText)
-					if err != nil {
-						reason = "Generic templated rejection (no specific reason provided)"
-					}
-					logRejectionFeedback(company, subject, reason)
-				}
-			}
+			highest = msg.Uid
 			continue
 		}
-		if err := storage.MarkEmailProcessed(msg.Envelope.MessageId); err != nil {
-			log.Printf("[Tracker] Failed to mark email processed: %v", err)
+
+		company := matchTrackedCompany(trackedCompanies, senderDomain, subject)
+		result, err := updateDBWithTrackerResult(
+			msg.Envelope.MessageId,
+			company,
+			status,
+			subject,
+			bodyLower,
+			senderDomain,
+		)
+		if err != nil {
+			log.Printf(
+				"[Tracker] Failed to persist %s outcome for %q: %v. Stopping this batch for retry next scan.",
+				status,
+				company,
+				err,
+			)
+			return highest, false
 		}
-	}
 
-	if err := <-done; err != nil {
-		return err
+		switch result {
+		case trackerUpdateUnmatched:
+			log.Printf("[Tracker] Detected %s-shaped email from %s (%s) but it matches no tracked application — ignoring.", status, senderDomain, subject)
+		case trackerUpdateNoop:
+			log.Printf("[Tracker] Detected %s for tracked company %q, but no APPLIED row required an update.", status, company)
+		case trackerUpdateAmbiguous:
+			log.Printf("[Tracker] Found %s for %q, but multiple APPLIED roles matched. Logged for manual review.", status, company)
+		case trackerUpdateUpdated:
+			log.Printf("[Tracker] Persisted %s for exactly one application at tracked company %q.", status, company)
+			if status == "REJECTED" {
+				llmClient := mcp.NewClient(os.Getenv("GEMINI_API_KEY"))
+				reason, err := llmClient.ExtractRejectionReason(bodyText)
+				if err != nil {
+					reason = "Generic templated rejection (no specific reason provided)"
+				}
+				logRejectionFeedback(company, subject, reason)
+			}
+		}
+		highest = msg.Uid
 	}
-
-	reportUnmatchedOutcomes()
-	return nil
+	return highest, true
 }
 
 // reportUnmatchedOutcomes surfaces the outcomes that were acknowledged but

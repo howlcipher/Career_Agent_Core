@@ -181,6 +181,16 @@ func InitDBWithPath(path string) error {
 		new_eligible INTEGER NOT NULL DEFAULT 0,
 		error_class TEXT NOT NULL DEFAULT ''
 	);
+	CREATE TABLE IF NOT EXISTS tracker_cursor (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		uid_validity INTEGER NOT NULL,
+		forward_uid INTEGER NOT NULL,
+		catchup_floor_uid INTEGER NOT NULL,
+		catchup_ceiling_uid INTEGER NOT NULL,
+		catchup_next_uid INTEGER NOT NULL,
+		catchup_complete INTEGER NOT NULL DEFAULT 0,
+		updated_at DATETIME NOT NULL
+	);
 	CREATE INDEX IF NOT EXISTS idx_job_funnel_status ON job_funnel(status);
 	CREATE INDEX IF NOT EXISTS idx_application_attempts_started ON application_attempts(started_at);
 	CREATE INDEX IF NOT EXISTS idx_funnel_stage_events_url_id ON funnel_stage_events(url, id);
