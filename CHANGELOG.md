@@ -6,7 +6,10 @@
   ignored local cohort through the existing network and prompt-injection
   boundaries. The extractor opens SQLite with `mode=ro` and `query_only`, and
   removes employer names, URLs, contact data, and database IDs before writing
-  mode-0600 artifacts.
+  mode-0600 artifacts. A continuation audit caught ATS indexes and wrong-title
+  redirects in the first ignored cohort; the extractor now rejects both with
+  deterministic tests, and all reported model metrics use the corrected
+  100-job cohort.
 * Added hash-pinned local runners for the installed `nomic-embed-text`
   baseline, `upply-org/bge-small-jobs-data-embedding`, and
   `TechWolf/JobBERT-v2`. Hugging Face inference is local-only, accepts ONNX or

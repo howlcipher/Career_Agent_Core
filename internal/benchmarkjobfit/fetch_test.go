@@ -44,7 +44,7 @@ func TestFetchDescriptionSanitizesBeforeAcceptance(t *testing.T) {
 	t.Parallel()
 
 	body := `<html><body><main>
-		Example Employer seeks an engineer to build reliable distributed services.
+		Example Employer seeks a Platform Engineer to build reliable distributed services.
 		The role includes Go development, incident response, testing, documentation,
 		and collaboration across a remote platform team. Contact jobs@example.com or
 		visit https://example.com/private for more details about this opportunity.
@@ -66,6 +66,57 @@ func TestFetchDescriptionSanitizesBeforeAcceptance(t *testing.T) {
 		if strings.Contains(description, forbidden) {
 			t.Fatalf("description contains %q: %q", forbidden, description)
 		}
+	}
+}
+
+func TestFetchDescriptionRejectsPostingForDifferentTitle(t *testing.T) {
+	t.Parallel()
+
+	body := `<html><body><main>
+		<h1>Python Tutor</h1>
+		<p>Teach online programming lessons to children using a prepared curriculum.</p>
+		<p>This job description includes mentoring, progress reports, student feedback,
+		class preparation, group sessions, individual sessions, and regular collaboration
+		with teaching mentors throughout the remote program.</p>
+	</main></body></html>`
+	_, reason := fetchDescription(
+		context.Background(),
+		responseClient(body),
+		security.NewQuarantineLayer(),
+		SourceJob{Title: "Python Developer", URL: "https://example.com/job"},
+	)
+	if reason != "title_mismatch" {
+		t.Fatalf("reason = %q, want title_mismatch", reason)
+	}
+}
+
+func TestFetchDescriptionRejectsATSListingPage(t *testing.T) {
+	t.Parallel()
+
+	body := `<html><body><main>
+		<h1>Current openings at Example Employer</h1>
+		<p>Create a Job Alert</p>
+		<ul><li>Platform Engineer</li><li>Accountant</li><li>Sales Director</li></ul>
+		<p>We use AI to write clearer job descriptions for every role.</p>
+		<p>Search Department Select Search Office Select and browse our open jobs.</p>
+	</main></body></html>`
+	_, reason := fetchDescription(
+		context.Background(),
+		responseClient(body),
+		security.NewQuarantineLayer(),
+		SourceJob{Title: "Platform Engineer", URL: "https://example.com/job"},
+	)
+	if reason != "listing_page" {
+		t.Fatalf("reason = %q, want listing_page", reason)
+	}
+}
+
+func TestPostingQualityNormalizesTitlePunctuation(t *testing.T) {
+	t.Parallel()
+
+	description := "Senior Go Developer - Platform. About the role: build reliable services."
+	if reason := postingQualityReason("Senior Go Developer (Platform)", description); reason != "" {
+		t.Fatalf("postingQualityReason() = %q, want acceptance", reason)
 	}
 }
 

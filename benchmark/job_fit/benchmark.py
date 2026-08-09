@@ -18,13 +18,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from metrics import discrimination_metrics, rank_percentiles, ranking_metrics
+from metrics import (
+    discrimination_metrics,
+    rank_percentiles,
+    ranking_metrics,
+    spearman_correlation,
+)
 
 
 MODEL_REVISIONS = {
     "nomic_embed_text": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
     "upply_bge_small_jobs": "042d48864ea832df6d22abaca1870c6b8d59a07a",
     "techwolf_jobbert_v2": "a480476925abdf9d97621e56aa38abbb572fe343",
+}
+MODEL_INPUT_MODES = {
+    # Production fit_similarity embeds company + title. Employer names are
+    # intentionally absent from the private cohort, so title is the closest
+    # privacy-safe reproduction of the existing model's ranking input.
+    "nomic_embed_text": "title",
+    "upply_bge_small_jobs": "full",
+    "techwolf_jobbert_v2": "title",
 }
 SAFE_MODEL_SUFFIXES = {".json", ".txt", ".onnx", ".safetensors"}
 
@@ -398,6 +411,7 @@ def run_worker(arguments: argparse.Namespace) -> dict[str, Any]:
             for job, score in zip(jobs, scores, strict=True)
         ],
         "runtime": {
+            "input_mode": arguments.text_mode,
             "model_size_bytes": model.size_bytes,
             "cold_load_seconds": cold_load_seconds,
             "profile_prepare_seconds": profile_prepare_seconds,
@@ -470,6 +484,20 @@ def signal_analysis(
     return finite_or_none(result)
 
 
+def rank_agreement(
+    left: dict[str, float], right: dict[str, float]
+) -> dict[str, Any]:
+    """Compare two model signals on shared rows without implying accuracy."""
+    common = sorted(set(left) & set(right))
+    correlation = spearman_correlation(
+        [left[benchmark_id] for benchmark_id in common],
+        [right[benchmark_id] for benchmark_id in common],
+    )
+    return finite_or_none(
+        {"common_count": len(common), "spearman": correlation}
+    )
+
+
 def run_parent(arguments: argparse.Namespace) -> dict[str, Any]:
     jobs = load_cohort(arguments.cohort)
     labels = read_labels(arguments.labels)
@@ -503,7 +531,7 @@ def run_parent(arguments: argparse.Namespace) -> dict[str, Any]:
             "--ollama-endpoint",
             arguments.ollama_endpoint,
             "--text-mode",
-            "full",
+            MODEL_INPUT_MODES[model_key],
             "--output",
             str(worker_path),
         ]
@@ -517,6 +545,29 @@ def run_parent(arguments: argparse.Namespace) -> dict[str, Any]:
         runtime[model_key] = worker["runtime"]
 
     analysis = {key: signal_analysis(value, labels) for key, value in signals.items()}
+    agreement = {
+        f"{candidate}_vs_current_fit_score": rank_agreement(
+            signals[candidate], signals["current_fit_score"]
+        )
+        for candidate in (
+            "current_embedding_similarity",
+            "nomic_embed_text",
+            "upply_bge_small_jobs",
+            "techwolf_jobbert_v2",
+        )
+    }
+    agreement.update(
+        {
+            f"{candidate}_vs_current_embedding_similarity": rank_agreement(
+                signals[candidate], signals["current_embedding_similarity"]
+            )
+            for candidate in (
+                "nomic_embed_text",
+                "upply_bge_small_jobs",
+                "techwolf_jobbert_v2",
+            )
+        }
+    )
     hybrids: dict[str, Any] = {}
     if labels:
         for candidate in ("upply_bge_small_jobs", "techwolf_jobbert_v2"):
@@ -550,6 +601,7 @@ def run_parent(arguments: argparse.Namespace) -> dict[str, Any]:
             "human_label_count": len(labels),
             "human_labels_are_ground_truth": bool(labels),
             "signals": analysis,
+            "structural_rank_agreement_not_accuracy": agreement,
             "hybrid_sensitivity": hybrids if labels else None,
             "runtime": runtime,
             "limitations": (

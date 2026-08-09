@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,17 @@ import (
 )
 
 const maxPostingBytes = 4 << 20
+
+var nonPostingWord = regexp.MustCompile(`[^a-z0-9]+`)
+
+var listingPageMarkers = []string{
+	"current openings at",
+	"create a job alert",
+	"jobopeningname",
+	"search department select",
+	"search office select",
+	"careers build a career",
+}
 
 // FetchStats records only aggregate outcomes; it never includes private URLs
 // or employer names.
@@ -105,8 +117,40 @@ func fetchDescription(
 	if len([]rune(description)) < 160 {
 		return "", "insufficient_text"
 	}
+	if reason := postingQualityReason(candidate.Title, description); reason != "" {
+		return "", reason
+	}
 	if err := filter.QuarantinePayload(candidate.Title + "\n" + description); err != nil {
 		return "", "prompt_injection_quarantine"
 	}
 	return description, ""
+}
+
+// postingQualityReason rejects live URLs that resolve to an ATS index, generic
+// careers page, or a different posting. Benchmarking mismatched page text
+// would measure scraper noise rather than candidate-to-job semantics.
+func postingQualityReason(title string, description string) string {
+	normalizedTitle := normalizePostingText(title)
+	normalizedDescription := normalizePostingText(description)
+	if normalizedTitle == "" || !strings.Contains(normalizedDescription, normalizedTitle) {
+		return "title_mismatch"
+	}
+	lowerDescription := strings.ToLower(description)
+	if containsAny(lowerDescription, listingPageMarkers) {
+		return "listing_page"
+	}
+	return ""
+}
+
+func normalizePostingText(value string) string {
+	return strings.TrimSpace(nonPostingWord.ReplaceAllString(strings.ToLower(value), " "))
+}
+
+func containsAny(value string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
 }

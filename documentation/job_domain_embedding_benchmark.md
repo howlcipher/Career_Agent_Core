@@ -1,8 +1,9 @@
 # Job-domain embedding benchmark
 
 - **Experiment date:** 2026-08-08 through 2026-08-09
-- **Repository baseline:** `a27ffde4a989`
+- **Repository baseline:** `e6f30a61eda`
 - **Status:** Inconclusive on ranking quality; explicit human labels required
+
 **Production scoring changed:** No
 
 ## Decision
@@ -14,6 +15,12 @@ Both job-domain candidates create useful numeric separation, including within hi
 **Recommendation: C. Collect more human labels before making a decision.**
 
 No production follow-up improvement was filed. A faster model that disagrees with the current scorer is not evidence of a better model.
+
+### Cohort correction during continuation
+
+A continuation audit found that the first ignored cohort had accepted ATS index and generic careers pages as if they were individual postings: at least 39 of 100 cohort rows were obvious index pages, and additional rows resolved to a different job title. No human labels had been entered, but those inputs still made the provisional discrimination results unreliable. They were discarded rather than defended.
+
+The extractor now requires the normalized selected title to appear in the fetched page and unconditionally rejects known listing-page markers. Deterministic tests cover title-mismatched redirects and ATS indexes. The corrected cohort required 295 attempts, rejecting 132 title mismatches and 14 listing pages before reaching 100 valid rows. Every metric below uses the corrected cohort. This quality gate changes benchmark-only code, not production scraping or scoring.
 
 ## Current production architecture
 
@@ -94,6 +101,8 @@ The Upply model card describes roughly 1,850 job/candidate triplets across more 
 
 JobBERT-v2 reports 5,579,240 title-skill training pairs and a maximum sequence length of 64. Its intended objective is title normalization, not whole-posting candidate fit. The benchmark uses the documented `anchor` branch for job and target-role titles and the standard `positive` branch for profile skills, aggregating the three highest profile-concept similarities. It intentionally uses titles only rather than pretending the title-trained model understands a long responsibility section.
 
+Inputs follow the models' intended objectives and the production architecture. The existing `nomic-embed-text` ranking baseline receives the title because production `fit_similarity` embeds `company + title`; employer names are intentionally absent from the private cohort. Upply receives sanitized title plus posting text and truncates it to the documented 64-token maximum. JobBERT-v2 receives titles only. A separate full-posting nomic probe on the pre-final cohort, where 99 of 100 rows pass the final gate, did not finish: after approximately 19 minutes, one bounded 10-job request exceeded the 180-second timeout. It is recorded as a runtime failure, not a ranking signal for the final cohort.
+
 Before download, the model repositories were enumerated and checked for owner, license, file list, custom modules, and unsafe serialization. The downloader permits only pinned JSON, tokenizer text, ONNX, and safetensors files. Git blobs and all weight files are hash-verified. JobBERT's declared modules are restricted to the standard Sentence Transformers Transformer, Pooling, Asym, and Dense types. The runner uses `local_files_only=True` and `trust_remote_code=False`; no repository Python is downloaded or executed.
 
 ### Excluded models
@@ -107,12 +116,14 @@ Before download, the model repositories were enumerated and checked for owner, l
 The standalone Go extractor sampled production rows deterministically across fixed strata, then fetched live posting pages through the repository's resolver-bound network guard. It excluded Workable while that source's documented automated-access block was cooling down, bounded response size and request time, converted HTML to visible text, applied prompt-injection quarantine, and removed employer names, URLs, email addresses, phone numbers, and database IDs.
 
 - requested cohort: 100 jobs;
-- accepted cohort: 100 jobs from 127 fetch attempts;
+- accepted cohort: 100 jobs from 295 fetch attempts;
 - human-review subset: 50 jobs;
 - explicit human labels supplied: 0;
+- observed behavior: 2 cohort rows have `APPLIED` workflow status; this is secondary evidence and was not treated as an explicit relevance label;
 - posting dates: 2026-07-14 through 2026-08-06;
-- current-score strata: 22 score-100, 23 score-90-to-99, 20 score-80-to-89, 2 score-60-to-79, 22 below 60, and 11 unscored;
-- rejected during extraction: 13 prompt-injection detections, 8 HTTP 404s, 5 insufficient-text pages, and 1 deliberately excluded host.
+- unique titles: 81;
+- current-score strata: 30 score-100, 11 score-90-to-99, 12 score-80-to-89, 2 score-60-to-79, 31 below 60, and 14 unscored;
+- rejected during extraction: 132 title mismatches, 14 ATS listing pages, 21 prompt-injection quarantines, 12 HTTP 404s, 1 HTTP 410, 12 insufficient-text pages, 1 oversized body, and 2 deliberately excluded hosts.
 
 The database contains only five rows in the entire 60-to-79 band, so the cohort could not manufacture the requested near-threshold volume. The extractor retained the two that remained live and filled the cohort from the other strata.
 
@@ -122,11 +133,13 @@ The cohort, 50-item Markdown review, editable label CSV, model scores, caches, a
 
 No ranking-quality winner can be reported yet.
 
+No biggest ranking win or regression can be named honestly: every apparent improvement or demotion is relative to another model-derived signal until the user labels the review set.
+
 | Signal | Human labels | Spearman | Pairwise accuracy | NDCG@10 | NDCG@20 | Precision@10 | Precision@20 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Current fit score | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
 | Current stored embedding similarity | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
-| Current embedding model, comparable full text | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
+| Current embedding model, production-like title input | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
 | Upply BGE-small jobs | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
 | JobBERT-v2 | 0 | Not available | Not available | Not available | Not available | Not available | Not available |
 
@@ -138,18 +151,17 @@ Values are rounded to six decimals when counting effective distinctness and top-
 
 | Signal | N | Distinct | Standard deviation | P90 minus P10 | Top-decile separation | Ties in top 20 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Current fit score | 89 | 7 | 39.0638 | 100.0000 | 35.3750 | 19 |
-| Current stored title/company embedding similarity | 80 | 76 | 0.05228 | 0.12616 | 0.09945 | 0 |
-| `nomic-embed-text`, full posting text | 100 | 97 | 0.03450 | 0.08559 | 0.06275 | 0 |
-| `nomic-embed-text`, title only | 100 | 68 | 0.05743 | 0.12609 | 0.08741 | 7 |
-| Upply BGE-small jobs | 100 | 97 | 0.05386 | 0.12850 | 0.11794 | 0 |
-| JobBERT-v2 | 100 | 69 | 0.13445 | 0.30775 | 0.17808 | 10 |
+| Current fit score | 86 | 7 | 44.2035 | 100.0000 | 44.2857 | 19 |
+| Current stored title/company embedding similarity | 83 | 78 | 0.04708 | 0.11028 | 0.07814 | 2 |
+| `nomic-embed-text`, title only | 100 | 81 | 0.06290 | 0.12801 | 0.10902 | 6 |
+| Upply BGE-small jobs | 100 | 100 | 0.06090 | 0.15756 | 0.12131 | 0 |
+| JobBERT-v2 | 100 | 81 | 0.14234 | 0.38153 | 0.21740 | 7 |
 
-Within the 22 historical score-100 cohort items, Upply produced 22 effective values and JobBERT-v2 produced 21. That proves both can break a historical tie. It does not prove that either ordering is correct.
+Within the 30 historical score-100 cohort items, Upply produced 30 effective values, while title-only nomic and JobBERT-v2 each produced 28. That proves the models can break most or all of a historical tie. It does not prove that any resulting order is correct.
 
-Candidate rank agreement with current fit score was low: Spearman 0.165 for Upply and 0.218 for JobBERT-v2 over the 89 rows with fit scores. Agreement with the stored current embedding signal was also low, at 0.081 and 0.151. These are model-to-model comparisons, not accuracy metrics.
+Candidate rank agreement with current fit score was low: Spearman -0.016 for Upply and 0.243 for JobBERT-v2 over the 86 rows with fit scores. Agreement with the stored current embedding signal was 0.213 and 0.070 over 83 rows. The production-like nomic title run agreed more strongly with the stored title/company signal at 0.527. The stored embedding and current fit score themselves had Spearman -0.018 over 72 shared rows because they serve different stages and objectives. These are model-to-model comparisons, not accuracy metrics.
 
-Each candidate's top 20 contained four jobs that the current scorer placed below 60. Several had strongly matching technical titles but non-semantic constraints or responsibility details that can change actual fit. Conversely, title-specialized JobBERT moved several generic or specialized engineering titles far below the historical score-100 group. Because those 100s come from the saturated historical population and the zeroes are also model-derived, neither direction is labeled a win or regression.
+Upply's top 20 contained six jobs that the current scorer placed below 60; JobBERT-v2's contained three. Several had strongly matching technical titles, but non-semantic constraints or responsibility details can change actual fit. Conversely, title-specialized JobBERT moved several specialized engineering titles far below the historical score-100 group. Because those current scores are also model-derived, neither direction is labeled a win or regression.
 
 The main semantic risks observed in sanitized review were:
 
@@ -160,16 +172,16 @@ The main semantic risks observed in sanitized review were:
 
 ## Local CPU performance
 
-Hardware was the user's actual distrobox host: AMD Ryzen 5 PRO 3500U, 4 physical cores and 8 logical CPUs, with approximately 29 GiB RAM. No Ollama generation was active. Each candidate ran in a fresh process. Hugging Face network access was forced offline for inference.
+Hardware was the user's actual distrobox host: AMD Ryzen 5 PRO 3500U, 4 physical cores and 8 logical CPUs, with approximately 29 GiB RAM. No Ollama generation was active. Ollama's embedding model was explicitly unloaded before the final clean run; filesystem page caches were not cleared. Each candidate ran in a fresh process. Hugging Face network access was forced offline for inference.
 
 | Model and input mode | Disk | Cold load | Profile preparation | Warm latency/job | Batch 100 | Peak memory | CPU observation |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `nomic-embed-text`, title only | 261.6 MiB | 0.631 s | 2.517 s | 94.4 ms | 5.611 s | ~640.5 MiB runner RSS observed | Ollama runner used about 374% process CPU, effectively all 4 physical cores |
-| `nomic-embed-text`, full posting text | 261.6 MiB | 0.629 s | 2.269 s | 3.925 s | 445.871 s | ~640.5 MiB runner RSS observed | Same all-core Ollama behavior; one unchunked 100-job request first exceeded 120 s |
-| Upply BGE-small jobs, first 64 tokens | 33.1 MiB | 0.600 s | 0.114 s | 101.4 ms | 5.768 s | 309.3 MiB process RSS | 69.4% of 8-logical-CPU capacity during batch |
-| JobBERT-v2, title only | 424.6 MiB | 5.713 s | 2.339 s | 67.2 ms | 3.629 s | 764.1 MiB process RSS | 46.5% of 8-logical-CPU capacity during batch |
+| `nomic-embed-text`, title only | 261.6 MiB | 1.154 s | 2.859 s | 97.5 ms | 5.534 s | 40.3 MiB client; 391.0 MiB Ollama runner RSS observed after run | External Ollama runner used the CPU; harness cannot attribute server CPU precisely |
+| `nomic-embed-text`, full posting text | 261.6 MiB | Not completed | Not completed | Not completed | Timed out | 561.9 MiB Ollama runner RSS observed | Approximately 19 minutes elapsed before a 10-job request exceeded 180 s; no valid batch result |
+| Upply BGE-small jobs, first 64 tokens | 33.1 MiB | 0.478 s | 0.047 s | 47.6 ms | 2.608 s | 316.1 MiB process RSS | 91.0% of 8-logical-CPU capacity during batch |
+| JobBERT-v2, title only | 424.6 MiB | 5.259 s | 2.103 s | 65.4 ms | 3.500 s | 772.8 MiB process RSS | 41.6% of 8-logical-CPU capacity during batch |
 
-Title-only Upply is not materially faster than Career Agent's existing title-only embedding path on this machine. JobBERT-v2 saves about two seconds per 100 titles but costs an additional 163 MiB of model storage and reached a higher process-memory peak. Both are locally feasible. Full-description nomic embedding is expensive enough to contend with Ollama generation if run simultaneously, so the clean benchmark deliberately ran no generation. Candidate CPU inference also uses several cores, but only for a few seconds per 100 jobs.
+Both job-domain candidates are faster than the production-like nomic title baseline for 100 jobs, but the savings are only about two to three seconds per 100 and do not establish ranking quality. Upply is much smaller on disk; JobBERT costs an additional 163 MiB over nomic and reached the highest process-memory peak. Both remain locally feasible. Full-description nomic is not a viable cheap pre-ranker on representative postings: it occupied Ollama without competing generation and still timed out. Candidate CPU inference uses several cores, but only for roughly three seconds per 100 jobs.
 
 ## Architecture comparison
 
@@ -209,6 +221,6 @@ The strongest future labels remain submitted application, recruiter response, sc
 
 ## Reproduction and privacy
 
-The durable harness lives in `cmd/benchmark-job-fit`, `internal/benchmarkjobfit`, `benchmark/job_fit`, and `scripts/download_job_fit_models.sh`. Model IDs, revisions, licenses, dimensions, parameters, and weight hashes are recorded in `benchmark/job_fit/model_manifest.json`. Python dependencies are fully pinned.
+The durable harness lives in `cmd/benchmark-job-fit`, `internal/benchmarkjobfit`, `benchmark/job_fit`, and `scripts/download_job_fit_models.sh`. The extractor's posting-quality gate prevents a live generic careers page or different-title redirect from silently entering the cohort. Model IDs, revisions, licenses, dimensions, parameters, and weight hashes are recorded in `benchmark/job_fit/model_manifest.json`. Python dependencies are fully pinned.
 
 Normal Career Agent operation never imports the benchmark packages, downloads models, or opens benchmark artifacts. The extractor cannot write to SQLite, the Python runner never opens SQLite, and all model downloads are explicit. Production thresholds, queue behavior, profile preferences, application records, and scoring code remain unchanged.

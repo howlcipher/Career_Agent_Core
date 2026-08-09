@@ -10,6 +10,13 @@ The benchmark compares three pinned models:
 
 The downloader fetches only JSON, tokenizer text, ONNX, and safetensors artifacts from pinned revisions, then verifies Git blob hashes or SHA-256 hashes. The runner rejects other file types and always loads JobBERT with `trust_remote_code=False` and `local_files_only=True`.
 
+Inputs follow each architecture rather than forcing incomparable models through
+one artificial text shape. The existing `nomic-embed-text` baseline receives
+the job title, which is the closest privacy-safe reproduction of production's
+company-plus-title `fit_similarity` input. Upply receives the sanitized title
+and posting text, truncated to its documented 64-token maximum. JobBERT-v2
+receives titles because its training objective is job-title normalization.
+
 ## Local workflow
 
 Generate a private cohort through the read-only Go extractor:
