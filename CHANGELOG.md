@@ -1,5 +1,23 @@
 # Career Agent Core - Changelog
 
+## 2026-08-09 — Job-domain embedding candidates are benchmarked without changing production scoring
+
+* Added an isolated, read-only job-fit benchmark path that builds a sanitized,
+  ignored local cohort through the existing network and prompt-injection
+  boundaries. The extractor opens SQLite with `mode=ro` and `query_only`, and
+  removes employer names, URLs, contact data, and database IDs before writing
+  mode-0600 artifacts.
+* Added hash-pinned local runners for the installed `nomic-embed-text`
+  baseline, `upply-org/bge-small-jobs-data-embedding`, and
+  `TechWolf/JobBERT-v2`. Hugging Face inference is local-only, accepts ONNX or
+  safetensors rather than pickle, and never enables remote repository code.
+* Re-measured production scores rather than inheriting the historical
+  saturation premise. The full population remains saturated at 100, while a
+  recent scoring-active sensitivity slice has no 100s. The experiment remains
+  inconclusive on ranking quality because the prepared 50-job review set has
+  no user labels; production scoring and all admission thresholds are
+  unchanged.
+
 ## 2026-08-08 — The tracker recovers outcome mail after downtime, of any length
 
 * **Fix (bugs.md #534):** `StartTracker` fetched only the newest ~50 IMAP
