@@ -993,6 +993,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load operator settings: %v", err)
 	}
+	if opSettings == nil {
+		// bugs.md #535: no operator_settings.yaml resolved (missing file, not
+		// a parse/validation error, which log.Fatalf'd above). ApplyOperatorSettings
+		// fails closed to find_only below -- this is a bounded, contents-free
+		// warning, not the profile/settings data itself.
+		log.Println("[Agent] operator settings missing; automatic submission disabled and mode defaulted to find_only")
+	}
 	if err := config.ApplyOperatorSettings(prof, opSettings); err != nil {
 		log.Fatalf("Failed to apply operator settings: %v", err)
 	}
