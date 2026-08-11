@@ -1,5 +1,25 @@
 # Career Agent Core - Changelog
 
+## 2026-08-11 — Automatic mode can no longer be inferred from a missing operator settings file (Fixes #535)
+
+* **Security fix:** `config.GetEffectiveSettings` and `config.ApplyOperatorSettings` previously fell back to
+  inferring `application_mode` from legacy `profile.yaml` booleans (`auto_submit`/`auto_submit_click`/
+  `copilot_mode`) whenever `applications/operator_settings.yaml` was missing, including inferring
+  `automatic`. `ApplyOperatorSettings` is the function that actually sets `profile.AutoSubmitClick`, which
+  `cmd/agent`'s pipeline passes directly into the final employer form submit-click — so a missing settings
+  file (a fresh install, a botched upgrade) could silently reactivate real automatic submission with no
+  operator ever choosing Automatic.
+* **Invariant:** Automatic mode is opt-in and requires an explicit, successfully loaded operator-settings
+  selection of `application_mode: automatic`. Missing or invalid operator settings never infer Automatic
+  from legacy profile flags. Added `config.DefaultOperatorSettings()` (`find_only`, `minimum_fit_score: 50`)
+  as the single authoritative fallback, consumed by `ApplyOperatorSettings` (and, through it, every call
+  site: `cmd/agent`'s startup and daemon refresh, `cmd/dashboard`'s operator-settings API). `cmd/agent` now
+  also logs one bounded warning when operator settings are missing, without changing its (already
+  non-fatal) startup behavior.
+* Explicit `find_only`, `assisted`, and `automatic` settings are unaffected — Automatic mode still works
+  exactly as before when explicitly selected. See `documentation/backlog_history/bugs_done_details.md` item
+  #535 for the full account and test matrix.
+
 ## 2026-08-09 — Job-domain embedding candidates are benchmarked without changing production scoring
 
 * Added an isolated, read-only job-fit benchmark path that builds a sanitized,

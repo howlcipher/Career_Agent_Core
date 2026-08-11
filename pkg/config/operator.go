@@ -21,6 +21,20 @@ type OperatorSettings struct {
 	MinimumFitScore int             `yaml:"minimum_fit_score"`
 }
 
+// DefaultOperatorSettings is the sole fail-closed fallback used whenever an
+// operator_settings.yaml cannot be resolved (missing file, unreadable path).
+// It is the single authoritative default for the whole application: no
+// call site may substitute its own inference from legacy profile.yaml
+// booleans (auto_submit/auto_submit_click/copilot_mode) for this value, since
+// doing so previously let a missing settings file silently reactivate
+// Automatic mode's final employer submit-click (bugs.md #535).
+func DefaultOperatorSettings() *OperatorSettings {
+	return &OperatorSettings{
+		MinimumFitScore: 50,
+		ApplicationMode: ApplicationModeFindOnly,
+	}
+}
+
 func (s *OperatorSettings) Validate() error {
 	if s.ApplicationMode != ApplicationModeFindOnly &&
 		s.ApplicationMode != ApplicationModeAssisted &&
@@ -91,11 +105,17 @@ func SaveOperatorSettings(path string, settings *OperatorSettings) error {
 }
 
 // ApplyOperatorSettings applies the canonical operator settings to the legacy Profile booleans.
+//
+// This is the single authoritative site for the operator-settings-missing
+// fallback: op == nil (no operator_settings.yaml resolved) always falls
+// back to DefaultOperatorSettings(), never to whatever auto_submit/
+// auto_submit_click/copilot_mode happen to be sitting in profile.yaml. Prior
+// to bugs.md #535, this branch was a no-op that left the legacy booleans
+// exactly as loaded from profile.yaml, which meant a missing settings file
+// could silently reactivate Automatic mode's final employer submit-click.
 func ApplyOperatorSettings(p *Profile, op *OperatorSettings) error {
 	if op == nil {
-		// Infer legacy mode
-		// Preserve existing behavior, no rewrites
-		return nil
+		op = DefaultOperatorSettings()
 	}
 
 	// Canonical mode dictates the pipeline behavior

@@ -30,6 +30,31 @@ func TestGetEffectiveSettings(t *testing.T) {
 	}
 }
 
+// TestGetEffectiveSettings_MissingOperatorSettingsNeverInfersAutomatic is bug #535's
+// regression test. A missing operator_settings.yaml must never let legacy
+// profile.yaml booleans (auto_submit/auto_submit_click/copilot_mode) resolve to
+// Automatic mode -- that would let a missing tiny settings file silently
+// reactivate final employer submit-click.
+func TestGetEffectiveSettings_MissingOperatorSettingsNeverInfersAutomatic(t *testing.T) {
+	d := t.TempDir()
+	pPath := filepath.Join(d, "profile.yaml")
+	oPath := filepath.Join(d, "operator_settings.yaml") // deliberately never created
+
+	os.WriteFile(pPath, []byte("auto_submit: true\nauto_submit_click: true\ncopilot_mode: false\n"), 0644)
+
+	eff, err := GetEffectiveSettings(pPath, oPath)
+	if err != nil {
+		t.Fatalf("GetEffectiveSettings failed: %v", err)
+	}
+
+	if eff.ApplicationMode == ApplicationModeAutomatic {
+		t.Errorf("ApplicationMode = automatic with no operator settings file; a missing settings file must never infer Automatic from legacy profile flags")
+	}
+	if eff.AutomaticSubmitClickActive {
+		t.Errorf("AutomaticSubmitClickActive = true with no operator settings file; final employer submit-click must never activate without an explicit operator setting")
+	}
+}
+
 func TestGetEffectiveSettings_MissingProfile(t *testing.T) {
 	d := t.TempDir()
 	pPath := filepath.Join(d, "profile.yaml")
