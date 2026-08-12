@@ -4460,3 +4460,17 @@ Tests: `TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled` writes disti
 **Status:** Done (Bug A). Bug B (transient timeouts) remains open as a known limitation of Playwright's timeout overlapping with stale selector errors.
 
 ---
+
+## 536. Tracker email classifier treats promotional emails as `INTERVIEW_REQUESTED`
+
+**Found 2026-08-12 from live daemon logs.** The classifier in `pkg/tracker/imap.go` emitted `INTERVIEW_REQUESTED` whenever the combined lowercased subject/body contained "interview", "next steps", or "availability". Live logs showed obvious marketing/entertainment emails being logged as interviews: `email.dunhamssports.com` weekly ads ("deals are here", "super sale"), `google.com` Pixel pre-order announcements ("pre-order", "availability"), `mail.beehiiv.com` Pixel promo copy, `gofobo.com` movie first-look notices ("first look:", "tickets"), and generic retail "availability" language. These inflated `unmatched_outcomes` and made it harder to spot genuine interviews among unmatched outcomes.
+
+**Fix.** Hardened `classifyEmail` in `pkg/tracker/imap.go` to require recruiting context before emitting `INTERVIEW_REQUESTED`: an email must contain at least one interview signal word/phrase ("interview", "phone screen", "next steps", "availability", "available") AND at least one recruiting context word/phrase ("interview", "phone screen", "job", "role", "position", "candidate", "hiring", "recruiter", "recruiting", "application", "opportunity", "schedule", plus common job-function stems such as "engineer", "developer", "manager", "analyst", and "architect"). Expanded `notJobPhrases` with retail/entertainment markers observed live ("weekly ad", "pre-order", "shop now", "order now", "free shipping", "coupon code", "sale ends", "super sale", "deals are here", "limited time offer", "your order", "track your package", "first look:", "now streaming", "in theaters", "watch now", "tickets") so obvious commerce/entertainment copy short-circuits to "no classification" even if it accidentally hits a context word. Rejection classification stayed keyword-based on negative outcome language, which had not shown this particular false-positive pattern.
+
+**Tests.** Extended `TestClassifyEmail` in `pkg/tracker/imap_test.go` with regression cases for the live promotional subjects and a few genuine recruiting emails that must still classify (interview availability with an engineering role, phone-screen availability, real rejection). All pre-existing `pkg/tracker` tests continued to pass.
+
+**Verification.** `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed clean.
+
+**Files changed.** `pkg/tracker/imap.go`, `pkg/tracker/imap_test.go`.
+
+---

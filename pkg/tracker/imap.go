@@ -406,7 +406,8 @@ func reportUnmatchedOutcomes() {
 // about something else entirely (receipts, marketing, application-sent
 // confirmations) routinely contain words like "next steps" and must never
 // produce a status (bug #20 — a Google payment receipt and a LinkedIn
-// "application sent" notice were both classified INTERVIEW_REQUESTED).
+// "application sent" notice were both classified INTERVIEW_REQUESTED; bug #536
+// added retail/entertainment phrases seen in live logs).
 var notJobPhrases = []string{
 	"we've received your payment",
 	"received your payment",
@@ -416,6 +417,80 @@ var notJobPhrases = []string{
 	"your application was sent",
 	"application has been submitted",
 	"automated message",
+	"weekly ad",
+	"pre-order",
+	"shop now",
+	"order now",
+	"free shipping",
+	"coupon code",
+	"sale ends",
+	"super sale",
+	"deals are here",
+	"limited time offer",
+	"your order",
+	"track your package",
+	"first look:",
+	"now streaming",
+	"in theaters",
+	"watch now",
+	"tickets",
+}
+
+// interviewSignals are words/phrases that suggest an interview request.
+// Alone they are not enough: marketing copy also uses "availability" and
+// "next steps", so a recruiting context word is required too (bug #536).
+var interviewSignals = []string{
+	"interview",
+	"phone screen",
+	"next steps",
+	"availability",
+	"available",
+}
+
+// recruitingContext contains words/phrases that indicate the email is about
+// a job or hiring process, not generic commerce or entertainment.
+var recruitingContext = []string{
+	"interview",
+	"phone screen",
+	"job",
+	"role",
+	"position",
+	"candidate",
+	"hiring",
+	"recruiter",
+	"recruiting",
+	"application",
+	"opportunity",
+	"schedule",
+	"engineer",
+	"engineering",
+	"developer",
+	"development",
+	"manager",
+	"management",
+	"analyst",
+	"analytics",
+	"architect",
+	"consultant",
+	"director",
+	"specialist",
+	"coordinator",
+	"administrator",
+	"technician",
+	"designer",
+	"scientist",
+	"researcher",
+}
+
+// combinedContainsAny reports whether combined (lowercased subject + body)
+// contains any of the provided phrases.
+func combinedContainsAny(combined string, phrases []string) bool {
+	for _, p := range phrases {
+		if strings.Contains(combined, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyEmail maps an email (lowercased subject and body) to a funnel
@@ -424,15 +499,13 @@ var notJobPhrases = []string{
 // company we actually applied to before anything is written.
 func classifyEmail(subjectLower, bodyLower string) string {
 	combined := subjectLower + " " + bodyLower
-	for _, phrase := range notJobPhrases {
-		if strings.Contains(combined, phrase) {
-			return ""
-		}
+	if combinedContainsAny(combined, notJobPhrases) {
+		return ""
 	}
 	if strings.Contains(combined, "unfortunately") || strings.Contains(combined, "not moving forward") || strings.Contains(combined, "decided to pursue other candidates") {
 		return "REJECTED"
 	}
-	if strings.Contains(combined, "interview") || strings.Contains(combined, "next steps") || strings.Contains(combined, "availability") {
+	if combinedContainsAny(combined, interviewSignals) && combinedContainsAny(combined, recruitingContext) {
 		return "INTERVIEW_REQUESTED"
 	}
 	return ""

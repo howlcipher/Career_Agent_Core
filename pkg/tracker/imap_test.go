@@ -21,9 +21,17 @@ func TestClassifyEmail(t *testing.T) {
 		{"google payment receipt", "google: we've received your payment for 7552-6381-4439", "thank you. next steps: no action needed.", ""},
 		{"linkedin sent confirmation", "william, your application was sent to clearlyagile", "prepare for interviews with these tips", ""},
 		{"automated message", "interview scheduling", "this is an automated message about your interview", ""},
+		// Bug #536: live promotional/entertainment emails that triggered the old interview keyword
+		{"dunhamssports weekly ad", "your weekly ad deals are here!", "shop now before sale ends", ""},
+		{"google pixel pre-order", "pre-order the new google pixel 11 series", "check availability at your local store", ""},
+		{"beehiiv pixel promo", "google's new pixel phone has a shiny light to arrest your attention", "limited time offer", ""},
+		{"gofobo movie first look", "first look: jon hamm's new psychological thriller series, american hostage", "tickets on sale now", ""},
+		{"generic retail availability", "last shot at par-fect deals", "check availability before you buy", ""},
 		// Genuine signals must still classify
 		{"real rejection", "glimpse - senior edge infrastructure engineer - next steps", "unfortunately we will not be moving forward", "REJECTED"},
 		{"real interview", "your upcoming call with glimpse", "we would like to schedule an interview, what is your availability?", "INTERVIEW_REQUESTED"},
+		{"interview availability with role", "re: rate confirmation_production ai platform engineer", "what is your availability for the position?", "INTERVIEW_REQUESTED"},
+		{"phone screen availability", "follow up on your application", "are you available for a phone screen next week?", "INTERVIEW_REQUESTED"},
 		{"unrelated newsletter", "weekly go digest", "generics deep dive", ""},
 	}
 	for _, tt := range tests {

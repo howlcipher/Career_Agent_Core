@@ -1,5 +1,30 @@
 # Career Agent Core - Changelog
 
+## 2026-08-12 — Tracker no longer classifies promotional emails as interview requests (Fixes #536)
+
+* **Fix (bugs.md #536):** `classifyEmail` in `pkg/tracker/imap.go` treated any
+  email containing "interview", "next steps", or "availability" as an
+  `INTERVIEW_REQUESTED` outcome. Promotional and entertainment emails
+  (retail weekly ads, Pixel pre-orders, movie first-look notices) routinely
+  use words like "availability" and "next steps", so the tracker was
+  logging them as unmatched interview outcomes and inflating the dashboard's
+  interview count.
+* `INTERVIEW_REQUESTED` now requires an interview signal word/phrase
+  **and** a recruiting-context word/phrase (e.g., "job", "role", "position",
+  "candidate", "hiring", "recruiter", "application", "opportunity",
+  "schedule", "engineer", "developer", "manager", "analyst", "architect").
+* Expanded `notJobPhrases` with retail/entertainment markers observed in
+  live logs ("weekly ad", "pre-order", "shop now", "sale ends",
+  "super sale", "deals are here", "limited time offer", "first look:",
+  "now streaming", "in theaters", "watch now", "tickets") so obvious
+  commerce/entertainment copy is ignored even if it accidentally hits a
+  context word. Rejection classification remains keyword-based on negative
+  outcome language.
+* Added regression tests covering the live false-positive cases and
+  genuine interview/rejection examples. See
+  `documentation/backlog_history/bugs_done_details.md` item #536 for the
+  full account.
+
 ## 2026-08-12 — Dashboard agent lifecycle and liveness now report truthfully (Fixes #522)
 
 * **Fix (bugs.md #522):** The dashboard's agent start/stop controls and `daemon_active` flag were unsafe around real child processes.
