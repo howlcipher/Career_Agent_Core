@@ -102,6 +102,37 @@ func TestServeAssistedLaunch_RefusesATSThatRejectsTheAssistedBrowser(t *testing.
 	}
 }
 
+func TestServeAssistedNotFound_MarksJobInvalidURLAndLeavesQueue(t *testing.T) {
+	setupTestDB(t)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO job_funnel (url, id, company_name, job_title, status, discovered_at)
+		VALUES (?, 41, 'Expired Co', 'Engineer', 'MANUAL_REQUIRED', ?)`,
+		"https://jobs.lever.co/expired/abc-123", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO assisted_applications
+		(job_id, original_status, next_action_code, assisted_state, revalidation_state, revalidation_version, created_at, updated_at)
+		VALUES (41, 'MANUAL_REQUIRED', 'login_or_create_account', 'waiting_human', 'required', 3, ?, ?)`,
+		now, now); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/assisted/not-found", bytes.NewBufferString(`{"job_id":"41"}`))
+	rec := httptest.NewRecorder()
+	serveAssistedNotFound(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	var status, reason, provenance string
+	if err := db.QueryRow(`SELECT jf.status, jf.status_reason, aa.confirmation_provenance
+		FROM job_funnel jf JOIN assisted_applications aa ON aa.job_id = jf.id WHERE jf.id = 41`).
+		Scan(&status, &reason, &provenance); err != nil {
+		t.Fatal(err)
+	}
+	if status != "INVALID_URL" || reason != storage.InvalidURLReasonExpired || provenance != "manual_posting_not_found" {
+		t.Fatalf("status=%q reason=%q provenance=%q", status, reason, provenance)
+	}
+}
+
 func TestAssistedApplicationCommandPrefersBuiltBinaryInCheckoutRoot(t *testing.T) {
 	cmd, err := assistedApplicationCommand("41")
 	if err != nil {

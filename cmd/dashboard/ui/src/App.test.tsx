@@ -577,6 +577,43 @@ describe('Assisted Apply workflow', () => {
 		fireEvent.click(screen.getByRole('button', { name: 'Confirmed — Mark Applied' }));
 		await flush();
 		expect(confirmed).toEqual(['293752']);
+		// The dialog must close after a successful confirm so the operator is
+		// not left staring at a stale confirmation modal.
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+	});
+
+	it('offers a not-found action that records the posting as invalid', async () => {
+		const notFound: string[] = [];
+		installFetch((input, init) => {
+			const url = String(input);
+			if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+			if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+			if (url === '/api/assisted') {
+				return Promise.resolve(jsonResponse({ jobs: [{
+					id: '41', company: 'Globex', role: 'Senior Engineer', provider: 'Greenhouse', original_status: 'AWAITING_REVIEW',
+					interruption: '', last_updated: '2026-08-06T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+					mapping_ready: true, completed_work: 'Documents prepared.', legacy: false, live_browser: false, assisted_attempt_count: 0,
+					priority_reason: 'Ready for the next human step', requisition_id: 'GLB-1', location: 'Remote', duplicate_siblings: 0, ambiguous: false,
+					next_action: { code: 'review_and_submit', title: 'Review and submit', instruction: 'Review the form, then submit it.', primary_button: 'Open Application', requires_browser: true, documents_ready: true, requires_explicit_submit: true, can_continue: false },
+				}] }));
+			}
+			if (url === '/api/assisted/not-found' && init?.method === 'POST') {
+				notFound.push(JSON.parse(String(init?.body)).job_id);
+				return Promise.resolve(jsonResponse({ status: 'not_found' }));
+			}
+			throw new Error(`unexpected fetch ${url}`);
+		});
+		render(<App />);
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+		await flush();
+		fireEvent.click(screen.getByRole('button', { name: /posting not found/i }));
+		await flush();
+		expect(screen.getByRole('dialog')).toHaveTextContent('Globex — Senior Engineer (Remote · Req GLB-1)');
+		fireEvent.click(screen.getByRole('button', { name: 'Posting Not Found / Expired' }));
+		await flush();
+		expect(notFound).toEqual(['41']);
+		expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 	});
 });
 

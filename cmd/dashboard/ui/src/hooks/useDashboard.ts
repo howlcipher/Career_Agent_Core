@@ -219,11 +219,34 @@ export function useDashboard() {
       if (!res.ok) throw new Error('confirmation rejected');
       fetchAssisted();
       poll();
+      return true;
     } catch (e) {
       console.error(e);
       setActionError(
         'Could not record the application confirmation. Keep it pending and try again after verifying the employer site.'
       );
+      return false;
+    }
+  };
+
+  const markAssistedNotFound = async (job: AssistedJob) => {
+    setActionError(null);
+    try {
+      const res = await fetch('/api/assisted/not-found', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: job.id }),
+      });
+      if (!res.ok) throw new Error('not-found rejected');
+      fetchAssisted();
+      poll();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError(
+        'Could not record the posting as not found. The row may have already been removed or updated elsewhere.'
+      );
+      return false;
     }
   };
 
@@ -310,6 +333,7 @@ export function useDashboard() {
     handleStop,
     qualifiedAction,
     confirmApplied,
+    markAssistedNotFound,
     requestContinue,
     launchAssisted,
     revalidateAssisted,

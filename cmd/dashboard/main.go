@@ -495,6 +495,7 @@ func main() {
 	mux.HandleFunc("/api/metrics", serveMetrics)
 	mux.HandleFunc("/api/assisted", serveAssistedQueue)
 	mux.HandleFunc("/api/assisted/confirm", requireSameOrigin(serveAssistedConfirm))
+	mux.HandleFunc("/api/assisted/not-found", requireSameOrigin(serveAssistedNotFound))
 	mux.HandleFunc("/api/assisted/continue", requireSameOrigin(serveAssistedContinue))
 	mux.HandleFunc("/api/assisted/revalidate", requireSameOrigin(serveAssistedRevalidate))
 	mux.HandleFunc("/api/assisted/launch", requireSameOrigin(serveAssistedLaunch))
@@ -959,6 +960,29 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"confirmed"}`))
+}
+
+func serveAssistedNotFound(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		JobID string `json:"job_id"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.JobID) == "" {
+		http.Error(w, "an assisted job identifier is required", http.StatusBadRequest)
+		return
+	}
+	if err := storage.MarkAssistedNotFound(db, request.JobID); err != nil {
+		log.Printf("serveAssistedNotFound: %v", err)
+		http.Error(w, "unable to record posting as not found", http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"not_found"}`))
 }
 
 func serveAssistedContinue(w http.ResponseWriter, r *http.Request) {

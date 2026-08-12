@@ -39,6 +39,7 @@ function App() {
     handleStop,
     qualifiedAction,
     confirmApplied,
+    markAssistedNotFound,
     requestContinue,
     launchAssisted,
     revalidateAssisted,
@@ -49,6 +50,7 @@ function App() {
 
   const [showModeConfirm, setShowModeConfirm] = useState<boolean>(false);
   const [confirmJob, setConfirmJob] = useState<AssistedJob | null>(null);
+  const [confirmNotFoundJob, setConfirmNotFoundJob] = useState<AssistedJob | null>(null);
   const [confirmQualifiedJob, setConfirmQualifiedJob] = useState<QualifiedJob | null>(null);
   const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
   const [batchIndex, setBatchIndex] = useState<number | null>(null);
@@ -400,6 +402,7 @@ function App() {
                     onRevalidate={revalidateAssisted}
                     onContinue={requestContinue}
                     onConfirm={setConfirmJob}
+                    onMarkNotFound={setConfirmNotFoundJob}
                     onOpenDocument={openDocument}
                   />
                 ))
@@ -416,7 +419,10 @@ function App() {
             actions={
               <ConfirmActions
                 confirmLabel="Confirmed — Mark Applied"
-                onConfirm={() => confirmApplied(confirmJob)}
+                onConfirm={async () => {
+                  const ok = await confirmApplied(confirmJob);
+                  if (ok) setConfirmJob(null);
+                }}
                 onCancel={() => setConfirmJob(null)}
               />
             }
@@ -429,6 +435,30 @@ function App() {
               </p>
             )}
             <p>Only mark this applied if the employer's site showed that your application was received or successfully submitted.</p>
+          </ConfirmDialog>
+        )}
+
+        {confirmNotFoundJob && (
+          <ConfirmDialog
+            title="Mark posting as not found"
+            titleId="confirm-not-found-title"
+            onCancel={() => setConfirmNotFoundJob(null)}
+            actions={
+              <ConfirmActions
+                confirmLabel="Posting Not Found / Expired"
+                variant="danger"
+                onConfirm={async () => {
+                  const ok = await markAssistedNotFound(confirmNotFoundJob);
+                  if (ok) setConfirmNotFoundJob(null);
+                }}
+                onCancel={() => setConfirmNotFoundJob(null)}
+              />
+            }
+          >
+            <p className="confirm-subject">{assistedJobLabel(confirmNotFoundJob)}</p>
+            <p>
+              Mark this posting as not found or expired. The job will leave the assisted queue and be recorded as an invalid URL.
+            </p>
           </ConfirmDialog>
         )}
 

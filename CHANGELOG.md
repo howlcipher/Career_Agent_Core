@@ -1,5 +1,28 @@
 # Career Agent Core - Changelog
 
+## 2026-08-12 — Assisted Apply can mark dead postings and its confirm dialog now closes
+
+* **New Assisted Apply action:** each assisted card now offers
+  "Posting not found / expired". Clicking it opens a confirmation dialog that
+  names the job and, on confirm, marks the underlying `job_funnel` row as
+  `INVALID_URL` (reason `expired`) and completes the `assisted_applications`
+  handoff with provenance `manual_posting_not_found`. The job leaves the active
+  queue instead of sitting there indefinitely.
+  * Backend: `storage.MarkAssistedNotFound` in `pkg/storage/assisted.go` and
+    new dashboard endpoint `POST /api/assisted/not-found` in
+    `cmd/dashboard/main.go`.
+  * Frontend: new `markAssistedNotFound` action in
+    `cmd/dashboard/ui/src/hooks/useDashboard.ts`, new
+    `onMarkNotFound` prop on `AssistedJobCard`, and a confirmation dialog in
+    `App.tsx`.
+* **Fix:** the "Confirmed — Mark Applied" dialog in Assisted Apply previously
+  stayed open after a successful confirm; the user had to click Cancel to
+  dismiss it. `confirmApplied` now returns success/failure, and the dialog
+  closes automatically on success.
+* Added backend tests for `MarkAssistedNotFound` and `serveAssistedNotFound`,
+  and frontend tests covering the new not-found action and the dialog-close
+  behavior.
+
 ## 2026-08-12 — Tracker no longer classifies promotional emails as interview requests (Fixes #536)
 
 * **Fix (bugs.md #536):** `classifyEmail` in `pkg/tracker/imap.go` treated any

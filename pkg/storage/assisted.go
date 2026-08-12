@@ -911,6 +911,48 @@ func ConfirmAssistedSubmission(conn *sql.DB, jobID string) error {
 	return tx.Commit()
 }
 
+// MarkAssistedNotFound records an explicit operator decision that the
+// assisted application's posting no longer exists or is otherwise not a
+// reachable job. It completes the assisted handoff and moves the underlying
+// funnel row to INVALID_URL so the job leaves every active queue.
+func MarkAssistedNotFound(conn *sql.DB, jobID string) error {
+	if strings.TrimSpace(jobID) == "" {
+		return errors.New("assisted job identifier is required")
+	}
+	tx, err := conn.Begin()
+	if err != nil {
+		return fmt.Errorf("begin assisted not-found: %w", err)
+	}
+	defer tx.Rollback()
+	var exists bool
+	err = tx.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
+		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
+	)`, jobID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("load assisted job for not-found: %w", err)
+	}
+	if !exists {
+		return errors.New("assisted job is no longer awaiting action")
+	}
+	now := time.Now().UTC()
+	result, err := tx.Exec(`UPDATE assisted_applications
+		SET assisted_state = 'completed', confirmation_provenance = 'manual_posting_not_found', updated_at = ?
+		WHERE job_id = ? AND assisted_state != 'completed'`, now, jobID)
+	if err != nil {
+		return fmt.Errorf("record assisted not-found: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted not-found conflict")
+	}
+	if _, err := tx.Exec(`UPDATE job_funnel
+		SET status = 'INVALID_URL', status_reason = ?, last_updated = ?
+		WHERE id = ? AND status != 'APPLIED'`, InvalidURLReasonExpired, now, jobID); err != nil {
+		return fmt.Errorf("mark assisted job invalid url: %w", err)
+	}
+	return tx.Commit()
+}
+
 func isAssistedEligibleStatus(status string) bool {
 	_, ok := eligibleAssistedStatuses[status]
 	return ok

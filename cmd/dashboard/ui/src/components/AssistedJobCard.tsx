@@ -11,6 +11,7 @@ interface AssistedJobCardProps {
   onRevalidate: (job: AssistedJob) => void;
   onContinue: (job: AssistedJob) => void;
   onConfirm: (job: AssistedJob) => void;
+  onMarkNotFound: (job: AssistedJob) => void;
   onOpenDocument: (job: AssistedJob, kind: 'resume' | 'cover_letter') => void;
 }
 
@@ -27,6 +28,7 @@ export function AssistedJobCard({
   onRevalidate,
   onContinue,
   onConfirm,
+  onMarkNotFound,
   onOpenDocument,
 }: AssistedJobCardProps) {
   const distinguisher = assistedDistinguisher(job);
@@ -106,6 +108,12 @@ export function AssistedJobCard({
             I saw a confirmation — Mark Applied
           </ConsoleButton>
         )}
+      </div>
+
+      <div className="assisted-not-found">
+        <ConsoleButton variant="danger" onClick={() => onMarkNotFound(job)}>
+          Posting not found / expired
+        </ConsoleButton>
       </div>
 
       <details>

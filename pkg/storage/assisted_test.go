@@ -244,6 +244,37 @@ func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *t
 	}
 }
 
+func TestMarkAssistedNotFound_CompletesPlanAndMarksInvalidURL(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	url := "https://expired.example/jobs/notfound"
+	if _, err := AddToFunnel("Expired Co", "Engineer", url, "MANUAL_REQUIRED"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateLegacyAssisted(AssistedMigrationOptions{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", url).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkAssistedNotFound(GetDB(), id); err != nil {
+		t.Fatal(err)
+	}
+	var status, provenance, reason string
+	if err := GetDB().QueryRow(`SELECT jf.status, jf.status_reason, aa.confirmation_provenance
+		FROM job_funnel jf JOIN assisted_applications aa ON aa.job_id = jf.id WHERE jf.id = ?`, id).
+		Scan(&status, &reason, &provenance); err != nil {
+		t.Fatal(err)
+	}
+	if status != "INVALID_URL" || reason != InvalidURLReasonExpired || provenance != "manual_posting_not_found" {
+		t.Fatalf("status=%q reason=%q provenance=%q", status, reason, provenance)
+	}
+	if err := MarkAssistedNotFound(GetDB(), id); err == nil {
+		t.Fatal("second not-found must conflict")
+	}
+}
+
 func TestAssistedLease_AllowsOneOwnerAndContinuationOnlyWhileLive(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
