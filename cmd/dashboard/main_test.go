@@ -9,11 +9,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
 )
@@ -95,16 +102,72 @@ func TestServeAssistedLaunch_RefusesATSThatRejectsTheAssistedBrowser(t *testing.
 	}
 }
 
-func TestAssistedApplicationCommandUsesCheckoutRoot(t *testing.T) {
+func TestAssistedApplicationCommandPrefersBuiltBinaryInCheckoutRoot(t *testing.T) {
 	cmd, err := assistedApplicationCommand("41")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Dir == "" || !strings.Contains(cmd.Dir, "career") && !strings.Contains(cmd.Dir, "Career") {
-		t.Fatalf("assisted command directory = %q", cmd.Dir)
+	// A built career_assist_bin in the repository root must be used directly,
+	// not wrapped in `go run` (bugs.md #522).
+	if cmd.Args[0] == "go" {
+		t.Fatalf("assisted command still uses go run when a built binary exists: args=%#v", cmd.Args)
 	}
-	if len(cmd.Args) < 4 || cmd.Args[0] != "go" || cmd.Args[1] != "run" || cmd.Args[2] != "./cmd/assist" {
-		t.Fatalf("assisted command = %#v", cmd.Args)
+	if !strings.Contains(cmd.Args[0], "career_assist_bin") && !strings.Contains(cmd.Args[0], "assist") {
+		t.Fatalf("assisted command does not resolve to a known binary: args=%#v", cmd.Args)
+	}
+	if cmd.Args[1] != "-job" || cmd.Args[2] != "41" {
+		t.Fatalf("assisted command args = %#v, want binary -job 41", cmd.Args)
+	}
+}
+
+func TestAssistedApplicationCommandFallsBackToGoRunWhenNoBinaryExists(t *testing.T) {
+	dir := t.TempDir()
+	binName := "career_assist_bin"
+	if runtime.GOOS == "windows" {
+		binName = "career_assist_bin.exe"
+	}
+	// Build a dummy binary that is not the real assist binary but satisfies the
+	// resolution rules. We then rename it away so the next lookup falls through
+	// to the go run fallback.
+	dummy := filepath.Join(dir, binName)
+	if err := os.WriteFile(dummy, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the lookup to see only our temp directory by making the binary
+	// executable live beside a fake module root.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module dummy\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	cmd, err := assistedApplicationCommand("41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args[0] != filepath.Join(dir, binName) {
+		t.Errorf("assisted command = %q, want built binary %q", cmd.Args[0], dummy)
+	}
+
+	if err := os.Remove(dummy); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err = assistedApplicationCommand("42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Args) < 3 || cmd.Args[0] != "go" || cmd.Args[1] != "run" || cmd.Args[2] != "./cmd/assist" {
+		t.Fatalf("fallback command = %#v, want go run ./cmd/assist", cmd.Args)
+	}
+	if cmd.Dir != dir {
+		t.Errorf("fallback command directory = %q, want %q", cmd.Dir, dir)
 	}
 }
 
@@ -1562,5 +1625,325 @@ func TestScanVariantConversions_NoErrorOnCleanExhaustion(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Variant != "formal" || got[0].InterviewRate != "25.0%" {
 		t.Errorf("unexpected result: %+v", got)
+	}
+}
+
+// agentLifecycleTestEnv points the dashboard at a temp lock path and a compiled
+// fake_agent binary, then restores them afterwards.
+func agentLifecycleTestEnv(t *testing.T) (lockPath string, fakeAgent string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	lockPath = filepath.Join(dir, "career_agent.lock")
+	fakeAgent = filepath.Join(dir, "career_agent_bin")
+
+	src := filepath.Join("testdata", "fake_agent", "main.go")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("fake_agent source not found at %s: %v", src, err)
+	}
+	cmd := exec.Command("go", "build", "-o", fakeAgent, "./"+filepath.Join("testdata", "fake_agent"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build fake_agent: %v\n%s", err, out)
+	}
+
+	oldLockPath := config.AgentLockPath
+	oldEnv := os.Getenv("CAREER_AGENT_BIN")
+	oldFakeLockEnv := os.Getenv("FAKE_AGENT_LOCK_PATH")
+	oldStopTimeout := agentStopTimeout
+
+	config.AgentLockPath = lockPath
+	if err := os.Setenv("CAREER_AGENT_BIN", fakeAgent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("FAKE_AGENT_LOCK_PATH", lockPath); err != nil {
+		t.Fatal(err)
+	}
+	agentStopTimeout = 500 * time.Millisecond
+
+	t.Cleanup(func() {
+		config.AgentLockPath = oldLockPath
+		_ = os.Setenv("CAREER_AGENT_BIN", oldEnv)
+		_ = os.Setenv("FAKE_AGENT_LOCK_PATH", oldFakeLockEnv)
+		agentStopTimeout = oldStopTimeout
+
+		// Drain any still-tracked child so the next test starts clean.
+		agentMu.Lock()
+		child := agentProc
+		agentProc = nil
+		agentMu.Unlock()
+		if child != nil && child.process != nil {
+			_ = child.process.Kill()
+			<-child.done
+		}
+		// Remove the fake lock if a previous holder leaked it.
+		_ = os.Remove(lockPath)
+	})
+
+	return lockPath, fakeAgent
+}
+
+func postAgentStart(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/start", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	rec := httptest.NewRecorder()
+	serveAgentStart(rec, req)
+	return rec
+}
+
+func postAgentStop(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/stop", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	rec := httptest.NewRecorder()
+	serveAgentStop(rec, req)
+	return rec
+}
+
+func agentStatusRunning(t *testing.T) bool {
+	t.Helper()
+	_, running, err := agentPID()
+	if err != nil {
+		t.Fatalf("agentPID: %v", err)
+	}
+	return running
+}
+
+// waitForAgentGone polls the authoritative lock until the agent is no longer
+// running or until the test deadline expires.
+func waitForAgentGone(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if !agentStatusRunning(t) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent still holds lock after %v", timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func countZombieChildren(t *testing.T) int {
+	t.Helper()
+	parentPID := strconv.Itoa(os.Getpid())
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatalf("cannot read /proc: %v", err)
+	}
+	count := 0
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		status, err := os.ReadFile(filepath.Join("/proc", e.Name(), "status"))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(status), "PPid:\t"+parentPID) && strings.Contains(string(status), "State:\tZ") {
+			count++
+		}
+	}
+	return count
+}
+
+func TestServeAgentStart_LaunchesAndReapsAfterNaturalExit(t *testing.T) {
+	agentLifecycleTestEnv(t)
+	// Let the agent stay alive long enough for the start handler to confirm its
+	// lock, then exit on its own to exercise the natural-exit reaping path.
+	t.Setenv("FAKE_AGENT_EXIT_AFTER", "200ms")
+
+	rec := postAgentStart(t)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "started") {
+		t.Fatalf("start failed: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	waitForAgentGone(t, 2*time.Second)
+	if agentStatusRunning(t) {
+		t.Fatal("agent still reported running after natural exit")
+	}
+	if countZombieChildren(t) != 0 {
+		t.Fatalf("zombie children remain after natural exit: %d", countZombieChildren(t))
+	}
+}
+
+func TestServeAgentStop_WaitsForActualExit(t *testing.T) {
+	agentLifecycleTestEnv(t)
+	t.Setenv("FAKE_AGENT_STOP_DELAY", "200ms")
+
+	rec := postAgentStart(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start failed: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if !agentStatusRunning(t) {
+		t.Fatal("agent not running before stop")
+	}
+
+	stopRec := postAgentStop(t)
+	if stopRec.Code != http.StatusOK {
+		t.Fatalf("stop returned status %d body=%q", stopRec.Code, stopRec.Body.String())
+	}
+	if !strings.Contains(stopRec.Body.String(), "stopped") {
+		t.Fatalf("stop did not report stopped: %q", stopRec.Body.String())
+	}
+
+	if agentStatusRunning(t) {
+		t.Fatal("agent still running after stop returned stopped")
+	}
+	if countZombieChildren(t) != 0 {
+		t.Fatalf("zombie children remain after stop: %d", countZombieChildren(t))
+	}
+}
+
+func TestServeAgentStop_TimeoutDoesNotClaimSuccess(t *testing.T) {
+	agentLifecycleTestEnv(t)
+	t.Setenv("FAKE_AGENT_IGNORE_SIGTERM", "1")
+
+	rec := postAgentStart(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start failed: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	stopRec := postAgentStop(t)
+	if stopRec.Code != http.StatusRequestTimeout {
+		t.Fatalf("stop status = %d, want %d (timeout); body=%q", stopRec.Code, http.StatusRequestTimeout, stopRec.Body.String())
+	}
+	if strings.Contains(stopRec.Body.String(), "stopped") {
+		t.Fatalf("stop falsely claimed stopped on ignored signal: %q", stopRec.Body.String())
+	}
+
+	// Clean up the stubborn helper explicitly.
+	agentMu.Lock()
+	child := agentProc
+	agentProc = nil
+	agentMu.Unlock()
+	if child != nil && child.process != nil {
+		_ = child.process.Kill()
+		<-child.done
+	}
+}
+
+func TestServeAgentStop_AlreadyStoppedReportsTruthfully(t *testing.T) {
+	agentLifecycleTestEnv(t)
+
+	stopRec := postAgentStop(t)
+	if stopRec.Code != http.StatusOK {
+		t.Fatalf("stop status = %d body=%q", stopRec.Code, stopRec.Body.String())
+	}
+	if !strings.Contains(stopRec.Body.String(), "not_running") {
+		t.Fatalf("stop on missing agent = %q, want not_running", stopRec.Body.String())
+	}
+}
+
+func TestServeAgentStart_AlreadyRunningReportsTruthfully(t *testing.T) {
+	agentLifecycleTestEnv(t)
+
+	// Manually start a holder for the lock without going through the dashboard.
+	lockPath := config.AgentLockPath
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+		_ = os.Remove(lockPath)
+	})
+
+	rec := postAgentStart(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "already_running") {
+		t.Fatalf("start on held lock = %q, want already_running", rec.Body.String())
+	}
+}
+
+func TestRepeatedStartStop_NoZombiesNoStaleLocks(t *testing.T) {
+	agentLifecycleTestEnv(t)
+	t.Setenv("FAKE_AGENT_STOP_DELAY", "5ms")
+
+	for i := 0; i < 10; i++ {
+		rec := postAgentStart(t)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("cycle %d start failed: status=%d body=%q", i, rec.Code, rec.Body.String())
+		}
+		if !agentStatusRunning(t) {
+			t.Fatalf("cycle %d: agent not running immediately after start", i)
+		}
+
+		stopRec := postAgentStop(t)
+		if stopRec.Code != http.StatusOK {
+			t.Fatalf("cycle %d stop failed: status=%d body=%q", i, stopRec.Code, stopRec.Body.String())
+		}
+		waitForAgentGone(t, 2*time.Second)
+		if agentStatusRunning(t) {
+			t.Fatalf("cycle %d: agent still running after stop", i)
+		}
+	}
+
+	if countZombieChildren(t) != 0 {
+		t.Fatalf("zombie children after 10 cycles: %d", countZombieChildren(t))
+	}
+	_, running, err := config.IsAgentAlive(config.AgentLockPath)
+	if err != nil {
+		t.Fatalf("liveness check error: %v", err)
+	}
+	if running {
+		t.Fatal("stale lock held after all cycles")
+	}
+}
+
+func TestAgentCommandPrefersBuiltBinary(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "career_agent_bin")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAREER_AGENT_BIN", bin)
+
+	cmd, err := agentCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Args[0] != bin {
+		t.Fatalf("agent command = %q, want %q", cmd.Args[0], bin)
+	}
+	if cmd.Args[1] != "-daemon" {
+		t.Fatalf("agent command args = %#v, want -daemon ...", cmd.Args)
+	}
+}
+
+func TestLaunchAssistedApplication_ReadinessTimeoutKillsAndReaps(t *testing.T) {
+	dir := t.TempDir()
+	fakeAssist := filepath.Join(dir, "career_assist_bin")
+	src := filepath.Join("testdata", "fake_assist", "main.go")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("fake_assist source not found at %s: %v", src, err)
+	}
+	cmd := exec.Command("go", "build", "-o", fakeAssist, "./"+filepath.Join("testdata", "fake_assist"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build fake_assist: %v\n%s", err, out)
+	}
+
+	t.Setenv("CAREER_ASSIST_BIN", fakeAssist)
+	t.Setenv("CAREER_ASSIST_READY_TIMEOUT", "100ms")
+
+	err := launchAssistedApplication("1")
+	if err == nil {
+		t.Fatal("expected timeout error from fake assist that never becomes ready")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout message, got %v", err)
+	}
+
+	// Give the forced kill a moment to take effect, then confirm no zombie.
+	time.Sleep(50 * time.Millisecond)
+	if countZombieChildren(t) != 0 {
+		t.Fatalf("zombie children remain after assisted launch timeout: %d", countZombieChildren(t))
 	}
 }

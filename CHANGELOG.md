@@ -1,5 +1,15 @@
 # Career Agent Core - Changelog
 
+## 2026-08-12 — Dashboard agent lifecycle and liveness now report truthfully (Fixes #522)
+
+* **Fix (bugs.md #522):** The dashboard's agent start/stop controls and `daemon_active` flag were unsafe around real child processes.
+  * `/api/agent/stop` no longer claims `"stopped"` immediately after `SIGTERM`. It signals the PID recorded in the agent's single-instance `flock`, then polls the lock until the process actually exits, returning HTTP 408 with `{"status":"timeout"}` if it does not exit within the graceful window (`CAREER_AGENT_STOP_TIMEOUT`, default `30s`).
+  * `/api/agent/start` now reaps the child it launches: a single goroutine owns `cmd.Wait()`, and the start response waits until the child has acquired its own lock.
+  * `daemon_active` is now `acknowledged_settings && lock_backed_liveness`. A new `daemon_running` field reports liveness independently of the settings acknowledgement.
+  * Assisted Apply now prefers a compiled binary (`$CAREER_ASSIST_BIN`, sibling `career_assist_bin`/`assist`, repository-root `career_assist_bin`) and only falls back to `go run ./cmd/assist` when no compiled binary is available. The launcher keeps a single `Wait()` owner so readiness-timeout kills do not leak zombies.
+* Process ownership source remains the existing `applications/career_agent.lock` `flock`; the PID is used only as a signalling target, never as the sole proof of liveness. `pkg/config/IsAgentAlive` uses a non-blocking shared lock for status checks so it does not race against the agent's exclusive acquisition.
+* Added unit and Linux integration tests for start, stop, reaping, lock liveness, stale/mismatched settings, and assisted binary resolution; a build-tagged Playwright UI test drives the real dashboard in Chromium to click Start/Stop and assert rendered state transitions. See `documentation/backlog_history/bugs_done_details.md` item #522 for the full account and smoke-test evidence.
+
 ## 2026-08-11 — Automatic mode can no longer be inferred from a missing operator settings file (Fixes #535)
 
 * **Security fix:** `config.GetEffectiveSettings` and `config.ApplyOperatorSettings` previously fell back to

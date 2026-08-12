@@ -15,7 +15,7 @@ This project reaches 100% usable when every box below is checked. Until then, th
 - [x] `cmd/agent` completes one full batch run against live job boards end to end — discover → score → tailor (resume + cover letter) → submit or log to `applications/manual_submissions.md` → row written to `applications.db` — with zero crashes. **MET 2026-07-23 12:00:** a real Lever posting (`jobs.lever.co/smarsh/...`) went discover → score (85) → tailor (real resume + cover letter generated) → submit (`handleLever`, real form fill + click-submit) → `job_funnel.status = APPLIED` in `applications.db`, zero crashes, in a single clean run. This was the culmination of bugs #45/#46 (two independent CAPTCHA-detection false positives that had been killing the large majority of Greenhouse/Lever/Ashby/Workable jobs before they ever reached fit-scoring or the fill stage) and #47 (the dedicated Lever/Greenhouse handlers' own missing click-to-reveal step, only exposed once #45/#46 stopped killing the job earlier). See #45/#46/#47's Details sections for the full diagnostic chain. **Progress 2026-07-20 (extended live-testing session, ~6 hours):** bug #3 (Ollama context/concurrency) fixed and verified — a real job completed discover → score → tailor cleanly with zero Ollama errors and reached the actual Playwright submit step for the first time. Bug #4 (form-fill) was re-diagnosed from a wrong "timeout" theory to the real cause (forms embedded in iframes were never searched) and fixed in code, but **could not be verified live** — a new Blocker (#6, Ollama generation throughput collapsing mid-request) emerged and prevented most attempts from even reaching the fill step. **Progress 2026-07-21:** bug #6 resolved — root cause was a too-short hardcoded 10-minute client timeout racing against genuinely slow (but honest) CPU generation at long context, not context-shift thrashing; timeout is now configurable and defaults to 45 minutes. Bug #4's fix is still unverified live — that requires an actual full batch run, not yet attempted. **Progress 2026-07-22 (Claude Code session, ~6 hours, live triage with the user watching):** found and fixed a chain of real, independently-verified blockers, most reached only after the previous ones were cleared: (1) three duplicate/orphaned agent processes running simultaneously (same class as the Operational Trap below, recurred despite being documented) fighting over one Ollama instance — killed down to one clean process; (2) three files/dirs under `applications/` silently failing to write (`permission denied`) because they were owned by a stale UID `524288` left over from an earlier containerized run — the manual-apply queue and manual-submissions log had been dropping entries with no record at all; (3) **the dominant root cause of the whole session's "First Name" timeout pattern turned out to be environmental, not code**: `cmd/agent` was running on the bare Bazzite host again (see the Resolved-but-regressed entry below) where Chromium renders pages completely blank while reporting navigation success — moved everything back into the `career-agent` distrobox and confirmed real page content renders again; (4) a cookie-consent banner's backdrop `<div>` intercepts every click site-wide until dismissed, silently defeating `clickApplyIfPresent` (bug #34, new); (5) SmartRecruiters uses "I'm interested" instead of any "Apply" wording, and clicking it can reveal a fresh DataDome challenge the earlier captcha check never saw since it ran before that click (bug #35, new); (6) Jobvite gates the real form behind a "Data Consent" `<select>` — zero fields exist in the DOM until an option is chosen (bug #36, new); (7) `fillActionTimeoutMs` bumped 15000→30000: confirmed live that even a single clean instance can still lose the fill race to a co-located Ollama generation burst (bug #37, new). Also excluded `breezy.hr` from discovery (0 real applies across 212 attempts) and deprioritized Workday in the backlog query (bug #38, new) so platforms that can actually reach `APPLIED` stop being crowded out. **Still not verified:** despite all of the above, no fresh `APPLIED` was produced this session — the last real fill attempt (`brightvisiontechnologies.applytojob.com`) hit a *different*, smaller bug in the Vision-fallback path (bug #39, new, open) rather than any of the issues just fixed. Next session should resume with a clean single instance already running in the container and watch for the first real post-fix `APPLIED`.
 - [x] `cmd/dashboard` serves and displays live, correct data from a populated `applications.db` — **re-verified 2026-07-30 (groom pass after #443):** a second instance built from the current tree and run against the real `applications.db` on `127.0.0.1:8099` returned HTTP 200 with real, correctly-typed field data from `/api/metrics` (this was also #447's live verification). The production dashboard on `:8080` was left untouched throughout. *(prior verification history archived in `documentation/backlog_history/bugs_groom_history.md`.)*
 - [x] `cmd/tracker` runs against real IMAP credentials for at least one poll cycle without crashing (or no-ops cleanly per its existing missing-credentials guard) — **re-verified 2026-08-07 in the first full production validation since #529 and #533 shipped:** nine consecutive scans against the real inbox, zero errors of any kind, 120 messages acknowledged, 19 outcome-shaped emails durably recorded in `unmatched_outcomes`, and two scans observed end to end that correctly wrote nothing. The box has outgrown "does not crash": it now also records that the outcome path persists real evidence and that its acknowledgement and its unmatched-outcome record are atomic on live data. What this run did *not* cover, and the next session should not assume: no email matched any application, so the matched-outcome path and #529's ledger stamping remain unexercised in production. See the gate status paragraph above for the full evidence, and #534 for why nothing matched. *(prior note — the 2026-07-22 crash-safety verification and the 2026-07-21 malformed-app-password attempt — archived in `documentation/backlog_history/bugs_groom_history.md`.)*
-- [x] Zero open bugs below tagged `Blocker` or `Major` in the Ranked Backlog — **Re-checked 2026-08-08 after closing #534:** still zero. The five open rows are #522, #524, #526, #528 and #532, all Minor. **Prior — Checked 2026-08-06:** the acceptance trial's last Major closed. #521 (indistinguishable duplicate cards, which caused a false APPLIED record) closed 2026-08-06; #520 (Lever submissions fail in the assisted browser) and #519 (assisted prefill non-functional on Greenhouse/Lever) closed the same day. Only Minor rows (#522-#525) remain open. *(prior verification history archived in `documentation/backlog_history/bugs_groom_history.md`.)*
+- [x] Zero open Blocker or Major bugs in the Ranked Backlog — **Re-checked 2026-08-08 after closing #534:** still zero. The four open rows are #524, #526, #528 and #532, all Minor. **Prior — Checked 2026-08-06:** the acceptance trial's last Major closed. #521 (indistinguishable duplicate cards, which caused a false APPLIED record) closed 2026-08-06; #520 (Lever submissions fail in the assisted browser) and #519 (assisted prefill non-functional on Greenhouse/Lever) closed the same day. Only Minor rows (#522-#525) remain open. *(prior verification history archived in `documentation/backlog_history/bugs_groom_history.md`.)*
 
 Every session — Claude Code, Gemini CLI, or manual — that touches this repo should glance at this checklist. When the last box is checked, change the Status line to `MET (YYYY-MM-DD)` and add a one-line note on what was verified; from that point on, `improvements.md`'s Pending rows become fair game for normal ROI-ranked selection instead of being blocked behind this gate.
 
@@ -63,7 +63,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 535 | [A missing operator_settings.yaml could silently reactivate Automatic mode's final employer submit-click from legacy profile.yaml booleans](#535-a-missing-operator_settingsyaml-could-silently-reactivate-automatic-modes-final-employer-submit-click-from-legacy-profileyaml-booleans) | Major | Done (2026-08-11) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #535 for the full account. |
 | 530 | [A posting that has died still occupies a queue card, because the assisted queue never reads the funnel status it selects](#530-a-posting-that-has-died-still-occupies-a-queue-card-because-the-assisted-queue-never-reads-the-funnel-status-it-selects) | Minor | Done (2026-08-07) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #530 for the full account. |
 | 531 | [Every queue card whose timestamp was written by Go reports `last_updated` as year 0001](#531-every-queue-card-whose-timestamp-was-written-by-go-reports-last_updated-as-year-0001) | Minor | Done (2026-08-07) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #531 for the full account. |
-| 522 | [Agent lifecycle and liveness reporting are unreliable in four distinct ways](#522-agent-lifecycle-and-liveness-reporting-are-unreliable-in-four-distinct-ways) | Minor | Pending | 1.3 = 2×1.0÷1.5 | standard | None of the four blocks work, but together they make "is the agent running?" unanswerable without checking /proc by hand, which cost time repeatedly during the trial. |
+| 522 | [Agent lifecycle and liveness reporting are unreliable in four distinct ways](#522-agent-lifecycle-and-liveness-reporting-are-unreliable-in-four-distinct-ways) | Minor | Done (2026-08-12) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #522 for the full account. |
 | 527 | [The `:memory:` test database silently fails every nested query, so the assisted queue's readiness fields cannot be covered](#527-the-memory-test-database-silently-fails-every-nested-query-so-the-assisted-queues-readiness-fields-cannot-be-covered) | Minor | Done (2026-08-07) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #527 for the full account. |
 | 529 | [49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`](#529-49-emails-processed-zero-outcomes-recorded--the-trackers-detections-may-never-be-reaching-job_funnel) | Minor | Done (2026-08-07) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #529 for the full account. |
 | 533 | [An outcome email that matches no application is acknowledged and discarded, so the evidence is unrecoverable](#533-an-outcome-email-that-matches-no-application-is-acknowledged-and-discarded-so-the-evidence-is-unrecoverable) | Minor | Done (2026-08-07) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #533 for the full account. |
@@ -997,103 +997,5 @@ Live counts confirmed the 2026-08-07 state exactly (67/524 with a location, 361 
 
 ### 522. Agent lifecycle and liveness reporting are unreliable in four distinct ways
 
-**Found 2026-08-05/06**, all confirmed live during the acceptance trial. Individually minor; together they make "is the agent running?" unanswerable without inspecting `/proc` by hand.
-
-1. **`/api/agent/stop` returns `{"status":"stopped"}` while the agent is still alive.** It signals and returns without waiting. Observed repeatedly; the process often needed 60+ seconds, and once a `SIGKILL`, before actually exiting.
-2. **The stopped agent becomes a zombie.** `serveAgentStart` uses `cmd.Start()` and never `Wait()`s, so the child is never reaped. It lingers as `Z`/`<defunct>` until the dashboard itself exits. `kill -0` succeeds on a zombie, so naive liveness checks report a dead agent as running — the flock check is correct, ad-hoc checks are not.
-3. **`daemon_active` reads true with no agent running.** It compares `applications/active_operator_settings.json` against the effective settings and has no liveness component at all, so it reflects "the last daemon agreed with these settings", not "a daemon exists".
-4. **The dashboard launches Assisted Apply through `go run`.** `assistedApplicationCommand` prefers `go run ./cmd/assist` whenever a go.mod root exists, so a built `career_assist_bin` is never what executes in a source checkout. It also adds a wrapper process between the dashboard and the real assist process — the classic orphan shape this file already documents for `cmd/agent`.
-
-**Fix direction.** Have stop wait briefly and report truthfully; reap the child; give `daemon_active` a real liveness check (the flock already used by `agentPID` is the obvious source); and either exec the built binary or document the `go run` preference deliberately.
-
-### 529. 49 emails processed, zero outcomes recorded — the tracker's detections may never be reaching `job_funnel`
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md` item #529.
-
-### 533. An outcome email that matches no application is acknowledged and discarded, so the evidence is unrecoverable
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md` item #533.
-
-### 534. `StartTracker` only ever reads the newest ~51 messages, so any outage longer than the fetch window loses outcomes permanently
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md` item #534.
-
-### 535. A missing operator_settings.yaml could silently reactivate Automatic mode's final employer submit-click from legacy profile.yaml booleans
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md` item #535.
-
-### 532. Every stage-ledger event has a NULL duration, because the trigger measures time with `julianday()` over a format SQLite cannot parse
-
-**Found 2026-08-07** while closing #529, which needed to prove that a tracker outcome lands in the funnel stage ledger with the right timestamp. It does now. Its `stage_duration_ms` does not, and neither does anything else's.
-
-**The observation.** Against the live `applications.db`, **1,385 of 1,385** `funnel_stage_events` rows have `stage_duration_ms IS NULL`. The column has never held a value since the ledger shipped (improvement #494, 2026-08-01). This is not specific to the tracker — it is every writer, on every transition.
-
-**Cause, already half-documented.** `createFunnelStageLedgerTrigger` (`pkg/storage/manager.go:597`) computes the gap between the new event and the previous one for that URL with
-
-```sql
-CAST(ROUND((julianday(NEW.last_updated) - julianday((SELECT occurred_at ...))) * 86400000) AS INTEGER)
-```
-
-ADR-003 **decision 6** (bug #531, 2026-08-07) already records why that returns nothing: `modernc.org/sqlite` stores a bound `time.Time` as `time.Time.String()` — `2026-08-06 15:52:28.596249998 +0000 UTC` — and SQLite's own date functions return NULL over that shape. Confirmed directly against the live database: `SELECT julianday(occurred_at) FROM funnel_stage_events` returns empty for every row. So the subtraction is `NULL - NULL`, the `CAST` yields NULL, and the trigger's `CASE` guard never even gets to matter.
-
-ADR-003 **decision 5** asserts in the same document that the ledger records "prior and next state, derived pipeline stage, normalized reason code, timestamp, and elapsed duration". Four of those five are true. The fifth has never been true. The two decisions contradict each other and decision 6 is the correct one — decision 5's text has been corrected in place as part of #529's close, but the code behind it has not.
-
-**Second, smaller problem in the same trigger.** The `pipeline_stage` `CASE` has no arm for `REJECTED` or `INTERVIEW_REQUESTED`, so every outcome event the tracker writes falls through to the generic `ELSE 'funnel'` bucket — the same label used for ordinary funnel churn. Verified live 2026-08-07 with a synthetic rejection: `stage=funnel`. Outcomes are the events the feedback loop exists to isolate, and they are currently indistinguishable by stage from a requeue.
-
-**Why it is only Minor.** Nothing reads the column today. `stage_duration_ms` is projected into `storage.FunnelStageEvent.StageDurationMs` (`pkg/storage/attempts.go:49`) and no caller consumes it — no dashboard panel, no ranking input. The cost is latent: improvement #493's expected-yield ranking is the intended consumer of exactly this data, and it will read a column that is silently NULL for its entire history rather than one that is visibly absent.
-
-**Fix direction.** Do **not** change the DSN's time format — ADR-003 decision 6 records why that is off the table (it would split every timestamp column into two encodings and leave 12,046 existing rows unreadable). Two workable options, in preference order:
-
-1. Have the trigger normalise before measuring. SQLite can parse the stored shape if the trailing zone text is stripped and the space is left as-is: `julianday(substr(x, 1, 23))` handles `2026-08-06 15:52:28.596` correctly. Cheap, but it hard-codes an assumption about the driver's output width, and rows written as RFC3339 (which some paths do produce) would need the same treatment.
-2. Compute the duration in Go at the one call site that knows both timestamps and pass it in, demoting the trigger to recording what it is given. This contradicts decision 5's stated reason for using a trigger at all ("raw status writers cannot silently skip history"), so it needs an ADR amendment rather than a quiet change.
-
-Either way the change is a `DROP TRIGGER` + `CREATE TRIGGER` migration, not a `CREATE TRIGGER IF NOT EXISTS` edit — the existing trigger is already installed in the live database and `IF NOT EXISTS` will not replace it. There is **no precedent for a trigger migration in this repo** (`DROP TRIGGER` appears nowhere), so the migration helper is genuinely new work and is the bulk of the Effort 3. Backfilling the 1,385 existing NULLs is possible from `occurred_at` alone and should be a separate, explicitly opt-in step.
-
-### 526. The automatic submitter's network guard aborts requests silently
-
-**Found 2026-08-06** while fixing #523, which covered only the assisted browser. `installSafeBrowserRoutes` (`pkg/submitter/network.go:80`) is the *automatic* submission path's own route guard — a separate function from the one #523 fixed — and it has the same gap: `guard.ValidateURL` rejects a request at `:94` and `route.Abort("accessdenied")` runs with **no record of the rejection**. It logs only the two failure cases around it (`:97` if the abort fails, `:105` if a continue fails), so a request that is blocked cleanly is invisible exactly as it was on the assisted path.
-
-Scope confirmed by call chain, not assumed: the function is reached only from `Pipeline.Execute` (`pkg/submitter/dynamic.go:270`) and `newSubmitPage` (`pkg/submitter/browser.go:1364`). `cmd/assist` never calls it — `FillAssistedMappedPage` receives an already-open page — so #523's fix does not cover this path and this row does not overlap it.
-
-Lower value than #523 only because the automatic path is not the one currently in daily use. The cost when it does bite is the same: #523's own history is a full investigation cycle spent ruling the guard out by building a synthetic reproduction, because the log could not answer the question.
-
-**Second, smaller problem in the same function.** Both existing log lines print the Playwright error with `%v`. That error can quote the request it refers to, which is why #523 deliberately reported an abort failure by fact and safe host rather than by message. These two lines have the exposure #523 removed from the assisted path.
-
-**Fix direction.** Reuse what #523 already built rather than writing a second mechanism: `security.NetworkRejectionReason(err)` already maps every reachable rejection to a bounded code and is exported. The host sanitizer is not — it is `safeAssistedHost` in `cmd/assist/main.go`, unexported. Either move it into `pkg/security` beside the classifier and repoint `cmd/assist` at it, or duplicate ~20 lines; moving it is preferred, since two copies of a redaction rule is how one of them ends up wrong. Then log one bounded record at the rejection point and drop the `%v` from the two existing lines. Do not change what the guard permits.
-
-### 527. The `:memory:` test database silently fails every nested query, so the assisted queue's readiness fields cannot be covered
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
-
-### 528. Assisted Apply attaches the "cover letters are disabled" note when send_cover_letter is false
-
-**Found 2026-08-06** while fixing #525, in the branch immediately beside it. This is the last member of the #515/#517/#525 family — the automatic and assisted paths resolving the same document differently.
-
-With `send_cover_letter: false`, `cmd/agent` sends no cover letter at all: `cmd/agent/pipeline.go` returns `""` for the cover path from both its untailored branch and its tailored branch. But `SaveApplication` still writes a per-job `coverletter.txt`, and in the untailored branch its contents are the literal sentence "Cover letters are disabled (send_cover_letter: false); none was sent with this application."
-
-`storage.GetAssistedDocument` resolves `cover_letter` to that file whenever no master letter applies. So an assisted application would attach a one-sentence note explaining that no cover letter was sent — the same shape of defect as #515, where the résumé resolved to a "master documents were used" placeholder.
-
-**Not live on this host:** `profile.yaml` currently sets `send_cover_letter: true`, so this cannot fire today. It becomes an active document-fidelity defect the moment the toggle is turned off, which is a one-line profile edit.
-
-**Re-scored 2026-08-06 (`/groom_backlogs`, the pass after it was filed):** filed the same day at `1.5 = 3×0.5÷1` and `mechanical`; corrected to `1.0 = 2×1.0÷2` and `standard`. Two changes, both against this row's own fix direction rather than against the number: Value drops to 2 because the defect is latent rather than live, and Effort rises to 2 because the fix is not a one-line path swap — it needs a "not applicable" state distinguishable from a load failure, threaded through `GetAssistedDocument`, the queue projection's `cover_letter_ready`, and `cmd/assist`'s manual-review fallback. Decay stays 1.0 per this file's rule that a defect's cost does not shrink because sibling defects were fixed; the 0.5 it was filed with was borrowed from `improvements.md`'s theme-decay rule, which bugs are explicitly exempt from.
-
-Deliberately left out of #525's scope: fixing it means teaching the assisted path to represent "no cover letter" as a distinct state from "the cover letter failed to load". Today `cmd/assist` treats any `GetAssistedDocument` error as a reason to fall back to manual review (`cmd/assist/main.go:607-616`), which would turn a correctly-configured profile into a degraded handoff on every job.
-
-**Fix direction.** Extend `config.Profile` with the same single-source resolution #525 introduced — a method answering "does this profile send a cover letter at all" is already there in `ShouldSendCoverLetter`. Have `GetAssistedDocument` report a not-applicable cover letter distinctly from a failed one, have `GetAssistedQueue` set `cover_letter_ready` false without implying an error, and have `cmd/assist` pass an empty cover path to `FillAssistedMappedPage` rather than entering manual review. Check what the fill handlers already do with an empty `coverPath`, since the automatic path passes exactly that today and works.
-
-### 518. A revalidated, already-submitted application cannot be confirmed from the dashboard
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
-
-### 517. Assisted Apply serves 404 for every cover letter once documents move to needs_manual_apply
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
-
-### 516. Discovery has no geographic gate, so an India-only role reached a live application attempt
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
-
-### 515. Assisted Apply uploaded the saved reference note in place of the résumé
-
-Closed — full account archived in `documentation/backlog_history/bugs_done_details.md`.
+Closed 2026-08-12 — full account archived in `documentation/backlog_history/bugs_done_details.md` item #522.
 

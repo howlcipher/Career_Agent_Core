@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 )
 
+// ActiveSettingsPath is the file where the running daemon acknowledges its
+// effective settings. It is a variable so tests can point it at a temp file.
+var ActiveSettingsPath = "applications/active_operator_settings.json"
+
 func AcknowledgeActiveSettings(eff *EffectiveSettings, path string) error {
 	dir := filepath.Dir(path)
 	os.MkdirAll(dir, 0700)

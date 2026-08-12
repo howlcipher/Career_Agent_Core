@@ -2,6 +2,32 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 522. Agent lifecycle and liveness reporting are unreliable in four distinct ways
+
+**Found 2026-08-05/06** and confirmed live. Closed 2026-08-12. Four independent defects in `cmd/dashboard` and `pkg/config` made the dashboard's answer to "is the agent running?" unsafe when operating real child processes.
+
+**Defects and fixes.**
+
+1. **`/api/agent/stop` claimed `{"status":"stopped"}` while the agent was still alive.** It sent `SIGTERM` and returned immediately. `serveAgentStop` (`cmd/dashboard/main.go`) now identifies the agent through the same single-instance `flock` used everywhere else, sends `SIGTERM` only to that PID, and polls the lock until it is released. Only then does it return `{"status":"stopped"}`. If the process does not exit within `CAREER_AGENT_STOP_TIMEOUT` (default `30s`, overridable), it returns HTTP 408 with `{"status":"timeout", "pid": <pid>, "message": "..."}`. There is no automatic `SIGKILL` escalation; a truthful timeout is preferred over a false success.
+
+2. **Dashboard-launched agents became unreaped zombies.** `serveAgentStart` called `cmd.Start()` without an owner for `cmd.Wait()`. It now keeps an `agentChild` record, spawns one goroutine that owns `cmd.Wait()`, and synchronizes on `agentProc`/`agentMu` so lifecycle races between start, stop, and status are bounded. Repeated start/stop cycles no longer accumulate `<defunct>` processes.
+
+3. **`daemon_active` read true with no agent running.** `pkg/config.GetEffectiveSettings` compared the effective settings against `applications/active_operator_settings.json` and reported `DaemonActive` from the acknowledgement alone. It now also calls `config.IsAgentAlive(AgentLockPath)`, sets a new `DaemonRunning` field from the lock-backed liveness check, and only sets `DaemonActive = acknowledged && alive`. This separates "settings the daemon acknowledged" from "an agent process actually holds the lock".
+
+4. **Assisted Apply launched through `go run` in a source checkout.** `assistedApplicationCommand` now resolves: `$CAREER_ASSIST_BIN` if set and executable; sibling `career_assist_bin` or `assist` next to the dashboard binary; a built `career_assist_bin` in the repository root; and only falls back to `go run ./cmd/assist` as an explicit development fallback. The launch path also keeps a single `Wait()` owner so readiness-timeout kills do not leak zombies.
+
+**Process ownership and reaping.** One goroutine owns `cmd.Wait()` for every dashboard-started child. The agent start endpoint waits only until the child has acquired its own single-instance lock, then hands the child off to the wait goroutine. The stop endpoint signals the lock-file PID and waits for the lock to release. The assisted launch goroutine owns `Wait()`; its timeout path kills via a captured `*os.Process` and then waits on the same goroutine, never calling `Wait()` twice.
+
+**Liveness source.** The existing `flock` on `applications/career_agent.lock` is the single source of truth. `pkg/config/IsAgentAlive` checks it with a non-blocking shared lock so status checks do not race against the agent's exclusive acquisition. The PID in the lock file is used only as a signalling target, never as the sole proof of liveness.
+
+**Tests.** New unit/Linux integration tests in `cmd/dashboard/main_test.go`: `TestServeAgentStart_LaunchesAndReapsAfterNaturalExit`, `TestServeAgentStop_WaitsForActualExit`, `TestServeAgentStop_TimeoutDoesNotClaimSuccess`, `TestServeAgentStop_AlreadyStoppedReportsTruthfully`, `TestServeAgentStart_AlreadyRunningReportsTruthfully`, `TestRepeatedStartStop_NoZombiesNoStaleLocks`, `TestAgentCommandPrefersBuiltBinary`, `TestLaunchAssistedApplication_ReadinessTimeoutKillsAndReaps`, `TestAssistedApplicationCommandPrefersBuiltBinaryInCheckoutRoot`, `TestAssistedApplicationCommandFallsBackToGoRunWhenNoBinaryExists`. New `pkg/config` tests in `effective_settings_test.go`: `TestGetEffectiveSettings_DaemonActiveRequiresLiveness`, `TestGetEffectiveSettings_DaemonActiveFalseWhenSettingsMismatch`. A build-tagged Playwright UI test, `cmd/dashboard/ui_lifecycle_test.go` (`go test -tags=ui ./cmd/dashboard -run TestUILifecycleStartStop`), drives the real dashboard in Chromium and clicks Start/Stop while asserting the rendered state transitions.
+
+**Real process smoke tests in the Devin Linux VM.** A synthetic `fake_agent` binary acquired the same flock, printed readiness, and responded to `SIGTERM`/`FAKE_AGENT_IGNORE_SIGTERM`. Results: 10 consecutive start/stop cycles returned `{"status":"started"}`/`{"status":"stopped"}`, status toggled `running:true`/`running:false`, 0 zombies, lock free at the end; a 200ms stop delay caused the endpoint to wait ~2s and then truthfully return `stopped`; ignoring `SIGTERM` caused the endpoint to return HTTP 408 with `{"status":"timeout"}` while the process remained alive.
+
+**Verification.** `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` are clean. `go test -race ./cmd/dashboard/... ./pkg/config/...` passes.
+
+**Files changed.** `cmd/dashboard/main.go`, `pkg/config/agent_liveness.go`, `pkg/config/active_settings.go`, `pkg/config/effective_settings.go`, `cmd/dashboard/main_test.go`, `pkg/config/effective_settings_test.go`, `cmd/dashboard/ui_lifecycle_test.go`, `cmd/dashboard/testdata/fake_agent/main.go`, `cmd/dashboard/testdata/fake_assist/main.go`.
+
 ## 535. A missing operator_settings.yaml could silently reactivate Automatic mode's final employer submit-click from legacy profile.yaml booleans
 
 **Found and completed 2026-08-11**, as a proactive safety-hardening task rather than from a live incident. Severity graded **Major** under the existing rubric rather than downgraded to protect the Usability Gate's zero-Major claim: the failure mode is an irreversible external action (a real employer form submitted with no operator having explicitly chosen Automatic mode), triggered by nothing more than a settings file being absent — exactly the state a fresh install or a botched upgrade leaves behind.

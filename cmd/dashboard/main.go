@@ -22,11 +22,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
@@ -1156,10 +1158,9 @@ func serveAssistedLaunch(w http.ResponseWriter, r *http.Request) {
 }
 
 // launchAssistedApplication is replaceable only by handler tests. Prefer the
-// source checkout when one is available, but also support a compiled
-// dashboard launched from another working directory by using a sibling
-// assist binary. This prevents a valid click from becoming a silent no-op
-// merely because the dashboard was started outside the repository root.
+// built career_assist_bin, falling back to `go run ./cmd/assist` only when no
+// compiled binary exists. The launched process is always reaped by a single
+// Wait() goroutine so repeated launches do not accumulate zombies.
 var launchAssistedApplication = func(jobID string) error {
 	cmd, err := assistedApplicationCommand(jobID)
 	if err != nil {
@@ -1172,6 +1173,9 @@ var launchAssistedApplication = func(jobID string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// Capture the process before the Wait goroutine starts so the timeout path
+	// can kill it without racing cmd.Wait's mutation of cmd.Process.
+	proc := cmd.Process
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -1189,6 +1193,12 @@ var launchAssistedApplication = func(jobID string) error {
 		}
 		done <- cmd.Wait()
 	}()
+	timeout := 45 * time.Second
+	if d := os.Getenv("CAREER_ASSIST_READY_TIMEOUT"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil {
+			timeout = parsed
+		}
+	}
 	select {
 	case <-ready:
 		return nil
@@ -1197,31 +1207,86 @@ var launchAssistedApplication = func(jobID string) error {
 			return errors.New("assisted browser exited before it opened the application")
 		}
 		return fmt.Errorf("assisted browser exited before it opened the application: %w", err)
-	case <-time.After(45 * time.Second):
-		_ = cmd.Process.Kill()
+	case <-time.After(timeout):
+		_ = proc.Kill()
+		// Reap the process via the single goroutine that owns Wait().
+		<-done
 		return errors.New("timed out waiting for assisted browser to open")
 	}
 }
 
+// assistedApplicationCommand resolves the binary used for an Assisted Apply
+// launch. Resolution order:
+//  1. $CAREER_ASSIST_BIN if set and executable.
+//  2. A binary named career_assist_bin or assist beside the dashboard executable.
+//  3. A built career_assist_bin in the repository root.
+//  4. `go run ./cmd/assist` from the repository root (development fallback).
 func assistedApplicationCommand(jobID string) (*exec.Cmd, error) {
+	if envBin := os.Getenv("CAREER_ASSIST_BIN"); envBin != "" {
+		if info, err := os.Stat(envBin); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(envBin, "-job", jobID), nil
+		}
+	}
+
+	executable, err := os.Executable()
+	if err == nil {
+		directory := filepath.Dir(executable)
+		for _, name := range []string{"career_assist_bin", "assist"} {
+			candidate := filepath.Join(directory, name)
+			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+				return exec.Command(candidate, "-job", jobID), nil
+			}
+		}
+	}
+
 	if root := findGoModuleRoot(); root != "" {
+		candidate := filepath.Join(root, "career_assist_bin")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(candidate, "-job", jobID), nil
+		}
 		cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
 		cmd.Dir = root
 		return cmd, nil
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("locate dashboard executable: %w", err)
-	}
-	directory := filepath.Dir(executable)
-	for _, name := range []string{"career_assist_bin", "assist"} {
-		candidate := filepath.Join(directory, name)
-		info, statErr := os.Stat(candidate)
-		if statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(candidate, "-job", jobID), nil
+
+	return nil, errors.New("cannot locate assisted browser command: start the dashboard from the repository checkout or place career_assist_bin beside the dashboard binary")
+}
+
+// agentCommand resolves the binary used for the daemon agent. Resolution order
+// matches assistedApplicationCommand:
+//  1. $CAREER_AGENT_BIN if set and executable.
+//  2. A binary named career_agent_bin beside the dashboard executable.
+//  3. A built career_agent_bin in the repository root.
+//  4. `go run ./cmd/agent` from the repository root (development fallback).
+func agentCommand() (*exec.Cmd, error) {
+	args := []string{"-daemon", "-cycle-limit", "15", "-cycle-interval", "1m"}
+
+	if envBin := os.Getenv("CAREER_AGENT_BIN"); envBin != "" {
+		if info, err := os.Stat(envBin); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(envBin, args...), nil
 		}
 	}
-	return nil, errors.New("cannot locate assisted browser command: start the dashboard from the repository checkout or place career_assist_bin beside the dashboard binary")
+
+	executable, err := os.Executable()
+	if err == nil {
+		directory := filepath.Dir(executable)
+		candidate := filepath.Join(directory, "career_agent_bin")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(candidate, args...), nil
+		}
+	}
+
+	if root := findGoModuleRoot(); root != "" {
+		candidate := filepath.Join(root, "career_agent_bin")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return exec.Command(candidate, args...), nil
+		}
+		cmd := exec.Command("go", append([]string{"run", "./cmd/agent"}, args...)...)
+		cmd.Dir = root
+		return cmd, nil
+	}
+
+	return nil, errors.New("cannot locate agent binary: start the dashboard from the repository checkout or place career_agent_bin beside the dashboard binary")
 }
 
 func findGoModuleRoot() string {
@@ -1280,43 +1345,56 @@ func serveAssistedDocument(w http.ResponseWriter, r *http.Request) {
 
 // Removed serveDashboard and serveFavicon as they are now handled by http.FileServer
 
-// agentLockPath is cmd/agent's single-instance lock (bug #414), reused here
-// as the source of truth for whether the agent is running.
-const agentLockPath = "applications/career_agent.lock"
+// agentChild tracks a dashboard-launched agent process and the result of the
+// single Wait() goroutine that reaps it. The mutex protects both the in-use
+// process record and the lock state it reflects.
+type agentChild struct {
+	cmd     *exec.Cmd
+	process *os.Process
+	done    chan struct{}
+	err     error
+}
+
+var (
+	agentMu   sync.Mutex
+	agentProc *agentChild
+)
 
 // agentPIDAt reports whether the agent's single-instance lock file is
-// currently held, and the PID of the process holding it when the file's
-// contents parse as one. This replaces identifying the agent via `pgrep -f
-// career_agent_bin`, which false-positived on any process whose command line
-// merely contained that substring - a `go build`, a `tail -f`, an editor with
-// the file open - and whose `pkill -f` counterpart then killed the unrelated
-// match (bug #449). A lock we can acquire ourselves means nothing holds it;
-// we release it immediately since this call is a status check, not a claim.
+// currently held. It delegates to pkg/config so both commands share one
+// definition of liveness.
 func agentPIDAt(lockPath string) (pid int, running bool, err error) {
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return 0, false, fmt.Errorf("open agent lock file: %w", err)
-	}
-	defer f.Close()
-
-	if flockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); flockErr != nil {
-		// Held by another process: that is the agent. Its PID is whatever it
-		// wrote when it acquired the lock; treat unreadable or unparsed
-		// content as "running, PID unknown" rather than failing the check.
-		data, readErr := os.ReadFile(lockPath)
-		if readErr == nil {
-			if parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
-				pid = parsed
-			}
-		}
-		return pid, true, nil
-	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return 0, false, nil
+	return config.IsAgentAlive(lockPath)
 }
 
 func agentPID() (pid int, running bool, err error) {
-	return agentPIDAt(agentLockPath)
+	return agentPIDAt(config.AgentLockPath)
+}
+
+// waitForAgentLock polls until the agent lock is held by expectedPID, the lock
+// is held by some other PID, or the context is cancelled. It is used after
+// cmd.Start() so the start response only claims success once the child has
+// actually acquired its own single-instance lock.
+func waitForAgentLock(ctx context.Context, lockPath string, expectedPID int) error {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		pid, running, err := config.IsAgentAlive(lockPath)
+		if err != nil {
+			return err
+		}
+		if running && pid == expectedPID {
+			return nil
+		}
+		if running && pid != 0 && pid != expectedPID {
+			return fmt.Errorf("another process (pid %d) holds the agent lock", pid)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func serveAgentStart(w http.ResponseWriter, r *http.Request) {
@@ -1324,6 +1402,9 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	agentMu.Lock()
+	defer agentMu.Unlock()
 
 	_, running, err := agentPID()
 	if err != nil {
@@ -1336,23 +1417,55 @@ func serveAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep the dashboard-launched agent actively draining its backlog while
-	// retaining a short pause between source-refresh cycles to avoid a tight
-	// retry loop when an upstream job board is unavailable.
-	cmd := exec.Command(
-		"./career_agent_bin",
-		"-daemon",
-		"-cycle-limit", "15",
-		"-cycle-interval", "1m",
-	)
+	cmd, err := agentCommand()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to locate agent binary: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	if err := cmd.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start agent: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// Wait only until the child has acquired its own lock. That is the process
+	// liveness contract; we deliberately do not wait for an entire job cycle.
+	startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := waitForAgentLock(startCtx, config.AgentLockPath, cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		http.Error(w, fmt.Sprintf("Agent started but never established its liveness lock: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	child := &agentChild{cmd: cmd, process: cmd.Process, done: make(chan struct{})}
+	go func() {
+		child.err = cmd.Wait()
+		close(child.done)
+		agentMu.Lock()
+		if agentProc == child {
+			agentProc = nil
+		}
+		agentMu.Unlock()
+	}()
+	agentProc = child
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status": "started"}`))
 }
+
+// agentStopTimeout is how long the stop endpoint waits for the process to
+// actually exit after SIGTERM before reporting a timeout. It is a variable so
+// tests can shorten it and operators can override it via the environment.
+var agentStopTimeout = func() time.Duration {
+	if d := os.Getenv("CAREER_AGENT_STOP_TIMEOUT"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 30 * time.Second
+}()
 
 func serveAgentStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1360,23 +1473,69 @@ func serveAgentStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Signal the specific PID the lock file names, not a `pkill -f` substring
-	// match: that pattern also matched a `go build`, a `tail -f`, or an editor
-	// with the binary's name open, and killed whichever one it hit (bug
-	// #449). If the PID is unknown, there is nothing safe to signal.
+	agentMu.Lock()
 	pid, running, err := agentPID()
 	if err != nil {
+		agentMu.Unlock()
 		log.Printf("serveAgentStop: could not determine agent status: %v", err)
+		http.Error(w, fmt.Sprintf("Could not determine agent status: %v", err), http.StatusInternalServerError)
+		return
 	}
-	if running && pid > 0 {
-		if proc, findErr := os.FindProcess(pid); findErr == nil {
-			if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil {
-				log.Printf("serveAgentStop: failed to signal pid %d: %v", pid, sigErr)
-			}
+	if !running {
+		agentMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status": "not_running"}`))
+		return
+	}
+
+	if pid <= 0 {
+		agentMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status": "running", "error": "agent lock held but PID unknown"}`))
+		return
+	}
+
+	proc, findErr := os.FindProcess(pid)
+	if findErr != nil {
+		agentMu.Unlock()
+		log.Printf("serveAgentStop: could not find process %d: %v", pid, findErr)
+		http.Error(w, fmt.Sprintf("Could not find agent process %d: %v", pid, findErr), http.StatusInternalServerError)
+		return
+	}
+	if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil {
+		agentMu.Unlock()
+		log.Printf("serveAgentStop: failed to signal pid %d: %v", pid, sigErr)
+		http.Error(w, fmt.Sprintf("Failed to signal agent (pid %d): %v", pid, sigErr), http.StatusInternalServerError)
+		return
+	}
+	agentMu.Unlock()
+
+	// Poll the authoritative lock until the process is gone or we time out.
+	// We do not automatically escalate to SIGKILL; a truthful timeout is
+	// preferable to claiming stopped while the process is still alive.
+	deadline := time.Now().Add(agentStopTimeout)
+	for {
+		_, stillRunning, checkErr := agentPID()
+		if checkErr != nil {
+			log.Printf("serveAgentStop: liveness check failed: %v", checkErr)
 		}
+		if !stillRunning {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status": "stopped"}`))
+			return
+		}
+		if time.Now().After(deadline) {
+			w.WriteHeader(http.StatusRequestTimeout)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"status":  "timeout",
+				"pid":     pid,
+				"message": "agent did not exit within the graceful shutdown window",
+			})
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status": "stopped"}`))
 }
 
 func serveAgentStatus(w http.ResponseWriter, r *http.Request) {
