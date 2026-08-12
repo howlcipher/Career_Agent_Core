@@ -1,45 +1,213 @@
+/* Career Agent Core — MegaDeus-Inspired Design System
+ *
+ * A restrained industrial command-console palette: dark machined surfaces,
+ * brass/bronze structural accents, and a small set of system-status signals.
+ * Values are tokenised to keep the rest of the UI consistent.
+ */
+
 :root {
-  --bg-color: #111820;
-  --card-bg: #1a252f;
-  --card-border: #3a4b58;
-  --text-main: #f4f1e7;
-  --text-muted: #b4bdc2;
-  --neon-blue: #6ec4cf;
-  --neon-purple: #8b8fa2;
-  --neon-green: #9fbe78;
-  --neon-red: #d46e67;
-  --neon-yellow: #e6b866;
-  --neon-orange: #d8925b;
-  --neon-pink: #cf8191;
-  --neon-teal: #6eb6a9;
-  --neon-cyan: #87d3c4;
+  /* Surfaces — layered like a physical console */
+  --bg-color: #0b0d0f;
+  --bg-grid: rgba(255, 255, 255, 0.035);
+  --surface-1: #14181c;
+  --surface-2: #1a1f24;
+  --surface-3: #20262c;
+  --surface-inset: #0e1114;
+  --surface-raised: #232a31;
+
+  /* Trim and accents */
+  --trim: #3d454d;
+  --trim-light: #56606a;
+  --trim-dark: #252b31;
+  --brass: #b89a6a;
+  --brass-dim: #7d6848;
+  --bronze: #a67c52;
+  --gold: #c9a66b;
+  --steel: #7a8a99;
+
+  /* Text */
+  --text-main: #e8e4dc;
+  --text-muted: #9ca3ab;
+  --text-dim: #6c747d;
+
+  /* System status signals — bright means something */
+  --status-active: #7da86b;
+  --status-pending: #d4a45a;
+  --status-warning: #c76b5e;
+  --status-info: #6b90a8;
+  --status-offline: #5c646b;
+  --status-crt: #7ebd6e;
+
+  /* Functional accents derived from status signals */
+  --neon-green: var(--status-active);
+  --neon-yellow: var(--status-pending);
+  --neon-red: var(--status-warning);
+  --neon-blue: var(--status-info);
+
+  /* Legacy aliases kept for existing class names/tests */
+  --card-bg: var(--surface-2);
+  --card-border: var(--trim);
+
+  /* Spacing — 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Typography */
+  --font-display: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+
+  /* Geometry */
+  --radius: 0;
+  --radius-sm: 2px;
+  --border-thin: 1px solid var(--trim);
+  --border-accent: 1px solid var(--brass-dim);
+  --border-status: 2px solid;
+
+  /* Motion */
+  --transition-fast: 120ms ease;
+  --transition-base: 180ms ease;
+  --transition-slow: 260ms ease;
 }
 
 * {
   box-sizing: border-box;
 }
 
-body {
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background-color: var(--bg-color);
-  background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
-  background-size: 28px 28px;
-  color: var(--text-main);
-  margin: 0;
-  padding: 28px 20px 56px;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+html {
+  background: var(--bg-color);
 }
 
-button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #f2c573; outline-offset: 3px; }
+body {
+  font-family: var(--font-body);
+  background-color: var(--bg-color);
+  background-image:
+    linear-gradient(var(--bg-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  color: var(--text-main);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
 
+/* Selection emphasises the readout character of telemetry text. */
+::selection {
+  background: rgba(184, 154, 106, 0.35);
+  color: var(--text-main);
+}
+
+/* Focus states — visible but engineered, not glow-heavy. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* Typography primitives */
+.machine-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  text-transform: uppercase;
+  color: var(--text-main);
+}
+
+.machine-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.machine-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.readout {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Anchor style */
+a {
+  color: var(--gold);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Form defaults */
+input,
+select,
+textarea {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-main);
+  background: var(--surface-inset);
+  border: 1px solid var(--trim);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--trim-light);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--gold);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Reduced motion — strip purposeful animation, keep state transitions. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-      scroll-behavior: auto !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
