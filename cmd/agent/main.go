@@ -583,6 +583,7 @@ func runAgentSchedule(
 func newDiscoveryEngine(prof *config.Profile) *scraper.FunnelEngine {
 	engine := scraper.NewFunnelEngine(prof.Roles)
 	engine.AllowedCountries = prof.AllowedCountries
+	engine.RemoteOnly = prof.RemoteOnly
 	return engine
 }
 
@@ -664,8 +665,15 @@ func runAgentQueueCycle(
 			Title:       discovered.JobTitle,
 			URL:         discovered.URL,
 			Salary:      deps.targetCompensation,
-			Remote:      true,
-			Intent:      discovered.StatusReason,
+			Location:    discovered.Location,
+			// discovered.IsRemote reflects what was actually recorded for
+			// this posting (job_funnel.is_remote), not an assumption. It is
+			// re-checked, together with the full description, once
+			// pipeline.go fetches the posting (bugs.md-class fix: this used
+			// to hardcode Remote: true for every discovered job regardless
+			// of its recorded remote status).
+			Remote: discovered.IsRemote,
+			Intent: discovered.StatusReason,
 		})
 	}
 

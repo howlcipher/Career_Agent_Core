@@ -106,6 +106,14 @@ type FunnelEngine struct {
 	// See LocationAllowed for the fail-open policy (bug #516).
 	AllowedCountries []string
 
+	// RemoteOnly mirrors Profile.RemoteOnly. When true, feed-sourced postings
+	// that are not confirmed fully remote (config.RemoteEligible) are
+	// rejected at intake rather than costing a full fit-scoring call only to
+	// be rejected later. The authoritative check still happens again in
+	// cmd/agent's pipeline once the full description is available -- this is
+	// a cheap early exit, not a replacement for it.
+	RemoteOnly bool
+
 	// yahooClient is shared across every discoverWithYahooHTML call made by
 	// this engine instance (one per DiscoverJobs run, see NewFunnelEngine's
 	// call site) so its cookie jar accumulates across queries instead of

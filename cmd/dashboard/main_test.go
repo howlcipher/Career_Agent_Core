@@ -226,7 +226,9 @@ func setupTestDB(t *testing.T) {
 		applied_at DATETIME,
 		next_eligible_at DATETIME,
 		tone_variant TEXT,
-		processing_intent TEXT
+		processing_intent TEXT,
+		job_location TEXT,
+		is_remote INTEGER
 	);
 	CREATE TABLE applied_jobs (
 		company_name TEXT,

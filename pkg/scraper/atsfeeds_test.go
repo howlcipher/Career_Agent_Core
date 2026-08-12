@@ -208,6 +208,36 @@ func TestPollBoardPersistsDiscoverySource(t *testing.T) {
 	}
 }
 
+// With RemoteOnly enabled, a feed posting whose location already says
+// "hybrid" must never reach the funnel, let alone the assisted-apply queue.
+func TestPollBoard_RejectsHybridWhenRemoteOnly(t *testing.T) {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
+		t.Fatalf("InitDBWithPath: %v", err)
+	}
+	defer storage.CloseDB()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jobs":[
+			{"absolute_url":"https://job-boards.greenhouse.io/hybridco/jobs/1","title":"DevOps Engineer","location":{"name":"Hybrid - Austin, TX"}},
+			{"absolute_url":"https://job-boards.greenhouse.io/hybridco/jobs/2","title":"DevOps Engineer","location":{"name":"Remote - United States"}}
+		]}`))
+	}))
+	defer ts.Close()
+
+	f := &FunnelEngine{Roles: []string{"DevOps Engineer"}, RemoteOnly: true}
+	jobChan := make(chan Job, 10)
+	found := f.pollBoard("hybridco", ts.URL, parseGreenhouseBoard, "atsfeed:greenhouse", jobChan)
+	close(jobChan)
+	if found != 1 {
+		t.Fatalf("found = %d, want exactly the fully-remote posting", found)
+	}
+	for job := range jobChan {
+		if job.URL == "https://job-boards.greenhouse.io/hybridco/jobs/1" {
+			t.Fatalf("hybrid posting reached the funnel: %+v", job)
+		}
+	}
+}
+
 // Feeds must not be able to bypass the junk filter every other source passes
 // through — a board can legitimately list non-posting URLs.
 func TestFeedJobsStillPassThroughJunkFilter(t *testing.T) {

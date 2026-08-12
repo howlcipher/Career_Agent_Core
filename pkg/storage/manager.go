@@ -1942,6 +1942,17 @@ type FunnelJob struct {
 	IsExploration    bool
 	StatusReason     string
 	ProcessingIntent string
+	// Location and IsRemote carry job_funnel's own advertised-location
+	// evidence forward into the automatic pipeline. Before this field
+	// existed, cmd/agent's queue cycle synthesized Remote: true for every
+	// discovered job regardless of what had actually been recorded for it --
+	// a hybrid or on-site posting whose is_remote column already said so
+	// would still reach the pipeline claiming to be remote. IsRemote is
+	// false both for a posting explicitly recorded as not remote and for one
+	// with no evidence either way; RemoteEligible's fail-closed policy makes
+	// that the correct default for both cases.
+	Location string
+	IsRemote bool
 }
 
 func (j *FunnelJob) GetURL() string             { return j.URL }
@@ -1992,7 +2003,7 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 	// next_eligible_at IS NULL covers every row that has never been retried
 	// (the overwhelming majority); rows UpdateFunnelStatusRetryable has
 	// backed off are excluded until their delay elapses (bugs.md #466).
-	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at, status_reason FROM job_funnel
+	rows, err := db.Query(`SELECT company_name, job_title, url, COALESCE(fit_similarity, -1), discovered_at, status_reason, COALESCE(job_location, ''), is_remote FROM job_funnel
 		WHERE status = 'DISCOVERED' AND url NOT LIKE '%breezy.hr%'
 		AND (next_eligible_at IS NULL OR next_eligible_at <= ?)`, time.Now().UTC())
 	if err != nil {
@@ -2005,10 +2016,12 @@ func GetDiscoveredJobs() ([]FunnelJob, error) {
 		var j FunnelJob
 		var discoveredAt sql.NullTime
 		var statusReason sql.NullString
-		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL, &j.FitSimilarity, &discoveredAt, &statusReason); err != nil {
+		var isRemote sql.NullInt64
+		if err := rows.Scan(&j.CompanyName, &j.JobTitle, &j.URL, &j.FitSimilarity, &discoveredAt, &statusReason, &j.Location, &isRemote); err != nil {
 			log.Printf("[Storage] Error scanning discovered job row: %v", err)
 			continue
 		}
+		j.IsRemote = isRemote.Valid && isRemote.Int64 != 0
 		if statusReason.Valid {
 			j.StatusReason = statusReason.String
 		}

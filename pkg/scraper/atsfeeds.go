@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	"github.com/howlcipher/Career_Agent_Core/pkg/util"
 	"golang.org/x/sync/errgroup"
@@ -194,6 +195,18 @@ func (f *FunnelEngine) pollBoard(company, endpoint string, parse boardParser, di
 			log.Printf("[FunnelEngine] Skipping %s posting outside the configured region: %s", company, reason)
 			continue
 		}
+		// Fully-remote hard gate. Only the location text is available at
+		// intake (the description is fetched later, and re-checked there by
+		// cmd/agent's pipeline with the full text) -- but a feed that already
+		// says "hybrid" or a location that names an office requirement is
+		// rejected here rather than costing a full fit-scoring call only to
+		// be rejected later anyway.
+		if f.RemoteOnly {
+			if ok, reason := config.RemoteEligible(j.Remote, j.Location, ""); !ok {
+				log.Printf("[FunnelEngine] Skipping %s posting that is not confirmed fully remote: %s", company, reason)
+				continue
+			}
+		}
 		isNew, err := f.addToFunnelCounted(discoverySource, company, j.Title, j.URL, "DISCOVERED")
 		if err != nil {
 			continue
@@ -335,49 +348,5 @@ func parseLeverBoard(body []byte) ([]feedJob, error) {
 // here on a keyword technicality. Scoring remains the authority on fit; this
 // only prevents obviously-unrelated roles from consuming a scoring slot.
 func (f *FunnelEngine) titleLooksRelevant(title string) bool {
-	if len(f.Roles) == 0 {
-		return true // no configured roles: do not silently filter everything out
-	}
-	t := strings.ToLower(title)
-
-	// Distinctive words are matched against whole tokens, never substrings.
-	// Substring matching is actively wrong for short tokens: "go" appears
-	// inside "Cargo" and "Chicago", and "api" inside "capital", so a
-	// Contains-based check would wave through exactly the unrelated roles
-	// this filter exists to stop.
-	titleWords := map[string]bool{}
-	for _, w := range strings.FieldsFunc(t, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '/' && r != '+'
-	}) {
-		titleWords[w] = true
-	}
-
-	for _, role := range f.Roles {
-		r := strings.ToLower(strings.TrimSpace(role))
-		if r == "" {
-			continue
-		}
-		// Full configured role as a phrase is safe to substring-match: it is
-		// long and specific enough not to collide accidentally.
-		if strings.Contains(t, r) {
-			return true
-		}
-		for _, word := range strings.Fields(r) {
-			if distinctiveRoleWords[word] && titleWords[word] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// distinctiveRoleWords are the tokens worth matching on their own. Words like
-// "senior", "engineer" or "developer" appear in nearly every technical title
-// and would let almost anything through, defeating the filter's purpose.
-var distinctiveRoleWords = map[string]bool{
-	"backend": true, "devops": true, "devsecops": true, "platform": true,
-	"infrastructure": true, "reliability": true, "sre": true, "automation": true,
-	"python": true, "golang": true, "go": true, "cloud": true, "security": true,
-	"observability": true, "kubernetes": true, "ci/cd": true, "sdet": true,
-	"integration": true, "network": true, "systems": true, "api": true,
+	return config.TitleEligible(title, f.Roles)
 }

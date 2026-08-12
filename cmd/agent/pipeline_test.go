@@ -167,6 +167,98 @@ func TestStateInit_DuplicateCooldownSkipsBeforeNetworkWork(t *testing.T) {
 	}
 }
 
+// The hard eligibility gate runs at the end of StateDiscovery, once the full
+// description is available, and must reject a hybrid posting outright --
+// before scoring ever runs, and regardless of how attractive its title is.
+func TestStateDiscovery_RejectsHybridPostingBeforeScoring(t *testing.T) {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer storage.CloseDB()
+
+	const jobURL = "https://jobs.example.com/hybridco/1"
+	if _, err := storage.AddToFunnel("Hybrid Co", "DevOps Engineer", jobURL, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+
+	g := buildJobPipeline(JobPipelineDeps{
+		NetworkGuard: security.NewNetworkGuard(security.WithResolver(publicResolver{})),
+		Profile: &config.Profile{
+			RemoteOnly: true,
+			Roles:      []string{"DevOps Engineer"},
+		},
+	})
+	state := &JobState{Job: scraper.Job{
+		CompanyName: "Hybrid Co",
+		Title:       "DevOps Engineer",
+		Location:    "Remote - US",
+		Remote:      true,
+		// A perfect title and an attractive "Remote" location must not
+		// override a description that plainly requires hybrid attendance.
+		Description: "This is a hybrid role requiring three days a week in office.",
+		URL:         jobURL,
+	}}
+	// Start at StateDiscovery directly: the job's description is already
+	// populated, so this exercises the hard eligibility gate without needing
+	// a live network guard / job-alive check first.
+	if err := g.Run(context.Background(), StateDiscovery, state); err != nil {
+		t.Fatalf("pipeline run: %v", err)
+	}
+
+	var status, reason string
+	if err := storage.GetDB().QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", jobURL).Scan(&status, &reason); err != nil {
+		t.Fatalf("read rejected job: %v", err)
+	}
+	if status != "SKIPPED" {
+		t.Errorf("status = %q, want SKIPPED", status)
+	}
+	if reason == "" || reason == "below_minimum_fit_score" {
+		t.Errorf("status_reason = %q, want the job rejected before scoring ever ran", reason)
+	}
+}
+
+// A job that fails the hard gate must never reach StateScoring, which is
+// what "before scoring" actually means: no LLM call, no score, no chance for
+// an attractive score to matter.
+func TestStateDiscovery_RoleMismatchRejectedBeforeScoring(t *testing.T) {
+	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	defer storage.CloseDB()
+
+	const jobURL = "https://jobs.example.com/dataco/1"
+	if _, err := storage.AddToFunnel("Data Co", "Data Engineer", jobURL, "DISCOVERED"); err != nil {
+		t.Fatalf("AddToFunnel: %v", err)
+	}
+
+	g := buildJobPipeline(JobPipelineDeps{
+		NetworkGuard: security.NewNetworkGuard(security.WithResolver(publicResolver{})),
+		Profile: &config.Profile{
+			RemoteOnly: true,
+			Roles:      []string{"Software Engineer", "DevOps Engineer"},
+		},
+	})
+	state := &JobState{Job: scraper.Job{
+		CompanyName: "Data Co",
+		Title:       "Data Engineer",
+		Location:    "Remote - US",
+		Remote:      true,
+		Description: "Fully remote data engineering role building ETL pipelines.",
+		URL:         jobURL,
+	}}
+	if err := g.Run(context.Background(), StateDiscovery, state); err != nil {
+		t.Fatalf("pipeline run: %v", err)
+	}
+
+	var status string
+	if err := storage.GetDB().QueryRow("SELECT status FROM job_funnel WHERE url = ?", jobURL).Scan(&status); err != nil {
+		t.Fatalf("read rejected job: %v", err)
+	}
+	if status != "SKIPPED" {
+		t.Errorf("status = %q, want SKIPPED for a role removed from the target profile", status)
+	}
+}
+
 func TestStateInit_DNSNotFoundTerminalizesWithoutRetry(t *testing.T) {
 	if err := storage.InitDBWithPath(filepath.Join(t.TempDir(), "test.db")); err != nil {
 		t.Fatalf("failed to open test database: %v", err)

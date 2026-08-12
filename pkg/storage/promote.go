@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 )
 
 var (
@@ -14,6 +16,7 @@ var (
 	ErrAlreadyApplied  = errors.New("job has already been applied to")
 	ErrStalePosting    = errors.New("posting is expired or stale")
 	ErrAlreadyPromoted = errors.New("job is already promoted")
+	ErrJobIneligible   = errors.New("job does not meet the current role/remote eligibility rules")
 )
 
 // PromoteJobToAssisted atomically promotes a qualified job to assisted apply mode.
@@ -24,13 +27,15 @@ func PromoteJobToAssisted(conn *sql.DB, jobID int64, minScore int) error {
 	}
 	defer tx.Rollback()
 
-	var u, status, reason string
+	var u, status, reason, title, location string
 	var fitScore int
+	var isRemote sql.NullInt64
 	var discoveredAt time.Time
 	var processingIntent sql.NullString
 
-	err = tx.QueryRow(`SELECT url, status, COALESCE(status_reason, ''), fit_score, discovered_at, processing_intent 
-		FROM job_funnel WHERE id = ?`, jobID).Scan(&u, &status, &reason, &fitScore, &discoveredAt, &processingIntent)
+	err = tx.QueryRow(`SELECT url, status, COALESCE(status_reason, ''), fit_score, discovered_at, processing_intent,
+		COALESCE(job_title, ''), COALESCE(job_location, ''), is_remote
+		FROM job_funnel WHERE id = ?`, jobID).Scan(&u, &status, &reason, &fitScore, &discoveredAt, &processingIntent, &title, &location, &isRemote)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ErrJobNotFound
@@ -48,6 +53,21 @@ func PromoteJobToAssisted(conn *sql.DB, jobID int64, minScore int) error {
 
 	if fitScore < minScore {
 		return ErrScoreTooLow
+	}
+
+	// Manual promotion must pass the same hard eligibility gate as every
+	// other path into the assisted-apply queue (bugs.md/improvements.md:
+	// "prevent assisted-apply from bypassing the remote filter"). An
+	// attractive fit score is deliberately checked above this, not instead
+	// of it: neither can substitute for the other.
+	if profile, perr := resolveEligibilityProfile(); perr == nil {
+		if ok, _ := config.IsEligibleJob(config.JobEligibilityInput{
+			Title:         title,
+			Location:      location,
+			RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
+		}, profile); !ok {
+			return ErrJobIneligible
+		}
 	}
 
 	// Posting freshness (e.g. older than 30 days is stale)

@@ -160,13 +160,14 @@ func RenewAssistedLease(conn *sql.DB, jobID, owner string, now time.Time) error 
 
 func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, error) {
 	var info AssistedLaunchInfo
-	var status, original, revalidationState string
+	var status, original, revalidationState, location string
 	var revalidationVersion int
-	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, COALESCE(jf.job_title, ''), jf.url, jf.status, aa.original_status, aa.revalidation_state, aa.revalidation_version
+	var isRemote sql.NullInt64
+	err := conn.QueryRow(`SELECT CAST(jf.id AS TEXT), jf.company_name, COALESCE(jf.job_title, ''), jf.url, jf.status, aa.original_status, aa.revalidation_state, aa.revalidation_version, COALESCE(jf.job_location, ''), jf.is_remote
 		FROM assisted_applications aa JOIN job_funnel jf ON jf.id = aa.job_id
 		WHERE aa.job_id = ? AND aa.assisted_state != 'completed'
 		AND NOT EXISTS (SELECT 1 FROM applied_jobs aj WHERE aj.url = jf.url)`, jobID).
-		Scan(&info.JobID, &info.Company, &info.Role, &info.URL, &status, &original, &revalidationState, &revalidationVersion)
+		Scan(&info.JobID, &info.Company, &info.Role, &info.URL, &status, &original, &revalidationState, &revalidationVersion, &location, &isRemote)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AssistedLaunchInfo{}, errors.New("assisted job is not available to launch")
 	}
@@ -175,6 +176,22 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	}
 	if status != original || !isAssistedEligibleStatus(status) {
 		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch newer job status %q", status)
+	}
+	// Defense in depth: GetAssistedQueue already reconciles every active row
+	// before it can be rendered as a launchable card, but a browser can only
+	// ever be launched by job id, not by whatever the operator currently sees
+	// on screen. Re-checking here closes the narrow window between a queue
+	// render and a click during which a policy change (or a directly-issued
+	// launch, e.g. from cmd/assist) could otherwise open a browser against a
+	// job that no longer qualifies.
+	if profile, perr := resolveEligibilityProfile(); perr == nil {
+		if ok, reason := config.IsEligibleJob(config.JobEligibilityInput{
+			Title:         info.Role,
+			Location:      location,
+			RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
+		}, profile); !ok {
+			return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch ineligible job: %s", reason)
+		}
 	}
 	if revalidationVersion != assistedRevalidationVersion ||
 		(revalidationState != "captcha_confirmed" && revalidationState != "application_ready") {
@@ -701,6 +718,18 @@ func EnsureAssistedPlanForURL(rawURL, status string) error {
 // GetAssistedQueue reads a queue through an explicitly supplied connection so
 // dashboard readers never need to initialize the storage package singleton.
 func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
+	// Re-run the hard eligibility gate against every active row before
+	// serving the queue, so a row that was queued before a policy change (or
+	// restored from a stale cache/persistence path) can never reappear
+	// without passing the current rules again. A profile load failure is
+	// treated as "nothing to reconcile against right now" rather than a hard
+	// error -- the query below still runs with whatever was already true of
+	// the queue.
+	if profile, err := resolveEligibilityProfile(); err == nil {
+		if _, err := ReconcileAssistedQueueEligibility(conn, profile); err != nil {
+			log.Printf("[Storage] Assisted queue eligibility reconciliation failed: %v", err)
+		}
+	}
 	masterCoverLetter := resolveMasterCoverLetter()
 	// The funnel status filter is not redundant with assisted_state (bug #530).
 	// assisted_state only says whether the *operator* finished with the row; it

@@ -287,6 +287,29 @@ func buildJobPipeline(deps JobPipelineDeps) *graph.Graph[*JobState] {
 			return StateEnd, nil
 		}
 
+		// Hard eligibility gate, applied before scoring so a high fit score,
+		// an attractive title, or a job that was already sitting in the
+		// queue before this rule existed can never override it. This is the
+		// authoritative check: it runs once the full description has been
+		// fetched, unlike the cheaper location-only checks upstream in
+		// discovery, and every path that can reach scoring, the
+		// assisted-apply queue, or auto-submit goes through this same node.
+		if deps.Profile != nil {
+			eligible, reason := config.IsEligibleJob(config.JobEligibilityInput{
+				Title:         job.Title,
+				Location:      job.Location,
+				Description:   job.Description,
+				RemoteClaimed: job.Remote,
+			}, deps.Profile)
+			if !eligible {
+				log.Printf("[Worker-%d] Ineligible: %s (%s) rejected: %s", workerID, job.CompanyName, job.Title, reason)
+				if err := storage.UpdateFunnelStatusWithReason(job.URL, "SKIPPED", "ineligible_"+reason); err != nil {
+					log.Printf("[Worker-%d] Failed to record ineligibility for %s: %v", workerID, job.CompanyName, err)
+				}
+				return StateEnd, nil
+			}
+		}
+
 		state.ScrapedData = map[string]string{
 			"title": state.Job.Title,
 			"desc":  state.Job.Description,
