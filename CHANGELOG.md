@@ -55,13 +55,36 @@ holds only explicitly approved answers; no log statement prints an answer value;
 and the assisted browser was the only child stream the dashboard persisted. No
 other plaintext path was found.
 
-**Still unverified in production:** a real employer submission followed by
-Confirm producing exactly one `APPLIED` record. A read-only audit of that path
-found the guarantees in place — Confirm touches no browser control, writes only
-the operator's assertion, and does its funnel update, `applied_jobs` insert,
-session advance and pending-answer deletion in a single transaction, with three
-independent guards against a duplicate confirmation — but it has not been
-exercised against a real submission, and is stated as unverified until it is.
+**Verified in production the same day, on a real employer application the
+operator genuinely wanted.** The last outstanding claim from the apply-session
+work — a real submission followed by Confirm producing *exactly one* `APPLIED`
+record — now has evidence behind it. The operator submitted on the employer's
+site themselves, closed the assisted browser, and clicked Confirm. Career Agent
+wrote one `job_funnel` row (`APPLIED`), one `applied_jobs` row, and one
+`assisted_applications` row (`completed`, `manual_user_confirmation`), and no
+other `APPLIED` row was written. All three carry the **identical nanosecond
+timestamp**, which is the observable consequence of their being written in one
+transaction rather than three. `pending_answers` was left empty. The read-only
+audit of that path — Confirm touches no browser control, writes only the
+operator's assertion, three independent guards against a duplicate confirmation
+— now describes something that has actually run.
+
+The dashboard log from that run was scanned by category: zero HTML tag openers,
+zero `locator resolved to`, zero `value="..."` attributes, zero `Call log:`
+blocks, zero email or phone shapes, zero unprefixed continuation lines. The
+readiness sentinel and the browser-closed record both survived the new filter,
+so the diagnostics were not traded away for the privacy.
+
+**What that run did *not* cover, stated so the checklist is not read as more
+complete than it is.** The operator submitted directly in the opened browser
+rather than using Continue, so the refill and operator-answer path did not run —
+no fields were auto-filled, no questions were surfaced, and the answer vault is
+still empty. The clean log is therefore consistent with the #543 fix but is not
+a live exercise of it; the proof for that remains the two Playwright regression
+tests, both of which fail against the pre-fix tree. The run was also a one-off
+Assisted Apply rather than an apply session, so **auto-advance after a
+confirmation** is still verified only by code and tests — auto-advance after a
+*skip* was exercised live in the earlier run.
 
 
 ## 2026-08-13 — Apply sessions verified against real employer forms, and five defects fixed
