@@ -657,6 +657,8 @@ describe('poll failure indicator (improvement #460)', () => {
           return Promise.resolve(jsonResponse(baseMetrics, metricsCalls > 1));
         }
         if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+        if (url === '/api/operator-settings') return Promise.resolve(jsonResponse({ active_mode: 'manual', minimum_fit_score: 80, scoring_active: true, daemon_active: true }));
+        if (url === '/api/qualified-jobs') return Promise.resolve(jsonResponse({ jobs: [] }));
         throw new Error(`unexpected fetch: ${url}`);
       });
 
@@ -685,6 +687,8 @@ describe('poll failure indicator (improvement #460)', () => {
           return Promise.resolve(jsonResponse(baseMetrics, shouldSucceed));
         }
         if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+        if (url === '/api/operator-settings') return Promise.resolve(jsonResponse({ active_mode: 'manual', minimum_fit_score: 80, scoring_active: true, daemon_active: true }));
+        if (url === '/api/qualified-jobs') return Promise.resolve(jsonResponse({ jobs: [] }));
         throw new Error(`unexpected fetch: ${url}`);
       });
 

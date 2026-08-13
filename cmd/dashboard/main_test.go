@@ -134,6 +134,28 @@ func TestServeAssistedNotFound_MarksJobInvalidURLAndLeavesQueue(t *testing.T) {
 }
 
 func TestAssistedApplicationCommandPrefersBuiltBinaryInCheckoutRoot(t *testing.T) {
+	dir := t.TempDir()
+	binName := "career_assist_bin"
+	if runtime.GOOS == "windows" {
+		binName = "career_assist_bin.exe"
+	}
+	dummy := filepath.Join(dir, binName)
+	if err := os.WriteFile(dummy, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module dummy\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
 	cmd, err := assistedApplicationCommand("41")
 	if err != nil {
 		t.Fatal(err)
