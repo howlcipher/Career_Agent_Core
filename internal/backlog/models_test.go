@@ -45,7 +45,7 @@ var validTiers = map[string]bool{
 }
 
 // backlogFiles are the three ranked backlogs, relative to the repo root.
-var backlogFiles = []string{"bugs.md", "improvements.md", "improvements_paywall.md"}
+var backlogFiles = []string{"documentation/backlog/bugs.md", "documentation/backlog/improvements.md", "documentation/backlog/improvements_paywall.md"}
 
 func repoRoot() string { return filepath.Join("..", "..") }
 
@@ -252,13 +252,13 @@ func TestBacklogTierColumnIsParsedFromHeader(t *testing.T) {
 	if len(offsets) != len(backlogFiles) {
 		t.Fatalf("expected a Tier column in all of %v, found %v", backlogFiles, offsets)
 	}
-	if offsets["bugs.md"] == offsets["improvements.md"] {
+	if offsets["documentation/backlog/bugs.md"] == offsets["documentation/backlog/improvements.md"] {
 		t.Errorf(
 			"bugs.md and improvements.md now place the Tier column at the same offset (%d). "+
 				"That is not a failure in itself, but this test exists to record that they historically "+
 				"differed — if the schemas were deliberately unified, delete this test rather than "+
 				"weakening the header-driven parsing it justifies",
-			offsets["bugs.md"],
+			offsets["documentation/backlog/bugs.md"],
 		)
 	}
 }

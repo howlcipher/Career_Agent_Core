@@ -47,3 +47,4 @@ nlp_service/venv/
 tracker_bin
 tracker.log
 tracker_daemon.log
+profile.yaml

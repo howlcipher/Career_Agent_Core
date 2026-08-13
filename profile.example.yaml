@@ -1,0 +1,25 @@
+salary_floor: 100000
+target_compensation: 130000
+remote_only: true
+
+allowed_countries:
+  - US
+
+roles:
+  - "Platform Engineer"
+  - "DevOps Engineer"
+  - "Site Reliability Engineer"
+  - "AI Automation Engineer"
+
+experience_years: 7
+
+skills:
+  - Go
+  - Python
+  - Docker
+  - Kubernetes
+
+exclude_companies:
+  - "Example Corp"
+
+cover_letter_tone: "Direct, concise, professional, conversational."
