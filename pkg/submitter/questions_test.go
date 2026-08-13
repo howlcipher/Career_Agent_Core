@@ -1,6 +1,7 @@
 package submitter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
@@ -141,5 +142,28 @@ func TestAssistedFillPlan_PreparedDocuments(t *testing.T) {
 	plan.CoverPath = "letter.txt"
 	if got := plan.PreparedDocuments(); len(got) != 2 {
 		t.Fatalf("expected both documents, got %+v", got)
+	}
+}
+
+// The control inventory is what selects which element an answer is typed into,
+// so what it refuses to enumerate is a safety property, not a detail.
+//
+// <button> is never queried at all, and the input types that act as buttons are
+// skipped explicitly. That is why ApplyApprovedAnswers cannot reach a submit
+// control even though it commits values by key: no submit control ever appears
+// in the map it looks keys up in.
+func TestControlInventory_NeverEnumeratesAControlThatCouldSubmit(t *testing.T) {
+	if strings.Contains(controlInventoryJS, "querySelectorAll('input, textarea, select, [role=\"combobox\"]')") == false {
+		t.Fatal("the inventory's element query changed; re-check that <button> is still excluded")
+	}
+	for _, buttonType := range []string{"'submit'", "'button'", "'reset'", "'image'"} {
+		if !strings.Contains(controlInventoryJS, buttonType) {
+			t.Errorf("the inventory no longer skips input type %s", buttonType)
+		}
+	}
+	// A tag-level query for buttons would defeat the type skip above.
+	if strings.Contains(controlInventoryJS, "querySelectorAll('button") ||
+		strings.Contains(controlInventoryJS, "'input, button") {
+		t.Fatal("the inventory must never enumerate <button> elements")
 	}
 }
