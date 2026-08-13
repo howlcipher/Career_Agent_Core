@@ -1,19 +1,19 @@
 # Career Agent Core
 
 <div align="center">
-  <img src="docs/images/og-image.jpg" alt="Career Agent Core Banner" width="100%">
+  <img src="images/og-image.jpg" alt="Career Agent Core Banner" width="100%">
 </div>
 
-Career Agent Core is an autonomous AI-driven job application engine written in Go. It discovers remote jobs, filters them against your strict salary and career requirements, and uses an LLM (local Ollama by default, or Claude/Gemini) to write highly tailored resumes and cover letters using your central AI Knowledge Library.
+Career Agent Core is an agentic workflow and automation platform written in Go, applied to the career domain. It discovers remote jobs, filters them against your strict salary and career requirements, and uses an LLM (local Ollama by default, or Claude/Gemini) to write highly tailored resumes and cover letters using your central AI Knowledge Library — stopping and handing control back to you at every step automation cannot complete safely or reliably.
 
 ## Features
 - **Massive Discovery Engine**: Concurrently scrapes Google/Yahoo dorks targeting 12 major Applicant Tracking Systems (Greenhouse, Workday, Lever, Jobvite, BambooHR, etc) using fuzzy keyword matching.
 - **Tech-Stack Agnostic Fit Score**: Uses your configured LLM to evaluate job descriptions against your profile and constraints (Salary/Remote). Only proceeds if the fit score is 50 or higher. Evaluates based on core competencies, not strict language matching.
 - **AI Tailoring & Keyword Gap Analysis**: Analyzes job descriptions, identifies missing keywords, and synthesizes them with your `USER_PROFILE.md` via your configured LLM provider (Ollama by default, or Claude/Gemini).
-- **Stealth Writer**: The system prompt is engineered with strict humanizing constraints (banning words like "delve", "tapestry", "synergy") and high burstiness to completely bypass AI detection.
+- **Grounded Document Writer**: The tailoring system prompts (`pkg/mcp/client.go`) constrain the model toward factual, verifiable output — most importantly `Do not hallucinate metrics`, so generated resumes and cover letters cannot invent numbers that are not in your profile — alongside fixed structural and style requirements.
 - **Interview Cheat Sheet**: Automatically generates an `interview_prep.md` alongside your resume containing likely interview questions and tailored talking points.
 - **Continuous Vector-Based Job Matchmaking**: Uses a background goroutine to continually match incoming job board feeds against your `USER_PROFILE.md` embedding for hyper-relevant ranking.
-- **Isolated Job-Fit Research Harness**: A read-only, privacy-safe benchmark path can compare pinned local embedding models against an ignored production-derived cohort without changing production scoring, downloading weights during normal operation, or writing to `applications.db`. See [`documentation/job_domain_embedding_benchmark.md`](documentation/job_domain_embedding_benchmark.md).
+- **Isolated Job-Fit Research Harness**: A read-only, privacy-safe benchmark path can compare pinned local embedding models against an ignored production-derived cohort without changing production scoring, downloading weights during normal operation, or writing to `applications.db`. See [`documentation/job_domain_embedding_benchmark.md`](../documentation/job_domain_embedding_benchmark.md).
 - **SQLite Application Tracking**: Locally tracks applied jobs in `applications.db` (hardened with WAL mode and robust connection pooling) to ensure you never accidentally apply to the same job twice.
 - **Strict Rule Enforcement**: Dynamically discards jobs that don't meet your salary floor or remote requirements defined in `profile.yaml`.
 - **Security Quarantine**: Routes fetched posting text and browser DOM through one deterministic `promptsec` boundary before any embedding, scoring, form-mapping, validation-solving, or visual model call. Detections are audited locally and receive a durable terminal funnel status without sending the flagged text to another model for review.
@@ -23,7 +23,7 @@ Career Agent Core is an autonomous AI-driven job application engine written in G
 - **ADR Documentation**: Comprehensive Architecture Decision Records (ADRs) capture and explain all critical design and infrastructure choices.
 - **Blocklist**: Automatically skips current and past employers to prevent awkward application scenarios.
 - **Auto-Submit Framework**: Headless Playwright browser submission with dedicated handlers and pre-mapped selectors for Greenhouse, Lever, and Ashby, plus a generic Learner Module fallback (below) that adapts to any other ATS at runtime. LinkedIn is detected and routed to its own handler, but Easy Apply's multi-step modal is **not implemented** — those postings always fail submission and fall through to the manual-submission checklist.
-- **Human-in-the-Loop Copilot Mode**: Set `copilot_mode: true` in `profile.yaml` to do all the expensive work — discovery, scoring, tailoring, and confirming the form is reachable and fillable — and stop before the irreversible submit click. The job is recorded as `AWAITING_REVIEW`, its tailored documents are moved to `applications/needs_manual_apply/`, and it is queued in `copilot_queue.md` with the apply URL so you can submit it yourself. Useful where bot protection blocks automated submits but not a real person.
+- **Human-in-the-Loop Copilot Mode**: Set `copilot_mode: true` in `profile.yaml` to do all the expensive work — discovery, scoring, tailoring, and confirming the form is reachable and fillable — and stop before the irreversible submit click. The job is recorded as `AWAITING_REVIEW`, its tailored documents are moved to `applications/needs_manual_apply/`, and it is queued in `copilot_queue.md` with the apply URL so you can submit it yourself. This is the mode to use whenever automated submission cannot proceed safely or reliably.
 - **Email Tracker**: Actively scans your IMAP Gmail inbox for rejections and interview requests. Each outcome update and processed-message acknowledgement commits in one SQLite transaction, so a database failure leaves the email available for a later retry. Progress is a durable IMAP UID checkpoint, not a fixed "newest N messages" window: normal scans cover new mail since the last checkpoint, and downtime of any length is recovered through a separate, bounded historical catch-up seeded from live evidence (the earliest still-open application), so outages longer than one scan interval no longer put outcome mail permanently out of reach.
 - **Live Web Dashboard & Controls**: A live-updating web dashboard (`cmd/dashboard`, `localhost:8080`) featuring start/stop agent controls, funnel conversion metrics, a live activity indicator, what's currently being worked on, your last successful application, and the last skipped/failed job with its reason. The Failed and Manual Queue tiles each cover two statuses with genuinely different meanings — failed to score vs. failed to submit; ATS requires an account vs. filled by Copilot and awaiting your click — and caption whichever one(s) actually contributed to the count, rather than a single hardcoded reason. The "Not A Posting" tile splits the same way by a persisted reason rather than a status: a live measurement found most of that bucket is a real posting that expired (caught by the freshness re-checks below), not the "never a real posting" URL-shape rejections the caption used to imply for the whole count. A dedicated "Retry Exhausted" tile also surfaces `RETRY_EXHAUSTED` rows (see below), which previously had no dashboard presence at all.
 - **Capped Daemon Mode**: Refreshes the discovery sources and database backlog every six hours, then processes at most 15 jobs per cycle by default. The cap is configurable, and interrupt signals cancel the inter-cycle wait cleanly.
@@ -73,11 +73,11 @@ graph TD
 
 ---
 ### 📜 Changelog
-Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](CHANGELOG.md)!
+Curious about recent updates, security patches, and architectural optimizations? Check out the [CHANGELOG.md](../CHANGELOG.md)!
 
 ## Requirements
 - **Git** to clone the repository.
-- **Go 1.26.5 or newer in the 1.26 release line**. The required version is defined by [`go.mod`](go.mod).
+- **Go 1.26.5 or newer in the 1.26 release line**. The required version is defined by [`go.mod`](../go.mod).
 - **Ollama** for the default local LLM provider, or credentials for Claude or Gemini. Claude still requires local Ollama embeddings.
 - **Playwright and its browser dependencies** for application submission. The dashboard itself does not need Playwright.
 
@@ -225,7 +225,7 @@ and lets you stop after the current one.
 Follow these steps after the platform setup.
 
 ### 1. Set Up Your Personal Identifiable Information (PII)
-Create a local `pii.yaml` for contact and application facts. It is ignored by Git; do not commit it. Start from the safe fake-data-only [`pii.yaml.template`](pii.yaml.template), or create a minimal file:
+Create a local `pii.yaml` for contact and application facts. It is ignored by Git; do not commit it. Start from the safe fake-data-only [`pii.yaml.template`](../pii.yaml.template), or create a minimal file:
 
 ```yaml
 first_name: "Your first name"
@@ -460,7 +460,7 @@ go run ./cmd/reconcile -confirm   # records the ticked applications as applied
 
 **What does and does not carry over.** The agent fills the form inside its own automated browser session, which closes when it stops at the gate. That fill does **not** appear in your browser — expect a blank form when you open the link. What you get is the expensive part: the job was scored as a genuine fit, a tailored resume and cover letter were written for it, and the form was confirmed reachable and fillable rather than dead, gated, or bot-blocked. The typing is left to you.
 
-This is the mode to use when bot protection is the binding constraint. The project's own monitoring measured 6 of 7 fully-filled forms blocked *after* an automated submit — a challenge a real person applying in their own browser is not subject to.
+This is the mode to use whenever automated submission cannot proceed safely or reliably — which, in practice, is most of the time. The project's own monitoring measured 6 of 7 fully-filled forms rejected *after* an automated submit, so the automation stops at the gate and escalates to a person rather than burning an application on a submit it cannot confirm.
 
 ### Re-queueing jobs that failed for a reason you have since fixed
 
@@ -509,8 +509,8 @@ go run ./cmd/modelbench -list                              # see what's installe
 go run ./cmd/modelbench -models qwen3:4b-instruct -reps 2   # benchmark one model
 ```
 
-Like `cmd/rankjobs`, it shares the same local Ollama instance the agent uses, and it refuses to start while `cmd/agent`'s single-instance lock is held so it never competes with a live application attempt. See [`documentation/model_benchmark.md`](documentation/model_benchmark.md) for the full task set, how to interpret cold/warm timing and schema failures, and the current routing hypothesis.
+Like `cmd/rankjobs`, it shares the same local Ollama instance the agent uses, and it refuses to start while `cmd/agent`'s single-instance lock is held so it never competes with a live application attempt. See [`documentation/model_benchmark.md`](../documentation/model_benchmark.md) for the full task set, how to interpret cold/warm timing and schema failures, and the current routing hypothesis.
 
 ### Producing a reviewed local-model change proposal
 
-`cmd/localdelegate` is an intentionally narrow, local-Ollama-only delegation harness. It first produces a strict, bounded JSON investigation proposal. A second request can produce a candidate patch only after a reviewer supplies the digest of that exact proposal; the command validates the patch and writes it as an artifact, never applies it. It refuses to run while the production agent owns its lock, and has no shell, Git, browser, email, credentials, or application-database capability. See [`documentation/local_delegation.md`](documentation/local_delegation.md) for the two-phase workflow and safe usage.
+`cmd/localdelegate` is an intentionally narrow, local-Ollama-only delegation harness. It first produces a strict, bounded JSON investigation proposal. A second request can produce a candidate patch only after a reviewer supplies the digest of that exact proposal; the command validates the patch and writes it as an artifact, never applies it. It refuses to run while the production agent owns its lock, and has no shell, Git, browser, email, credentials, or application-database capability. See [`documentation/local_delegation.md`](../documentation/local_delegation.md) for the two-phase workflow and safe usage.
