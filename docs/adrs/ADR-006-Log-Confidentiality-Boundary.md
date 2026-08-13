@@ -59,14 +59,27 @@ however the input is worded. This is the same shape as
 the same reason, and every assisted-path call site that could hold a Playwright
 error now uses it.
 
-**2. The dashboard persists only records it recognises as its own.**
-`security.SanitizeChildLogLine` admits a line only if it carries the prefix Go's
-standard logger writes, then strips markup from the remainder and bounds its
-length. A qualifying record is logged; everything else is counted and dropped.
-Readiness is decided separately, from the raw line in memory, so the
-`"Assisted application is open."` contract survives a filter that does not know
-it is special. `cmd/assist` additionally discards the Chromium process's own
-streams rather than inheriting them.
+**2. The dashboard persists only records written through the child's own
+standard logger.** `security.SanitizeChildLogLine` admits a line only if it
+carries the prefix Go's standard logger writes, then strips markup from the
+remainder and bounds its length. A qualifying record is logged; everything else
+is counted and dropped. Readiness is decided separately, from the raw line in
+memory, so the `"Assisted application is open."` contract survives a filter that
+does not know it is special. `cmd/assist` additionally discards the Chromium
+process's own streams rather than inheriting them.
+
+Note the precise scope, because it is narrower than "Career Agent's own
+records": the admission test is *how* a line was written, not *who* wrote it. A
+library linked into `cmd/assist` that logs through the same standard logger
+produces records this filter cannot distinguish from the command's own. That is
+observed, not hypothetical — `playwright-go`'s installer emits
+`INFO Downloading browsers...` this way, and those lines are persisted. It is
+the correct outcome rather than a gap: such records are in-process status
+messages, and they are still subject to the markup strip and the length bound,
+which is what actually protects the page content. What the rule reliably
+excludes is the separate byte stream — a subprocess writing to the inherited
+descriptor, and every unprefixed continuation line of a multiline diagnostic,
+which is where the element HTML lives.
 
 ### Why not a blocklist
 
@@ -96,6 +109,10 @@ producer half, and hence the markup pass on records that do qualify.
   Chromium's output. It keeps the operational narrative — launched, ready,
   filled *n* fields, questions surfaced, answers entered, confirmed, closed,
   exited — plus a bounded reason on failures, and a count of what was withheld.
+  Confirmed against a real assisted run on 2026-08-13: the readiness sentinel
+  and the browser-closed record both persisted, and a categorical scan found no
+  markup, no `locator resolved to`, no `value="..."` attribute, no `Call log:`
+  block and no unprefixed continuation line.
 * Diagnosing an assisted failure from the log now yields a category rather than
   a stack of driver detail. Reproducing with the driver's own output requires
   running `cmd/assist` directly, where nothing persists its stderr.
