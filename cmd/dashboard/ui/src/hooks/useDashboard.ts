@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { Metrics, OperatorSettings, AssistedJob, QualifiedJob } from '../types';
+import type {
+  Metrics,
+  OperatorSettings,
+  AssistedJob,
+  QualifiedJob,
+  ApplySession,
+  AnswerSubmission,
+} from '../types';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -20,6 +27,12 @@ export function useDashboard() {
 
   const [assistedJobs, setAssistedJobs] = useState<AssistedJob[]>([]);
   const [showAssisted, setShowAssisted] = useState<boolean>(false);
+
+  // The apply session lives on the server. Keeping it out of React state is
+  // the whole point: the previous sequential batch held its index in a
+  // useState, so a refresh silently ended a run mid-way through.
+  const [applySession, setApplySession] = useState<ApplySession | null>(null);
+  const [submittingAnswers, setSubmittingAnswers] = useState<boolean>(false);
 
   const opRef = useRef<OperatorSettings | null>(null);
   const draftRef = useRef<OperatorSettings | null>(null);
@@ -120,13 +133,26 @@ export function useDashboard() {
     }
   }, []);
 
+  const fetchApplySession = useCallback(async () => {
+    try {
+      const res = await fetch('/api/apply-session');
+      if (res.ok) {
+        const data = await res.json();
+        setApplySession(data.session ?? null);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const poll = useCallback(() => {
     const seq = ++pollSeq.current;
     fetchMetrics(seq);
     checkAgent(seq);
     fetchOperatorSettings();
     fetchQualifiedJobs();
-  }, [fetchMetrics, checkAgent, fetchOperatorSettings, fetchQualifiedJobs]);
+    fetchApplySession();
+  }, [fetchMetrics, checkAgent, fetchOperatorSettings, fetchQualifiedJobs, fetchApplySession]);
 
   useEffect(() => {
     poll();
@@ -307,6 +333,82 @@ export function useDashboard() {
     );
   };
 
+  const submitAnswers = async (jobId: string, answers: AnswerSubmission[]): Promise<boolean> => {
+    setSubmittingAnswers(true);
+    setActionError(null);
+    try {
+      const res = await fetch('/api/assisted/answers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, answers }),
+      });
+      if (!res.ok) throw new Error('answers rejected');
+      const result = await res.json();
+      if (result.answers_refused > 0) {
+        // A refusal here is the vault working: a sensitive answer the operator
+        // asked to save but did not grant reuse for is stored nowhere. Saying
+        // so beats letting them believe it will be reused next time.
+        setActionError(
+          `${result.answers_refused} answer(s) were sent to the application but not saved for reuse. ` +
+            'Declarations need the separate reuse confirmation before Career Agent can remember them.'
+        );
+      }
+      await fetchAssisted();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError(
+        'Could not send your answers. The assisted browser may have closed — reopen the application and try again.'
+      );
+      return false;
+    } finally {
+      setSubmittingAnswers(false);
+    }
+  };
+
+  const startApplySession = async (jobIds: string[]): Promise<boolean> => {
+    setActionError(null);
+    try {
+      const res = await fetch('/api/apply-session/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_ids: jobIds }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setApplySession(data.session ?? null);
+      await fetchAssisted();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError('Could not start the apply session. Stop any open session and try again.');
+      return false;
+    }
+  };
+
+  const controlApplySession = async (
+    action: 'pause' | 'resume' | 'stop_after_current' | 'stop' | 'skip',
+    jobId?: string
+  ): Promise<boolean> => {
+    setActionError(null);
+    try {
+      const res = await fetch('/api/apply-session/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, job_id: jobId ?? '' }),
+      });
+      if (!res.ok) throw new Error('control rejected');
+      const data = await res.json();
+      setApplySession(data.session ?? null);
+      await fetchAssisted();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError('Could not update the apply session.');
+      return false;
+    }
+  };
+
   const assistedBrowserOpen = assistedJobs.some((job) => job.live_browser);
 
   return {
@@ -340,5 +442,10 @@ export function useDashboard() {
     openDocument,
     assistedBrowserOpen,
     fetchQualifiedJobs,
+    applySession,
+    startApplySession,
+    controlApplySession,
+    submitAnswers,
+    submittingAnswers,
   };
 }

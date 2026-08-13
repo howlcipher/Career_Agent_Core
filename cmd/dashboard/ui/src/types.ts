@@ -80,6 +80,7 @@ export interface Metrics {
   interview_rate_pct?: string;
   by_source?: SourceConversionRow[];
   by_variant?: VariantConversionRow[];
+  human_effort?: HumanEffortMetrics;
 }
 
 export interface OperatorSettings {
@@ -113,6 +114,107 @@ export interface AssistedAction {
   can_continue: boolean;
 }
 
+export interface ApplicationQuestion {
+  id: number;
+  job_id: string;
+  key: string;
+  prompt: string;
+  control_type: string;
+  options?: string[];
+  required: boolean;
+  status: string;
+  /**
+   * 'routine' | 'sensitive' | 'generate_per_job'. A sensitive question needs a
+   * second, separate acknowledgement before its answer may ever be reused, so
+   * the UI must not collapse the two decisions into one checkbox.
+   */
+  sensitivity: string;
+  /** Career Agent's proposal. Never an answer the operator already gave. */
+  suggested?: string;
+  source?: string;
+  label_unsafe?: boolean;
+  created_at: string;
+}
+
+export interface AssistedFillSummary {
+  job_id: string;
+  filled_count: number;
+  reused_answers: number;
+  documents: string[] | null;
+  filled_labels: string[] | null;
+  unresolved_count: number;
+  recorded_at: string;
+}
+
+export interface AssistedEffort {
+  band: string;
+  low_minutes: number;
+  high_minutes: number;
+  signals?: string[];
+}
+
+export interface ApplySessionItem {
+  id: number;
+  position: number;
+  job_id: string;
+  company: string;
+  role: string;
+  state: string;
+  terminal_reason?: string;
+}
+
+export interface ApplySession {
+  id: number;
+  state: 'running' | 'paused' | 'finished';
+  auto_advance: boolean;
+  stop_after_current: boolean;
+  pause_reason?: string;
+  current_job_id?: string;
+  position: number;
+  total: number;
+  completed: number;
+  confirmed: number;
+  items: ApplySessionItem[];
+}
+
+export interface AnswerSubmission {
+  key: string;
+  answer: string;
+  save_for_reuse: boolean;
+  allow_sensitive_reuse: boolean;
+  scope: string;
+}
+
+export interface PacketEntry {
+  label: string;
+  value: string;
+  sensitive: boolean;
+}
+
+export interface DocumentSummary {
+  kind: string;
+  ready: boolean;
+  headline: string;
+  changes: string[] | null;
+  note?: string;
+}
+
+export interface HumanEffortMetrics {
+  applications_confirmed: number;
+  median_human_seconds: number;
+  median_answering_seconds: number;
+  fields_auto_filled: number;
+  fields_needing_human: number;
+  approved_answers_reused: number;
+  auto_fill_rate_pct: string;
+  mean_unresolved_per_application: number;
+  sessions_completed: number;
+  sessions_abandoned: number;
+  applications_per_session: number;
+  browser_handoffs: number;
+  mapping_cache_hit_pct: string;
+}
+
 export interface AssistedJob {
   id: string;
   company: string;
@@ -136,4 +238,7 @@ export interface AssistedJob {
   requisition_id?: string;
   duplicate_siblings?: number;
   ambiguous?: boolean;
+  completed: AssistedFillSummary;
+  questions?: ApplicationQuestion[] | null;
+  effort: AssistedEffort;
 }

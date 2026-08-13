@@ -1095,3 +1095,416 @@ summary:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Exception-only Assisted Apply ──────────────────────────────────────── */
+
+/* The card's two halves. "Career Agent completed" is quiet and scannable;
+   "Needs you" is the only thing on the card that asks for attention. */
+.completed-summary {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border-left: 3px solid var(--status-active);
+}
+
+.completed-summary h4 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--status-active);
+}
+
+.completed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.completed-list span[aria-hidden] {
+  color: var(--status-active);
+}
+
+.needs-you {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--status-pending);
+}
+
+.needs-you h4 {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--status-pending);
+}
+
+.question-list {
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.question-item + .question-item {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--trim-dark);
+}
+
+.question-prompt {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-main);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.question-number {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.question-required {
+  color: var(--status-warning);
+}
+
+.question-item input[type='text'],
+.question-item textarea,
+.question-item select {
+  width: 100%;
+  max-width: 40rem;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-inset);
+  border: 1px solid var(--trim);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.question-choices {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* The three note styles say different things and must not look the same: a
+   declaration warning is not the same as a "written for this job" note. */
+.question-sensitive,
+.question-generated,
+.question-warning {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.question-sensitive {
+  border-left: 3px solid var(--status-warning);
+  background: rgba(199, 107, 94, 0.08);
+  color: var(--text-main);
+}
+
+.question-generated {
+  border-left: 3px solid var(--status-info);
+  background: rgba(107, 144, 168, 0.08);
+  color: var(--text-muted);
+}
+
+.question-warning {
+  border-left: 3px solid var(--status-pending);
+  background: rgba(212, 164, 90, 0.1);
+  color: var(--text-main);
+}
+
+.question-reuse {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.question-reuse label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* Indented and tinted, so the second acknowledgement reads as a consequence of
+   the first rather than as an equal, independent checkbox. */
+.question-reuse-sensitive {
+  margin-left: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--status-warning);
+  color: var(--text-main);
+}
+
+.question-scope {
+  margin-left: var(--space-4);
+  align-items: center !important;
+}
+
+.assisted-headline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+
+.fit-score {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--gold);
+}
+
+.effort-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--trim);
+  color: var(--text-muted);
+}
+
+.effort-badge .effort-label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.effort-low {
+  border-color: var(--status-active);
+  color: var(--status-active);
+}
+
+.effort-medium {
+  border-color: var(--status-pending);
+  color: var(--status-pending);
+}
+
+.effort-high {
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
+.assisted-details {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--trim-dark);
+  padding-top: var(--space-2);
+}
+
+.assisted-details > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.assisted-details > summary:hover {
+  color: var(--text-muted);
+}
+
+/* ── Apply session ──────────────────────────────────────────────────────── */
+
+.apply-session-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--trim);
+}
+
+.apply-session-status,
+.apply-session-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.session-paused {
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--status-warning);
+  background: rgba(199, 107, 94, 0.08);
+  color: var(--text-main);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+/* ── Copy packet and document changes ───────────────────────────────────── */
+
+.copy-packet-list {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.copy-packet-list li {
+  display: grid;
+  grid-template-columns: 12rem 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--trim-dark);
+}
+
+.copy-packet-label {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.copy-packet-value {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.copy-packet-status {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--status-active);
+  font-size: 0.8rem;
+}
+
+.document-change + .document-change {
+  margin-top: var(--space-3);
+}
+
+.document-change h5 {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.document-headline {
+  margin: 0 0 var(--space-2);
+  color: var(--text-main);
+  font-size: 0.88rem;
+}
+
+.document-change ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+/* ── Fast triage ────────────────────────────────────────────────────────── */
+
+.triage-legend {
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.triage-legend kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--trim);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.triage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The list is one tab stop with a roving active option, so the focus ring
+   belongs on the list and the active card needs its own visible marker. */
+.triage-list:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.triage-card {
+  padding: var(--space-3) var(--space-4);
+  margin-top: var(--space-3);
+  background: var(--surface-inset);
+  border: 1px solid var(--trim-dark);
+  border-left: 3px solid transparent;
+}
+
+.triage-card.active {
+  border-left-color: var(--gold);
+  background: var(--surface-1);
+}
+
+.triage-title {
+  margin: 0 0 var(--space-2);
+  font-size: 0.95rem;
+  color: var(--text-main);
+}
+
+.triage-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+}
+
+.triage-facts div {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.triage-facts dt {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.triage-facts dd {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.triage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .copy-packet-list li {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}

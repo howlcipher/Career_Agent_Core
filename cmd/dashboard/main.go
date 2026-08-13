@@ -114,6 +114,12 @@ type Metrics struct {
 	// see bug #435.
 	StatusLegend map[string]string `json:"status_legend,omitempty"`
 
+	// HumanEffort measures whether the assisted workflow is actually saving
+	// the operator time. Every figure is derived from this machine's own
+	// database; nothing is collected about what was answered, and nothing
+	// leaves the machine.
+	HumanEffort storage.HumanEffortMetrics `json:"human_effort"`
+
 	TotalApplied     int                     `json:"total_applied_tracked"`
 	Interviews       int                     `json:"interviews"`
 	Rejections       int                     `json:"rejections"`
@@ -500,6 +506,18 @@ func main() {
 	mux.HandleFunc("/api/assisted/revalidate", requireSameOrigin(serveAssistedRevalidate))
 	mux.HandleFunc("/api/assisted/launch", requireSameOrigin(serveAssistedLaunch))
 	mux.HandleFunc("/api/assisted/document", serveAssistedDocument)
+	mux.HandleFunc("/api/assisted/document-summary", requireSameOrigin(serveAssistedDocumentSummary))
+	// Answers, the packet and the vault all carry the operator's own personal
+	// data back to their own loopback dashboard — the same boundary
+	// /api/assisted/document already crosses — so all three are same-origin
+	// gated, including the reads. That is stricter than /api/metrics, which is
+	// left open because it discloses nothing personal.
+	mux.HandleFunc("/api/assisted/answers", requireSameOrigin(serveAssistedAnswers))
+	mux.HandleFunc("/api/assisted/packet", requireSameOrigin(serveApplicationPacket))
+	mux.HandleFunc("/api/answer-vault", requireSameOrigin(serveAnswerVault))
+	mux.HandleFunc("/api/apply-session", requireSameOrigin(serveApplySession))
+	mux.HandleFunc("/api/apply-session/start", requireSameOrigin(serveApplySessionStart))
+	mux.HandleFunc("/api/apply-session/control", requireSameOrigin(serveApplySessionControl))
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -514,6 +532,12 @@ func main() {
 	mux.HandleFunc("/api/qualified-jobs/promote", requireSameOrigin(serveQualifiedJobsPromote))
 	mux.HandleFunc("/api/qualified-jobs/skip", requireSameOrigin(serveQualifiedJobsSkip))
 	mux.HandleFunc("/api/qualified-jobs/confirm", requireSameOrigin(serveQualifiedJobsConfirm))
+
+	// The backstop behind auto-advance. Confirm, skip and resume advance the
+	// session directly; this covers only the cases they cannot — an assisted
+	// process that died without a handoff, or a dashboard restarted mid
+	// session — so it is deliberately infrequent.
+	startApplySessionTicker(20*time.Second, make(chan struct{}))
 
 	if warning := dashboardExposureWarning(address); warning != "" {
 		log.Print(warning)
@@ -558,6 +582,19 @@ func serveMetrics(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		return db.QueryRow(`SELECT COUNT(*) FROM assisted_applications WHERE assisted_state != 'completed'`).Scan(&m.AssistedWaiting)
+	})
+
+	g.Go(func() error {
+		// A database that has not recorded any human interactions yet is the
+		// normal state on day one, not a failure, so this never errors the
+		// whole metrics response.
+		effort, err := storage.GetHumanEffortMetrics(db)
+		if err != nil {
+			log.Printf("human effort metrics unavailable: %v", err)
+			return nil
+		}
+		m.HumanEffort = effort
+		return nil
 	})
 
 	g.Go(func() error {
@@ -953,13 +990,43 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a confirmed assisted job identifier is required", http.StatusBadRequest)
 		return
 	}
+	// Read the review clock before the confirmation, because confirming is
+	// what ends it.
+	reviewStartedAt := assistedReviewStartedAt(request.JobID)
 	if err := storage.ConfirmAssistedSubmission(db, request.JobID); err != nil {
 		log.Printf("serveAssistedConfirm: %v", err)
 		http.Error(w, "unable to record application confirmation", http.StatusConflict)
 		return
 	}
+	// Measured server-side from timestamps this project already records,
+	// rather than from a duration the browser reports. A metric that exists to
+	// tell the operator whether their time is being saved should not be
+	// derived from something a stale tab can inflate.
+	if !reviewStartedAt.IsZero() {
+		if err := storage.RecordHumanInteraction(db, request.JobID, storage.InteractionReviewSubmit, reviewStartedAt, time.Now().UTC()); err != nil {
+			log.Printf("serveAssistedConfirm: could not record review time: %v", err)
+		}
+	}
+	// The confirmation is what releases the session to open the next
+	// application. Doing it here rather than waiting for the ticker is what
+	// makes the next job appear immediately instead of up to 20 seconds later.
+	go advanceApplySession()
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"confirmed"}`))
+}
+
+// assistedReviewStartedAt reports when this application became ready for the
+// operator to review, or the zero time when that is unknown.
+func assistedReviewStartedAt(jobID string) time.Time {
+	summary, err := storage.GetFillSummary(db, jobID)
+	if err != nil || summary.RecordedAt == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, summary.RecordedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func serveAssistedNotFound(w http.ResponseWriter, r *http.Request) {
