@@ -42,6 +42,8 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
+| 536 | [Normal-browser Career Agent companion](#536-normal-browser-career-agent-companion) | Pending | 0.6 = 3×1.0÷5 | deep-reasoning | Designed in `docs/adrs/ADR-005-Browser-Companion.md`, deliberately not built. The Copy Application Packet already recovers most of the operator time in the handoff case at none of the complexity, so the remaining benefit does not yet justify shipping a browser extension that handles PII. |
+| 537 | [Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run](#537-apply-session-auto-advance-is-only-exercised-by-unit-tests-never-by-a-live-multi-application-run) | Pending | 1.0 = 3×1.0÷3 | standard | The state machine and its refusals are unit-tested, but nothing has yet driven two real applications end to end through open → questions → answers → confirm → auto-open. That is the one claim in this feature that only a live run can settle. |
 | 512 | [Application Mode selector and configurable fit threshold](#512-application-mode-selector-and-configurable-fit-threshold) | Done (2026-08-04) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #512 for the full account. |
 | 506 | [`/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely](#506-work_next_items-selection-rule-never-returns-to-bugsmd-once-the-gate-is-met-starving-minor-pending-bugs-indefinitely) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #506 for the full account. |
 | 500 | [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at) | Closed (2026-08-01) | — | mechanical | See `documentation/backlog_history/improvements_done_details.md` item #500 for the full account. |
@@ -64,7 +66,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 473 | [Extend bug #467's target-closed browser recovery to the Vision submission paths](#473-extend-bug-467s-target-closed-browser-recovery-to-the-vision-submission-paths) | Pending ⚠️ below floor — same-theme decay | 0.38 = 3×0.25÷2 | standard | Vision fallback still has no target-closed recovery; work only with explicit user confirmation. |
 | 513 | [111 backlog table rows link to detail sections that no longer exist](#513-111-backlog-table-rows-link-to-detail-sections-that-no-longer-exist) | Pending | 1.5 = 3×1.0÷2 | mechanical | Every session navigates these files by clicking a row through to its Details. 92 rows in `bugs.md` and 19 in `improvements.md` land nowhere. Cheap to fix and, unlike the last two conventions that silently broke, cheap to keep fixed with a test. |
 | 485 | [Resource-aware local inference admission control](#485-resource-aware-local-inference-admission-control) | Pending | 0.67 = 4×1.0÷6 | deep-reasoning | Existing one-model limit prevents OOM; contention remains an unobserved risk. |
-| 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Pending | 0.5 = 3×1.0÷6 | deep-reasoning | No data-driven approved-answer store exists; historic observed volume remains low. |
+| 497 | [User-approved application-answer memory](#497-user-approved-application-answer-memory) | Done (2026-08-13) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #497 for the full account. |
 | 493 | [Rank by expected confirmed-application yield](#493-rank-by-expected-confirmed-application-yield) | Pending ⚠️ below floor — insufficient outcome data | 0.33 = 2×1.0÷6 | deep-reasoning | The live metrics endpoint is readable, but only 2 applied rows and zero outcomes exist; that cannot validate a yield-ranking change. |
 | 488 | [OpenClaw read-only sidecar evaluation](#488-openclaw-read-only-sidecar-evaluation) | Pending ⚠️ below floor — user decision | 0.4 = 2×1.0÷5 | deep-reasoning | Optional sidecar remains below the floor and requires explicit user confirmation. |
 | 498 | [Company and role-family duplicate/cooldown protection](#498-company-and-role-family-duplicatecooldown-protection) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #498 for the full account. |
@@ -218,23 +220,33 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #498.
 
+### 536. Normal-browser Career Agent companion
+
+**Filed 2026-08-13**, alongside the Assisted Apply fast-path work.
+
+Some ATS platforms cannot be served by the assisted browser at all — Lever is the confirmed case (bugs.md #520): applications completed in the guarded Playwright browser are rejected with "There was an error verifying your application", while the identical application submitted from an ordinary browser succeeds. `storage.AssistedBrowserRejectionReason` already routes those postings to the operator's own browser, which is the right answer and stays. But that is also where Career Agent's help currently stops.
+
+**Designed, not built.** `docs/adrs/ADR-005-Browser-Companion.md` records the full contract a companion would have to satisfy: loopback-only communication, a paired per-session token (a localhost port with no authentication is reachable by any page the operator visits, which would expose their PII to any site), origin allowlists on both sides, sanitized field descriptors in place of page content, resolution through the existing `answers.Store` so sensitive categories behave identically, and — the load-bearing one — **no submit verb in the protocol at all**, so no bug, compromised page, or future contributor can reach one.
+
+**Why it is deferred rather than built.** The Copy Application Packet (`/api/assisted/packet`) shipped in the same pass and already gives the operator every prepared value, one click each, for exactly these handoff cases. That recovers most of the time a companion would, at none of the cost of distributing and updating a browser extension that handles personal data. Revisit when the packet is demonstrably insufficient in practice, not before.
+
+**Value 3, Effort 5, Decay 1.0, score 0.6.** Effort is the honest number for an extension plus a second DOM-extraction implementation in JavaScript against the same shapes `pkg/submitter/questions.go` already handles in Go — two implementations of one idea that will drift.
+
+### 537. Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run
+
+**Filed 2026-08-13**, by the session that built it, as an honest statement of what was and was not verified.
+
+The apply-session state machine is unit-tested against every rule that matters: it advances only on a terminal item state, a closed browser pauses it rather than advancing, a confirmation and its session advance commit in one transaction, stop-after-current records the remainder as stopped, and `GetAssistedLaunchInfo` still gates every auto-launch exactly as it gates a manual click. The dashboard handlers and the React session bar are tested too.
+
+**What has not happened is a live run.** Nothing has yet driven two real applications end to end — open → refill → questions → answers → review → confirm → the next application opening by itself — against real employer pages. Everything between `advanceApplySession` calling `launchAssistedApplication` and a visible browser appearing is unexercised outside a unit test, and this repository's own history is emphatic that runtime wiring escapes `go test` (see the memory of an uninitialized package-global `db` and `os.IsNotExist` on a wrapped error, both of which only a live binary run caught).
+
+**How to close it.** Back up `applications.db`, select two queued Greenhouse applications, start a session, and watch for: the first browser opening without a second click; the question list appearing on the card rather than a form to re-read; answers landing in the visible form; the confirmation advancing to application 2 automatically; and `career_agent.log` containing no question text, answer text, or PII. Then close this row with what was observed, including anything that did not work.
+
+**Value 3, Effort 3, Decay 1.0, score 1.0.** Effort is a live session with a real browser and real postings, not a code change — assuming nothing is found.
+
 ### 497. User-approved application-answer memory
 
-**Filed 2026-08-01**, mission-alignment audit (seeded candidate G).
-
-Confirmed no unanswered-question logging, answer map, or per-question memory exists anywhere in the codebase. Improvement #29 ("Hard-code every repeatable application fact," Done) implemented a fixed Go struct (`config.PII`, `pkg/config/pii.go`) — adding a new fact type requires a code change, not a data-driven registration; there is no mechanism today that logs a question the model couldn't answer for later review.
-
-**Value held to 3, not the brief's implied higher priority**, on real observed volume: only 26 `MANUAL_REQUIRED` rows exist in the live database today (0.2% of the funnel) — dwarfed by bugs.md #489's 5,983 quarantined rows and this file's own #492's multi-day first-attempt latency. The underlying capability gap is real, but the current bottleneck on confirmed applications is overwhelmingly upstream of where this item would help.
-
-**Proposed direction, per the brief:** a local, user-approved answer store — normalized question identity, original example wording, explicit user-approved answer, answer type, scope (global/ATS-specific/company-specific/role-specific), sensitivity classification, timestamps, revocation, source of approval, deterministic reuse before any LLM call. **Never** auto-infer or auto-approve legal attestations, protected-class questions, salary expectations, relocation commitments, or anything absent from user-controlled data — stop and request approval for anything sensitive or ambiguous.
-
-**Acceptance criteria:** a previously-approved question is answered deterministically from the store without an LLM call on a repeat encounter; a novel or sensitive question always stops for explicit approval, never auto-answered.
-
-**Automated tests:** tests covering exact-match reuse, scope resolution (global vs. company-specific), revocation, and the sensitive-question refusal path (mirroring the existing legal-attestation refusal behavior from improvement #30, Done).
-
-**Safe live verification:** confirm no sensitive-category answer is ever auto-approved by feeding the store's own protected-question list through the refusal path.
-
-**Boundaries:** must never fabricate an answer to a legal attestation or protected-class question; must never bypass the existing refusal behavior improvement #30 already established.
+Closed — full account archived in `documentation/backlog_history/improvements_done_details.md` item #497.
 
 ### 492. Explicit first-attempt SLA and bounded fresh-queue admission
 

@@ -67,6 +67,33 @@ The system operates across three increasingly autonomous modes:
 2. **Assisted Apply (Recommended)**: Fills in known information and generates authenticity-aware documents, pausing execution for a human to review, solve CAPTCHAs, and submit.
 3. **Automatic / Experimental**: Fully headless submission on supported ATS platforms (requires explicit opt-in).
 
+Assisted Apply optimizes for **human seconds per submitted application**, not for
+the number of applications submitted automatically. Career Agent does everything
+it can safely do — discovery, ranking, documents, form filling, reusing answers
+you have approved — and interrupts you only for judgement, unknown information,
+authentication, CAPTCHA, legal attestations, final review, and the employer's own
+Submit button. An apply session then opens the next application by itself once
+you confirm the last one was received.
+
+* **Approved Answer Vault**: answers you explicitly approve are reused
+  automatically on equivalent questions, matched deterministically with no model
+  in the path. Legal and protected-class declarations are never learned
+  silently: Career Agent may suggest, but reuse requires two separate,
+  explicit acknowledgements. See `docs/ARCHITECTURE.md`.
+* **Exception-only review**: each card leads with what Career Agent completed and
+  the short list that needs you. Full diagnostics remain available behind
+  expandable details.
+* **Apply sessions**: durable in SQLite, so a dashboard refresh resumes rather
+  than restarts. A session never advances past an application unless Career
+  Agent knows what happened to it — a browser closing without a confirmation
+  pauses the session instead of being guessed either way.
+* **Application effort**: a band and a range (`Low · ~1–2 min`), never a false
+  precise number, capped at ±4% influence on ranking so ease can break ties but
+  never outrank fit.
+* **Local effort metrics**: median human interaction time, auto-fill rate,
+  approved-answer reuse, and unresolved questions per application, computed
+  locally and never transmitted.
+
 ### Safety model
 
 - **Untrusted web content quarantine**: All fetched text and DOM structures pass through a deterministic prompt-security boundary before any embedding, scoring, or visual model calls.
@@ -83,6 +110,7 @@ The system operates across three increasingly autonomous modes:
 * **Stateful workflow orchestration**: Multi-step application flows maintain explicit state and recovery paths.
 * **Durable outcome tracking**: IMAP UID checkpoints survive downtime and recover missed events for application outcome tracking.
 * **Human-in-the-loop escalation**: Automation stops when human judgment, CAPTCHA, authentication, or review is required.
+* **Fail-closed answer memory**: reusable application answers require explicit operator approval, enforced in the store rather than in any caller, so no code path can learn a legal attestation implicitly.
 * **Resilient ATS abstraction**: Known ATS handlers coexist with dynamic fallback mapping.
 * **Observability**: Operational dashboard and structured logs expose what the agent is doing and why.
 

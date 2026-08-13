@@ -1,5 +1,81 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Assisted Apply optimizes for human seconds, not for autonomy
+
+Assisted Apply could fill a form but could not say what it had filled, so the
+operator re-read the whole employer form to find the gaps and answered the same
+screening questions on every application. This release closes both, without
+moving the boundary where a human decides anything.
+
+**Approved Answer Vault** (`pkg/answers`, closes `improvements.md` #497).
+Answers the operator explicitly approves are reused on equivalent questions.
+Resolution is deterministic — approved alias, then approved answer with scope
+precedence, then a curated pattern over `pii.yaml`, then "ask the operator" —
+with no model call and no similarity threshold, so the same form yields the same
+answers on every run. Approving an answer records an alias for the exact wording
+the employer used, which is how three different phrasings of the work
+authorization question converge without any semantic matching.
+
+*The safety rule lives in the store, not in a caller.* `answers.Store.Save`
+refuses a sensitive answer that lacks both an explicit operator provenance and
+an explicit reuse decision; a client cannot talk it down by mislabelling the
+sensitivity, because the store classifies the question itself and a caller may
+only raise it. Sensitive patterns resolve to a suggestion the operator confirms
+and never to an auto-fill. Per-job questions ("Why this company?") are never
+stored. `pii.yaml` seeding writes suggestions with reuse withheld.
+
+**Exception-only Assisted Apply.** Cards now lead with what Career Agent
+completed and the short list of questions that need a human, then one action.
+The stepper, ATS, attempt counts and revalidation state are all still present,
+inside `<details>` — observability was moved off the critical path, not removed.
+
+**Apply sessions** replace the sequential batch. The old one kept its position in
+React state, so a refresh ended a run, and the operator clicked "Open Next
+Selected Application" for every job. Sessions now live in SQLite and the server
+opens the next application itself once an outcome is recorded. A session
+advances only on a terminal item state; **a browser that closes without a
+confirmation pauses it instead**, because a window disappearing does not
+distinguish a submitted application from an abandoned one.
+
+**Also in this release**
+
+* Fast triage on Qualified Jobs: a compact decision card with `A`/`S`/`D`/`J`/`K`
+  keyboard navigation. One tab stop with a roving active option, shortcuts that
+  never fire from a text field, a real button behind every shortcut, and an
+  `aria-live` announcement for each action.
+* An application effort estimate — a band and a range, never a fake precise
+  number — capped at ±4% influence on ranking so ease breaks ties without
+  outranking fit.
+* Local human-effort metrics on `/api/metrics`: median interaction time,
+  auto-fill rate, approved-answer reuse, unresolved questions per application.
+  Computed from this machine's database; nothing is transmitted.
+* A document-change summary that states plainly that the résumé is the
+  unmodified master rather than inventing a diff, and flags any figure in a
+  tailored cover letter that does not appear in the master.
+* **Copy Application Packet**: every prepared value with one-click copy, so an
+  unsupported ATS still benefits. Sensitive values stay hidden until revealed.
+* `docs/adrs/ADR-005-Browser-Companion.md` designs a normal-browser companion
+  and explains why it is deliberately not built yet (`improvements.md` #536).
+
+**Nothing about submission changed.** Career Agent still never clicks an
+employer's Submit control in Assisted Apply, `assistedFillOutcome` still treats
+a clean nil from a copilot-mode handler as a failure precisely because that
+would mean a Submit was clicked, `ApplyApprovedAnswers` has no access to a
+submit control, and Automatic Apply is no easier to enable than before.
+
+**Operator answers are not retained.** They cross from the dashboard to the
+assisted browser through a `pending_answers` table that `TakePendingAnswers`
+empties in the same transaction that reads it, and the assisted queue projection
+never serves one back. The only answers kept are the ones the operator asked
+Career Agent to remember.
+
+**Schema.** `approved_answers`, `answer_aliases`, `application_questions`,
+`assisted_fill_summary`, `pending_answers`, `application_sessions`,
+`application_session_items`, `human_interactions` — all additive, created through
+the existing `Ensure*` migration chain, no destructive migration, existing data
+preserved.
+
+
 ## 2026-08-12 — Assisted Apply can mark dead postings and its confirm dialog now closes
 
 * **New Assisted Apply action:** each assisted card now offers
