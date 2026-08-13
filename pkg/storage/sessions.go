@@ -253,12 +253,70 @@ func NextApplySessionJob(conn *sql.DB) (string, bool, error) {
 			return "", false, nil
 		}
 	}
+	// An assisted browser that is still live holds the only visible-browser
+	// lease, so a launch now would be refused by AcquireAssistedLease.
+	//
+	// Checking here rather than letting the launch fail is bugs.md #542's
+	// second half: the caller cannot tell a refused lease (transient — the
+	// previous browser is closing) from a browser that failed to open (an
+	// unknown outcome), and treating the first as the second paused the session
+	// every time an application was skipped while its browser was still open.
+	live, err := assistedBrowserIsLive(conn)
+	if err != nil || live {
+		return "", false, err
+	}
 	for _, item := range session.Items {
 		if item.State == ItemPending {
 			return item.JobID, true, nil
 		}
 	}
 	return "", false, nil
+}
+
+// assistedBrowserIsLive reports whether any assisted application currently
+// holds a live lease, using the same heartbeat window AcquireAssistedLease
+// applies so the two cannot disagree about what "live" means.
+func assistedBrowserIsLive(conn *sql.DB) (bool, error) {
+	var live int
+	err := conn.QueryRow(`SELECT COUNT(*) FROM assisted_applications
+		WHERE lease_owner != '' AND lease_expires_at > ? AND updated_at > ?`,
+		time.Now().UTC(), time.Now().UTC().Add(-assistedLeaseHeartbeatTimeout)).Scan(&live)
+	if err != nil {
+		return false, fmt.Errorf("check for a live assisted browser: %w", err)
+	}
+	return live > 0, nil
+}
+
+// AssistedWorkFinished reports whether this job's place in the open apply
+// session has reached an outcome, so the process holding its browser knows its
+// work is done.
+//
+// cmd/assist polls this. Without it, skipping or stopping a session left the
+// browser open indefinitely holding the only visible-browser lease, so the
+// session could never advance — the operator pressed Skip and nothing happened
+// (bugs.md #542). Confirming already closed the browser, because that path sets
+// assisted_state to 'completed', which the same loop watches for; skip and stop
+// had no equivalent signal until this.
+func AssistedWorkFinished(conn *sql.DB, jobID string) (bool, error) {
+	if conn == nil {
+		return false, errors.New("database not initialized")
+	}
+	var state string
+	err := conn.QueryRow(`SELECT i.state FROM application_session_items i
+		JOIN application_sessions s ON s.id = i.session_id
+		WHERE i.job_id = ? AND s.state != ? ORDER BY i.id DESC LIMIT 1`, jobID, SessionFinished).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Not part of an open session: this browser was opened on its own and
+		// only its own state governs it.
+		return false, nil
+	}
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return false, nil
+		}
+		return false, fmt.Errorf("check apply session item state: %w", err)
+	}
+	return terminalItemStates[state], nil
 }
 
 // MarkApplySessionItemOpen records that this job's browser is now open.

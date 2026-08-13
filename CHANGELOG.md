@@ -1,5 +1,53 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Apply sessions verified against real employer forms, and five defects fixed
+
+The apply-session work released earlier today was unit-tested but had never
+driven a real application. Doing that (improvements.md #537, on a copy of the
+database, against two real Greenhouse postings, submitting nothing) found five
+defects that all passed `go test`. Two of them were Major.
+
+* **bugs.md #542 — auto-advance did not work on the skip path at all.** Nothing
+  told `cmd/assist` its work was done, so a skipped application's browser held
+  the single visible-browser lease indefinitely, and the resulting lease
+  conflict was misread as an unknown outcome and paused the session. Pressing
+  Skip appeared to do nothing. `storage.AssistedWorkFinished` now signals the
+  browser to close, and `NextApplySessionJob` waits rather than attempting a
+  launch that cannot succeed.
+* **bugs.md #541 — the Answer Vault's two-checkbox guarantee failed in the
+  unsafe direction.** The card chose which acknowledgements to show from the
+  sensitivity recorded on the question; the store enforced its rule using its
+  own re-classification. When they disagreed, an answer shown as routine was
+  stored as a declaration with reuse permission the operator was never asked
+  for. Resolution now escalates to the stricter of the two, and the handler
+  takes the union as well, so a future divergence still fails safe.
+* **bugs.md #540 — the sensitivity classifier treated the employer's own name as
+  attestation vocabulary.** "Affirm" is both a real company and a declaration
+  verb, so every question on that form containing the company's name was
+  classified as a legal declaration. It is what triggered #541.
+* **bugs.md #538 — the dashboard never created the tables Assisted Apply needs.**
+  It opens a reader connection and never runs the migration chain, and it is in
+  practice the first process to touch them, so Start Apply Session would have
+  failed on every existing installation. Confirmed against the live database.
+* **bugs.md #539 — `decodeBoundedJSON` hardcoded port 8080**, so on any other
+  `-addr` every state-changing POST was refused, including all four apply-session
+  controls. The check was also redundant with `requireSameOrigin`, which is
+  correct on any port.
+
+**Verified live, after the fixes:** application 1 opened with no click, 6 fields
+filled and 1 approved answer reused, 17 questions surfaced, 2 answers entered
+into the real form, Skip closed that browser and **application 2 opened by
+itself 22 seconds later**, and closing that browser without confirming paused the
+session with `browser_closed_without_outcome` rather than counting it either
+way. A real submission followed by Confirm remains unverified and is stated as
+such in #537's closing account.
+
+**bugs.md #543** was filed and not fixed: the assist process's stderr is echoed
+verbatim into the dashboard log, and Playwright's retry diagnostics include
+element HTML, which on a filled control would print a typed answer. Observed
+benign in this run (`value=""`). Pre-existing.
+
+
 ## 2026-08-13 — Assisted Apply optimizes for human seconds, not for autonomy
 
 Assisted Apply could fill a form but could not say what it had filled, so the

@@ -43,7 +43,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
 | 536 | [Normal-browser Career Agent companion](#536-normal-browser-career-agent-companion) | Pending | 0.6 = 3×1.0÷5 | deep-reasoning | Designed in `docs/adrs/ADR-005-Browser-Companion.md`, deliberately not built. The Copy Application Packet already recovers most of the operator time in the handoff case at none of the complexity, so the remaining benefit does not yet justify shipping a browser extension that handles PII. |
-| 537 | [Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run](#537-apply-session-auto-advance-is-only-exercised-by-unit-tests-never-by-a-live-multi-application-run) | Pending | 1.0 = 3×1.0÷3 | standard | The state machine and its refusals are unit-tested, but nothing has yet driven two real applications end to end through open → questions → answers → confirm → auto-open. That is the one claim in this feature that only a live run can settle. |
+| 537 | [Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run](#537-apply-session-auto-advance-is-only-exercised-by-unit-tests-never-by-a-live-multi-application-run) | Done (2026-08-13) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #537 for the full account. Found five defects that all passed `go test`, two of them Major. |
 | 512 | [Application Mode selector and configurable fit threshold](#512-application-mode-selector-and-configurable-fit-threshold) | Done (2026-08-04) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #512 for the full account. |
 | 506 | [`/work_next_item`'s selection rule never returns to `bugs.md` once the gate is MET, starving Minor Pending bugs indefinitely](#506-work_next_items-selection-rule-never-returns-to-bugsmd-once-the-gate-is-met-starving-minor-pending-bugs-indefinitely) | Done (2026-08-01) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #506 for the full account. |
 | 500 | [Add a missing index on `job_funnel(discovered_at)`](#500-add-a-missing-index-on-job_funneldiscovered_at) | Closed (2026-08-01) | — | mechanical | See `documentation/backlog_history/improvements_done_details.md` item #500 for the full account. |
@@ -234,15 +234,7 @@ Some ATS platforms cannot be served by the assisted browser at all — Lever is 
 
 ### 537. Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run
 
-**Filed 2026-08-13**, by the session that built it, as an honest statement of what was and was not verified.
-
-The apply-session state machine is unit-tested against every rule that matters: it advances only on a terminal item state, a closed browser pauses it rather than advancing, a confirmation and its session advance commit in one transaction, stop-after-current records the remainder as stopped, and `GetAssistedLaunchInfo` still gates every auto-launch exactly as it gates a manual click. The dashboard handlers and the React session bar are tested too.
-
-**What has not happened is a live run.** Nothing has yet driven two real applications end to end — open → refill → questions → answers → review → confirm → the next application opening by itself — against real employer pages. Everything between `advanceApplySession` calling `launchAssistedApplication` and a visible browser appearing is unexercised outside a unit test, and this repository's own history is emphatic that runtime wiring escapes `go test` (see the memory of an uninitialized package-global `db` and `os.IsNotExist` on a wrapped error, both of which only a live binary run caught).
-
-**How to close it.** Back up `applications.db`, select two queued Greenhouse applications, start a session, and watch for: the first browser opening without a second click; the question list appearing on the card rather than a form to re-read; answers landing in the visible form; the confirmation advancing to application 2 automatically; and `career_agent.log` containing no question text, answer text, or PII. Then close this row with what was observed, including anything that did not work.
-
-**Value 3, Effort 3, Decay 1.0, score 1.0.** Effort is a live session with a real browser and real postings, not a code change — assuming nothing is found.
+Closed — full account archived in `documentation/backlog_history/improvements_done_details.md` item #537.
 
 ### 497. User-approved application-answer memory
 

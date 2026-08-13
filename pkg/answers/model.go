@@ -133,6 +133,17 @@ type Question struct {
 	ControlType string
 	Options     []string
 	Required    bool
+	// Company is the employer asking the question, when the caller knows it.
+	//
+	// It exists because an employer's own name appears in its questions, and
+	// some company names are also legal-attestation vocabulary. Observed live
+	// on a real Greenhouse form: "Have you previously been employed at Affirm
+	// for any length of time?" classified as a legal declaration purely because
+	// the company is called Affirm (bugs.md #540). Consent, Certify and Accord
+	// are also real companies. Supplying this lets the classifier discount the
+	// employer's own name; leaving it empty is safe but keeps the false
+	// positive.
+	Company string
 }
 
 // Context is what the vault knows about where a question was asked, used to

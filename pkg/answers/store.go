@@ -109,6 +109,12 @@ func (s *Store) Save(request SaveRequest) (Answer, error) {
 	// the classification but never lower it, so a client that sends
 	// "routine" for an attestation cannot talk the store into treating it
 	// that way.
+	//
+	// The caller is expected to have classified the same question the same way
+	// when it decided which acknowledgements to ask the operator for. Any
+	// disagreement is resolved here in favour of the stricter answer, and
+	// answers.Resolve now escalates identically so the two cannot drift
+	// (bugs.md #541).
 	classified := Classify(request.Question)
 	sensitivity := classified
 	if request.Sensitivity == Sensitive {

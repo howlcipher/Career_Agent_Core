@@ -68,3 +68,7 @@ applied_urls_verify*.txt
 /gh_*_linux_amd64/
 /gh_*_linux_amd64.tar.gz
 logs*.zip
+
+# Scratch directory for live verification runs. Holds a copy of the database
+# and of pii.yaml; never commit it.
+/livecheck/

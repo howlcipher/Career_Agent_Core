@@ -39,17 +39,46 @@ func (s *Store) Resolve(question Question, ctx Context, pii *config.PII) Resolut
 	if s != nil && s.conn != nil {
 		for _, scope := range scopeChain(ctx) {
 			if resolution, ok := s.resolveFromAlias(question, scope); ok {
-				return resolution
+				return escalateSensitivity(resolution, question)
 			}
 			if resolution, ok := s.resolveFromVault(question, scope); ok {
-				return resolution
+				return escalateSensitivity(resolution, question)
 			}
 		}
 	}
 	if resolution, ok := resolveFromPattern(question, pii); ok {
-		return resolution
+		return escalateSensitivity(resolution, question)
 	}
 	return Resolution{Sensitivity: Classify(question), Source: SourceUnknown}
+}
+
+// escalateSensitivity takes the stricter of what produced the answer and what
+// the question itself classifies as.
+//
+// This closes the hole bugs.md #541 was filed for. The dashboard decides which
+// acknowledgements to show from the sensitivity recorded on the *question*,
+// while Store.Save enforces its rule using its own re-classification of the
+// same question. When those two disagreed, the two-checkbox guarantee failed
+// silently in the unsafe direction: a pattern declared Routine, so the operator
+// saw one checkbox and no declaration warning, while the store classified the
+// question Sensitive and accepted the resulting ReuseAllowed=true — storing a
+// declaration with reuse permission nobody had granted. Observed live on a real
+// Greenhouse form.
+//
+// Taking the union means the two can no longer disagree in the direction that
+// matters. AutoFill is recomputed rather than carried over, because a
+// resolution that has just become sensitive must stop being something Career
+// Agent types on the operator's behalf — except for a stored answer whose reuse
+// the operator explicitly granted, which is exactly what that grant is for.
+func escalateSensitivity(resolution Resolution, question Question) Resolution {
+	if resolution.Sensitivity == Sensitive || Classify(question) != Sensitive {
+		return resolution
+	}
+	resolution.Sensitivity = Sensitive
+	if resolution.Source == SourcePattern {
+		resolution.AutoFill = false
+	}
+	return resolution
 }
 
 func (s *Store) resolveFromAlias(question Question, scope string) (Resolution, bool) {
@@ -116,6 +145,12 @@ func (s *Store) resolutionFrom(answer Answer, source Source) Resolution {
 func (s *Store) ResolveAll(questions []Question, ctx Context, pii *config.PII) Batch {
 	batch := Batch{}
 	for _, question := range questions {
+		// The classifier needs the employer's name to discount it (bugs.md
+		// #540); callers supply it once on the context rather than on every
+		// question.
+		if question.Company == "" {
+			question.Company = ctx.Company
+		}
 		resolution := s.Resolve(question, ctx, pii)
 		entry := Resolved{Question: question, Resolution: resolution}
 		if resolution.Resolved && resolution.AutoFill {

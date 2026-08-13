@@ -1591,3 +1591,34 @@ The learning loop runs through the dashboard: a refill that leaves unanswered qu
 Scored 3×1.0÷6 = 0.5 when filed, on 26 observed `MANUAL_REQUIRED` rows. It was worked as part of a larger operator-directed effort to reduce human seconds per submitted application, not selected by ROI rank.
 
 ---
+## 537. Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run
+
+**Completed 2026-08-13.** Run against a copy of `applications.db` from inside the `career-agent` container, on two real Greenhouse postings, on a dashboard bound to `127.0.0.1:8099` while the production instance on `:8080` was left untouched. Nothing was submitted to any employer: auto-advance was driven by Skip rather than Confirm, by explicit agreement with the user before the run.
+
+**Observed timeline, second pass (after the fixes below):**
+
+```
+10:08:35  application 1 opened automatically  (no click; "Verified destination: application")
+10:09:48  refill: 6 fields filled, 1 approved answer reused, 17 questions surfaced
+10:10:04  2 operator answers entered into the real form
+          "Review the form and submit it yourself; Career Agent will not click Submit."
+10:10:16  Skip -> "This application's place in the apply session reached an outcome; closing the browser."
+10:10:38  application 2 opened automatically   <- the claim this row exists for
+10:18:38  browser 2 closed with no confirmation -> session paused,
+          reason browser_closed_without_outcome, item returned to pending, nothing counted
+```
+
+Every claim is now observed rather than inferred: the migration on an existing database, session-driven browser launch, the fill report and its question list, the answer round trip through `pending_answers` into a real employer form, auto-advance on a terminal outcome, and the pause-on-closed-browser rule. The 6 filled fields were First Name, Last Name, Email, Phone, LinkedIn Profile and Current Company; the sensitivity classifier correctly marked all nine of that form's immigration and protected-class questions sensitive and offered suggestions only where `pii.yaml` had configured one, leaving the EEO questions blank.
+
+**Not verified, and deliberately so:** a real employer submission followed by Confirm writing an `APPLIED` row. The confirm path's session advance is unit-tested and shares `advanceApplySessionItemTx` with the skip path that was exercised live, but no application was actually sent.
+
+**The run found five defects, all of which passed `go test`.** Two before a browser was ever opened (bugs.md #538, #539), three from the live form (#541, #542, #540), plus one filed for later (#543). The two that mattered:
+
+- **#542** — auto-advance did not work on the skip path at all. Nothing told `cmd/assist` its work was done, so the skipped application's browser held the only visible-browser lease forever, and the resulting lease conflict was misread as an unknown outcome and paused the session. The first pass ended with the operator pressing Skip and nothing happening.
+- **#541** — the Answer Vault's two-checkbox guarantee failed in the unsafe direction on a real form: an answer the card showed as routine was stored as a sensitive declaration with reuse permission the operator was never asked for. The trigger was **#540**, the classifier treating the employer's own name ("Affirm") as attestation vocabulary.
+
+That is the value this row was filed to obtain. None of the five was reachable from the test suite: three depended on a real employer's DOM, one on a database created by an earlier release, one on a non-default port.
+
+**Live PII scan of `dashboard.log`:** no email addresses, no phone numbers, no question prompt text, and no operator answer. The only page-derived content was Playwright's own locator-retry diagnostics, filed as #543 because the same diagnostic on a filled control would print a typed value.
+
+---
