@@ -48,3 +48,23 @@ tracker_bin
 tracker.log
 tracker_daemon.log
 profile.yaml
+
+# Ad-hoc verification cohorts written during live-batch runs (e.g.
+# applied_urls_verify82.txt, a one-off 82-job list committed on purpose so an
+# in-flight task could recover its cohort). These are real posting URLs from a
+# personal job search -- runtime exhaust, not a fixture, and nothing in the
+# codebase reads them once the task that produced them closes.
+applied_urls_verify*.txt
+
+# cmd/demo's compiled binary. Every other build output is ignored above; this
+# one was not, and a 12MB ELF rode along in the 2026-08-12 portfolio-hardening
+# commit. The documented way to run it is `go run ./cmd/demo`. Anchored so it
+# cannot shadow the cmd/demo/ package directory.
+/demo
+
+# Local tooling and support bundles unpacked into the repo root (a downloaded
+# gh release, zipped log bundles). Convenient to keep locally, never part of
+# the repository.
+/gh_*_linux_amd64/
+/gh_*_linux_amd64.tar.gz
+logs*.zip
