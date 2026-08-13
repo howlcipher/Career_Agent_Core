@@ -54,7 +54,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
-| 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Pending | 1.0 = 2×1.0÷2 | standard | Found by improvements.md #537's live run while scanning the logs for PII. Observed benign this time (`value=""`), but the same diagnostic on a filled control would print the operator's answer. Pre-existing, not introduced by the apply-session work. |
+| 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Done (2026-08-13) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #543 for the full account. |
 | 541 | [The two-checkbox guarantee fails when the UI and the vault classify a question differently](#541-the-two-checkbox-guarantee-fails-when-the-ui-and-the-vault-classify-a-question-differently) | Major | Fixed (2026-08-13) | — | standard | Found by the improvements.md #537 live run on a real Greenhouse form. A declaration was stored with reuse permission the operator was never asked for, because the card and the store disagreed about whether the question was sensitive. |
 | 542 | [Skip leaves the assisted browser open holding the only lease, so an apply session can never advance past it](#542-skip-leaves-the-assisted-browser-open-holding-the-only-lease-so-an-apply-session-can-never-advance-past-it) | Major | Fixed (2026-08-13) | — | standard | Same run. Auto-advance — the feature's headline — did not work on the skip path: the operator pressed Skip and the session paused instead of opening the next application. |
 | 540 | [The sensitivity classifier treats the employer's own name as legal-attestation vocabulary](#540-the-sensitivity-classifier-treats-the-employers-own-name-as-legal-attestation-vocabulary) | Minor | Fixed (2026-08-13) | — | mechanical | Same run. "Affirm" is both a real company and an attestation verb; so are Consent and Certify. It is what triggered #541. |
@@ -252,21 +252,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 
 ### 543. The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML
 
-**Found 2026-08-13** during improvements.md #537's live run, by the PII scan that run performs on its own logs rather than by a failure.
-
-`launchAssistedApplication` in `cmd/dashboard/main.go` scans the assist process's stderr and echoes every line with `log.Printf("assisted browser: %s", line)`. That is useful — it is how the operator sees what the browser is doing — but the lines are not all Career Agent's own. When a Playwright action retries, its diagnostics include the target element's outer HTML. Observed in this run:
-
-```
-- locator resolved to <input value="" type="text" role="combobox" ... >
-```
-
-Here `value=""` because the retry happened before the fill. **The same diagnostic on a control that already holds a value would print it**, and on an application form that value is whatever the operator typed — a salary expectation, a work-authorization answer, a free-text response.
-
-Nothing left the machine: `dashboard.log` is local and gitignored. But this project already decided that page content does not belong in logs (bug #523 did exactly this work for the assisted network guard, replacing verbatim Playwright errors with a classified reason), and this is the same class one layer up.
-
-**Pre-existing.** The echo predates the apply-session work; the live run simply looked for it. Filed rather than fixed in that session to keep an unrelated change out of a bug fix for something else.
-
-**Fix direction.** Do not echo assist stderr verbatim. Either filter lines to those the assist process itself emits (they all carry its own `log` timestamp prefix, unlike Playwright's indented continuation lines), or strip `value="..."` and any `<input`/`<textarea` payload before logging. The readiness sentinel `launchAssistedApplication` watches for ("Assisted application is open.") must keep working, so filtering has to preserve Career Agent's own lines exactly.
+Closed 2026-08-13 — full account archived in `documentation/backlog_history/bugs_done_details.md` item #543.
 
 ### 541. The two-checkbox guarantee fails when the UI and the vault classify a question differently
 

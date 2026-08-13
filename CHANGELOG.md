@@ -1,5 +1,69 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Operator answers can no longer reach the dashboard log
+
+`bugs.md` #543, filed by the live apply-session run earlier today and fixed here.
+The dashboard echoed every line of the assisted browser's stderr into its own
+log. That stream is not Career Agent's alone, and Playwright's diagnostics quote
+the target element's outer HTML — so a fill that retried against a control the
+operator had already typed into wrote their answer to `dashboard.log`.
+
+**Reproduced with a real browser before anything was changed.** A localhost
+synthetic form, a synthetic canary, and a deliberately provoked Playwright retry
+failure. No employer was contacted, and no real answer, résumé field, `pii.yaml`
+value or production database was involved. Real Playwright emitted
+`- locator resolved to <input ... value="<the canary>"/>`, and with the old
+reader in place that canary was written to a persisted log file. Both regression
+tests were confirmed to fail against the pre-fix tree.
+
+**The filed description was one of four leak sites.** It named the dashboard's
+echo. Reading the code also found that `pkg/submitter/assisted_fill.go` and
+`cmd/assist` rendered raw Playwright errors with `%v` on lines that *do* carry a
+Career Agent timestamp — so the timestamp filter #543 proposed would not have
+caught them — and that `cmd/assist` was inheriting a Chromium process's stderr
+into the same stream.
+
+**The fix is a boundary at both ends, recorded as ADR-006.**
+
+* **Producers report a bounded reason, not the error.**
+  `security.BrowserFailureReason` maps any automation error to one code from a
+  closed vocabulary. It matches on the error text but returns only constants, so
+  a wording change in Playwright costs precision and never confidentiality. Same
+  shape as the `NetworkRejectionReason` classifier bug #523 introduced.
+* **The dashboard persists only records it recognises as its own.**
+  `security.SanitizeChildLogLine` admits a line by record shape, then strips
+  markup and bounds its length. Everything else is counted and dropped.
+  Blocklisting Playwright's phrasing was considered and rejected as brittle.
+
+**Readiness still works, because the two concerns were separated.** The
+`"Assisted application is open."` contract is matched against the raw in-memory
+line; only persistence goes through the filter. No new file holds the raw
+stream — this reduces persistence boundaries rather than moving them.
+
+`dashboard.log` keeps the operational narrative it was useful for — launched,
+ready, *n* fields filled, questions surfaced, answers entered, confirmed,
+closed, exited — plus a bounded failure reason and a count of what was withheld.
+
+**Also fixed:** the reader was a `bufio.Scanner`, which fails the whole stream on
+a token over 64 KB. Since an employer's page controls how long a diagnostic is,
+that was a route to a stalled read and a child blocked on a full pipe.
+
+**Adjacent answer-persistence paths were audited and are unchanged:**
+`pending_answers` is consumed and deleted in one transaction, cleared when a
+browser closes, and deleted again inside the confirmation transaction; the vault
+holds only explicitly approved answers; no log statement prints an answer value;
+and the assisted browser was the only child stream the dashboard persisted. No
+other plaintext path was found.
+
+**Still unverified in production:** a real employer submission followed by
+Confirm producing exactly one `APPLIED` record. A read-only audit of that path
+found the guarantees in place — Confirm touches no browser control, writes only
+the operator's assertion, and does its funnel update, `applied_jobs` insert,
+session advance and pending-answer deletion in a single transaction, with three
+independent guards against a duplicate confirmation — but it has not been
+exercised against a real submission, and is stated as unverified until it is.
+
+
 ## 2026-08-13 — Apply sessions verified against real employer forms, and five defects fixed
 
 The apply-session work released earlier today was unit-tested but had never

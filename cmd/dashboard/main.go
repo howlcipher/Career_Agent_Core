@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"embed"
@@ -1293,18 +1292,13 @@ var launchAssistedApplication = func(jobID string) error {
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			log.Printf("assisted browser: %s", line)
-			if strings.Contains(line, "Assisted application is open.") {
-				select {
-				case <-ready:
-				default:
-					close(ready)
-				}
+		readAssistedStderr(stderr, func() {
+			select {
+			case <-ready:
+			default:
+				close(ready)
 			}
-		}
+		})
 		done <- cmd.Wait()
 	}()
 	timeout := 45 * time.Second

@@ -104,12 +104,12 @@ func main() {
 		return
 	}
 	if err := playwright.Install(); err != nil {
-		log.Printf("install Playwright: %v", err)
+		log.Printf("install Playwright: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	pw, err := playwright.Run()
 	if err != nil {
-		log.Printf("start Playwright: %v", err)
+		log.Printf("start Playwright: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	defer pw.Stop()
@@ -134,7 +134,7 @@ func main() {
 	browserProxy := &playwright.Proxy{Server: proxy.URL(), Bypass: playwright.String("<-loopback>"), Username: playwright.String(proxy.Username()), Password: playwright.String(proxy.Password())}
 	browserContext, err := pw.Chromium.LaunchPersistentContext(profileDir, assistedBrowserLaunchOptions(browserProxy))
 	if err != nil {
-		log.Printf("launch visible assisted browser: %v", err)
+		log.Printf("launch visible assisted browser: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	defer browserContext.Close()
@@ -146,7 +146,7 @@ func main() {
 			Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 		`),
 	}); err != nil {
-		log.Printf("install assisted browser compatibility script: %v", err)
+		log.Printf("install assisted browser compatibility script: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	pages := browserContext.Pages()
@@ -156,12 +156,12 @@ func main() {
 	} else {
 		page, err = browserContext.NewPage()
 		if err != nil {
-			log.Print(err)
+			log.Printf("open assisted browser page: reason=%q", security.BrowserFailureReason(err))
 			return
 		}
 	}
 	if err := installAssistedContextGuard(browserContext, guard); err != nil {
-		log.Printf("install browser network guard: %v", err)
+		log.Printf("install browser network guard: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	page.SetDefaultTimeout(45000)
@@ -169,16 +169,16 @@ func main() {
 		// Analytics and bot-protection assets can keep an otherwise usable
 		// employer page busy indefinitely. DOM content is still enough to verify
 		// that the visible document is the role the user selected.
-		log.Printf("assisted application network-idle wait failed; checking loaded document: %v", err)
+		log.Printf("assisted application network-idle wait failed; checking loaded document: reason=%q", security.BrowserFailureReason(err))
 		if _, err = page.Goto(info.URL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
-			log.Printf("open assisted application: %v", err)
+			log.Printf("open assisted application: reason=%q", security.BrowserFailureReason(err))
 			return
 		}
 	}
 	page.WaitForTimeout(1500)
 	title, err := page.Title()
 	if err != nil {
-		log.Printf("verify assisted application title: %v", err)
+		log.Printf("verify assisted application title: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	if !assistedPageTitleMatchesRole(title, info.Role) {
@@ -187,7 +187,7 @@ func main() {
 	}
 	destinationPage, destination, err := submitter.ReachAssistedDestination(page)
 	if err != nil {
-		log.Printf("open exact assisted destination: %v", err)
+		log.Printf("open exact assisted destination: reason=%q", security.BrowserFailureReason(err))
 		return
 	}
 	if destinationPage != page {
@@ -355,8 +355,14 @@ func launchDirectAssistedBrowser(executable string, commandPrefix []string, prof
 	arguments := directAssistedBrowserArguments(profileDir, extensionDir, proxy.URL())
 	arguments = append(append([]string{}, commandPrefix...), arguments...)
 	command := exec.Command(executable, arguments...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
+	// The browser's own streams are discarded rather than inherited. This
+	// process's stderr is read and persisted by the dashboard, so inheriting
+	// here would put a third party's unfiltered output into a log file this
+	// project is answerable for (bugs.md #543). Nothing reads these streams:
+	// readiness arrives over startDirectBrowserReadiness, and a launch failure
+	// surfaces through Start, Wait and the readiness timeout.
+	command.Stdout = nil
+	command.Stderr = nil
 	if err := command.Start(); err != nil {
 		_ = readyServer.Close()
 		_ = os.RemoveAll(extensionDir)
@@ -678,7 +684,7 @@ func continueAssistedApplication(page playwright.Page, info storage.AssistedLaun
 			log.Printf("Assisted refill stopped and manual review could not be preserved: %v", stateErr)
 			return false
 		}
-		log.Printf("Assisted refill stopped safely; the verified application remains open for manual completion: %v", err)
+		log.Printf("Assisted refill stopped safely; the verified application remains open for manual completion: reason=%q", security.BrowserFailureReason(err))
 		return true
 	}
 
@@ -726,7 +732,7 @@ func applyOperatorAnswers(page playwright.Page, info storage.AssistedLaunchInfo,
 			log.Printf("Answers could not be applied and manual review could not be preserved: %v", stateErr)
 			return false
 		}
-		log.Printf("Your answers could not be entered automatically; the application remains open so you can complete it yourself: %v", err)
+		log.Printf("Your answers could not be entered automatically; the application remains open so you can complete it yourself: reason=%q", security.BrowserFailureReason(err))
 		return true
 	}
 	if len(report.Unresolved) > 0 {
