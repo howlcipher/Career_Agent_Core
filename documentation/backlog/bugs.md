@@ -54,6 +54,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
+| 544 | [A skill-scoped experience question is answered with the operator's total career years](#544-a-skill-scoped-experience-question-is-answered-with-the-operators-total-career-years) | Major | Fixed (2026-08-13) | — | standard | Found by reading `patterns.go` while planning the Application Knowledge work. `years_experience` needs only a duration token and `experience`, is Routine, and every Routine pattern auto-fills — so "How many years of Kubernetes experience?" typed the operator's whole career total onto a real screening question. A fabricated qualification, submitted under their name. |
 | 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Done (2026-08-13) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #543 for the full account. |
 | 541 | [The two-checkbox guarantee fails when the UI and the vault classify a question differently](#541-the-two-checkbox-guarantee-fails-when-the-ui-and-the-vault-classify-a-question-differently) | Major | Fixed (2026-08-13) | — | standard | Found by the improvements.md #537 live run on a real Greenhouse form. A declaration was stored with reuse permission the operator was never asked for, because the card and the store disagreed about whether the question was sensitive. |
 | 542 | [Skip leaves the assisted browser open holding the only lease, so an apply session can never advance past it](#542-skip-leaves-the-assisted-browser-open-holding-the-only-lease-so-an-apply-session-can-never-advance-past-it) | Major | Fixed (2026-08-13) | — | standard | Same run. Auto-advance — the feature's headline — did not work on the skip path: the operator pressed Skip and the session paused instead of opening the next application. |
@@ -249,6 +250,26 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 544. A skill-scoped experience question is answered with the operator's total career years
+
+**Found 2026-08-13** while planning the Application Knowledge work, by reading `pkg/answers/patterns.go` rather than by running anything. Fixed the same day, before any of that feature work was built on top of it.
+
+The `years_experience` curated pattern requires only a duration token (`years`/`year`) and the token `experience`. It is classified `Routine`, and `resolveFromPattern` grants `AutoFill: candidate.Sensitivity == Routine` to every Routine pattern. So a question scoped to one technology matched it and Career Agent typed `pii.Work.YearsExperience` — the operator's **whole career total** — into it:
+
+> "How many years of **Kubernetes** experience do you have?" → auto-filled `12`
+
+Reproduced as a failing test before the fix: six of eight real phrasings (`Kubernetes`, `Terraform`, `Azure`, `Go`, `Python`, and the "years of professional X experience" shape) auto-filled the career total. The remaining two escaped only because they lack the literal token `experience`, so they were already unresolved — not because anything stopped them.
+
+This is not a cosmetic mismatch. It states a qualification the operator does not have, on a real employer's screening question, under their name, with no interruption and nothing in the fill summary to show it happened — the summary keeps labels, not values. It is precisely the "invent experience durations" failure the project forbids, and it would have got worse the moment the Application Knowledge work started surfacing skill-screening questions in bulk.
+
+**Fix**, in `pkg/answers`:
+
+* `experience.go` (new) — `SkillExperienceSubject` reduces a duration question to the thing it asks about, using a closed, curated token list: strip the interrogatives, the duration and experience vocabulary, and the qualifiers that describe the *measure* rather than its subject (`professional`, `total`, `overall`, `relevant`, `full`/`part`/`time` …). Whatever survives is the skill. The employer's own name is subtracted first, for the same reason #540 subtracts it — "How many years have you worked at Affirm?" is a tenure question, not a question about a skill called Affirm. No stemming, no similarity, no model.
+* `patterns.go` — `pattern` gains an optional `Reject func(Question) bool`, and `years_experience` sets it to refuse any question with a non-empty skill subject. Stated as a predicate rather than left to table ordering plus an empty `Value`, because a refusal that depends on which row comes first is a refusal nobody can see when reading the table.
+* `resolve.go` — a refusal alone would turn every phrasing of every skill question into a permanent operator interruption, so the scope chain gains `resolveFromSkillExperience`: an approved *years of `<skill>`* answer resolves **any** phrasing of that skill's duration question, through the same deterministic reduction. One approval covers "Years of Kubernetes experience", "How long have you worked with Kubernetes?" and "Kubernetes experience (years)". A skill nobody approved still reaches nobody.
+
+The general question is untouched: "How many years of professional experience do you have?" still resolves and still auto-fills from `pii.Work.YearsExperience`, which is the answer it actually wants.
 
 ### 543. The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML
 

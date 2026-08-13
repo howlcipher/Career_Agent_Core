@@ -157,10 +157,16 @@ type Context struct {
 type Source string
 
 const (
-	SourceAlias   Source = "alias"
-	SourceVault   Source = "vault"
-	SourcePattern Source = "pattern"
-	SourceUnknown Source = ""
+	SourceAlias Source = "alias"
+	SourceVault Source = "vault"
+	// SourceSkillExperience is an approved years-of-<skill> value reached by
+	// reducing the employer's phrasing to the skill it asks about. It is
+	// reported separately from SourceVault so a reader of the diagnostics can
+	// tell "you approved this exact question" from "you approved this skill and
+	// Career Agent recognised another way of asking about it".
+	SourceSkillExperience Source = "skill_experience"
+	SourcePattern         Source = "pattern"
+	SourceUnknown         Source = ""
 )
 
 // Resolution is the outcome of asking the vault about one question.

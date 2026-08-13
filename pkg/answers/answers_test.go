@@ -520,3 +520,146 @@ func TestResolve_EscalationDoesNotRevokeAnExplicitReuseGrant(t *testing.T) {
 		t.Fatal("an explicitly granted reuse must survive escalation")
 	}
 }
+
+// --- Skill-scoped experience (bugs.md #544) -------------------------------
+
+// testPII is the shape these tests need: a configured career total that must
+// never end up answering a question about one technology.
+func testPII() *config.PII {
+	pii := &config.PII{}
+	pii.Work.YearsExperience = "12"
+	return pii
+}
+
+func TestResolve_SkillScopedExperienceNeverAutoFillsTheCareerTotal(t *testing.T) {
+	store := newTestStore(t)
+	pii := testPII()
+
+	// Every one of these is a question about a single technology. Answering any
+	// of them with the operator's 12-year career total states a qualification
+	// they do not have, on a real employer's screening question.
+	skillScoped := []string{
+		"How many years of Kubernetes experience do you have?",
+		"Years of professional Kubernetes experience?",
+		"How long have you worked with Kubernetes?",
+		"How many years of Terraform experience do you have?",
+		"Years of experience with Azure",
+		"How many years of experience do you have with Go?",
+		"Python experience (years)",
+		"How many years have you used Docker?",
+	}
+	for _, prompt := range skillScoped {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if resolution.AutoFill {
+				t.Fatalf("a skill-scoped experience question auto-filled %q from the career total", resolution.Answer)
+			}
+			if resolution.Answer == pii.Work.YearsExperience {
+				t.Fatalf("the career total leaked into a skill-scoped question as a suggestion")
+			}
+			if resolution.Resolved {
+				t.Fatalf("expected unresolved with nothing approved for this skill, got %+v", resolution)
+			}
+		})
+	}
+}
+
+func TestResolve_GeneralExperienceStillAnswersFromTheCareerTotal(t *testing.T) {
+	store := newTestStore(t)
+	pii := testPII()
+
+	// The other half of #544: refusing skill questions must not cost us the
+	// general one, which pii.Work.YearsExperience genuinely does answer.
+	general := []string{
+		"How many years of professional experience do you have?",
+		"Years of experience",
+		"How many years of relevant work experience do you have?",
+		"Total years of experience",
+	}
+	for _, prompt := range general {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if !resolution.Resolved || !resolution.AutoFill {
+				t.Fatalf("a general experience question must still resolve and auto-fill, got %+v", resolution)
+			}
+			if resolution.Answer != "12" || resolution.PatternID != "years_experience" {
+				t.Fatalf("expected the career total from years_experience, got %+v", resolution)
+			}
+		})
+	}
+}
+
+func TestResolve_OneApprovedSkillValueAnswersEveryPhrasingOfThatSkill(t *testing.T) {
+	store := newTestStore(t)
+	pii := testPII()
+
+	subject := SkillExperienceSubject(routineQuestion("How many years of Kubernetes experience do you have?"))
+	if subject != "kubernetes" {
+		t.Fatalf("subject = %q, want %q", subject, "kubernetes")
+	}
+	if _, err := store.Save(SaveRequest{
+		Question:          routineQuestion(SkillExperienceQuestion(subject)),
+		Answer:            "3",
+		Kind:              KindNumber,
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	}); err != nil {
+		t.Fatalf("save approved skill experience: %v", err)
+	}
+
+	// Phrasings the operator never saw must reach the approved value, and must
+	// reach it deterministically rather than through anything resembling a
+	// similarity score.
+	for _, prompt := range []string{
+		"How many years of Kubernetes experience do you have?",
+		"Years of professional Kubernetes experience?",
+		"How long have you worked with Kubernetes?",
+		"Kubernetes experience (years)",
+	} {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if !resolution.Resolved || !resolution.AutoFill {
+				t.Fatalf("expected the approved skill value to resolve, got %+v", resolution)
+			}
+			if resolution.Answer != "3" {
+				t.Fatalf("answer = %q, want the approved %q", resolution.Answer, "3")
+			}
+		})
+	}
+
+	// A skill nobody approved is still nobody's business to guess at.
+	other := store.Resolve(routineQuestion("How many years of Rust experience do you have?"), Context{}, pii)
+	if other.Resolved {
+		t.Fatalf("an unapproved skill resolved to %+v", other)
+	}
+}
+
+func TestSkillExperienceSubject_DistinguishesSkillsFromEverythingElse(t *testing.T) {
+	cases := []struct {
+		prompt  string
+		company string
+		want    string
+	}{
+		{"How many years of Kubernetes experience do you have?", "", "kubernetes"},
+		{"How long have you worked with Terraform?", "", "terraform"},
+		{"Years of experience with Amazon Web Services", "", "amazon web services"},
+		{"How many years of professional experience do you have?", "", ""},
+		{"Years of experience", "", ""},
+		{"How many years of full-time work experience?", "", ""},
+		// Not duration questions at all.
+		{"Describe your experience with Kubernetes", "", ""},
+		{"What is your current job title?", "", ""},
+		{"Are you legally authorized to work in the United States?", "", ""},
+		// bugs.md #540's reasoning applies here too: the employer's own name is
+		// in its questions, and tenure at a company is not a skill.
+		{"How many years have you worked at Affirm?", "Affirm", ""},
+		{"", "", ""},
+	}
+	for _, testCase := range cases {
+		got := SkillExperienceSubject(Question{Prompt: testCase.prompt, Company: testCase.company, ControlType: "text"})
+		if got != testCase.want {
+			t.Errorf("SkillExperienceSubject(%q) = %q, want %q", testCase.prompt, got, testCase.want)
+		}
+	}
+}

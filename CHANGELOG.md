@@ -1,5 +1,44 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Career Agent no longer answers "years of Kubernetes?" with your whole career
+
+`bugs.md` #544, found by reading the code while planning the Application
+Knowledge work, and fixed before anything was built on top of it.
+
+* **What it did.** The Approved Answer Vault's `years_experience` pattern
+  matched on a duration word plus the word "experience", and every pattern
+  classified Routine is allowed to auto-fill. So a screening question about one
+  technology — "How many years of **Kubernetes** experience do you have?" —
+  matched it, and Career Agent typed the operator's total years of professional
+  experience into it. On a real employer's form, under the operator's name,
+  with no interruption. The fill summary keeps labels and discards values, so
+  nothing on the card would have shown it either.
+* **Reproduced as a failing test before the fix.** Six of eight real phrasings
+  (Kubernetes, Terraform, Azure, Go, Python, and the "years of professional X
+  experience" shape) auto-filled the career total. The two that escaped did so
+  only because they omit the literal word "experience" and were therefore
+  already unresolved — nothing was stopping them.
+* **The fix tells the two questions apart deterministically.** A new
+  `SkillExperienceSubject` reduces a duration question to the thing it asks
+  about, using a closed curated token list — strip the interrogatives, the
+  duration and experience vocabulary, and the qualifiers that describe the
+  measure rather than its subject ("professional", "total", "overall",
+  "relevant", "full-time"). Whatever survives is the skill. The employer's own
+  name is subtracted first, the same way #540 subtracts it, so "How many years
+  have you worked at Affirm?" reads as tenure rather than as a skill called
+  Affirm. No stemming, no similarity score, no model — the same standard the
+  rest of the resolution path is held to.
+* **And it gives the skill question somewhere honest to get an answer.** A
+  refusal on its own would have made every phrasing of every skill question a
+  permanent interruption. So an approved *years of `<skill>`* value now resolves
+  **any** phrasing of that skill's duration question through the same
+  reduction: approve Kubernetes once and "Years of Kubernetes experience",
+  "How long have you worked with Kubernetes?" and "Kubernetes experience
+  (years)" are all answered. A skill nobody approved still reaches nobody.
+* **The general question is untouched.** "How many years of professional
+  experience do you have?" still resolves and still auto-fills from the
+  configured career total, which is the answer it actually wants.
+
 ## 2026-08-13 — Operator answers can no longer reach the dashboard log
 
 `bugs.md` #543, filed by the live apply-session run earlier today and fixed here.

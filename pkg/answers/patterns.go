@@ -34,6 +34,17 @@ type pattern struct {
 	// Returning "" means "the operator has not provided this", which resolves
 	// to unresolved rather than to a guess.
 	Value func(pii *config.PII) string
+	// Reject refuses a question this pattern's tokens would otherwise claim.
+	//
+	// Deny handles the case where a *token* disqualifies a match. Reject exists
+	// for the case where the disqualifying fact is a property of the whole
+	// question that no fixed token list can express -- currently only
+	// years_experience, which must not answer a question scoped to one skill
+	// with the operator's total career years (bugs.md #544). It is stated as a
+	// predicate rather than left to table ordering plus an empty Value, because
+	// a refusal that depends on which row happens to come first is a refusal
+	// nobody can see when reading the table.
+	Reject func(Question) bool
 }
 
 // patterns is ordered: the first match wins, so narrower families are listed
@@ -123,6 +134,15 @@ var patterns = []pattern{
 		Sensitivity: Routine,
 		Kind:        KindNumber,
 		Value:       func(pii *config.PII) string { return pii.Work.YearsExperience },
+		// bugs.md #544. pii.Work.YearsExperience is a career total, and it is
+		// the right answer to "How many years of professional experience do you
+		// have?" and the wrong answer to "How many years of Kubernetes
+		// experience do you have?" -- which this pattern's tokens match just as
+		// readily. Answering the second with the first states a qualification
+		// the operator does not have, on a real application, under their name.
+		// A skill-scoped question is therefore refused here and left for the
+		// vault's own skill-experience lookup or for the operator.
+		Reject: func(question Question) bool { return SkillExperienceSubject(question) != "" },
 	},
 	{
 		ID:          "current_title",
@@ -209,14 +229,17 @@ func matchPattern(question Question) *pattern {
 	}
 	for i := range patterns {
 		candidate := &patterns[i]
-		if matchesPattern(present, candidate) {
+		if matchesPattern(present, question, candidate) {
 			return candidate
 		}
 	}
 	return nil
 }
 
-func matchesPattern(present map[string]bool, candidate *pattern) bool {
+func matchesPattern(present map[string]bool, question Question, candidate *pattern) bool {
+	if candidate.Reject != nil && candidate.Reject(question) {
+		return false
+	}
 	for _, denied := range candidate.Deny {
 		if present[denied] {
 			return false
