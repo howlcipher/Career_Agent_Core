@@ -130,7 +130,7 @@ func resolveAndApply(target fillTarget, plan AssistedFillPlan, stillEmpty []Form
 			// dropped: it goes back to the operator with the known value
 			// pre-filled, which is strictly better than a blank box and
 			// strictly more honest than claiming it was filled.
-			log.Printf("[Assisted] Approved answer could not be committed to %q; returning it to the operator: %v", control.ControlType, err)
+			log.Printf("[Assisted] Approved answer could not be committed to %q; returning it to the operator: reason=%q", control.ControlType, security.BrowserFailureReason(err))
 			report.Unresolved = append(report.Unresolved, unresolvedFrom(control, entry.Resolution))
 			continue
 		}
@@ -190,7 +190,7 @@ func ApplyApprovedAnswers(page playwright.Page, filter *security.QuarantineLayer
 			continue
 		}
 		if err := applyAnswerToControl(target, control, value); err != nil {
-			log.Printf("[Assisted] Operator answer could not be committed to a %q control: %v", control.ControlType, err)
+			log.Printf("[Assisted] Operator answer could not be committed to a %q control: reason=%q", control.ControlType, security.BrowserFailureReason(err))
 			report.Unresolved = append(report.Unresolved, UnresolvedQuestion{
 				Key: control.Key, Selector: control.Selector, Label: control.Label,
 				ControlType: control.ControlType, Options: control.Options,

@@ -4474,3 +4474,50 @@ Tests: `TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled` writes disti
 **Files changed.** `pkg/tracker/imap.go`, `pkg/tracker/imap_test.go`.
 
 ---
+
+## 543. The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML
+
+**Found 2026-08-13** by improvements.md #537's live run, during the PII scan that run performs on its own logs. **Closed 2026-08-13.**
+
+**The invariant this closes.** *Assisted Apply child-process diagnostics may never cause transient operator answers or DOM values to be persisted in `dashboard.log`.* More generally: arbitrary child stderr is never blindly persisted. Recorded as ADR-006.
+
+**The filed description was accurate but incomplete.** It named one leak — the dashboard's verbatim echo — and proposed filtering to Career Agent's own timestamped lines. Reading the code first found three more sites, two of which defeat that filter from inside:
+
+* `pkg/submitter/assisted_fill.go:193` rendered the raw error from committing **the operator's answer** with `%v`. `safeFillWithLabelFallback` wraps Playwright's error with `%w`, so the driver's full diagnostic reached the log on a line that *does* carry a Career Agent timestamp. (`:133`, the vault-answer path, is the same shape.)
+* `cmd/assist/main.go:681`/`:729` did the same for the refill and answer-application failures.
+* `cmd/assist/main.go:358` set the **direct Chromium process's** `Stderr = os.Stderr`, so an entire third-party browser's output was already inside the stream the dashboard persisted.
+
+**Reproduced, not assumed.** A local synthetic form (`http://127.0.0.1:<port>`, one text input, no employer contacted, no `pii.yaml`, no production database) was filled with the synthetic canary `CA_TEST_SECRET_543_d7f912a4` and then locked, so the next commit retried and timed out. Real Playwright produced:
+
+```
+  - locator resolved to <input readonly id="salary" ... value="<the canary>"/>
+```
+
+Four error shapes were captured — retry timeout, strict-mode violation, pointer interception, detached locator. Three carried the canary; **all four put it on an unprefixed continuation line, never on line 0.**
+
+**Was timestamp filtering alone sufficient? Against the driver, yes; against this project, no.** Every captured shape would have been caught by the prefix rule. It is still insufficient, because the first line of an application-owned record is written by Career Agent, and Career Agent was embedding the raw error in it. The producer half is therefore not optional.
+
+**Proof of the leak, end to end.** `TestAssistedBrowserLogging_RealPlaywrightDiagnosticNeverReachesTheLogFile` (`cmd/dashboard`) re-executes the test binary as a stand-in for `cmd/assist`, runs a real Chromium against the localhost form, provokes the real retry failure, and pipes that child's stderr through the shipped reader into a real log file. With the filter disabled, **the canary was written to the persisted log file.** With it in place, it is not.
+
+**Fix — an application-owned boundary at both ends** (`pkg/security/logsafe.go`):
+
+* **Producer.** `security.BrowserFailureReason` maps any automation error to one code from a closed vocabulary (`browser_timeout`, `ambiguous_target`, `element_not_interactable`, `target_missing`, `navigation_failed`, `browser_closed`, `browser_driver_unavailable`, `unclassified`). It matches on the error's first line, but *returns only constants declared in that file*, so its output cannot contain page text however the input is worded. Same shape as `NetworkRejectionReason`, which #523 established. Applied to every assisted-path call site that could hold a Playwright error.
+* **Consumer.** `security.SanitizeChildLogLine` admits a line only if it carries the standard logger's record prefix, then strips markup from the remainder and bounds it to 1000 bytes. `cmd/dashboard/assist_log.go` logs what qualifies and counts what does not. `cmd/assist` now discards Chromium's own streams instead of inheriting them.
+
+**Blocklisting Playwright phrasing was rejected** — it encodes one dependency's current wording, fails silently on the first reword, and no test would notice. Both halves decide by structure instead.
+
+**Readiness preserved by separating the concerns.** `"Assisted application is open."` is matched against the **raw in-memory line**, before filtering; only persistence goes through the filter. No second file holds the raw stream — the change reduces persistence boundaries rather than moving them.
+
+**Also fixed while here:** the reader was a `bufio.Scanner`, which fails the whole stream on a token over 64 KB. Since an employer's page controls how long a diagnostic is, that was a path to a stalled read and a child blocked on a full pipe. `readBoundedLine` truncates and keeps reading.
+
+**Tests.** 7 in `pkg/security` (closed-vocabulary property, record survival, sentinel survival, continuation-line rejection, markup redaction, length bounding, CRLF/near-miss prefixes); 9 in `cmd/dashboard` (the same boundary through the real reader, plus a 4 MB line asserting no stall and a missing-final-newline case); 1 real-Playwright producer regression in `pkg/submitter` and 1 real-Playwright cross-process regression in `cmd/dashboard`, both gated on `CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1` per the existing convention. The canary appears only as an assertion target; no real answer was used anywhere.
+
+**Adjacent persistence paths checked** (bounded, per the task's scope): `pending_answers` is written only by the answer API and consumed by `TakePendingAnswers`, which reads and deletes in one transaction and returns an empty map if the commit fails; `DiscardPendingAnswers` clears it when a browser closes; `ConfirmAssistedSubmission` deletes it in the confirmation transaction. `answer_text` appears in exactly two tables — that transient one and the vault, which holds only explicitly approved answers. No log statement anywhere prints an answer value; the assisted log lines report counts. `Store.Save`'s refusal errors are fixed strings and do not quote the answer. The assisted browser was the **only** child stream the dashboard persisted (the agent daemon's streams go to `/dev/null`). No other plaintext path was found; nothing new was filed.
+
+**A note for whoever reads the pre-fix history.** A `role="combobox"` control — which is what #537's live run happened to hit — routes through `commitComboboxSelection`, which replaces the driver's error with a sentinel and never leaked. The default control path is the one that did. The producer regression test deliberately uses a plain text input for that reason.
+
+**Verification.** `gofmt -l ./cmd ./pkg ./internal` empty; `go build ./...`, `go vet ./...`, `go test ./...` all pass; both Playwright integration tests pass and both were confirmed to fail against the pre-fix tree.
+
+**Files changed.** `pkg/security/logsafe.go` (new), `pkg/security/logsafe_test.go` (new), `cmd/dashboard/assist_log.go` (new), `cmd/dashboard/assist_log_test.go` (new), `pkg/submitter/assisted_log_privacy_test.go` (new), `cmd/dashboard/main.go`, `cmd/assist/main.go`, `pkg/submitter/assisted_fill.go`, `pkg/submitter/browser.go`, `docs/adrs/ADR-006-Log-Confidentiality-Boundary.md` (new).
+
+---

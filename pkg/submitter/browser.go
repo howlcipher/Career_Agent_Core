@@ -4205,7 +4205,7 @@ func FillAssistedMappedPage(plan AssistedFillPlan) (FillReport, error) {
 	// fill, never a precondition for it.
 	before, inventoryErr := SnapshotControls(target)
 	if inventoryErr != nil {
-		log.Printf("[Assisted] Could not inventory the form before filling; the refill still runs, but its report will be incomplete: %v", inventoryErr)
+		log.Printf("[Assisted] Could not inventory the form before filling; the refill still runs, but its report will be incomplete: reason=%q", security.BrowserFailureReason(inventoryErr))
 	}
 
 	fillErr := runAssistedHandler(target, plan)
@@ -4220,7 +4220,7 @@ func FillAssistedMappedPage(plan AssistedFillPlan) (FillReport, error) {
 		// The handler succeeded and stopped at the submit gate; only the
 		// report is unavailable. Saying so is better than discarding a good
 		// fill, and better than claiming an empty question list.
-		log.Printf("[Assisted] Refill completed but the form could not be re-inventoried; no question list is available: %v", err)
+		log.Printf("[Assisted] Refill completed but the form could not be re-inventoried; no question list is available: reason=%q", security.BrowserFailureReason(err))
 		return report, nil
 	}
 	after = SanitizeControls(plan.Filter, after)
