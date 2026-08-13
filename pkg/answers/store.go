@@ -201,6 +201,172 @@ func (s *Store) Save(request SaveRequest) (Answer, error) {
 	}, nil
 }
 
+// ErrSensitiveAliasNeedsConfirmation is returned when a caller tries to bind
+// extra phrasings to a sensitive answer without the operator having confirmed
+// that those phrasings mean the same thing.
+//
+// It is separate from ErrSensitiveNeedsApproval because it is a separate
+// decision. Approving an attestation answers one question the operator read.
+// Aliasing it says that four other wordings ask that same question -- and the
+// vocabulary these questions are drawn from is small and treacherous
+// (authorization and sponsorship share most of their tokens and mean opposite
+// things). Career Agent may propose the grouping; only the operator may accept
+// it.
+var ErrSensitiveAliasNeedsConfirmation = errors.New("binding extra phrasings to a declaration needs the operator to confirm they mean the same thing")
+
+// AddAliases binds additional phrasings of a question to an answer already in
+// the vault, so a wording the operator has not seen before still resolves to
+// what they approved.
+//
+// Aliases are only meaningful on an answer whose reuse the operator granted: an
+// answer held back as a suggestion is not something Career Agent types, so
+// recognising more ways of asking for it would change nothing. Adding one to
+// such an answer is refused rather than ignored, because silently doing nothing
+// is how a caller comes to believe the vault knows something it does not.
+func (s *Store) AddAliases(answerID int64, prompts []string, operatorConfirmedEquivalent bool) (int, error) {
+	if s == nil || s.conn == nil {
+		return 0, errors.New("answer vault is not initialized")
+	}
+	if len(prompts) == 0 {
+		return 0, nil
+	}
+	var scope string
+	var sensitivity string
+	var reuseAllowed int
+	if err := s.conn.QueryRow(`SELECT scope, sensitivity, reuse_allowed FROM approved_answers
+		WHERE id = ? AND revoked_at IS NULL`, answerID).Scan(&scope, &sensitivity, &reuseAllowed); err != nil {
+		return 0, errors.New("no live approved answer with that identifier")
+	}
+	if reuseAllowed == 0 {
+		return 0, errors.New("an answer whose reuse is withheld cannot gain aliases")
+	}
+	if Sensitivity(sensitivity) == Sensitive && !operatorConfirmedEquivalent {
+		return 0, ErrSensitiveAliasNeedsConfirmation
+	}
+
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	added := 0
+	now := s.now()
+	for _, prompt := range prompts {
+		alias := Normalize(prompt)
+		if alias == "" {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO answer_aliases (alias_key, scope, answer_id, source, created_at)
+			VALUES (?, ?, ?, 'operator', ?)
+			ON CONFLICT(alias_key, scope) DO UPDATE SET answer_id = excluded.answer_id, created_at = excluded.created_at`,
+			alias, scope, answerID, now); err != nil {
+			return 0, fmt.Errorf("store answer alias: %w", err)
+		}
+		added++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+// Aliases lists the phrasings bound to one answer, so the management view can
+// show the operator what Career Agent believes it recognises.
+func (s *Store) Aliases(answerID int64) ([]string, error) {
+	if s == nil || s.conn == nil {
+		return nil, errors.New("answer vault is not initialized")
+	}
+	rows, err := s.conn.Query(`SELECT alias_key FROM answer_aliases WHERE answer_id = ? ORDER BY alias_key`, answerID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("list answer aliases: %w", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, err
+		}
+		out = append(out, alias)
+	}
+	return out, rows.Err()
+}
+
+// Get returns one live answer by identifier.
+func (s *Store) Get(answerID int64) (Answer, error) {
+	if s == nil || s.conn == nil {
+		return Answer{}, errors.New("answer vault is not initialized")
+	}
+	row := s.conn.QueryRow(`SELECT id, question_key, canonical_question, answer_text, answer_kind,
+		sensitivity, scope, reuse_allowed, provenance, approved_at, updated_at, revoked_at, use_count, last_used_at
+		FROM approved_answers WHERE id = ? AND revoked_at IS NULL`, answerID)
+	answer, err := scanAnswer(row)
+	if err != nil {
+		return Answer{}, errors.New("no live approved answer with that identifier")
+	}
+	return answer, nil
+}
+
+// UpdateAnswer changes the text of an answer already in the vault, and may
+// withdraw its reuse permission.
+//
+// It deliberately cannot change a question's sensitivity, its key or its scope.
+// Those decide which rules apply to the row, and a path that could edit them
+// would be a path around Save's refusal -- which is the one thing in this
+// package nothing is allowed to route around. Changing any of them means
+// revoking this answer and approving a new one, which is also the honest
+// description of what actually happened.
+//
+// Withdrawing reuse drops the aliases with it: an alias exists to make an
+// answer auto-fill, and an answer that no longer auto-fills has no use for one.
+func (s *Store) UpdateAnswer(answerID int64, answerText string, reuseAllowed bool) (Answer, error) {
+	if s == nil || s.conn == nil {
+		return Answer{}, errors.New("answer vault is not initialized")
+	}
+	answerText = strings.TrimSpace(answerText)
+	if answerText == "" {
+		return Answer{}, errors.New("an approved answer needs an answer")
+	}
+	existing, err := s.Get(answerID)
+	if err != nil {
+		return Answer{}, err
+	}
+	// A declaration that has lost its reuse grant may be re-granted only through
+	// the same two-decision path Save enforces, never by an edit.
+	if existing.Sensitivity == Sensitive && reuseAllowed && !existing.ReuseAllowed {
+		return Answer{}, ErrSensitiveNeedsApproval
+	}
+
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return Answer{}, err
+	}
+	defer tx.Rollback()
+	now := s.now()
+	if _, err := tx.Exec(`UPDATE approved_answers
+		SET answer_text = ?, reuse_allowed = ?, provenance = ?, updated_at = ?
+		WHERE id = ? AND revoked_at IS NULL`,
+		answerText, boolToInt(reuseAllowed), string(OperatorEdited), now, answerID); err != nil {
+		return Answer{}, fmt.Errorf("update approved answer: %w", err)
+	}
+	if !reuseAllowed {
+		if _, err := tx.Exec(`DELETE FROM answer_aliases WHERE answer_id = ?`, answerID); err != nil {
+			return Answer{}, fmt.Errorf("remove answer aliases: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Answer{}, err
+	}
+	existing.AnswerText = answerText
+	existing.ReuseAllowed = reuseAllowed
+	existing.Provenance = OperatorEdited
+	existing.UpdatedAt = now
+	return existing, nil
+}
+
 // Revoke withdraws an answer without deleting it. The row stays so its
 // provenance remains auditable; its aliases go, because an alias exists only to
 // make a live answer resolvable.

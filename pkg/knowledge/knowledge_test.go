@@ -1,0 +1,630 @@
+package knowledge
+
+import (
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	_ "modernc.org/sqlite"
+)
+
+// newTestService opens a per-test database on disk rather than ":memory:", for
+// the reason ADR-003 decision 7 gives: a pooled ":memory:" connection opens its
+// own empty database, so a second connection sees no tables.
+func newTestService(t *testing.T) (*Service, *sql.DB) {
+	t.Helper()
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "knowledge.db"))
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	for _, ensure := range []func(*sql.DB) error{
+		storage.EnsureQuestionSchema,
+		storage.EnsureAssistedSchema,
+		answers.EnsureSchema,
+	} {
+		if err := ensure(conn); err != nil {
+			t.Fatalf("prepare schema: %v", err)
+		}
+	}
+	if _, err := conn.Exec(`CREATE TABLE IF NOT EXISTS job_funnel (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		company_name TEXT, job_title TEXT, url TEXT UNIQUE, status TEXT,
+		fit_score INTEGER, discovered_at DATETIME, applied_at DATETIME,
+		last_updated DATETIME)`); err != nil {
+		t.Fatalf("create job funnel: %v", err)
+	}
+	pii := &config.PII{}
+	pii.Work.YearsExperience = "12"
+	pii.Links.LinkedIn = "https://www.linkedin.com/in/example"
+
+	service, err := Open(conn, pii)
+	if err != nil {
+		t.Fatalf("open knowledge service: %v", err)
+	}
+	return service, conn
+}
+
+func seedJob(t *testing.T, conn *sql.DB, id int, company string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, err := conn.Exec(`INSERT INTO job_funnel (id, company_name, job_title, url, status, discovered_at, last_updated)
+		VALUES (?, ?, 'Platform Engineer', ?, 'AWAITING_REVIEW', ?, ?)`,
+		id, company, "https://boards.greenhouse.io/example/jobs/"+company, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO assisted_applications (job_id, original_status, next_action_code, interruption_reason, created_at, updated_at)
+		VALUES (?, 'AWAITING_REVIEW', 'review_and_submit', '', ?, ?)`, id, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ask(t *testing.T, conn *sql.DB, jobID string, questions ...storage.ApplicationQuestion) {
+	t.Helper()
+	for i := range questions {
+		questions[i].JobID = jobID
+	}
+	if err := storage.ReplaceApplicationQuestions(conn, jobID, questions, storage.AssistedFillSummary{JobID: jobID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func findGroup(groups []Group, key string) *Group {
+	for i := range groups {
+		if groups[i].Key == key {
+			return &groups[i]
+		}
+	}
+	return nil
+}
+
+// --- Deduplication --------------------------------------------------------
+
+func TestInbox_CollapsesTheSameQuestionAcrossEmployersAndRanksByDemand(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+
+	// Three employers, three wordings of the same skill question, plus one
+	// question only one of them asks. The inbox should show two entries, and
+	// the widely-asked one first.
+	for id, company := range map[int]string{1: "Acme", 2: "Globex", 3: "Initech"} {
+		seedJob(t, conn, id, company)
+	}
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "How many years of Kubernetes experience do you have?", ControlType: "text"})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Years of professional Kubernetes experience?", ControlType: "text"})
+	ask(t, conn, "3",
+		storage.ApplicationQuestion{Key: "c", Prompt: "How long have you worked with Kubernetes?", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "d", Prompt: "What is your T-shirt size?", ControlType: "text"},
+	)
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 2 {
+		t.Fatalf("expected 2 groups, got %d: %+v", len(inbox), inbox)
+	}
+	// Demand order: the question three applications are waiting on comes first.
+	if inbox[0].Applications != 3 {
+		t.Fatalf("the most widely-asked question must rank first, got %+v", inbox[0])
+	}
+	kubernetes := inbox[0]
+	if kubernetes.Key != "experience:kubernetes" {
+		t.Fatalf("group key = %q, want experience:kubernetes", kubernetes.Key)
+	}
+	if kubernetes.SkillSubject != "kubernetes" {
+		t.Fatalf("skill subject = %q", kubernetes.SkillSubject)
+	}
+	if kubernetes.Occurrences != 3 {
+		t.Fatalf("occurrences = %d, want 3", kubernetes.Occurrences)
+	}
+	// Every wording is shown, because "these mean the same thing" is a claim the
+	// operator is entitled to check.
+	if len(kubernetes.Phrasings) != 3 {
+		t.Fatalf("expected all 3 phrasings shown, got %+v", kubernetes.Phrasings)
+	}
+	// A question three employers ask cannot be answered "for this company only".
+	if kubernetes.CompanyScopeAvailable {
+		t.Fatal("company scope must not be offered for a question several employers ask")
+	}
+	if len(kubernetes.Companies) != 3 {
+		t.Fatalf("expected all three employers named, got %+v", kubernetes.Companies)
+	}
+}
+
+func TestInbox_UsesTheVaultsOwnPatternFamiliesForGrouping(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	seedJob(t, conn, 2, "Globex")
+
+	// These are worded completely differently and are the same question. The
+	// curated pattern table already knows that; grouping reuses it rather than
+	// guessing.
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Will you now or in the future require visa sponsorship?", ControlType: "radio", Options: []string{"Yes", "No"}})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Do you need sponsorship to work in the US?", ControlType: "radio", Options: []string{"Yes", "No"}})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 {
+		t.Fatalf("two phrasings of sponsorship must be one group, got %d: %+v", len(inbox), inbox)
+	}
+	if inbox[0].Key != "pattern:sponsorship" {
+		t.Fatalf("group key = %q, want pattern:sponsorship", inbox[0].Key)
+	}
+}
+
+func TestInbox_KeepsWorkAuthorizationAndSponsorshipApart(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+
+	// These two share most of their vocabulary and mean opposite things.
+	// Grouping them together would put a flatly wrong attestation on a real
+	// application, which is why grouping uses the pattern table's Deny lists
+	// rather than word overlap.
+	ask(t, conn, "1",
+		storage.ApplicationQuestion{Key: "a", Prompt: "Are you legally authorized to work in the United States?", ControlType: "radio", Options: []string{"Yes", "No"}},
+		storage.ApplicationQuestion{Key: "b", Prompt: "Will you require sponsorship for employment authorization?", ControlType: "radio", Options: []string{"Yes", "No"}},
+	)
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 2 {
+		t.Fatalf("work authorization and sponsorship must stay separate, got %d groups: %+v", len(inbox), inbox)
+	}
+}
+
+func TestInbox_FlagsAGroupWhoseEmployersOfferDifferentChoices(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	seedJob(t, conn, 2, "Globex")
+
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "How did you hear about this role?", ControlType: "select", Options: []string{"LinkedIn", "Referral"}})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "How did you hear about us?", ControlType: "select", Options: []string{"Job board", "Careers page"}})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := findGroup(inbox, "pattern:how_did_you_hear")
+	if group == nil {
+		t.Fatalf("expected the how-did-you-hear group, got %+v", inbox)
+	}
+	if !group.OptionsVary {
+		t.Fatal("employers offering different choices must be reported, not averaged")
+	}
+
+	// And a bulk answer must be refused rather than sent to an employer that
+	// does not offer it.
+	if _, err := service.Approve(ApproveRequest{
+		GroupKey: group.Key, Answer: "LinkedIn", SaveForReuse: true,
+	}, now); err == nil {
+		t.Fatal("a group with conflicting option sets must not be bulk-answerable")
+	}
+}
+
+// --- What never reaches the operator in bulk ------------------------------
+
+func TestInbox_ExcludesAnythingCareerAgentCanAlreadyFill(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+
+	ask(t, conn, "1",
+		// Answerable from configured facts: never an interruption.
+		storage.ApplicationQuestion{Key: "a", Prompt: "LinkedIn profile URL", ControlType: "text"},
+		// Genuinely unknown.
+		storage.ApplicationQuestion{Key: "b", Prompt: "What is your T-shirt size?", ControlType: "text"},
+	)
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 || inbox[0].Prompt != "What is your T-shirt size?" {
+		t.Fatalf("only the unknown question belongs in the inbox, got %+v", inbox)
+	}
+}
+
+func TestApprove_RefusesToStoreAPerJobAnswerForReuse(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	seedJob(t, conn, 2, "Globex")
+
+	// "Why this company?" is asked by both, and is exactly the answer that must
+	// never be replayed verbatim across employers.
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Why do you want to work here?", ControlType: "textarea"})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Why do you want to work here?", ControlType: "textarea"})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 {
+		t.Fatalf("expected one group, got %+v", inbox)
+	}
+	if inbox[0].Policy != PolicyGeneratePerJob {
+		t.Fatalf("policy = %q, want %q", inbox[0].Policy, PolicyGeneratePerJob)
+	}
+	if _, err := service.Approve(ApproveRequest{
+		GroupKey: inbox[0].Key, Answer: "I admire the mission.", SaveForReuse: true,
+	}, now); !errors.Is(err, answers.ErrNotReusable) {
+		t.Fatalf("expected ErrNotReusable, got %v", err)
+	}
+	live, err := service.vault.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("nothing should have been stored, found %+v", live)
+	}
+}
+
+func TestApprove_ADeclarationNeedsTheSecondAcknowledgement(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	ask(t, conn, "1", storage.ApplicationQuestion{
+		Key: "a", Prompt: "Have you ever been convicted of a felony?", ControlType: "radio", Options: []string{"Yes", "No"},
+	})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) != 1 || inbox[0].Policy != PolicyHumanReview {
+		t.Fatalf("a criminal-history question must be human review, got %+v", inbox)
+	}
+
+	// One checkbox is not enough, in bulk exactly as it is not enough on a
+	// single application.
+	if _, err := service.Approve(ApproveRequest{
+		GroupKey: inbox[0].Key, Answer: "No", SaveForReuse: true,
+	}, now); !errors.Is(err, answers.ErrSensitiveNeedsApproval) {
+		t.Fatalf("expected ErrSensitiveNeedsApproval, got %v", err)
+	}
+	live, _ := service.vault.List()
+	if len(live) != 0 {
+		t.Fatalf("a declaration was stored without its second acknowledgement: %+v", live)
+	}
+
+	// Both acknowledgements: stored.
+	result, err := service.Approve(ApproveRequest{
+		GroupKey: inbox[0].Key, Answer: "No", SaveForReuse: true, AllowSensitiveReuse: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("with both acknowledgements the answer must store: %v", err)
+	}
+	if !result.Saved {
+		t.Fatal("expected the answer to be saved")
+	}
+}
+
+func TestApprove_ADeclarationsExtraPhrasingsNeedAnEquivalenceConfirmation(t *testing.T) {
+	// Two employers word the same criminal-history declaration differently. The
+	// curated pattern table groups them, which is Career Agent proposing that
+	// they are the same question -- not the operator agreeing. Binding one
+	// answer to both wordings is a separate decision from approving the answer,
+	// because this vocabulary is small and treacherous and a wrong grouping puts
+	// a false declaration on a real application.
+	//
+	// Each path starts from its own database: after the first approval the
+	// group has already changed, so running them in sequence would test
+	// something other than what it claims to.
+	approve := func(t *testing.T, confirmed bool) ApproveResult {
+		t.Helper()
+		service, conn := newTestService(t)
+		now := time.Now().UTC()
+		seedJob(t, conn, 1, "Acme")
+		seedJob(t, conn, 2, "Globex")
+		ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Have you ever been convicted of a felony?", ControlType: "radio", Options: []string{"Yes", "No"}})
+		ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Have you been convicted of a criminal offense?", ControlType: "radio", Options: []string{"Yes", "No"}})
+
+		inbox, err := service.Inbox(now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inbox) != 1 || len(inbox[0].Phrasings) != 2 {
+			t.Fatalf("expected one group holding both phrasings, got %+v", inbox)
+		}
+		result, err := service.Approve(ApproveRequest{
+			GroupKey: inbox[0].Key, Answer: "No", SaveForReuse: true,
+			AllowSensitiveReuse: true, ConfirmedEquivalent: confirmed,
+		}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	withheld := approve(t, false)
+	if !withheld.Saved {
+		t.Fatal("the answer itself should still be stored")
+	}
+	if withheld.AliasesAdded != 0 {
+		t.Fatalf("a declaration's other phrasings were aliased without confirmation: %d", withheld.AliasesAdded)
+	}
+	// The unconfirmed wording stays unresolved, which is the safe outcome: the
+	// operator is asked again rather than answered for.
+	if withheld.StillUnresolved != 1 {
+		t.Fatalf("the unconfirmed phrasing must stay unresolved, got %d", withheld.StillUnresolved)
+	}
+
+	confirmed := approve(t, true)
+	if confirmed.AliasesAdded == 0 {
+		t.Fatal("a confirmed equivalence should bind the other phrasings")
+	}
+	if confirmed.StillUnresolved != 0 {
+		t.Fatalf("once confirmed, both wordings should resolve, got %d unresolved", confirmed.StillUnresolved)
+	}
+}
+
+// --- The learning loop ----------------------------------------------------
+
+func TestApprove_ResolvesTheOtherQueuedApplicationsImmediately(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+
+	// Six applications ask about Terraform, in four different wordings; a
+	// seventh asks something else.
+	for id, company := range map[int]string{1: "Acme", 2: "Globex", 3: "Initech", 4: "Umbrella", 5: "Soylent", 6: "Tyrell", 7: "Wonka"} {
+		seedJob(t, conn, id, company)
+	}
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "How many years of Terraform experience do you have?", ControlType: "text"})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Years of Terraform experience", ControlType: "text"})
+	ask(t, conn, "3", storage.ApplicationQuestion{Key: "c", Prompt: "How long have you used Terraform?", ControlType: "text"})
+	ask(t, conn, "4", storage.ApplicationQuestion{Key: "d", Prompt: "Terraform experience (years)", ControlType: "text"})
+	ask(t, conn, "5", storage.ApplicationQuestion{Key: "e", Prompt: "How many years of Terraform experience do you have?", ControlType: "text"})
+	ask(t, conn, "6", storage.ApplicationQuestion{Key: "f", Prompt: "Years of Terraform experience", ControlType: "text"})
+	ask(t, conn, "7", storage.ApplicationQuestion{Key: "g", Prompt: "What is your T-shirt size?", ControlType: "text"})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terraform := findGroup(inbox, "experience:terraform")
+	if terraform == nil || terraform.Applications != 6 {
+		t.Fatalf("expected one Terraform group over 6 applications, got %+v", inbox)
+	}
+
+	result, err := service.Approve(ApproveRequest{
+		GroupKey: terraform.Key, Answer: "4", SaveForReuse: true,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The headline claim of the whole feature: one answer, six applications.
+	if result.QuestionsResolved != 6 {
+		t.Fatalf("questions resolved = %d, want 6", result.QuestionsResolved)
+	}
+	if result.ApplicationsHelped != 6 {
+		t.Fatalf("applications helped = %d, want 6", result.ApplicationsHelped)
+	}
+	if result.StillUnresolved != 1 {
+		t.Fatalf("still unresolved = %d, want 1 (the T-shirt question)", result.StillUnresolved)
+	}
+
+	// And it is durable: a fresh service over the same database sees it.
+	reopened, err := Open(conn, service.pii)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := reopened.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Prompt != "What is your T-shirt size?" {
+		t.Fatalf("after approval only the unknown question should remain, got %+v", after)
+	}
+}
+
+func TestReEvaluate_AnnotatesWithoutClosingAnything(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "What is your notice period?", ControlType: "text"})
+
+	if _, err := service.vault.Save(answers.SaveRequest{
+		Question:          answers.Question{Prompt: "What is your notice period?", ControlType: "text"},
+		Answer:            "Two weeks",
+		Provenance:        answers.OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ReEvaluate(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Examined != 1 || report.Resolved != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+
+	pending, err := storage.GetPendingQuestions(conn, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("re-evaluation must not close a question: %+v", pending)
+	}
+	if !pending[0].AutoFillable || pending[0].Suggested != "Two weeks" {
+		t.Fatalf("resolution was not recorded on the row: %+v", pending[0])
+	}
+	if pending[0].Status != storage.QuestionPending {
+		t.Fatalf("status = %q; Career Agent learning an answer is not the operator answering it", pending[0].Status)
+	}
+}
+
+func TestReEvaluate_LeavesAnApplicationAnAssistedBrowserIsHolding(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Leased")
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "What is your notice period?", ControlType: "text"})
+	if claimed, err := storage.AcquireAssistedLease(conn, "1", "owner", now); err != nil || !claimed {
+		t.Fatalf("acquire lease: %v %v", claimed, err)
+	}
+
+	report, err := service.ReEvaluate(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Examined != 0 {
+		t.Fatalf("an application being worked right now must be left alone, examined %d", report.Examined)
+	}
+}
+
+// --- Readiness ------------------------------------------------------------
+
+func TestReadiness_IsGroundedInTheQueueRatherThanInvented(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	seedJob(t, conn, 2, "Globex")
+
+	ask(t, conn, "1",
+		storage.ApplicationQuestion{Key: "a", Prompt: "LinkedIn profile URL", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "b", Prompt: "How many years of Kubernetes experience do you have?", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "c", Prompt: "Have you ever been convicted of a felony?", ControlType: "radio", Options: []string{"Yes", "No"}},
+		storage.ApplicationQuestion{Key: "d", Prompt: "Why do you want to work here?", ControlType: "textarea"},
+	)
+	ask(t, conn, "2",
+		storage.ApplicationQuestion{Key: "e", Prompt: "LinkedIn profile URL", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "f", Prompt: "Years of Kubernetes experience", ControlType: "text"},
+	)
+
+	readiness, err := service.Readiness(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Applications != 2 {
+		t.Fatalf("applications = %d, want 2", readiness.Applications)
+	}
+	if readiness.Fields != 6 {
+		t.Fatalf("fields = %d, want 6", readiness.Fields)
+	}
+	// Both LinkedIn fields are answerable from configured facts.
+	if readiness.Resolved != 2 {
+		t.Fatalf("resolved = %d, want 2", readiness.Resolved)
+	}
+	if readiness.Unresolved != 4 {
+		t.Fatalf("unresolved = %d, want 4", readiness.Unresolved)
+	}
+	// Three distinct things to deal with: Kubernetes, the felony declaration,
+	// and the per-job essay.
+	if readiness.UniqueQuestions != 3 {
+		t.Fatalf("unique questions = %d, want 3", readiness.UniqueQuestions)
+	}
+	if readiness.SensitiveDecisions != 1 {
+		t.Fatalf("sensitive decisions = %d, want 1", readiness.SensitiveDecisions)
+	}
+	if readiness.PerJobResponses != 1 {
+		t.Fatalf("per-job responses = %d, want 1", readiness.PerJobResponses)
+	}
+	// Only the Kubernetes group is answerable once for everyone, and doing so
+	// unlocks its two fields. A declaration and an essay are not bulk work and
+	// counting them would overstate what the number buys.
+	if readiness.AnswersNeeded != 1 {
+		t.Fatalf("answers needed = %d, want 1", readiness.AnswersNeeded)
+	}
+	if readiness.FieldsUnlockable != 2 {
+		t.Fatalf("fields unlockable = %d, want 2", readiness.FieldsUnlockable)
+	}
+	if readiness.KnownPercent() != 33 {
+		t.Fatalf("known percent = %d, want 33", readiness.KnownPercent())
+	}
+}
+
+func TestReadiness_AnEmptyQueueIsNotAFullyKnownOne(t *testing.T) {
+	service, _ := newTestService(t)
+	readiness, err := service.Readiness(time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "Nothing has been looked at" and "everything is known" must not render
+	// the same way, or the operator reads 100% and starts an apply session.
+	if readiness.KnownPercent() != 0 {
+		t.Fatalf("known percent = %d for an empty queue, want 0", readiness.KnownPercent())
+	}
+}
+
+// --- The companion-facing field query -------------------------------------
+
+func TestField_TellsACallerWhatItMayFillAndWhatItMayNot(t *testing.T) {
+	service, _ := newTestService(t)
+
+	// A stable configured fact: safe to fill.
+	reply, err := service.Field(FieldQuery{Prompt: "LinkedIn profile URL", ControlType: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Policy != PolicySafeAutoFill || reply.RequiresHuman {
+		t.Fatalf("LinkedIn should be safe auto-fill: %+v", reply)
+	}
+	if reply.Answer == "" {
+		t.Fatal("a fillable field must carry its answer")
+	}
+
+	// A declaration: the caller learns everything except a value it may type.
+	declaration, err := service.Field(FieldQuery{
+		Prompt: "Are you legally authorized to work in the United States?", ControlType: "radio",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if declaration.Policy != PolicyHumanReview || !declaration.RequiresHuman {
+		t.Fatalf("a work-authorization question must require a human: %+v", declaration)
+	}
+	if declaration.Answer != "" {
+		t.Fatalf("a declaration must never be returned as a fillable answer: %q", declaration.Answer)
+	}
+
+	// An unknown question: no invention, and it says so.
+	unknown, err := service.Field(FieldQuery{Prompt: "What is your T-shirt size?", ControlType: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown.Policy != PolicyUnknown || unknown.Answer != "" || unknown.Suggested != "" {
+		t.Fatalf("an unknown question must stay unknown: %+v", unknown)
+	}
+}
+
+func TestField_SeparatesAFillableAnswerFromASuggestion(t *testing.T) {
+	service, _ := newTestService(t)
+
+	// Reuse withheld: Career Agent remembers, but does not decide.
+	if _, err := service.vault.Save(answers.SaveRequest{
+		Question:     answers.Question{Prompt: "What is your notice period?", ControlType: "text"},
+		Answer:       "Two weeks",
+		Provenance:   answers.OperatorApproved,
+		ReuseAllowed: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := service.Field(FieldQuery{Prompt: "What is your notice period?", ControlType: "text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Policy != PolicySuggestAsk || !reply.RequiresHuman {
+		t.Fatalf("withheld reuse means suggest-and-ask: %+v", reply)
+	}
+	if reply.Answer != "" {
+		t.Fatalf("a suggestion must not arrive in the fillable field: %q", reply.Answer)
+	}
+	if reply.Suggested != "Two weeks" {
+		t.Fatalf("the suggestion should still be offered: %q", reply.Suggested)
+	}
+}

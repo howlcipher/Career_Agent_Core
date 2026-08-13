@@ -260,6 +260,25 @@ func matchesPattern(present map[string]bool, question Question, candidate *patte
 	return len(candidate.RequireAll) > 0
 }
 
+// MatchedPatternID names the curated family a question belongs to, or "".
+//
+// It is exported so cross-application grouping can use the same recognizers the
+// resolver uses. That matters more than it sounds: if grouping had its own idea
+// of which questions are the same family, the operator could answer a group and
+// find the resolver disagreed about half of it. One table, one answer to
+// "which question is this", and the Deny lists that keep sponsorship apart from
+// work authorization apply to both.
+//
+// Note this reports the family a question *belongs to*, not whether it can be
+// answered -- a match here says nothing about whether the operator has
+// configured the corresponding fact.
+func MatchedPatternID(question Question) string {
+	if candidate := matchPattern(question); candidate != nil {
+		return candidate.ID
+	}
+	return ""
+}
+
 // PatternIDs lists every curated pattern, so tests and the operator
 // documentation can enumerate what the vault recognizes without reading the
 // table.

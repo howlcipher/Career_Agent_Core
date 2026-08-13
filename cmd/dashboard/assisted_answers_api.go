@@ -324,6 +324,45 @@ func contains(values []string, want string) bool {
 // serveAnswerVault lists and revokes approved answers, so the operator can see
 // exactly what Career Agent has been given permission to reuse and withdraw
 // any of it.
+// seedAnswerVaultFromPII writes suggestion rows for the facts the operator has
+// already configured, so the vault is useful on its first application rather
+// than after a dozen.
+//
+// This call is the whole reason SeedFromPII stops being dead code. It has
+// existed and been tested since the vault shipped, and nothing in production
+// ever called it — which is why `approved_answers` was empty on a machine that
+// had processed 372 assisted applications, and why the operator was being asked
+// for their own LinkedIn URL.
+//
+// It is safe to run on every start by construction: every seeded row is written
+// with reuse withheld, so it can only ever be a suggestion the operator sees
+// pre-filled and never something Career Agent types on their behalf, and it
+// never overwrites a row they have approved. A failure here is logged and
+// otherwise ignored: a dashboard that will not start because it could not
+// pre-fill some suggestions would be a worse outcome than one that starts
+// without them.
+func seedAnswerVaultFromPII() {
+	pii, err := config.LoadPII("pii.yaml")
+	if err != nil {
+		log.Printf("Answer vault seeding skipped; pii.yaml could not be read: %v", err)
+		return
+	}
+	vault, err := answers.OpenStore(db)
+	if err != nil {
+		log.Printf("Answer vault seeding skipped; the vault is unavailable: %v", err)
+		return
+	}
+	seeded, err := vault.SeedFromPII(pii)
+	if err != nil {
+		log.Printf("Answer vault seeding stopped early: %v", err)
+		return
+	}
+	if seeded > 0 {
+		// A count, never the facts themselves.
+		log.Printf("Answer vault seeded %d suggestion(s) from your configured details; none of them auto-fill until you approve them.", seeded)
+	}
+}
+
 func serveAnswerVault(w http.ResponseWriter, r *http.Request) {
 	vault, err := answers.OpenStore(db)
 	if err != nil {

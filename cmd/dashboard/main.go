@@ -504,6 +504,7 @@ func main() {
 			log.Fatalf("Failed to prepare assisted apply schema: %v", err)
 		}
 	}
+	seedAnswerVaultFromPII()
 
 	mux := http.NewServeMux()
 

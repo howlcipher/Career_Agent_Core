@@ -663,3 +663,124 @@ func TestSkillExperienceSubject_DistinguishesSkillsFromEverythingElse(t *testing
 		}
 	}
 }
+
+// --- Alias, edit and revoke primitives ------------------------------------
+
+func approvedRoutine(t *testing.T, store *Store, prompt, answer string, reuse bool) Answer {
+	t.Helper()
+	saved, err := store.Save(SaveRequest{
+		Question:          routineQuestion(prompt),
+		Answer:            answer,
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      reuse,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatalf("save %q: %v", prompt, err)
+	}
+	return saved
+}
+
+func TestAddAliases_RefusesToGuessForADeclaration(t *testing.T) {
+	store := newTestStore(t)
+	declaration, err := store.Save(SaveRequest{
+		Question:          routineQuestion("Have you ever been convicted of a felony?"),
+		Answer:            "No",
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Career Agent may propose that two attestations are the same question.
+	// Only the operator may accept it -- the vocabulary is small and
+	// "authorized to work" and "require sponsorship" share most of it while
+	// meaning opposite things.
+	if _, err := store.AddAliases(declaration.ID, []string{"Have you been convicted of a criminal offense?"}, false); !errors.Is(err, ErrSensitiveAliasNeedsConfirmation) {
+		t.Fatalf("expected ErrSensitiveAliasNeedsConfirmation, got %v", err)
+	}
+	aliases, err := store.Aliases(declaration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range aliases {
+		if alias == Normalize("Have you been convicted of a criminal offense?") {
+			t.Fatal("an unconfirmed phrasing was bound to a declaration anyway")
+		}
+	}
+
+	added, err := store.AddAliases(declaration.ID, []string{"Have you been convicted of a criminal offense?"}, true)
+	if err != nil || added != 1 {
+		t.Fatalf("a confirmed equivalence should bind: added=%d err=%v", added, err)
+	}
+	resolution := store.Resolve(routineQuestion("Have you been convicted of a criminal offense?"), Context{}, &config.PII{})
+	if resolution.Source != SourceAlias || !resolution.AutoFill {
+		t.Fatalf("the bound phrasing should resolve through the alias: %+v", resolution)
+	}
+}
+
+func TestAddAliases_RefusesAnAnswerWhoseReuseIsWithheld(t *testing.T) {
+	store := newTestStore(t)
+	withheld := approvedRoutine(t, store, "What is your notice period?", "Two weeks", false)
+
+	// An answer Career Agent will not type is not made more useful by
+	// recognising more ways of asking for it, and reporting success would leave
+	// the operator believing the vault knows something it does not.
+	if _, err := store.AddAliases(withheld.ID, []string{"How much notice do you need to give?"}, true); err == nil {
+		t.Fatal("aliasing a suggestion-only answer must be refused, not silently ignored")
+	}
+}
+
+func TestUpdateAnswer_CannotRestoreADeclarationsReuseGrant(t *testing.T) {
+	store := newTestStore(t)
+	declaration, err := store.Save(SaveRequest{
+		Question:          routineQuestion("Have you ever been convicted of a felony?"),
+		Answer:            "No",
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Withdrawing reuse also drops the aliases, because an alias exists to make
+	// an answer auto-fill.
+	if _, err := store.AddAliases(declaration.ID, []string{"Any felony convictions?"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateAnswer(declaration.ID, "No", false); err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := store.Aliases(declaration.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliases) != 0 {
+		t.Fatalf("withdrawing reuse should drop the aliases, got %+v", aliases)
+	}
+
+	// Re-granting reuse to a declaration is the two-decision path in Save, and
+	// an edit is not allowed to be a way around it.
+	if _, err := store.UpdateAnswer(declaration.ID, "No", true); !errors.Is(err, ErrSensitiveNeedsApproval) {
+		t.Fatalf("expected ErrSensitiveNeedsApproval, got %v", err)
+	}
+}
+
+func TestUpdateAnswer_ChangesTheTextAndRecordsThatTheOperatorEditedIt(t *testing.T) {
+	store := newTestStore(t)
+	stored := approvedRoutine(t, store, "What is your notice period?", "Two weeks", true)
+
+	updated, err := store.UpdateAnswer(stored.ID, "Four weeks", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AnswerText != "Four weeks" || updated.Provenance != OperatorEdited {
+		t.Fatalf("update did not record the edit: %+v", updated)
+	}
+	resolution := store.Resolve(routineQuestion("What is your notice period?"), Context{}, &config.PII{})
+	if resolution.Answer != "Four weeks" {
+		t.Fatalf("the edited answer should resolve, got %q", resolution.Answer)
+	}
+}
