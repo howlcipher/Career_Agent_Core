@@ -54,7 +54,7 @@ jobs:
       run: npm ci
 
     - name: Run Linter
-      run: npm run lint || echo "Linting failed, but continuing for now" # Adjust based on strictness
+      run: npm run lint
 
     - name: Run Tests
       run: npm test -- --run
