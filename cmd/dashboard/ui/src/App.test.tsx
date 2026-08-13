@@ -6,6 +6,22 @@ import App from './App';
 // detail fields, so a minimal payload needs all of these to type-check and
 // to render without the app's own `?.` fallbacks masking the field we're
 // actually asserting on.
+const openSession = {
+  id: 1,
+  state: 'running' as const,
+  auto_advance: true,
+  stop_after_current: false,
+  current_job_id: '41',
+  position: 1,
+  total: 2,
+  completed: 0,
+  confirmed: 0,
+  items: [
+    { id: 1, position: 0, job_id: '41', company: 'First Co', role: 'Engineer', state: 'in_progress' },
+    { id: 2, position: 1, job_id: '42', company: 'Second Co', role: 'Engineer', state: 'pending' },
+  ],
+};
+
 const baseMetrics = {
   discovered: 0,
   processing: 0,
@@ -475,53 +491,69 @@ describe('Assisted Apply workflow', () => {
     expect(screen.queryByRole('button', { name: /continue/i })).not.toBeInTheDocument();
   });
 
-  it('waits for the current browser to close before enabling the next selected application', async () => {
-    vi.useFakeTimers();
-    try {
-      let assistedCalls = 0;
-      const launched: string[] = [];
-      const job = (id: string, company: string, live_browser: boolean) => ({
-        id, company, role: 'Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-03T12:00:00Z', resume_ready: false, cover_letter_ready: false, mapping_ready: false, completed_work: 'Job validated.', legacy: true, live_browser, assisted_attempt_count: 0, priority_reason: 'Ready', next_action: { code: 'open_verified_application', title: 'Application ready', instruction: 'Open it.', primary_button: 'Open Verified Application', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: false },
-      });
-      installFetch((input, init) => {
-        const url = String(input);
-        if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 2 }));
-        if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
-        if (url === '/api/assisted') {
-          assistedCalls += 1;
-          return Promise.resolve(jsonResponse({ jobs: [
-            job('41', 'First Co', assistedCalls === 2),
-            job('42', 'Second Co', false),
-          ] }));
-        }
-        if (url === '/api/assisted/launch' && init?.method === 'POST') {
-          launched.push(JSON.parse(String(init.body)).job_id);
-          return Promise.resolve(jsonResponse({ status: 'open' }));
-        }
-        throw new Error(`unexpected fetch ${url}`);
-      });
+  // Replaces "waits for the current browser to close before enabling the next
+  // selected application". That test asserted the sequential-batch flow this
+  // project deliberately removed: the operator had to click "Open Next Selected
+  // Application" for every job, and the run lived in React state, so a refresh
+  // ended it. Apply sessions replace both — the server owns the position and
+  // opens the next application itself once an outcome is recorded.
+  it('starts a server-owned apply session over the selected applications', async () => {
+    const started: string[][] = [];
+    const job = (id: string, company: string) => ({
+      id, company, role: 'Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-03T12:00:00Z', resume_ready: false, cover_letter_ready: false, mapping_ready: false, completed_work: 'Job validated.', legacy: true, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Ready', completed: { job_id: id, filled_count: 0, reused_answers: 0, documents: [], filled_labels: [], unresolved_count: 0, recorded_at: '' }, effort: { band: 'LOW', low_minutes: 1, high_minutes: 2 }, next_action: { code: 'open_verified_application', title: 'Application ready', instruction: 'Open it.', primary_button: 'Open Verified Application', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: false },
+    });
+    let sessionOpen = false;
+    installFetch((input, init) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 2 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [job('41', 'First Co'), job('42', 'Second Co')] }));
+      if (url === '/api/apply-session') {
+        return Promise.resolve(jsonResponse({ session: sessionOpen ? openSession : null }));
+      }
+      if (url === '/api/apply-session/start' && init?.method === 'POST') {
+        started.push(JSON.parse(String(init.body)).job_ids);
+        sessionOpen = true;
+        return Promise.resolve(jsonResponse({ session: openSession }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
 
-      render(<App />);
-      await flush();
-      fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
-      await flush();
-      for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
-      fireEvent.click(screen.getByRole('button', { name: 'Start Selected Applications' }));
-      await flush();
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Start Apply Session' }));
+    await flush();
 
-      expect(launched).toEqual(['41']);
-      expect(screen.getByRole('button', { name: 'Close Current Application First' })).toBeDisabled();
+    expect(started).toEqual([['41', '42']]);
+    // The operator never clicks "open next": the header now reports a
+    // server-owned position, and the controls are session-level.
+    expect(screen.getByText('Application 1 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause Session' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open next selected/i })).not.toBeInTheDocument();
+  });
 
-      await vi.advanceTimersByTimeAsync(2000);
-      await flush();
-      const nextButton = screen.getByRole('button', { name: 'Open Next Selected Application' });
-      expect(nextButton).toBeEnabled();
-      fireEvent.click(nextButton);
-      await flush();
-      expect(launched).toEqual(['41', '42']);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('tells the operator a closed browser is not a submitted application', async () => {
+    installFetch((input) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [{
+        id: '41', company: 'First Co', role: 'Engineer', provider: 'Other ATS', original_status: 'BLOCKED_CAPTCHA', interruption: '', last_updated: '2026-08-03T12:00:00Z', resume_ready: false, cover_letter_ready: false, mapping_ready: false, completed_work: 'Job validated.', legacy: true, live_browser: false, assisted_attempt_count: 0, priority_reason: 'Ready', completed: { job_id: '41', filled_count: 0, reused_answers: 0, documents: [], filled_labels: [], unresolved_count: 0, recorded_at: '' }, effort: { band: 'LOW', low_minutes: 1, high_minutes: 2 }, next_action: { code: 'open_verified_application', title: 'Application ready', instruction: 'Open it.', primary_button: 'Open Verified Application', requires_browser: true, documents_ready: false, requires_explicit_submit: false, can_continue: false },
+      }] }));
+      if (url === '/api/apply-session') {
+        return Promise.resolve(jsonResponse({ session: { ...openSession, state: 'paused', pause_reason: 'browser_closed_without_outcome' } }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+    expect(screen.getByText(/does not know whether that application was submitted/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume Session' })).toBeInTheDocument();
   });
 
 	// Bug #521: Veeva listed one role in four cities, the queue rendered four
@@ -712,5 +744,187 @@ describe('poll failure indicator (improvement #460)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Exception-only Assisted Apply', () => {
+  const questionJob = (questions: unknown[]) => ({
+    id: '77', company: 'Grafana Labs', role: 'Senior Platform Engineer', fit_score: 91,
+    provider: 'Greenhouse', original_status: 'AWAITING_REVIEW', interruption: '',
+    last_updated: '2026-08-12T12:00:00Z', resume_ready: true, cover_letter_ready: true,
+    mapping_ready: true, completed_work: 'Job validated.', legacy: false, live_browser: true,
+    assisted_attempt_count: 1, priority_reason: 'Quick completion',
+    completed: { job_id: '77', filled_count: 24, reused_answers: 6, documents: ['resume', 'cover_letter'], filled_labels: [], unresolved_count: questions.length, recorded_at: '2026-08-12T12:00:00Z' },
+    effort: { band: 'LOW', low_minutes: 1, high_minutes: 2 },
+    questions,
+    next_action: { code: 'answer_questions', title: 'Answer 2 questions', instruction: 'Answer the questions below.', primary_button: 'Send Answers', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: false },
+  });
+
+  const routineQuestion = {
+    id: 1, job_id: '77', key: 'backstage', prompt: 'Have you used Backstage professionally?',
+    control_type: 'radio', options: ['Yes', 'No'], required: true, status: 'pending',
+    sensitivity: 'routine', created_at: '2026-08-12T12:00:00Z',
+  };
+  const sensitiveQuestion = {
+    id: 2, job_id: '77', key: 'comp', prompt: 'What are your salary expectations?',
+    control_type: 'text', options: [], required: false, status: 'pending',
+    sensitivity: 'sensitive', suggested: '$160,000', created_at: '2026-08-12T12:00:00Z',
+  };
+
+  const renderQueue = (questions: unknown[], onAnswers?: (body: unknown) => void) => {
+    installFetch((input, init) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse({ ...baseMetrics, assisted_waiting: 1 }));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/apply-session') return Promise.resolve(jsonResponse({ session: null }));
+      if (url === '/api/operator-settings') return Promise.resolve(jsonResponse({ application_mode: 'assisted', minimum_fit_score: 50 }));
+      if (url === '/api/qualified-jobs') return Promise.resolve(jsonResponse([]));
+      if (url === '/api/assisted') return Promise.resolve(jsonResponse({ jobs: [questionJob(questions)] }));
+      if (url === '/api/assisted/answers' && init?.method === 'POST') {
+        onAnswers?.(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({ status: 'sent', answers_sent: 1, answers_saved: 0, answers_refused: 0 }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+  };
+
+  const openQueue = async () => {
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /open assisted apply/i }));
+    await flush();
+  };
+
+  it('leads with what Career Agent completed and only the questions that need a human', async () => {
+    renderQueue([routineQuestion, sensitiveQuestion]);
+    await openQueue();
+
+    expect(screen.getByText('24 form fields filled')).toBeInTheDocument();
+    expect(screen.getByText('6 approved answers reused')).toBeInTheDocument();
+    expect(screen.getByText('Needs you (2)')).toBeInTheDocument();
+
+    // The workflow machinery is still available, just not on the critical
+    // path: the stepper and the ATS/attempt detail are behind a collapsed
+    // <details> rather than removed.
+    const diagnostics = screen.getByText('Diagnostics').closest('details');
+    expect(diagnostics).not.toHaveAttribute('open');
+    expect(screen.getByLabelText('Application progress')).toBeInTheDocument();
+  });
+
+  it('offers a per-application answer without a reuse grant, and gates a declaration behind a second one', async () => {
+    renderQueue([routineQuestion, sensitiveQuestion]);
+    await openQueue();
+
+    // A routine question gets one reuse checkbox.
+    const reuseBoxes = screen.getAllByRole('checkbox', { name: /save this as my approved answer/i });
+    expect(reuseBoxes).toHaveLength(2);
+
+    // The declaration's second acknowledgement does not exist until the first
+    // is ticked, and it is the one that actually grants reuse.
+    expect(screen.queryByRole('checkbox', { name: /I understand this is a declaration/i })).not.toBeInTheDocument();
+    fireEvent.click(reuseBoxes[1]);
+    const declarationBox = screen.getByRole('checkbox', { name: /I understand this is a declaration/i });
+    expect(declarationBox).not.toBeChecked();
+  });
+
+  it('sends a declaration without a reuse grant unless the operator gives one', async () => {
+    let sent: any = null;
+    renderQueue([sensitiveQuestion], (body) => { sent = body; });
+    await openQueue();
+
+    fireEvent.click(screen.getByRole('button', { name: /continue application/i }));
+    await flush();
+
+    expect(sent.answers).toHaveLength(1);
+    // The suggestion was pre-filled from the operator's own configuration, and
+    // it goes to the browser — but nothing asked to remember it.
+    expect(sent.answers[0].answer).toBe('$160,000');
+    expect(sent.answers[0].save_for_reuse).toBe(false);
+    expect(sent.answers[0].allow_sensitive_reuse).toBe(false);
+  });
+
+  it('never offers to remember a per-job generated answer', async () => {
+    renderQueue([{
+      id: 3, job_id: '77', key: 'why', prompt: 'Why Grafana?', control_type: 'textarea',
+      options: [], required: true, status: 'pending', sensitivity: 'generate_per_job',
+      created_at: '2026-08-12T12:00:00Z',
+    }]);
+    await openQueue();
+
+    expect(screen.getByText(/will not reuse this answer elsewhere/i)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /save this as my approved answer/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('Fast triage', () => {
+  const qualified = (id: number, title: string) => ({
+    id, company: 'ExampleCo', title, fit_score: 89, provider: 'greenhouse',
+    discovered_at: '2026-08-12T12:00:00Z', last_updated: '2026-08-12T12:00:00Z',
+    location: 'Remote', remote: true, reason: 'find_only_threshold_met',
+  });
+
+  const renderTriage = (onAction: (action: string, jobId: number) => void) => {
+    installFetch((input, init) => {
+      const url = String(input);
+      if (url === '/api/metrics') return Promise.resolve(jsonResponse(baseMetrics));
+      if (url === '/api/agent/status') return Promise.resolve(jsonResponse({ running: false }));
+      if (url === '/api/apply-session') return Promise.resolve(jsonResponse({ session: null }));
+      if (url === '/api/operator-settings') return Promise.resolve(jsonResponse({ application_mode: 'find_only', minimum_fit_score: 50 }));
+      if (url === '/api/qualified-jobs') {
+        return Promise.resolve(jsonResponse([qualified(1, 'Platform Engineer'), qualified(2, 'SRE')]));
+      }
+      const promote = url.match(/^\/api\/qualified-jobs\/(\w+)$/);
+      if (promote && init?.method === 'POST') {
+        onAction(promote[1], JSON.parse(String(init.body)).job_id);
+        return Promise.resolve(jsonResponse({}));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    render(<App />);
+  };
+
+  it('promotes and skips from the keyboard, and announces the result', async () => {
+    const actions: Array<[string, number]> = [];
+    renderTriage((action, jobId) => actions.push([action, jobId]));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /view qualified jobs/i }));
+    await flush();
+
+    const list = screen.getByRole('listbox', { name: /qualified jobs/i });
+    fireEvent.keyDown(list, { key: 'a' });
+    await flush();
+    expect(actions).toEqual([['promote', 1]]);
+    expect(screen.getByRole('status')).toHaveTextContent(/Platform Engineer at ExampleCo moved to Assisted Apply/);
+
+    // J moves to the next card, so S skips the second job rather than the first.
+    fireEvent.keyDown(list, { key: 'j' });
+    fireEvent.keyDown(list, { key: 's' });
+    await flush();
+    expect(actions[1]).toEqual(['skip', 2]);
+  });
+
+  it('does not steal keystrokes from a text field', async () => {
+    const actions: Array<[string, number]> = [];
+    renderTriage((action, jobId) => actions.push([action, jobId]));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /view qualified jobs/i }));
+    await flush();
+
+    const list = screen.getByRole('listbox', { name: /qualified jobs/i });
+    const input = document.createElement('input');
+    list.appendChild(input);
+    fireEvent.keyDown(input, { key: 's' });
+    await flush();
+    expect(actions).toEqual([]);
+  });
+
+  it('keeps a real button for every shortcut', async () => {
+    renderTriage(() => {});
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /view qualified jobs/i }));
+    await flush();
+    expect(screen.getAllByRole('button', { name: 'Apply' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Skip' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Details' })).toHaveLength(2);
   });
 });

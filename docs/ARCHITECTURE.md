@@ -180,15 +180,65 @@ When an application needs a CAPTCHA, account login, answer, unsupported
 control, or final review, the dashboard preserves the handoff rather than
 asking you to start again.
 
+Career Agent's guiding rule here is that it should do everything it can safely
+and confidently do, and interrupt you only for judgement, unknown information,
+authentication, CAPTCHA, legal attestations, final review, and the employer's
+own Submit button.
+
 1. Start the dashboard.
 2. Open `http://127.0.0.1:8080`.
 3. Select **Assisted Apply**.
-4. Choose the highest-priority job.
-5. Read **What you need to do**.
-6. Click the primary action.
-7. Complete the CAPTCHA, login, question, field, or review in the dedicated Career Agent browser.
-8. Return to Career Agent and click **I completed this step — Continue** when it is available.
-9. Submit when requested, then mark Applied only after the employer confirms receipt.
+4. Tick the applications you want to work through and press **Start Apply Session**.
+5. Career Agent opens the first one and fills everything it can.
+6. The card shows what it completed, then **Needs you** — only the questions it could not safely answer.
+7. Answer them and press **Continue Application**; Career Agent enters them into the open form.
+8. Review the form and click the employer's own Submit button yourself.
+9. Confirm receipt. Career Agent records it and opens the next application automatically.
+
+Steps 5 through 9 repeat without returning to the dashboard queue. Pause, Skip
+Current, Stop After Current and Stop are available throughout.
+
+### The Approved Answer Vault
+
+Career Agent remembers answers you have explicitly approved, so a screening
+question you have answered once is filled automatically the next time any board
+asks it — even in different words. Resolution is deterministic: an approved
+alias for that exact phrasing, then an approved answer under the question's own
+key, then a curated pattern over the facts in your `pii.yaml`, and otherwise it
+asks you. There is no model in that path, so the same form produces the same
+answers on every run.
+
+**Career Agent never silently learns a declaration.** Work authorization,
+sponsorship, criminal history, security clearance, disability, veteran status,
+demographics, salary expectations, and legal attestations are all classified
+sensitive from the question's wording. For those, Career Agent may show you a
+suggestion drawn from your own configuration, but it never types one into an
+employer's form on its own, and it will only remember your answer if you tick
+two separate boxes: one to save it, and one that specifically acknowledges you
+are allowing a declaration to be reused. Ticking only the first is refused, and
+the dashboard tells you it was refused rather than letting you believe
+otherwise. Questions like "Why this company?" are never stored at all.
+
+You can review and revoke everything in the vault through `/api/answer-vault`.
+
+### Application effort
+
+Each card carries an estimate of how much of *your* time an application will
+take — a band and a range such as `Low · ~1–2 min`, derived from the ATS, whether
+a dedicated handler or healthy form mapping exists, whether documents are ready,
+whether an account gate is expected, and how many questions are outstanding. It
+is deliberately a range: Career Agent does not know the exact number and does not
+pretend to. Effort also nudges ranking, but is capped at ±4% so it can break
+ties between comparable jobs and cannot lift an easy mediocre job above a
+harder, better one.
+
+### Copy Application Packet
+
+Every card has a **Copy anything Career Agent could not fill** panel listing your
+prepared values with one-click copy. This is the floor under the whole feature:
+an unsupported ATS, a broken mapping, or a platform that must be finished in your
+own browser still benefits from the preparation. Sensitive values stay hidden
+until you reveal them.
 
 The dashboard does not mark a browser launch successful until the visible Career
 Agent browser confirms that the expected employer action page is open. A public
@@ -218,9 +268,16 @@ application. The Assisted Apply screen identifies legacy handoffs, shows
 whether a live browser exists or the session will be recreated, and offers
 only documents belonging to that job. CAPTCHA solving, password capture,
 legal attestations, and submission confirmation are intentionally left to
-you. Select multiple jobs for a sequential batch; the dashboard opens one
-application at a time, keeps Next disabled until the current browser closes,
-and lets you stop after the current one.
+you.
+
+**Apply sessions live in the database, not in the browser tab.** Refreshing the
+dashboard, or opening it in a second tab, resumes the same session at the same
+position. A session advances past an application only when Career Agent knows
+what happened to it: you confirmed it, you skipped it, you marked the posting
+gone, it could not be opened, or you stopped the session. **A browser that
+closes without a confirmation is not an outcome** — Career Agent cannot tell a
+submitted application from an abandoned one by a window disappearing, so the
+session pauses and asks you rather than guessing in either direction.
 
 Follow these steps after the platform setup.
 

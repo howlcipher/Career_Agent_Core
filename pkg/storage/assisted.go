@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +69,25 @@ type AssistedJob struct {
 	// ApplyURL is populated only when NextAction.Code is
 	// "open_in_own_browser"; it is empty for every other row.
 	ApplyURL string `json:"apply_url,omitempty"`
+	// Completed and Questions are the exception-only card's two halves: what
+	// Career Agent finished, and the short list that needs the operator.
+	// Questions carries prompts and Career Agent's own proposals; it never
+	// carries an answer the operator has already given.
+	Completed AssistedFillSummary   `json:"completed"`
+	Questions []ApplicationQuestion `json:"questions"`
+	// Effort is the estimated human time for this application, so the operator
+	// can see what a session will actually cost them before starting it.
+	Effort AssistedEffort `json:"effort"`
+}
+
+// AssistedEffort is the estimated human cost of one application, deliberately
+// reported as a band and a range rather than a number this project cannot
+// actually know.
+type AssistedEffort struct {
+	Band       string   `json:"band"`
+	LowMinutes int      `json:"low_minutes"`
+	HighMinute int      `json:"high_minutes"`
+	Signals    []string `json:"signals,omitempty"`
 }
 
 // AssistedMigrationOptions deliberately defaults to dry run. Statuses are
@@ -393,6 +413,101 @@ func RecordAssistedRefill(conn *sql.DB, jobID, owner string, now time.Time) erro
 	return nil
 }
 
+// RecordAssistedQuestions advances a refilled application to needs_answers and
+// records what still needs the operator, in one transaction.
+//
+// The state and the questions commit together on purpose: a card that says
+// "2 questions need you" while the question table is empty, or the reverse,
+// would be a queue that contradicts itself in front of the operator. Storing
+// them atomically means the card can only ever show what is actually there.
+func RecordAssistedQuestions(conn *sql.DB, jobID, owner string, questions []ApplicationQuestion, summary AssistedFillSummary, now time.Time) error {
+	if conn == nil {
+		return errors.New("database not initialized")
+	}
+	if len(questions) == 0 {
+		return errors.New("needs_answers requires at least one unresolved question")
+	}
+	if err := ReplaceApplicationQuestions(conn, jobID, questions, summary); err != nil {
+		return err
+	}
+	result, err := conn.Exec(`UPDATE assisted_applications SET assisted_state = 'needs_answers', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'continue_requested' AND lease_owner = ? AND lease_expires_at > ?`,
+		now.UTC(), jobID, owner, now.UTC())
+	if err != nil {
+		return fmt.Errorf("record assisted questions: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted question lease is no longer active")
+	}
+	return nil
+}
+
+// SubmitAssistedAnswers is the dashboard's transition after the operator
+// answers the questions a refill surfaced.
+//
+// The state change, the answers themselves, and the questions' answered marks
+// commit together. The answers land in pending_answers, which the assisted
+// process empties as soon as it reads them (TakePendingAnswers); they are not
+// kept. Requiring a live lease means answers cannot be queued for a browser
+// that is no longer open, so there is no path by which they sit in the database
+// waiting for a process that will never come back for them.
+func SubmitAssistedAnswers(conn *sql.DB, jobID string, values map[string]string, now time.Time) error {
+	if conn == nil {
+		return errors.New("database not initialized")
+	}
+	if len(values) == 0 {
+		return errors.New("no answers were provided")
+	}
+	tx, err := conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE assisted_applications SET assisted_state = 'answers_provided', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'needs_answers' AND lease_owner != '' AND lease_expires_at > ?`,
+		now.UTC(), jobID, now.UTC())
+	if err != nil {
+		return fmt.Errorf("submit assisted answers: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("no active assisted browser is waiting for answers")
+	}
+	for key, value := range values {
+		if _, err := tx.Exec(`INSERT INTO pending_answers (job_id, question_key, answer_text, created_at)
+			VALUES (?, ?, ?, ?) ON CONFLICT(job_id, question_key) DO UPDATE SET answer_text = excluded.answer_text`,
+			jobID, key, value, now.UTC()); err != nil {
+			return fmt.Errorf("queue assisted answer: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE application_questions SET status = ?, answered_at = ?
+			WHERE job_id = ? AND question_key = ? AND status = ?`, QuestionAnswered, now.UTC(), jobID, key, QuestionPending); err != nil {
+			return fmt.Errorf("mark question answered: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// RecordAssistedAnswersApplied advances to review once the operator's answers
+// have actually been committed to the visible form.
+func RecordAssistedAnswersApplied(conn *sql.DB, jobID, owner string, summary AssistedFillSummary, now time.Time) error {
+	if conn == nil {
+		return errors.New("database not initialized")
+	}
+	result, err := conn.Exec(`UPDATE assisted_applications SET assisted_state = 'review_and_submit', updated_at = ?
+		WHERE job_id = ? AND assisted_state = 'answers_provided' AND lease_owner = ? AND lease_expires_at > ?`,
+		now.UTC(), jobID, owner, now.UTC())
+	if err != nil {
+		return fmt.Errorf("record applied assisted answers: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errors.New("assisted answer lease is no longer active")
+	}
+	if _, err := conn.Exec(`UPDATE assisted_fill_summary SET filled_count = ?, reused_answers = ?, unresolved_count = 0, recorded_at = ?
+		WHERE job_id = ?`, summary.FilledCount, summary.ReusedAnswers, now.UTC(), jobID); err != nil {
+		return fmt.Errorf("update assisted fill summary: %w", err)
+	}
+	return nil
+}
+
 // RecordAssistedManualReview preserves a live browser when deterministic
 // refill cannot run. The user can still complete the verified employer form
 // manually, but the queue must not claim that documents or fields were ready.
@@ -560,6 +675,32 @@ func actionForRevalidation(status, reason, state string) AssistedNextAction {
 		return AssistedNextAction{"revalidate_current_page", "Could not check current page", "The public employer page could not be checked. Try the safe check again later; no browser was opened.", "Check Current Page Again", false, false, false, false}
 	default:
 		return AssistedNextAction{"revalidate_current_page", "Check current page", "This historic handoff must be checked against the employer's current public page before it is treated as a CAPTCHA or opened in a browser.", "Check Current Page", false, false, false, false}
+	}
+}
+
+// actionForNeedsAnswers is the state this whole feature exists to produce: the
+// form is filled as far as Career Agent safely can, and the only thing left
+// before review is the short list of decisions that genuinely need a human.
+func actionForNeedsAnswers(pending int) AssistedNextAction {
+	noun := "questions"
+	if pending == 1 {
+		noun = "question"
+	}
+	return AssistedNextAction{
+		"answer_questions", "Answer " + strconv.Itoa(pending) + " " + noun,
+		"Career Agent filled everything it could and stopped at what needs your judgement. Answer the " + noun + " below and it will finish filling the form.",
+		"Send Answers", true, true, false, false,
+	}
+}
+
+// actionForAnswersProvided is a brief transitional state: the operator has
+// answered and the assisted process is committing those answers to the visible
+// form. It is shown rather than hidden so a stall is visible as a stall.
+func actionForAnswersProvided() AssistedNextAction {
+	return AssistedNextAction{
+		"applying_answers", "Filling in your answers",
+		"Career Agent is entering your answers into the open application. This takes a few seconds.",
+		"Working…", true, true, false, false,
 	}
 }
 
@@ -731,6 +872,13 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 		}
 	}
 	masterCoverLetter := resolveMasterCoverLetter()
+	// One grouped count for the whole queue rather than one query per card:
+	// this endpoint is polled every two seconds over every open application.
+	pendingQuestions, err := PendingQuestionCounts(conn)
+	if err != nil {
+		log.Printf("[Storage] Pending question counts unavailable; cards will show none: %v", err)
+		pendingQuestions = map[string]int{}
+	}
 	// The funnel status filter is not redundant with assisted_state (bug #530).
 	// assisted_state only says whether the *operator* finished with the row; it
 	// says nothing about whether the posting still exists. A job the world has
@@ -817,17 +965,40 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 			unreadableTimestamps++
 		}
 		job.LiveBrowser = leaseOwner.Valid && leaseOwner.String != "" && leaseExpiry.Valid && leaseExpiry.Time.After(now) && heartbeatRead && heartbeat.After(now.Add(-assistedLeaseHeartbeatTimeout))
-		if assistedState == "review_and_submit" {
+		switch assistedState {
+		case "review_and_submit":
 			job.NextAction = actionForReview()
-		} else if assistedState == "manual_review" {
+		case "manual_review":
 			job.NextAction = actionForManualReview(job.LiveBrowser)
-		} else {
+		case "needs_answers":
+			job.NextAction = actionForNeedsAnswers(pendingQuestions[job.ID])
+		case "answers_provided":
+			job.NextAction = actionForAnswersProvided()
+		default:
 			job.NextAction = actionForRevalidation(job.OriginalStatus, job.Interruption, revalidationState)
 		}
 		job.CompletedWork = completedWork(job.OriginalStatus)
 		job.ResumeReady = assistedDocumentExists(conn, job.ID, "resume", masterCoverLetter)
 		job.CoverLetterReady = assistedDocumentExists(conn, job.ID, "cover_letter", masterCoverLetter)
 		job.PriorityReason = priorityReason(job.NextAction.Code)
+		if summary, err := GetFillSummary(conn, job.ID); err == nil {
+			job.Completed = summary
+		}
+		if assistedState == "needs_answers" {
+			if questions, err := GetPendingQuestions(conn, job.ID); err == nil {
+				job.Questions = questions
+			}
+		}
+		job.Effort = EstimateAssistedEffort(AssistedEffortInput{
+			PostingURL:        postingURL,
+			OriginalStatus:    job.OriginalStatus,
+			ResumeReady:       job.ResumeReady,
+			CoverLetterReady:  job.CoverLetterReady,
+			PendingQuestions:  pendingQuestions[job.ID],
+			MappingHealthy:    mappingHealthyOn(conn, postingURL),
+			AccountRequired:   job.OriginalStatus == "MANUAL_REQUIRED",
+			CaptchaEncounters: job.OriginalStatus == "BLOCKED_CAPTCHA",
+		})
 		if job.NextAction.Code == "open_verified_application" && job.LiveBrowser {
 			job.NextAction.CanContinue = true
 			job.NextAction.Instruction = "The verified application is open in the assisted browser. Complete the stated human step, then return here and click Continue."
@@ -908,6 +1079,17 @@ func ConfirmAssistedSubmission(conn *sql.DB, jobID string) error {
 	if _, err := tx.Exec(`INSERT INTO applied_jobs (company_name, job_title, url, applied_at) VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING`, company, title, NormalizeURL(url), now); err != nil {
 		return fmt.Errorf("record confirmed assisted application: %w", err)
 	}
+	// The apply session advances in this same transaction. A confirmation that
+	// committed while the session still believed the application was open
+	// would let the operator be shown the same job twice, or let the session
+	// advance without the confirmation having landed; joining them means
+	// neither is representable.
+	if err := advanceApplySessionItemTx(tx, jobID, ItemConfirmed, "operator confirmed the employer received it", now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM pending_answers WHERE job_id = ?`, jobID); err != nil {
+		return fmt.Errorf("clear pending answers: %w", err)
+	}
 	return tx.Commit()
 }
 
@@ -949,6 +1131,14 @@ func MarkAssistedNotFound(conn *sql.DB, jobID string) error {
 		SET status = 'INVALID_URL', status_reason = ?, last_updated = ?
 		WHERE id = ? AND status != 'APPLIED'`, InvalidURLReasonExpired, now, jobID); err != nil {
 		return fmt.Errorf("mark assisted job invalid url: %w", err)
+	}
+	// A posting that no longer exists is a real, known outcome, so the session
+	// may advance past it — unlike a closed browser, which is not.
+	if err := advanceApplySessionItemTx(tx, jobID, ItemNotFound, "posting no longer exists", now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM pending_answers WHERE job_id = ?`, jobID); err != nil {
+		return fmt.Errorf("clear pending answers: %w", err)
 	}
 	return tx.Commit()
 }

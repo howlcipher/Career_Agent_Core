@@ -106,6 +106,12 @@ type fillTarget interface {
 	GetByPlaceholderLoc(text string) playwright.Locator
 	WaitForSel(selector string, timeoutMs float64) (playwright.ElementHandle, error)
 	HTML() (string, error)
+	// Eval runs an expression in the target's own document. It exists for the
+	// form-control inventory in questions.go, which has to read structure
+	// (labels, control shapes, option lists, and whether a control is empty)
+	// that no combination of Locator calls can gather in one pass without
+	// dozens of round trips per form.
+	Eval(expression string, arg ...any) (any, error)
 }
 
 type pageTarget struct{ page playwright.Page }
@@ -127,6 +133,9 @@ func (t pageTarget) WaitForSel(selector string, timeoutMs float64) (playwright.E
 	return t.page.WaitForSelector(selector, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
 }
 func (t pageTarget) HTML() (string, error) { return t.page.Content() }
+func (t pageTarget) Eval(expression string, arg ...any) (any, error) {
+	return t.page.Evaluate(expression, arg...)
+}
 
 type frameTarget struct{ frame playwright.Frame }
 
@@ -141,6 +150,9 @@ func (t frameTarget) WaitForSel(selector string, timeoutMs float64) (playwright.
 	return t.frame.WaitForSelector(selector, playwright.FrameWaitForSelectorOptions{Timeout: playwright.Float(timeoutMs)})
 }
 func (t frameTarget) HTML() (string, error) { return t.frame.Content() }
+func (t frameTarget) Eval(expression string, arg ...any) (any, error) {
+	return t.frame.Evaluate(expression, arg...)
+}
 
 // deadJobPhrases are lowercase substrings different ATS platforms use to say a
 // posting is gone. Confirmed live 2026-07-21: a Jobvite listing that had
@@ -2254,14 +2266,16 @@ type atsFillHandler func(target fillTarget, resumePath, coverPath string, pii *c
 // platforms never produce — so the feature could not prefill on precisely
 // the two ATSes it is used with. A single router means a newly supported
 // ATS reaches both paths at once.
+// Which ATS a URL belongs to is decided by storage.SupportedAssistedATS rather
+// than by a second copy of the domain list here, so the effort model and this
+// router cannot disagree about whether an application is supported.
 func dedicatedATSHandler(applyURL string) (atsFillHandler, string) {
-	lowered := strings.ToLower(applyURL)
-	switch {
-	case strings.Contains(lowered, "greenhouse.io"):
+	switch storage.SupportedAssistedATS(applyURL) {
+	case "Greenhouse":
 		return handleGreenhouse, "Greenhouse"
-	case strings.Contains(lowered, "lever.co"):
+	case "Lever":
 		return handleLever, "Lever"
-	case strings.Contains(lowered, "ashbyhq.com"):
+	case "Ashby":
 		return handleAshby, "Ashby"
 	default:
 		return nil, ""
@@ -4155,19 +4169,29 @@ func handleDynamic(target fillTarget, resumePath, coverPath string, pii *config.
 // mapping" and the operator retyped a form the pipeline had already filled.
 // Route through the same dedicated handlers the automatic path uses, and
 // keep the cached mapping as the fallback for everything else.
-func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLayer, companyName, applyURL, resumePath, coverPath string, pii *config.PII) error {
+//
+// It now also reports what it did. The fill used to return nothing but an
+// error, which meant that after a successful refill neither the operator nor
+// the dashboard knew which fields were filled or which were still empty — so
+// the operator re-read the whole employer form to find out. AssistedFillPlan
+// gathers a before/after inventory around the unchanged handler call, resolves
+// what is left against the Approved Answer Vault, and returns the remainder as
+// the short list of things that genuinely need a human.
+func FillAssistedMappedPage(plan AssistedFillPlan) (FillReport, error) {
+	page := plan.Page
+	report := FillReport{}
 	content, err := page.Content()
 	if err != nil {
-		return err
+		return report, err
 	}
-	if isDeadJobPage(content) || DeadRedirectReason(applyURL, page.URL()) != "" {
-		return errors.New("job posting is expired")
+	if isDeadJobPage(content) || DeadRedirectReason(plan.ApplyURL, page.URL()) != "" {
+		return report, errors.New("job posting is expired")
 	}
 	if isCaptchaBlocked(page, content) {
-		return ErrCaptchaBlocked
+		return report, ErrCaptchaBlocked
 	}
-	if err := quarantineCareerPageDOM(filter, applyURL, companyName, content); err != nil {
-		return err
+	if err := quarantineCareerPageDOM(plan.Filter, plan.ApplyURL, plan.CompanyName, content); err != nil {
+		return report, err
 	}
 	// Deliberately no clickApplyIfPresent here, unlike the automatic path:
 	// ReachAssistedDestination has already advanced this browser to a
@@ -4175,13 +4199,52 @@ func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLay
 	// operator's visible window would risk navigating away from the very
 	// form they are about to review and submit by hand.
 	target := resolveFillTarget(page)
-	if handler, atsName := dedicatedATSHandler(applyURL); handler != nil {
-		if err := quarantineFillTargetDOM(filter, applyURL, companyName, target); err != nil {
+
+	// Best effort: a page whose inventory cannot be read still gets filled by
+	// the handler exactly as before. Reporting is an improvement on top of the
+	// fill, never a precondition for it.
+	before, inventoryErr := SnapshotControls(target)
+	if inventoryErr != nil {
+		log.Printf("[Assisted] Could not inventory the form before filling; the refill still runs, but its report will be incomplete: %v", inventoryErr)
+	}
+
+	fillErr := runAssistedHandler(target, plan)
+	if fillErr != nil {
+		return report, fillErr
+	}
+	report.ATS = plan.ATSName
+	report.Documents = plan.PreparedDocuments()
+
+	after, err := SnapshotControls(target)
+	if err != nil {
+		// The handler succeeded and stopped at the submit gate; only the
+		// report is unavailable. Saying so is better than discarding a good
+		// fill, and better than claiming an empty question list.
+		log.Printf("[Assisted] Refill completed but the form could not be re-inventoried; no question list is available: %v", err)
+		return report, nil
+	}
+	after = SanitizeControls(plan.Filter, after)
+	filled, stillEmpty := DiffSnapshots(SanitizeControls(plan.Filter, before), after)
+	for _, control := range filled {
+		report.Filled = append(report.Filled, FilledField{Key: control.Key, Label: control.Label, How: FilledByHandler})
+	}
+
+	report.absorb(resolveAndApply(target, plan, stillEmpty))
+	return report, nil
+}
+
+// runAssistedHandler performs the fill itself, unchanged from what this
+// function has always done: a dedicated ATS handler when one covers the
+// domain, and an already-healthy cached mapping otherwise. Both run in copilot
+// mode, so both stop at the submit gate.
+func runAssistedHandler(target fillTarget, plan AssistedFillPlan) error {
+	if handler, atsName := dedicatedATSHandler(plan.ApplyURL); handler != nil {
+		if err := quarantineFillTargetDOM(plan.Filter, plan.ApplyURL, plan.CompanyName, target); err != nil {
 			return fmt.Errorf("%s form rejected before use: %w", atsName, err)
 		}
-		return assistedFillOutcome(handler(target, resumePath, coverPath, pii, true, false))
+		return assistedFillOutcome(handler(target, plan.ResumePath, plan.CoverPath, plan.PII, true, false))
 	}
-	domain := ExtractDomain(applyURL)
+	domain := ExtractDomain(plan.ApplyURL)
 	mapping, err := storage.GetFormMapping(domain)
 	if err != nil {
 		return fmt.Errorf("no reusable form mapping: %w", err)
@@ -4190,7 +4253,7 @@ func FillAssistedMappedPage(page playwright.Page, filter *security.QuarantineLay
 	if err != nil || !healthy {
 		return errors.New("form mapping is not healthy enough to reuse")
 	}
-	return assistedFillOutcome(handleDynamic(target, resumePath, coverPath, pii, mapping, true, false))
+	return assistedFillOutcome(handleDynamic(target, plan.ResumePath, plan.CoverPath, plan.PII, mapping, true, false))
 }
 
 // assistedFillOutcome translates a copilot-mode fill result into the assisted

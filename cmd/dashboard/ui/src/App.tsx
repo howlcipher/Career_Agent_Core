@@ -9,10 +9,10 @@ import { MetricDisplay } from './components/MetricDisplay';
 import { TelemetryRow } from './components/TelemetryRow';
 import { ConversionTable } from './components/ConversionTable';
 import { AssistedJobCard } from './components/AssistedJobCard';
-import { QualifiedJobCard } from './components/QualifiedJobCard';
+import { TriageList } from './components/TriageList';
+import { ApplySessionBar } from './components/ApplySessionBar';
 import { ConfirmDialog, ConfirmActions } from './components/ConfirmDialog';
 import { ConsoleButton } from './components/ConsoleButton';
-import { SystemBadge } from './components/SystemBadge';
 
 function App() {
   const {
@@ -46,6 +46,11 @@ function App() {
     openDocument,
     assistedBrowserOpen,
     fetchQualifiedJobs,
+    applySession,
+    startApplySession,
+    controlApplySession,
+    submitAnswers,
+    submittingAnswers,
   } = useDashboard();
 
   const [showModeConfirm, setShowModeConfirm] = useState<boolean>(false);
@@ -53,8 +58,6 @@ function App() {
   const [confirmNotFoundJob, setConfirmNotFoundJob] = useState<AssistedJob | null>(null);
   const [confirmQualifiedJob, setConfirmQualifiedJob] = useState<QualifiedJob | null>(null);
   const [selectedJobs, setSelectedJobs] = useState<string[]>([]);
-  const [batchIndex, setBatchIndex] = useState<number | null>(null);
-  const [stopAfterCurrent, setStopAfterCurrent] = useState<boolean>(false);
 
   const legend = metrics?.status_legend ?? {};
   const explain = (status: string) => legend[status] ?? '';
@@ -91,31 +94,7 @@ function App() {
   const toggleSelected = (id: string) =>
     setSelectedJobs((ids) => (ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]));
 
-  const startSelected = async () => {
-    if (selectedJobs.length === 0 || assistedBrowserOpen) return;
-    setBatchIndex(0);
-    setStopAfterCurrent(false);
-    const first = assistedJobs.find((job) => job.id === selectedJobs[0]);
-    if (!first || !(await launchAssisted(first))) setBatchIndex(null);
-  };
-
-  const nextSelected = async () => {
-    if (batchIndex === null || stopAfterCurrent) {
-      setBatchIndex(null);
-      return;
-    }
-    if (assistedBrowserOpen) {
-      setActionError('Close the current assisted browser before opening the next selected application.');
-      return;
-    }
-    const nextIndex = batchIndex + 1;
-    if (nextIndex >= selectedJobs.length) {
-      setBatchIndex(null);
-      return;
-    }
-    const next = assistedJobs.find((job) => job.id === selectedJobs[nextIndex]);
-    if (next && (await launchAssisted(next))) setBatchIndex(nextIndex);
-  };
+  const sessionRunning = applySession !== null && applySession.state !== 'finished';
 
   const unsaved =
     operatorSettings &&
@@ -333,20 +312,13 @@ function App() {
                   Return to dashboard
                 </ConsoleButton>
               </div>
-              {qualifiedJobs.length === 0 ? (
-                <p className="detail-meta">No qualified jobs waiting.</p>
-              ) : (
-                qualifiedJobs.map((job) => (
-                  <QualifiedJobCard
-                    key={job.id}
-                    job={job}
-                    onOpen={() => qualifiedAction(job.id, 'open')}
-                    onPromote={() => qualifiedAction(job.id, 'promote')}
-                    onConfirmManual={() => setConfirmQualifiedJob(job)}
-                    onSkip={() => qualifiedAction(job.id, 'skip')}
-                  />
-                ))
-              )}
+              <TriageList
+                jobs={qualifiedJobs}
+                onPromote={(job) => qualifiedAction(job.id, 'promote')}
+                onSkip={(job) => qualifiedAction(job.id, 'skip')}
+                onOpen={(job) => qualifiedAction(job.id, 'open')}
+                onConfirmManual={(job) => setConfirmQualifiedJob(job)}
+              />
             </CommandSection>
           </section>
         )}
@@ -360,30 +332,14 @@ function App() {
                 </ConsoleButton>
               </div>
               {assistedJobs.length > 0 && (
-                <div className="batch-controls">
-                  <ConsoleButton
-                    variant="primary"
-                    onClick={startSelected}
-                    disabled={selectedJobs.length === 0 || batchIndex !== null || assistedBrowserOpen}
-                  >
-                    Start Selected Applications
-                  </ConsoleButton>
-                  {batchIndex !== null && (
-                    <>
-                      <SystemBadge variant="info">Application {batchIndex + 1} of {selectedJobs.length}</SystemBadge>
-                      <ConsoleButton variant="ghost" onClick={() => setStopAfterCurrent(true)}>
-                        Stop After This Application
-                      </ConsoleButton>
-                      <ConsoleButton
-                        variant="ghost"
-                        onClick={nextSelected}
-                        disabled={assistedBrowserOpen}
-                      >
-                        {assistedBrowserOpen ? 'Close Current Application First' : 'Open Next Selected Application'}
-                      </ConsoleButton>
-                    </>
-                  )}
-                </div>
+                <ApplySessionBar
+                  session={sessionRunning ? applySession : null}
+                  selectedCount={selectedJobs.length}
+                  canStart={selectedJobs.length > 0 && !assistedBrowserOpen}
+                  onStart={() => startApplySession(selectedJobs)}
+                  onControl={(action) => controlApplySession(action)}
+                  onSkip={() => controlApplySession('skip', applySession?.current_job_id)}
+                />
               )}
               {assistedJobs.length === 0 ? (
                 <p className="detail-meta">
@@ -395,8 +351,9 @@ function App() {
                     key={job.id}
                     job={job}
                     selected={selectedJobs.includes(job.id)}
-                    batchRunning={batchIndex !== null}
+                    sessionRunning={sessionRunning}
                     assistedBrowserOpen={assistedBrowserOpen}
+                    submittingAnswers={submittingAnswers}
                     onToggleSelect={toggleSelected}
                     onLaunch={launchAssisted}
                     onRevalidate={revalidateAssisted}
@@ -404,6 +361,7 @@ function App() {
                     onConfirm={setConfirmJob}
                     onMarkNotFound={setConfirmNotFoundJob}
                     onOpenDocument={openDocument}
+                    onSubmitAnswers={submitAnswers}
                   />
                 ))
               )}

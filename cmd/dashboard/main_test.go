@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 	_ "modernc.org/sqlite"
@@ -319,6 +320,24 @@ func setupTestDB(t *testing.T) {
 	);`
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
+	}
+	// The tables above are hand-written stand-ins for job_funnel and friends.
+	// The Assisted Apply tables are not: they are created by the same
+	// Ensure* functions a real dashboard connection runs, so a test can never
+	// pass against a schema shape production does not have. Added when Apply
+	// Sessions landed, because a confirm now writes a session item in the same
+	// transaction and a hand-copied schema would have silently drifted from it.
+	for _, ensure := range []func(*sql.DB) error{
+		storage.EnsureQuestionSchema,
+		storage.EnsureApplySessionSchema,
+		storage.EnsureHumanInteractionSchema,
+	} {
+		if err := ensure(db); err != nil {
+			t.Fatalf("failed to create assisted schema: %v", err)
+		}
+	}
+	if err := answers.EnsureSchema(db); err != nil {
+		t.Fatalf("failed to create answer vault schema: %v", err)
 	}
 }
 

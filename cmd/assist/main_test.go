@@ -14,6 +14,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 	"github.com/mxschmitt/playwright-go"
 )
 
@@ -68,9 +69,9 @@ func TestContinueAssistedApplicationKeepsBrowserOpenForManualReview(t *testing.T
 				return storage.AssistedDocument{Path: "fixture"}, tc.docErr
 			}
 			loadAssistedPII = func(string) (*config.PII, error) { return &config.PII{}, nil }
-			fillAssistedPage = func(playwright.Page, *security.QuarantineLayer, string, string, string, string, *config.PII) error {
+			fillAssistedPage = func(submitter.AssistedFillPlan) (submitter.FillReport, error) {
 				fillCalled = true
-				return tc.fillErr
+				return submitter.FillReport{}, tc.fillErr
 			}
 			recordAssistedRefill = func(*sql.DB, string, string, time.Time) error {
 				t.Fatal("refill state recorded after continuation failure")

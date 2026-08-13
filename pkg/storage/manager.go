@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/danielthedm/promptsec"
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	_ "modernc.org/sqlite"
 )
@@ -249,6 +250,22 @@ func InitDBWithPath(path string) error {
 		return err
 	}
 	if err := migrateJobFunnelProcessingIntent(); err != nil {
+		return err
+	}
+	// The Approved Answer Vault and the per-application question log. Both are
+	// additive; an existing database keeps every approved answer across
+	// upgrades, and a database that has never seen them simply gains empty
+	// tables.
+	if err := answers.EnsureSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureQuestionSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureApplySessionSchema(db); err != nil {
+		return err
+	}
+	if err := EnsureHumanInteractionSchema(db); err != nil {
 		return err
 	}
 	if err := secureSQLiteFiles(databasePath); err != nil {

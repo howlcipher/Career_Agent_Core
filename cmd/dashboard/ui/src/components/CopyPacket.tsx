@@ -1,0 +1,95 @@
+import { useEffect, useState } from 'react';
+import { ConsoleButton } from './ConsoleButton';
+import type { PacketEntry } from '../types';
+
+interface CopyPacketProps {
+  jobId: string;
+  /**
+   * These panels live inside a collapsed <details>. Fetching on mount would
+   * mean two extra requests per card on every queue render, for data nobody
+   * has asked to see, so the fetch waits until the panel is actually opened.
+   */
+  active: boolean;
+}
+
+/**
+ * Every prepared value in one place, each with a copy button.
+ *
+ * This is the floor under the whole feature: when automation cannot fill a form
+ * at all — an unsupported ATS, a broken mapping, an employer's own browser —
+ * the operator still gets the benefit of Career Agent having prepared
+ * everything, instead of hunting through pii.yaml by hand.
+ *
+ * Sensitive values are hidden until deliberately revealed. Not because the
+ * operator should not see their own data, but because a dashboard left open on
+ * a second monitor should not be displaying a work-authorization declaration.
+ */
+export function CopyPacket({ jobId, active }: CopyPacketProps) {
+  const [entries, setEntries] = useState<PacketEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    fetch(`/api/assisted/packet?job_id=${encodeURIComponent(jobId)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('packet unavailable'))))
+      .then((data) => {
+        if (live) setEntries(data.entries ?? []);
+      })
+      .catch(() => {
+        if (live) setError('Could not load your prepared details.');
+      });
+    return () => {
+      live = false;
+    };
+  }, [jobId, active]);
+
+  const copy = async (entry: PacketEntry) => {
+    try {
+      await navigator.clipboard.writeText(entry.value);
+      setCopied(entry.label);
+      window.setTimeout(() => setCopied(null), 1500);
+    } catch {
+      setError('Your browser blocked clipboard access. Select the value and copy it manually.');
+    }
+  };
+
+  if (error) return <p className="detail-meta">{error}</p>;
+  if (!entries) return <p className="detail-meta">Loading your prepared details…</p>;
+  if (entries.length === 0) return <p className="detail-meta">Nothing prepared for this application yet.</p>;
+
+  return (
+    <div className="copy-packet">
+      <p className="detail-meta">
+        Every value Career Agent has prepared, for any field it could not fill itself.
+      </p>
+      <p aria-live="polite" className="copy-packet-status">
+        {copied ? `${copied} copied` : ''}
+      </p>
+      <ul className="copy-packet-list">
+        {entries.map((entry) => {
+          const hidden = entry.sensitive && !revealed[entry.label];
+          return (
+            <li key={`${entry.label}-${entry.value}`}>
+              <span className="copy-packet-label">{entry.label}</span>
+              <span className="copy-packet-value">{hidden ? '••••••••' : entry.value}</span>
+              {entry.sensitive && (
+                <ConsoleButton
+                  variant="ghost"
+                  onClick={() => setRevealed((current) => ({ ...current, [entry.label]: !hidden }))}
+                >
+                  {hidden ? 'Show' : 'Hide'}
+                </ConsoleButton>
+              )}
+              <ConsoleButton variant="ghost" onClick={() => copy(entry)}>
+                Copy
+              </ConsoleButton>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
