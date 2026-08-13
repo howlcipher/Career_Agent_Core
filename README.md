@@ -115,7 +115,9 @@ go run ./cmd/agent --daemon
 
 ### Demo mode
 
-You can safely explore the system's logic and the dashboard interface without connecting personal accounts or executing real job applications. The demo mode populates the database with synthetic discovered jobs, scores, and mock outcomes.
+You can explore the system's logic and the dashboard interface without connecting personal accounts or executing real job applications. The demo mode populates the database with synthetic discovered jobs, scores, and mock outcomes — every company, role, and URL it inserts is fictional, and no network or LLM calls are made.
+
+> **Warning — destructive to an existing database.** The seeder runs `DELETE FROM job_funnel` against `./applications.db` (`pkg/storage.DefaultDatabasePath`) before inserting its synthetic rows, and the path is not configurable. Run it in a fresh clone, or move an existing `applications.db` aside first. It is safe on a first run, where there is nothing to clear.
 
 ```bash
 # Start the demo seeder
