@@ -120,7 +120,7 @@ func serveAssistedAnswers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	saved, refused := rememberApprovedAnswers(request.Answers, known)
+	saved, refused := rememberApprovedAnswers(request.JobID, request.Answers, known)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":          "sent",
@@ -137,7 +137,7 @@ func serveAssistedAnswers(w http.ResponseWriter, r *http.Request) {
 // sensitive answer the operator ticked "save" on but not "allow reuse" is
 // legitimately refused by the vault, and the operator should be told that
 // rather than left believing Career Agent will use it next time.
-func rememberApprovedAnswers(submissions []answerSubmission, known map[string]storage.ApplicationQuestion) (saved, refused int) {
+func rememberApprovedAnswers(jobID string, submissions []answerSubmission, known map[string]storage.ApplicationQuestion) (saved, refused int) {
 	wanted := false
 	for _, submission := range submissions {
 		if submission.SaveForReuse {
@@ -165,7 +165,27 @@ func rememberApprovedAnswers(submissions []answerSubmission, known map[string]st
 		if answer == "" {
 			continue
 		}
-		sensitive := question.Sensitivity == string(answers.Sensitive)
+		vaultQuestion := answers.Question{
+			Key:         question.Key,
+			Prompt:      question.Prompt,
+			ControlType: question.ControlType,
+			Options:     question.Options,
+			Required:    question.Required,
+			Company:     companyForJob(jobID),
+		}
+		// Sensitive if *either* the classification recorded on the question or
+		// the classifier's own reading of it says so.
+		//
+		// The union is the fix for bugs.md #541. This used to trust the stored
+		// value alone, while Store.Save enforced its rule using its own
+		// re-classification — so when the two disagreed, an answer the operator
+		// was shown as routine (one checkbox, no declaration warning) could be
+		// stored as a declaration with reuse permission they never granted.
+		// answers.Resolve escalates the same way, so the stored value and this
+		// check now agree by construction; taking the union here as well means
+		// a future divergence still fails safe rather than silently.
+		sensitive := question.Sensitivity == string(answers.Sensitive) ||
+			answers.Classify(vaultQuestion) == answers.Sensitive
 		// For a sensitive answer the reuse decision is the second checkbox,
 		// never the first. The vault re-checks this itself; passing the
 		// operator's actual answer through rather than a convenient default is
@@ -179,13 +199,7 @@ func rememberApprovedAnswers(submissions []answerSubmission, known map[string]st
 			provenance = answers.OperatorEdited
 		}
 		if _, err := vault.Save(answers.SaveRequest{
-			Question: answers.Question{
-				Key:         question.Key,
-				Prompt:      question.Prompt,
-				ControlType: question.ControlType,
-				Options:     question.Options,
-				Required:    question.Required,
-			},
+			Question:          vaultQuestion,
 			Answer:            answer,
 			Scope:             normalizeRequestedScope(submission.Scope),
 			Provenance:        provenance,
@@ -362,4 +376,16 @@ func serveAnswerVault(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// companyForJob names the employer asking, so the sensitivity classifier can
+// discount the company's own name (bugs.md #540). An unreadable company is
+// simply empty, which is safe: it only means the classifier keeps its false
+// positive rather than losing a true one.
+func companyForJob(jobID string) string {
+	var company string
+	if err := db.QueryRow(`SELECT COALESCE(company_name, '') FROM job_funnel WHERE id = ?`, jobID).Scan(&company); err != nil {
+		return ""
+	}
+	return company
 }

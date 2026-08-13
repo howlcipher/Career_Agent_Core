@@ -54,6 +54,12 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
+| 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Pending | 1.0 = 2×1.0÷2 | standard | Found by improvements.md #537's live run while scanning the logs for PII. Observed benign this time (`value=""`), but the same diagnostic on a filled control would print the operator's answer. Pre-existing, not introduced by the apply-session work. |
+| 541 | [The two-checkbox guarantee fails when the UI and the vault classify a question differently](#541-the-two-checkbox-guarantee-fails-when-the-ui-and-the-vault-classify-a-question-differently) | Major | Fixed (2026-08-13) | — | standard | Found by the improvements.md #537 live run on a real Greenhouse form. A declaration was stored with reuse permission the operator was never asked for, because the card and the store disagreed about whether the question was sensitive. |
+| 542 | [Skip leaves the assisted browser open holding the only lease, so an apply session can never advance past it](#542-skip-leaves-the-assisted-browser-open-holding-the-only-lease-so-an-apply-session-can-never-advance-past-it) | Major | Fixed (2026-08-13) | — | standard | Same run. Auto-advance — the feature's headline — did not work on the skip path: the operator pressed Skip and the session paused instead of opening the next application. |
+| 540 | [The sensitivity classifier treats the employer's own name as legal-attestation vocabulary](#540-the-sensitivity-classifier-treats-the-employers-own-name-as-legal-attestation-vocabulary) | Minor | Fixed (2026-08-13) | — | mechanical | Same run. "Affirm" is both a real company and an attestation verb; so are Consent and Certify. It is what triggered #541. |
+| 538 | [The dashboard never creates the tables Assisted Apply needs, so Start Apply Session fails on every existing installation](#538-the-dashboard-never-creates-the-tables-assisted-apply-needs-so-start-apply-session-fails-on-every-existing-installation) | Major | Fixed (2026-08-13) | — | standard | Found while planning improvements.md #537's live run, before running anything. The live `applications.db` had none of the eight tables PR #16 added, and the dashboard is the first process to touch them. |
+| 539 | [`decodeBoundedJSON` hardcodes port 8080, so every state-changing POST is refused on any other `-addr`](#539-decodeboundedjson-hardcodes-port-8080-so-every-state-changing-post-is-refused-on-any-other--addr) | Major | Fixed (2026-08-13) | — | mechanical | Same planning pass. The check was both wrong and redundant: every caller is already wrapped in `requireSameOrigin`, which compares against the request's own Host. |
 | 521 | [Indistinguishable duplicate cards let one click mark a job applied that was never submitted](#521-indistinguishable-duplicate-cards-let-one-click-mark-a-job-applied-that-was-never-submitted) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #521 for the full account. |
 | 523 | [The assisted browser's network guard aborts requests silently](#523-the-assisted-browsers-network-guard-aborts-requests-silently) | Minor | Done (2026-08-06) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #523 for the full account. |
 | 519 | [Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with](#519-assisted-apply-cannot-prefill-on-greenhouse-or-lever-the-only-two-atses-it-is-used-with) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #519 for the full account. |
@@ -243,6 +249,92 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 543. The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML
+
+**Found 2026-08-13** during improvements.md #537's live run, by the PII scan that run performs on its own logs rather than by a failure.
+
+`launchAssistedApplication` in `cmd/dashboard/main.go` scans the assist process's stderr and echoes every line with `log.Printf("assisted browser: %s", line)`. That is useful — it is how the operator sees what the browser is doing — but the lines are not all Career Agent's own. When a Playwright action retries, its diagnostics include the target element's outer HTML. Observed in this run:
+
+```
+- locator resolved to <input value="" type="text" role="combobox" ... >
+```
+
+Here `value=""` because the retry happened before the fill. **The same diagnostic on a control that already holds a value would print it**, and on an application form that value is whatever the operator typed — a salary expectation, a work-authorization answer, a free-text response.
+
+Nothing left the machine: `dashboard.log` is local and gitignored. But this project already decided that page content does not belong in logs (bug #523 did exactly this work for the assisted network guard, replacing verbatim Playwright errors with a classified reason), and this is the same class one layer up.
+
+**Pre-existing.** The echo predates the apply-session work; the live run simply looked for it. Filed rather than fixed in that session to keep an unrelated change out of a bug fix for something else.
+
+**Fix direction.** Do not echo assist stderr verbatim. Either filter lines to those the assist process itself emits (they all carry its own `log` timestamp prefix, unlike Playwright's indented continuation lines), or strip `value="..."` and any `<input`/`<textarea` payload before logging. The readiness sentinel `launchAssistedApplication` watches for ("Assisted application is open.") must keep working, so filtering has to preserve Career Agent's own lines exactly.
+
+### 541. The two-checkbox guarantee fails when the UI and the vault classify a question differently
+
+**Found 2026-08-13** by improvements.md #537's live verification run, on a real Greenhouse application form. Fixed the same day. This is the defect that run was worth doing for.
+
+The Approved Answer Vault's central promise is that a legal or protected-class answer is only ever remembered when the operator ticks **two** separate boxes: one to save it, and a second acknowledging that a declaration may be reused automatically. The card decides which boxes to show from the sensitivity recorded on the question; `answers.Store.Save` enforces the rule using **its own** re-classification of the same question. Nothing made those two agree.
+
+**What actually happened.** The question was *"Have you previously been employed at Affirm for any length of time?"* The `previously_employed` curated pattern declares itself `Routine`, so that is what was stored and what the card rendered — one checkbox, no declaration warning. `rememberApprovedAnswers` then read that stored `routine` and set `ReuseAllowed = true` unconditionally. `Store.Save` re-classified the same prompt as `Sensitive` (see #540), found `ReuseAllowed` true and a `ReuseDecisionMade` flag the handler always sets, and **stored the answer as a sensitive declaration with reuse allowed** — a permission the operator was never asked for and never gave. Verified in the database: `sensitive | reuse_allowed=1 | operator_approved`.
+
+The guarantee did not merely fail; it failed in the unsafe direction, silently, on a real employer's form.
+
+**Fix, in two places so a future divergence cannot reopen it.** `answers.Resolve` now escalates every resolution to the stricter of the source's declared sensitivity and `Classify`'s reading of the question (`escalateSensitivity`), so the value stored on the question — and therefore the card the operator sees — can no longer be weaker than what the store will enforce. A pattern hit that escalates also stops auto-filling. Independently, `rememberApprovedAnswers` now takes the union of the stored classification and its own call to `answers.Classify`, so even if the two ever drift again the reuse grant falls back to requiring the second acknowledgement. An explicitly granted reuse still survives escalation, which is the one case that grant exists for.
+
+**Tests.** `TestResolve_EscalatesAPatternWhoseQuestionClassifiesSensitive` and `TestResolve_EscalationDoesNotRevokeAnExplicitReuseGrant` in `pkg/answers`. Re-verified live on the same form: the answer now stores as `routine | reuse_allowed=1`, matching the single checkbox the operator was actually shown, and the immigration-sponsorship declaration beside it is still refused.
+
+### 542. Skip leaves the assisted browser open holding the only lease, so an apply session can never advance past it
+
+**Found 2026-08-13**, same live run. Fixed the same day.
+
+Auto-advance is the headline of apply sessions: confirm or skip an application and the next one opens by itself. It did not work on the skip path. Pressing **Skip Current** marked the item skipped and then paused the session with "the browser closed without a confirmation" — an alarming and completely wrong message, since no browser had closed.
+
+**Two causes, both needed fixing.**
+
+First, nothing told `cmd/assist` its work was done. Its poll loop watched `assisted_state` for `'completed'`, which only a confirmation or a not-found sets. A skipped application's browser therefore stayed open indefinitely, holding the single visible-browser lease `AcquireAssistedLease` enforces.
+
+Second, `advanceApplySession` then tried to launch the next application anyway, `AcquireAssistedLease` refused it (`assisted application is already active`), and the launch failure was treated as "the browser did not open, so nothing about this application is known" — which pauses the session. A transient lease conflict and an unknown outcome are not the same thing, and conflating them meant the session pauses every single time.
+
+**Fix.** `storage.AssistedWorkFinished` reports whether a job's item in the open session has reached a terminal state, and `cmd/assist` polls it beside the existing `'completed'` check — so skip and stop now close the browser exactly as confirm always did. `NextApplySessionJob` refuses to offer a job while any assisted browser still holds a live lease, using the same heartbeat window `AcquireAssistedLease` uses, so the launch is not attempted until the previous browser is genuinely gone and the spurious pause cannot occur.
+
+**Tests.** `TestNextApplySessionJob_WaitsWhileAnAssistedBrowserIsStillLive` and `TestAssistedWorkFinished_ReportsATerminalSessionItem` in `pkg/storage`. Verified live: after the fix, Skip logged "This application's place in the apply session reached an outcome; closing the browser" at 10:10:16 and the next application opened by itself at 10:10:38.
+
+### 540. The sensitivity classifier treats the employer's own name as legal-attestation vocabulary
+
+**Found 2026-08-13**, same live run. Fixed the same day.
+
+`answers.Classify` matches a curated set of declaration words including `affirm`, `consent`, `certify` and `attest`. Affirm is a real company, and so are Consent Systems and Certify — so *every* question on that employer's form containing its own name was classified as a legal declaration, including "How did you first learn about Affirm as an employer?".
+
+On its own this is a fail-safe false positive: it over-classifies, which costs the operator an unnecessary confirmation rather than risking a wrong answer. It became serious only because it was the trigger for #541.
+
+**Fix.** `answers.Question` gained a `Company` field, and `Classify` removes the tokens of the employer's name before matching. Only the exact words of the company's name are discounted, and the marker groups are redundant enough that a genuine attestation from such a company still matches on its other vocabulary — "Do you consent to a background check?" at Consent Systems still trips `background`. An absent company name simply keeps the old behaviour, which is safe.
+
+**Test.** `TestClassify_DoesNotTreatTheEmployersOwnNameAsADeclaration`, including the redundancy cases. Verified live: both Affirm questions now render as routine on the card.
+
+### 538. The dashboard never creates the tables Assisted Apply needs, so Start Apply Session fails on every existing installation
+
+**Found 2026-08-13**, while planning improvements.md #537's live verification run — before a browser was ever opened. Fixed the same day.
+
+`cmd/dashboard/main.go` opened its own `ReaderDSN` connection and called exactly one schema function, `storage.EnsureAssistedSchema`. The four schemas PR #16 added — `application_questions` / `assisted_fill_summary` / `pending_answers`, `application_sessions` / `application_session_items`, `human_interactions`, and the Approved Answer Vault's `approved_answers` / `answer_aliases` — are created only by `storage.InitDBWithPath`, which the dashboard never calls.
+
+**Confirmed against the live database, not inferred:** `SELECT name FROM sqlite_master` for all eight returned nothing. The dashboard is in practice the *first* process to touch them, because the operator starts a session before `cmd/assist` has ever run on a given database.
+
+**Why it hid.** Most read paths already tolerate `no such table` and return an empty result — `GetApplySession`, `GetPendingQuestions`, `PendingQuestionCounts`, `GetFillSummary`, `GetHumanEffortMetrics` all do — so the dashboard rendered normally and reported no error. Only the write paths fail: `StartApplySession` (`pkg/storage/sessions.go`) and `SubmitAssistedAnswers` (`pkg/storage/assisted.go`). The visible symptom would have been "Start Apply Session" returning a 409 on a working installation, with nothing else wrong.
+
+**Why the tests missed it.** `cmd/dashboard`'s `setupTestDB` calls the same `Ensure*` functions directly — a change made in the same PR that introduced the gap. The fixture therefore could not represent a database that had not had them run, which is the only shape that exposes the bug. This is the third instance of the pattern this project has recorded: `go test` cannot see wiring that only exists in `main()`.
+
+**Fix.** `main()` now runs all five schema functions as one named list, with the same rationale `EnsureAssistedSchema`'s own doc comment already gave for existing at all. **Test.** `cmd/dashboard/schema_upgrade_test.go` builds a database containing only the legacy tables, opens it through `storage.ReaderDSN` exactly as the dashboard does, asserts all nine tables appear, and then asserts `serveApplySessionStart` returns 200 against it — the behavioural half, since a table created with the wrong columns would satisfy a schema check alone.
+
+### 539. `decodeBoundedJSON` hardcodes port 8080, so every state-changing POST is refused on any other `-addr`
+
+**Found 2026-08-13**, same planning pass. Fixed the same day.
+
+`cmd/dashboard/operator_api.go` rejected any request whose `Origin` was not literally `http://localhost:8080` or `http://127.0.0.1:8080`. `cmd/dashboard` has an `-addr` flag, and the project's own documentation describes running a second instance on a spare port to check a build against a copy of the database — under which every state-changing POST routed through this helper returned 403: operator settings, all four qualified-job actions, the answer-vault revoke, and all four apply-session controls (pause, resume, skip, stop).
+
+**The check was also fully redundant.** Every handler that calls `decodeBoundedJSON` is already wrapped in `requireSameOrigin`, which prefers `Sec-Fetch-Site` and falls back to comparing `Origin`/`Referer` against the request's own `Host` (`hostMatchesRequest`). That check is correct on any port. Having two origin gates where one is right and one is wrong is strictly worse than having the right one alone.
+
+**Fix.** The hardcoded block is deleted; `requireSameOrigin` is the single gate, and `decodeBoundedJSON`'s doc comment now records that it deliberately performs no origin check of its own and why. **Test.** An apply-session control POST from `http://127.0.0.1:8099` with a matching Host reaches the handler, while a foreign origin, a right-host/wrong-port origin, a `null` origin and unparseable garbage are all still refused — so the removal cannot be mistaken for weakening the guard.
+
+**Noted, not changed:** `hostMatchesRequest` compares hosts and ignores the scheme, so `https://127.0.0.1:8099` against Host `127.0.0.1:8099` is accepted. That is documented design, and reaching it requires an attacker already serving TLS on the operator's loopback at the dashboard's exact port. Recorded in the test rather than tightened, because narrowing a documented security decision does not belong inside a bug fix for something else.
 
 ### 512. Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs
 

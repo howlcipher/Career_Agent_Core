@@ -251,3 +251,77 @@ func TestSupportedAssistedATS(t *testing.T) {
 		}
 	}
 }
+
+// --- bugs.md #542: found live — Skip did nothing visible ---
+
+// A session must not try to open the next application while another assisted
+// browser is still live. Its lease is the only one, so the launch would be
+// refused, and the caller cannot tell that transient refusal from a browser
+// that failed to open — which is what paused a session every time an
+// application was skipped with its browser still open.
+func TestNextApplySessionJob_WaitsWhileAnAssistedBrowserIsStillLive(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedSessionJob(t, 1, "First")
+	seedSessionJob(t, 2, "Second")
+	if _, err := StartApplySession(db, []string{"1", "2"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkApplySessionItemOpen(db, "1"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := db.Exec(`UPDATE assisted_applications SET lease_owner = 'owner', lease_expires_at = ?, updated_at = ? WHERE job_id = 1`,
+		now.Add(10*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	// The operator skips the open application. Its item is terminal, but its
+	// browser has not closed yet.
+	if err := AdvanceApplySession(db, "1", ItemSkipped, "operator skipped this application"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok, err := NextApplySessionJob(db); err != nil || ok {
+		t.Fatal("no application may be offered while the previous browser still holds the lease")
+	}
+
+	// Once that browser closes, the session continues on its own.
+	if _, err := db.Exec(`UPDATE assisted_applications SET lease_owner = '', lease_expires_at = NULL WHERE job_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	jobID, ok, err := NextApplySessionJob(db)
+	if err != nil || !ok || jobID != "2" {
+		t.Fatalf("expected the next application once the lease was released, got %q ok=%v err=%v", jobID, ok, err)
+	}
+}
+
+// The signal cmd/assist polls so a skipped or stopped application actually
+// closes its browser. Before this, only a confirmation closed one, so Skip left
+// the browser open forever and the session could never advance.
+func TestAssistedWorkFinished_ReportsATerminalSessionItem(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedSessionJob(t, 1, "First")
+	seedSessionJob(t, 2, "Second")
+	if _, err := StartApplySession(db, []string{"1", "2"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkApplySessionItemOpen(db, "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if done, err := AssistedWorkFinished(db, "1"); err != nil || done {
+		t.Fatal("an application still in progress is not finished")
+	}
+	if err := AdvanceApplySession(db, "1", ItemSkipped, "operator skipped this application"); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := AssistedWorkFinished(db, "1"); err != nil || !done {
+		t.Fatalf("a skipped application must report finished so its browser closes: done=%v err=%v", done, err)
+	}
+	// A job that is not part of any open session governs itself, and must not
+	// be told to close.
+	if done, err := AssistedWorkFinished(db, "999"); err != nil || done {
+		t.Fatalf("a job outside the session must not be reported finished: done=%v err=%v", done, err)
+	}
+}

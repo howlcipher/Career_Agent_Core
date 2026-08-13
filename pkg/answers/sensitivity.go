@@ -74,6 +74,18 @@ func Classify(question Question) Sensitivity {
 	for _, token := range tokens {
 		present[token] = true
 	}
+	// Discount the employer's own name (bugs.md #540). A question is not a
+	// legal declaration because the company is called Affirm, Consent or
+	// Certify. Only the exact words of the company's name are removed, and the
+	// marker groups are redundant enough that a real attestation from such a
+	// company still matches on its other vocabulary — "Do you consent to a
+	// background check?" at Consent Systems still trips "background".
+	for _, token := range Tokens(question.Company) {
+		delete(present, token)
+	}
+	if len(present) == 0 {
+		return Sensitive
+	}
 	if matchesAnyGroup(present, sensitiveMarkers) {
 		return Sensitive
 	}

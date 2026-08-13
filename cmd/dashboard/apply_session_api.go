@@ -181,6 +181,11 @@ func advanceApplySession() {
 		// The browser did not open, so nothing about this application is
 		// known. It goes back to pending and the session pauses, the same as
 		// any other outcome-less end.
+		//
+		// NextApplySessionJob has already refused to offer a job while another
+		// assisted browser is live, so this path no longer fires for the
+		// transient lease conflict that used to pause a session every time an
+		// application was skipped with its browser still open (bugs.md #542).
 		if pauseErr := storage.PauseApplySessionForClosedBrowser(db, jobID); pauseErr != nil {
 			log.Printf("advanceApplySession: %v", pauseErr)
 		}

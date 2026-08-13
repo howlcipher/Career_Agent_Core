@@ -16,12 +16,19 @@ import (
 
 const operatorSettingsPath = "applications/operator_settings.yaml"
 
+// decodeBoundedJSON reads a small, strictly-typed JSON body.
+//
+// It deliberately performs no origin check of its own. It used to compare the
+// Origin header against the literal strings "http://localhost:8080" and
+// "http://127.0.0.1:8080", which was both redundant and wrong: every handler
+// that calls this is already wrapped in requireSameOrigin, which compares
+// against the request's own Host and is therefore correct on any port, while
+// the hardcoded pair silently rejected every state-changing POST whenever the
+// dashboard was started with a non-default -addr — operator settings, all four
+// qualified-job actions, the answer-vault revoke, and every apply-session
+// control (bugs.md #539). Two origin checks where one is right and one is
+// wrong is worse than one; the wrong one is gone.
 func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, req interface{}) error {
-	origin := r.Header.Get("Origin")
-	if origin != "" && origin != "http://localhost:8080" && origin != "http://127.0.0.1:8080" {
-		http.Error(w, "Forbidden origin", http.StatusForbidden)
-		return fmt.Errorf("forbidden origin")
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()

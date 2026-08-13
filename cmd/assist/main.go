@@ -228,6 +228,14 @@ waitForSignal:
 				log.Print("Assisted application was confirmed; closing the browser.")
 				return
 			}
+			// Skipping or stopping a session is also an outcome for this
+			// application, and it has to close this browser — it holds the only
+			// visible-browser lease, so leaving it open means the session can
+			// never open the next application (bugs.md #542).
+			if done, err := storage.AssistedWorkFinished(storage.GetDB(), info.JobID); err == nil && done {
+				log.Print("This application's place in the apply session reached an outcome; closing the browser.")
+				return
+			}
 			if state == "continue_requested" {
 				goto continueFill
 			}

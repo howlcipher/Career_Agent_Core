@@ -443,3 +443,80 @@ func mustList(t *testing.T, store *Store) []Answer {
 	}
 	return live
 }
+
+// --- bugs.md #540 / #541: found live on a real Greenhouse form ---
+
+// The employer's own name is not attestation vocabulary. Affirm, Consent and
+// Certify are real companies, and "Have you previously been employed at Affirm?"
+// classified as a legal declaration purely because of the company's name.
+func TestClassify_DoesNotTreatTheEmployersOwnNameAsADeclaration(t *testing.T) {
+	cases := []struct {
+		prompt, company string
+		want            Sensitivity
+	}{
+		{"Have you previously been employed at Affirm for any length of time?", "Affirm", Routine},
+		{"How did you first learn about Affirm as an employer?", "Affirm", Routine},
+		{"Do you agree to our terms?", "Affirm", Sensitive},
+		// The marker groups are redundant enough that a real attestation from a
+		// company with an awkward name still matches on its other vocabulary.
+		{"Do you consent to a background check?", "Consent Systems", Sensitive},
+		{"Have you been convicted of a felony?", "Certify Inc", Sensitive},
+		// Without the company, the false positive is still there — which is why
+		// callers pass it.
+		{"Have you previously been employed at Affirm for any length of time?", "", Sensitive},
+	}
+	for _, testCase := range cases {
+		got := Classify(Question{Prompt: testCase.prompt, ControlType: "combobox", Company: testCase.company})
+		if got != testCase.want {
+			t.Errorf("Classify(%q, company=%q) = %q, want %q", testCase.prompt, testCase.company, got, testCase.want)
+		}
+	}
+}
+
+// The two-checkbox guarantee depends on the classification the operator was
+// shown matching the one the store enforces with. When a curated pattern
+// declares a question Routine but the classifier reads it as Sensitive, the
+// resolution must come back Sensitive — otherwise the operator sees one
+// checkbox and no declaration warning while the store treats their answer as a
+// declaration, which is how a declaration got stored with reuse permission
+// nobody granted.
+func TestResolve_EscalatesAPatternWhoseQuestionClassifiesSensitive(t *testing.T) {
+	pii := &config.PII{}
+	pii.Work.PreviouslyEmployed = "No"
+	store := newTestStore(t)
+
+	// No company supplied, so "Affirm" still trips the declaration markers —
+	// standing in for any pattern/classifier disagreement.
+	question := Question{Prompt: "Have you previously been employed at Affirm for any length of time?", ControlType: "combobox"}
+	resolution := store.Resolve(question, Context{}, pii)
+
+	if resolution.PatternID != "previously_employed" {
+		t.Fatalf("expected the previously-employed pattern to match, got %q", resolution.PatternID)
+	}
+	if resolution.Sensitivity != Sensitive {
+		t.Fatalf("a pattern must not downgrade a question the classifier calls sensitive: %+v", resolution)
+	}
+	if resolution.AutoFill {
+		t.Fatal("an escalated resolution must stop auto-filling")
+	}
+}
+
+// A stored answer whose reuse the operator explicitly granted keeps auto-
+// filling even after escalation — that grant is exactly what it is for.
+func TestResolve_EscalationDoesNotRevokeAnExplicitReuseGrant(t *testing.T) {
+	store := newTestStore(t)
+	question := Question{Prompt: "Do you agree to the terms?", ControlType: "combobox"}
+	if _, err := store.Save(SaveRequest{
+		Question: question, Answer: "Yes", Provenance: OperatorApproved,
+		ReuseAllowed: true, ReuseDecisionMade: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resolution := store.Resolve(question, Context{}, nil)
+	if resolution.Sensitivity != Sensitive {
+		t.Fatalf("expected the answer to stay sensitive, got %q", resolution.Sensitivity)
+	}
+	if !resolution.AutoFill {
+		t.Fatal("an explicitly granted reuse must survive escalation")
+	}
+}

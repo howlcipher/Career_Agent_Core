@@ -28,6 +28,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
@@ -479,8 +480,30 @@ func main() {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(10)
-	if err := storage.EnsureAssistedSchema(db); err != nil {
-		log.Fatalf("Failed to prepare assisted apply schema: %v", err)
+	// Every table Assisted Apply touches is created here, not just the original
+	// handoff table.
+	//
+	// The dashboard opens its own ReaderDSN connection and never calls
+	// storage.InitDBWithPath, so it never runs the migration chain that creates
+	// these. It is also, in practice, the *first* process to touch them: the
+	// operator starts a session before cmd/assist has ever run. Creating only
+	// assisted_applications here left an existing installation with no
+	// application_sessions table, where the read paths degraded quietly on
+	// "no such table" and Start Apply Session failed outright (bugs.md #538).
+	//
+	// The package tests did not catch it because their fixture calls these same
+	// functions directly; only a database created by an older release exposes
+	// the gap, which is exactly the case this line exists to serve.
+	for _, ensure := range []func(*sql.DB) error{
+		storage.EnsureAssistedSchema,
+		storage.EnsureQuestionSchema,
+		storage.EnsureApplySessionSchema,
+		storage.EnsureHumanInteractionSchema,
+		answers.EnsureSchema,
+	} {
+		if err := ensure(db); err != nil {
+			log.Fatalf("Failed to prepare assisted apply schema: %v", err)
+		}
 	}
 
 	mux := http.NewServeMux()
