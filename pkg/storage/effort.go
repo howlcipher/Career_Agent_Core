@@ -119,20 +119,29 @@ func EstimateAssistedEffort(input AssistedEffortInput) AssistedEffort {
 	return effort
 }
 
-// EffortMultiplier converts an effort band into a bounded ranking adjustment.
+// effortAdjustment is how far the effort model may move a job's rank, as a
+// fraction either side of 1.0.
 //
-// The bound is the point. Application ease is a real signal — an excellent job
-// on an unsupported ATS with an account gate genuinely is worth less than the
-// same job on Greenhouse — but it is a much weaker signal than fit, and an
-// unbounded version of it would rank a mediocre one-click job above an
-// excellent realistic one. Confined to ±15% it can reorder near-ties and
-// nothing else.
+// The size was chosen against the failure it exists to prevent, not picked for
+// roundness. At ±15% — the first value this shipped with — the swing between
+// the best and worst band is 1.35×, enough to lift a fit-74 one-click job above
+// a fit-92 realistic one; the ordering test caught exactly that. At ±4% the
+// full swing is about 8%, which can reorder jobs within roughly seven fit
+// points of each other and cannot touch a gap wider than that.
+//
+// That is the intended power. Application ease is a real signal — an excellent
+// job on an unsupported ATS behind an account gate genuinely does cost more
+// than the same job on Greenhouse — but it is a much weaker signal than whether
+// the job suits the applicant, and it must only ever break ties.
+const effortAdjustment = 0.04
+
+// EffortMultiplier converts an effort band into a bounded ranking adjustment.
 func EffortMultiplier(band string) float64 {
 	switch band {
 	case EffortLow:
-		return 1.15
+		return 1 + effortAdjustment
 	case EffortHigh:
-		return 0.85
+		return 1 - effortAdjustment
 	default:
 		return 1.0
 	}
