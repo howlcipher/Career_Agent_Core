@@ -54,6 +54,8 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
+| 538 | [The dashboard never creates the tables Assisted Apply needs, so Start Apply Session fails on every existing installation](#538-the-dashboard-never-creates-the-tables-assisted-apply-needs-so-start-apply-session-fails-on-every-existing-installation) | Major | Fixed (2026-08-13) | — | standard | Found while planning improvements.md #537's live run, before running anything. The live `applications.db` had none of the eight tables PR #16 added, and the dashboard is the first process to touch them. |
+| 539 | [`decodeBoundedJSON` hardcodes port 8080, so every state-changing POST is refused on any other `-addr`](#539-decodeboundedjson-hardcodes-port-8080-so-every-state-changing-post-is-refused-on-any-other--addr) | Major | Fixed (2026-08-13) | — | mechanical | Same planning pass. The check was both wrong and redundant: every caller is already wrapped in `requireSameOrigin`, which compares against the request's own Host. |
 | 521 | [Indistinguishable duplicate cards let one click mark a job applied that was never submitted](#521-indistinguishable-duplicate-cards-let-one-click-mark-a-job-applied-that-was-never-submitted) | Major | Done (2026-08-06) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #521 for the full account. |
 | 523 | [The assisted browser's network guard aborts requests silently](#523-the-assisted-browsers-network-guard-aborts-requests-silently) | Minor | Done (2026-08-06) | — | mechanical | See `documentation/backlog_history/bugs_done_details.md` item #523 for the full account. |
 | 519 | [Assisted Apply cannot prefill on Greenhouse or Lever, the only two ATSes it is used with](#519-assisted-apply-cannot-prefill-on-greenhouse-or-lever-the-only-two-atses-it-is-used-with) | Major | Done (2026-08-06) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #519 for the full account. |
@@ -243,6 +245,32 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 538. The dashboard never creates the tables Assisted Apply needs, so Start Apply Session fails on every existing installation
+
+**Found 2026-08-13**, while planning improvements.md #537's live verification run — before a browser was ever opened. Fixed the same day.
+
+`cmd/dashboard/main.go` opened its own `ReaderDSN` connection and called exactly one schema function, `storage.EnsureAssistedSchema`. The four schemas PR #16 added — `application_questions` / `assisted_fill_summary` / `pending_answers`, `application_sessions` / `application_session_items`, `human_interactions`, and the Approved Answer Vault's `approved_answers` / `answer_aliases` — are created only by `storage.InitDBWithPath`, which the dashboard never calls.
+
+**Confirmed against the live database, not inferred:** `SELECT name FROM sqlite_master` for all eight returned nothing. The dashboard is in practice the *first* process to touch them, because the operator starts a session before `cmd/assist` has ever run on a given database.
+
+**Why it hid.** Most read paths already tolerate `no such table` and return an empty result — `GetApplySession`, `GetPendingQuestions`, `PendingQuestionCounts`, `GetFillSummary`, `GetHumanEffortMetrics` all do — so the dashboard rendered normally and reported no error. Only the write paths fail: `StartApplySession` (`pkg/storage/sessions.go`) and `SubmitAssistedAnswers` (`pkg/storage/assisted.go`). The visible symptom would have been "Start Apply Session" returning a 409 on a working installation, with nothing else wrong.
+
+**Why the tests missed it.** `cmd/dashboard`'s `setupTestDB` calls the same `Ensure*` functions directly — a change made in the same PR that introduced the gap. The fixture therefore could not represent a database that had not had them run, which is the only shape that exposes the bug. This is the third instance of the pattern this project has recorded: `go test` cannot see wiring that only exists in `main()`.
+
+**Fix.** `main()` now runs all five schema functions as one named list, with the same rationale `EnsureAssistedSchema`'s own doc comment already gave for existing at all. **Test.** `cmd/dashboard/schema_upgrade_test.go` builds a database containing only the legacy tables, opens it through `storage.ReaderDSN` exactly as the dashboard does, asserts all nine tables appear, and then asserts `serveApplySessionStart` returns 200 against it — the behavioural half, since a table created with the wrong columns would satisfy a schema check alone.
+
+### 539. `decodeBoundedJSON` hardcodes port 8080, so every state-changing POST is refused on any other `-addr`
+
+**Found 2026-08-13**, same planning pass. Fixed the same day.
+
+`cmd/dashboard/operator_api.go` rejected any request whose `Origin` was not literally `http://localhost:8080` or `http://127.0.0.1:8080`. `cmd/dashboard` has an `-addr` flag, and the project's own documentation describes running a second instance on a spare port to check a build against a copy of the database — under which every state-changing POST routed through this helper returned 403: operator settings, all four qualified-job actions, the answer-vault revoke, and all four apply-session controls (pause, resume, skip, stop).
+
+**The check was also fully redundant.** Every handler that calls `decodeBoundedJSON` is already wrapped in `requireSameOrigin`, which prefers `Sec-Fetch-Site` and falls back to comparing `Origin`/`Referer` against the request's own `Host` (`hostMatchesRequest`). That check is correct on any port. Having two origin gates where one is right and one is wrong is strictly worse than having the right one alone.
+
+**Fix.** The hardcoded block is deleted; `requireSameOrigin` is the single gate, and `decodeBoundedJSON`'s doc comment now records that it deliberately performs no origin check of its own and why. **Test.** An apply-session control POST from `http://127.0.0.1:8099` with a matching Host reaches the handler, while a foreign origin, a right-host/wrong-port origin, a `null` origin and unparseable garbage are all still refused — so the removal cannot be mistaken for weakening the guard.
+
+**Noted, not changed:** `hostMatchesRequest` compares hosts and ignores the scheme, so `https://127.0.0.1:8099` against Host `127.0.0.1:8099` is accepted. That is documented design, and reaching it requires an attacker already serving TLS on the operator's loopback at the dashboard's exact port. Recorded in the test rather than tightened, because narrowing a documented security decision does not belong inside a bug fix for something else.
 
 ### 512. Assisted Apply presents stale, mismatched, and blank employer pages as actionable human handoffs
 
