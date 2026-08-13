@@ -105,9 +105,9 @@ type Job struct {
 // nowFunc is indirected so the computed start date is testable.
 var nowFunc = time.Now
 
-// earliestStartDate returns the configured value, or two weeks from today when
+// EarliestStartDate returns the configured value, or two weeks from today when
 // none is set (improvements.md #33).
-func (p PII) earliestStartDate() string {
+func (p PII) EarliestStartDate() string {
 	if v := strings.TrimSpace(p.Work.EarliestStart); v != "" {
 		return v
 	}
@@ -201,7 +201,7 @@ func (p PII) ApplicationFacts() string {
 	// improvements.md #33: the user's rule is "always two weeks from the date
 	// of applying", which is a moving target, not a value that can sit in a
 	// config file without going stale. Computed at render time when unset.
-	add("Earliest start date", p.earliestStartDate())
+	add("Earliest start date", p.EarliestStartDate())
 	add("Remote work preference", w.RemotePreference)
 	add("Willing to relocate", w.WillingToRelocate)
 	add("Willing to travel", w.WillingToTravel)

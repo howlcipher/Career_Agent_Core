@@ -4903,15 +4903,15 @@ func TestFillAssistedMappedPagePrefillsDedicatedATSesWithoutACachedMapping(t *te
 			probe := newAssistedFillProbe(testCase.present)
 			page := probe.page(testCase.applyURL, assistedBenignForm)
 
-			err := FillAssistedMappedPage(
-				page,
-				security.NewQuarantineLayer(),
-				"Acme",
-				testCase.applyURL,
-				resumePath,
-				coverPath,
-				assistedTestPII(),
-			)
+			_, err := FillAssistedMappedPage(AssistedFillPlan{
+				Page:        page,
+				Filter:      security.NewQuarantineLayer(),
+				CompanyName: "Acme",
+				ApplyURL:    testCase.applyURL,
+				ResumePath:  resumePath,
+				CoverPath:   coverPath,
+				PII:         assistedTestPII(),
+			})
 			if err != nil {
 				t.Fatalf("FillAssistedMappedPage returned %v, want nil (form filled, stopped before submit)", err)
 			}
@@ -4956,15 +4956,15 @@ func TestFillAssistedMappedPageNeverResolvesOrClicksSubmitControls(t *testing.T)
 	})
 	page := probe.page("https://job-boards.greenhouse.io/acme/jobs/123", assistedBenignForm)
 
-	if err := FillAssistedMappedPage(
-		page,
-		security.NewQuarantineLayer(),
-		"Acme",
-		"https://job-boards.greenhouse.io/acme/jobs/123",
-		resumePath,
-		"",
-		assistedTestPII(),
-	); err != nil {
+	if _, err := FillAssistedMappedPage(AssistedFillPlan{
+		Page:        page,
+		Filter:      security.NewQuarantineLayer(),
+		CompanyName: "Acme",
+		ApplyURL:    "https://job-boards.greenhouse.io/acme/jobs/123",
+		ResumePath:  resumePath,
+		CoverPath:   "",
+		PII:         assistedTestPII(),
+	}); err != nil {
 		t.Fatalf("FillAssistedMappedPage returned %v, want nil", err)
 	}
 
@@ -4992,15 +4992,15 @@ func TestFillAssistedMappedPageReportsADedicatedHandlerFailure(t *testing.T) {
 	probe.fillErr["input#first_name"] = errors.New("element is not attached to the DOM")
 	page := probe.page("https://job-boards.greenhouse.io/acme/jobs/123", assistedBenignForm)
 
-	err := FillAssistedMappedPage(
-		page,
-		security.NewQuarantineLayer(),
-		"Acme",
-		"https://job-boards.greenhouse.io/acme/jobs/123",
-		resumePath,
-		"",
-		assistedTestPII(),
-	)
+	_, err := FillAssistedMappedPage(AssistedFillPlan{
+		Page:        page,
+		Filter:      security.NewQuarantineLayer(),
+		CompanyName: "Acme",
+		ApplyURL:    "https://job-boards.greenhouse.io/acme/jobs/123",
+		ResumePath:  resumePath,
+		CoverPath:   "",
+		PII:         assistedTestPII(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "first_name") {
 		t.Fatalf("err = %v, want the underlying first_name fill failure", err)
 	}
@@ -5026,15 +5026,15 @@ func TestFillAssistedMappedPageQuarantinesDedicatedATSDOMBeforeFilling(t *testin
 			"</p><input id='first_name'></form></body></html>",
 	)
 
-	err := FillAssistedMappedPage(
-		page,
-		security.NewQuarantineLayer(),
-		"Malicious Corp",
-		"https://job-boards.greenhouse.io/acme/jobs/123",
-		resumePath,
-		"",
-		assistedTestPII(),
-	)
+	_, err := FillAssistedMappedPage(AssistedFillPlan{
+		Page:        page,
+		Filter:      security.NewQuarantineLayer(),
+		CompanyName: "Malicious Corp",
+		ApplyURL:    "https://job-boards.greenhouse.io/acme/jobs/123",
+		ResumePath:  resumePath,
+		CoverPath:   "",
+		PII:         assistedTestPII(),
+	})
 	if !errors.Is(err, security.ErrPromptInjectionDetected) {
 		t.Fatalf("err = %v, want ErrPromptInjectionDetected", err)
 	}
@@ -5132,15 +5132,15 @@ func TestDedicatedHandlersAttachTheResumeWhenTheControlIsNotNameResume(t *testin
 			probe := newAssistedFillProbe(testCase.present)
 			page := probe.page(testCase.applyURL, assistedBenignForm)
 
-			if err := FillAssistedMappedPage(
-				page,
-				security.NewQuarantineLayer(),
-				"Acme",
-				testCase.applyURL,
-				resumePath,
-				"",
-				assistedTestPII(),
-			); err != nil {
+			if _, err := FillAssistedMappedPage(AssistedFillPlan{
+				Page:        page,
+				Filter:      security.NewQuarantineLayer(),
+				CompanyName: "Acme",
+				ApplyURL:    testCase.applyURL,
+				ResumePath:  resumePath,
+				CoverPath:   "",
+				PII:         assistedTestPII(),
+			}); err != nil {
 				t.Fatalf("FillAssistedMappedPage returned %v, want nil", err)
 			}
 			uploaded := probe.uploads(testCase.upload)
@@ -5168,15 +5168,15 @@ func TestDedicatedHandlersStillFillAFormWithNoResumeControl(t *testing.T) {
 	})
 	page := probe.page("https://job-boards.greenhouse.io/acme/jobs/123", assistedBenignForm)
 
-	if err := FillAssistedMappedPage(
-		page,
-		security.NewQuarantineLayer(),
-		"Acme",
-		"https://job-boards.greenhouse.io/acme/jobs/123",
-		resumePath,
-		"",
-		assistedTestPII(),
-	); err != nil {
+	if _, err := FillAssistedMappedPage(AssistedFillPlan{
+		Page:        page,
+		Filter:      security.NewQuarantineLayer(),
+		CompanyName: "Acme",
+		ApplyURL:    "https://job-boards.greenhouse.io/acme/jobs/123",
+		ResumePath:  resumePath,
+		CoverPath:   "",
+		PII:         assistedTestPII(),
+	}); err != nil {
 		t.Fatalf("FillAssistedMappedPage returned %v, want nil for a form with no upload control", err)
 	}
 	if probe.fills["input#first_name"] != "Ada" {

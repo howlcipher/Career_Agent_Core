@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/security"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
@@ -36,6 +37,8 @@ var (
 	loadAssistedDocument       = storage.GetAssistedDocument
 	loadAssistedPII            = config.LoadPII
 	fillAssistedPage           = submitter.FillAssistedMappedPage
+	applyAssistedAnswers       = submitter.ApplyApprovedAnswers
+	takePendingAnswers         = storage.TakePendingAnswers
 	recordAssistedRefill       = storage.RecordAssistedRefill
 	recordAssistedManualReview = storage.RecordAssistedManualReview
 )
@@ -75,7 +78,21 @@ func main() {
 	if err != nil || !claimed {
 		log.Fatalf("assisted application is already active: %v", err)
 	}
-	defer storage.ReleaseAssistedLease(storage.GetDB(), info.JobID, owner, time.Now())
+	// Everything this process leaves behind is cleaned up on the way out, in
+	// one place, whichever of the many early returns below is taken.
+	//
+	// The apply-session pause is the load-bearing part. A browser that closed
+	// is not an application that was submitted, and it is not an application
+	// that was abandoned either — Career Agent genuinely does not know which.
+	// So the session stops and asks, rather than advancing to the next employer
+	// on the strength of a window disappearing.
+	defer func() {
+		storage.DiscardPendingAnswers(storage.GetDB(), info.JobID)
+		if err := storage.PauseApplySessionForClosedBrowser(storage.GetDB(), info.JobID); err != nil {
+			log.Printf("Apply session could not be paused after this browser closed: %v", err)
+		}
+		storage.ReleaseAssistedLease(storage.GetDB(), info.JobID, owner, time.Now())
+	}()
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		log.Printf("locate assisted browser cache: %v", err)
@@ -214,11 +231,20 @@ waitForSignal:
 			if state == "continue_requested" {
 				goto continueFill
 			}
+			if state == "answers_provided" {
+				goto applyAnswers
+			}
 		}
 	}
 
 continueFill:
 	if !continueAssistedApplication(page, info, owner) {
+		return
+	}
+	goto waitForSignal
+
+applyAnswers:
+	if !applyOperatorAnswers(page, info, owner) {
 		return
 	}
 	goto waitForSignal
@@ -603,6 +629,12 @@ func installAssistedContextGuard(browserContext playwright.BrowserContext, guard
 // preserving the visible browser as the user's safe fallback. Returning true
 // means the browser must stay open; false means the lease transition itself
 // failed and the session can no longer be represented truthfully.
+//
+// It now ends in one of three places rather than one. A refill that leaves
+// nothing unanswered goes straight to review, exactly as before. A refill that
+// leaves questions goes to needs_answers, so the operator is shown the short
+// list rather than being handed the whole form to re-read. A refill that fails
+// still preserves the open browser for manual completion.
 func continueAssistedApplication(page playwright.Page, info storage.AssistedLaunchInfo, owner string) bool {
 	resume, resumeErr := loadAssistedDocument(storage.GetDB(), info.JobID, "resume")
 	cover, coverErr := loadAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
@@ -615,7 +647,25 @@ func continueAssistedApplication(page playwright.Page, info storage.AssistedLaun
 		log.Print("Continuation inputs are unavailable. The verified application remains open for manual completion and review.")
 		return true
 	}
-	if err := fillAssistedPage(page, security.NewQuarantineLayer(), info.Company, info.URL, resume.Path, cover.Path, pii); err != nil {
+	vault, vaultErr := answers.OpenStore(storage.GetDB())
+	if vaultErr != nil {
+		// The vault being unavailable degrades the fill to what it always did
+		// before the vault existed. It is not a reason to refuse the
+		// application.
+		log.Printf("Approved Answer Vault unavailable; continuing without reusable answers: %v", vaultErr)
+	}
+	report, err := fillAssistedPage(submitter.AssistedFillPlan{
+		Page:        page,
+		Filter:      security.NewQuarantineLayer(),
+		Vault:       vault,
+		CompanyName: info.Company,
+		ApplyURL:    info.URL,
+		ResumePath:  resume.Path,
+		CoverPath:   cover.Path,
+		PII:         pii,
+		ATSName:     storage.SupportedAssistedATS(info.URL),
+	})
+	if err != nil {
 		if stateErr := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); stateErr != nil {
 			log.Printf("Assisted refill stopped and manual review could not be preserved: %v", stateErr)
 			return false
@@ -623,12 +673,100 @@ func continueAssistedApplication(page playwright.Page, info storage.AssistedLaun
 		log.Printf("Assisted refill stopped safely; the verified application remains open for manual completion: %v", err)
 		return true
 	}
+
+	summary := fillSummary(info.JobID, report)
+	if questions := questionsFromReport(info.JobID, report); len(questions) > 0 {
+		if err := storage.RecordAssistedQuestions(storage.GetDB(), info.JobID, owner, questions, summary, time.Now()); err != nil {
+			log.Printf("Assisted refill completed but its question list could not be recorded: %v", err)
+			return false
+		}
+		log.Printf("Filled %d field(s) and reused %d approved answer(s). %d question(s) need you; answer them in the dashboard and Career Agent will finish filling the form.",
+			report.FilledCount(), report.ReusedAnswers, len(questions))
+		return true
+	}
+	if err := storage.ReplaceApplicationQuestions(storage.GetDB(), info.JobID, nil, summary); err != nil {
+		log.Printf("Assisted refill completed but its summary could not be recorded: %v", err)
+	}
 	if err := recordAssistedRefill(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
 		log.Printf("Assisted refill completed but could not preserve the review state: %v", err)
 		return false
 	}
-	log.Print("Known fields were refilled in the visible browser. Review the form and submit only when the employer site is ready; Career Agent will not click Submit. The browser remains open until you confirm the employer received the application or close it.")
+	log.Printf("Filled %d field(s) and reused %d approved answer(s) with nothing left unanswered. Review the form and submit only when the employer site is ready; Career Agent will not click Submit.",
+		report.FilledCount(), report.ReusedAnswers)
 	return true
+}
+
+// applyOperatorAnswers types the answers the operator just gave into the open
+// application, then advances to review.
+//
+// It never clicks Submit, and it cannot: ApplyApprovedAnswers has no access to
+// a submit control. A failure here keeps the browser open for manual
+// completion, which is the same fallback every other assisted failure uses.
+func applyOperatorAnswers(page playwright.Page, info storage.AssistedLaunchInfo, owner string) bool {
+	values, err := takePendingAnswers(storage.GetDB(), info.JobID)
+	if err != nil || len(values) == 0 {
+		if stateErr := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); stateErr != nil {
+			log.Printf("Operator answers were unavailable and manual review could not be preserved: %v", stateErr)
+			return false
+		}
+		log.Printf("No operator answers were waiting for this application; it remains open for manual completion: %v", err)
+		return true
+	}
+	report, err := applyAssistedAnswers(page, security.NewQuarantineLayer(), values)
+	if err != nil {
+		if stateErr := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); stateErr != nil {
+			log.Printf("Answers could not be applied and manual review could not be preserved: %v", stateErr)
+			return false
+		}
+		log.Printf("Your answers could not be entered automatically; the application remains open so you can complete it yourself: %v", err)
+		return true
+	}
+	if len(report.Unresolved) > 0 {
+		log.Printf("%d of your answers could not be entered automatically; enter them yourself before submitting.", len(report.Unresolved))
+	}
+	summary := fillSummary(info.JobID, report)
+	if err := storage.RecordAssistedAnswersApplied(storage.GetDB(), info.JobID, owner, summary, time.Now()); err != nil {
+		log.Printf("Answers were entered but the review state could not be preserved: %v", err)
+		return false
+	}
+	log.Printf("Entered %d of your answers. Review the form and submit it yourself; Career Agent will not click Submit.", len(report.Filled))
+	return true
+}
+
+// fillSummary converts a fill report into the storable summary. Labels are
+// kept, values are not: the summary exists so the operator can see what was
+// done for them, not so this project can keep a copy of their application.
+func fillSummary(jobID string, report submitter.FillReport) storage.AssistedFillSummary {
+	labels := make([]string, 0, len(report.Filled))
+	for _, field := range report.Filled {
+		labels = append(labels, field.Label)
+	}
+	return storage.AssistedFillSummary{
+		JobID:         jobID,
+		FilledCount:   report.FilledCount(),
+		ReusedAnswers: report.ReusedAnswers,
+		Documents:     report.Documents,
+		FilledLabels:  labels,
+	}
+}
+
+func questionsFromReport(jobID string, report submitter.FillReport) []storage.ApplicationQuestion {
+	var out []storage.ApplicationQuestion
+	for _, question := range report.Unresolved {
+		out = append(out, storage.ApplicationQuestion{
+			JobID:       jobID,
+			Key:         question.Key,
+			Prompt:      question.Label,
+			ControlType: question.ControlType,
+			Options:     question.Options,
+			Required:    question.Required,
+			Sensitivity: question.Sensitivity,
+			Suggested:   question.Suggested,
+			Source:      question.Source,
+			LabelUnsafe: question.LabelUnsafe,
+		})
+	}
+	return out
 }
 
 // assistedPageTitleMatchesRole makes the browser handoff fail closed when an
