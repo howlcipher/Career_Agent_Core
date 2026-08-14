@@ -94,13 +94,33 @@ const controlInventoryJS = `() => {
         if (bound) return clean(bound.textContent);
       } catch (e) { /* an id CSS.escape cannot express is not a lookup key */ }
     }
+    // A wrapping <label> is read without the control's own subtree. textContent
+    // includes descendants, so a <label> around a <select> used to return the
+    // question followed by every option: observed live on a real Lever form as
+    // "GenderSelect ...MaleFemaleDecline to self-identify". An option is never
+    // part of the question, and Options already carries the choices.
     const wrapping = el.closest('label');
-    if (wrapping) return clean(wrapping.textContent);
+    if (wrapping) {
+      const own = textOutsideControls(wrapping, null, false);
+      if (own) return own;
+    }
     return '';
   };
 
-  // ownTextOf reads the text a container holds *itself*, ignoring every child
-  // subtree that contains a form control.
+  // controlBearing reports whether a subtree holds a form control.
+  const controlBearing = (child) => child.matches(FILLABLE) || !!child.querySelector(FILLABLE);
+
+  // childContaining finds which of node's children holds el, so text can be
+  // read relative to the control's own position.
+  const childContaining = (node, el) => {
+    for (const child of node.children) {
+      if (child.contains(el)) return child;
+    }
+    return null;
+  };
+
+  // textOutsideControls reads the text a container holds *itself*, ignoring
+  // every child subtree that contains a form control.
   //
   // That single exclusion is what makes the walk work without knowing anything
   // about a particular ATS, and it is why this replaced closest(). A control's
@@ -110,17 +130,23 @@ const controlInventoryJS = `() => {
   // So the first non-empty text found on the way up belongs to this control and
   // to nothing else.
   //
+  // before, when set, stops the read at the child holding the control: a
+  // question precedes its field, while a help note follows it. Observed live on
+  // Lever's pronouns group, where a <p class="description"> sits inside the
+  // group container and would otherwise outrank the group's own label outside.
+  //
   // skipLabels is set when resolving a *group's* question. An option's text
   // lives in a <label>, and a <label> holding no control (the "for" form) would
   // otherwise be read as part of the question — "Pick one Yes No" instead of
   // "Pick one". A form that puts a group's question in a <label> loses nothing
   // by this: it falls back to the option text, which is what it did before.
-  const ownTextOf = (node, skipLabels) => {
+  const textOutsideControls = (node, before, skipLabels) => {
     let text = '';
     for (const child of node.childNodes) {
+      if (before && child === before) break;
       if (child.nodeType === 3) { text += ' ' + child.nodeValue; continue; }
       if (child.nodeType !== 1) continue;
-      if (child.matches(FILLABLE) || child.querySelector(FILLABLE)) continue;
+      if (controlBearing(child)) continue;
       if (skipLabels && (child.matches('label') || child.querySelector('label'))) continue;
       text += ' ' + child.textContent;
     }
@@ -129,14 +155,23 @@ const controlInventoryJS = `() => {
 
   // questionTextFor walks up from a starting node looking for the question that
   // owns the control, nearest first.
-  const questionTextFor = (start, skipLabels) => {
-    let node = start;
-    for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
-      const tag = node.tagName ? node.tagName.toLowerCase() : '';
-      if (tag === 'form' || tag === 'body' || tag === 'html' || tag === '') break;
-      const text = ownTextOf(node, skipLabels);
-      if (text) return text;
-      node = node.parentElement;
+  //
+  // Two passes. The first reads only text that precedes the control, because
+  // that is where a question sits. Trailing text counts only when nothing
+  // precedes the control anywhere on the way up, which keeps every shape the
+  // previous fallback resolved rather than trading one set of wrong labels for
+  // another.
+  const questionTextFor = (start, el, skipLabels) => {
+    for (const precedingOnly of [true, false]) {
+      let node = start;
+      for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
+        const tag = node.tagName ? node.tagName.toLowerCase() : '';
+        if (tag === 'form' || tag === 'body' || tag === 'html' || tag === '') break;
+        const before = precedingOnly ? childContaining(node, el) : null;
+        const text = textOutsideControls(node, before, skipLabels);
+        if (text) return text;
+        node = node.parentElement;
+      }
     }
     return '';
   };
@@ -144,7 +179,7 @@ const controlInventoryJS = `() => {
   const labelFor = (el) => {
     const name = accessibleName(el);
     if (name) return name;
-    const question = questionTextFor(el.parentElement, false);
+    const question = questionTextFor(el.parentElement, el, false);
     if (question) return question;
     return clean(el.getAttribute('placeholder') || el.getAttribute('name') || '');
   };
@@ -154,9 +189,12 @@ const controlInventoryJS = `() => {
   //
   // The walk cannot start at the option's own wrapper: that wrapper holds the
   // option's text, which is exactly the wrong answer ("Yes", "He/him"). So it
-  // climbs first to the nearest ancestor holding the whole group, and only then
-  // starts reading. A fieldset's legend is preferred over both, because that is
-  // the platform's own way of saying "this is the group's question".
+  // starts above the option's own <label> and then climbs to the nearest
+  // ancestor holding the whole group before reading anything. Starting above
+  // the label matters even for a one-option group -- a Lever attestation card
+  // came out as its single option, "I Acknowledge", instead of the paragraph
+  // being acknowledged. A fieldset's legend is preferred over all of it,
+  // because that is the platform's own way of naming a group's question.
   const groupQuestionFor = (el, name) => {
     const fieldset = el.closest('fieldset');
     if (fieldset) {
@@ -166,7 +204,7 @@ const controlInventoryJS = `() => {
         if (text) return text;
       }
     }
-    let node = el.parentElement;
+    let node = (el.closest('label') || el).parentElement;
     if (name) {
       try {
         const selector = '[name="' + CSS.escape(name) + '"]';
@@ -176,7 +214,7 @@ const controlInventoryJS = `() => {
         }
       } catch (e) { /* a name CSS.escape cannot express: read from where we are */ }
     }
-    return questionTextFor(node, true);
+    return questionTextFor(node, el, true);
   };
 
   const visible = (el) => {

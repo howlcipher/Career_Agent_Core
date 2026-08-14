@@ -348,3 +348,78 @@ func TestControlInventory_GenericFallbackShapesStillResolve(t *testing.T) {
 	// A bare text node beside the control, with no element wrapping it at all.
 	assertLabel(t, byKey, "source", "How did you hear about us?")
 }
+
+// leverLabelWrappedControls are the three shapes the first pass of this fix did
+// not reach. All three were found by running the read-only inspection against a
+// real Lever posting after the unit fixtures already passed — which is the
+// point of doing that run.
+//
+//   - a <label> wrapping a <select>: textContent includes the options, so the
+//     EEO questions came out as "GenderSelect ...MaleFemaleDecline to
+//     self-identify".
+//   - a one-option attestation card: the group never climbed above the option's
+//     own <label>, so the question was its single option, "I Acknowledge",
+//     rather than the paragraph being acknowledged.
+//   - a help note inside the group container: it outranked the group's own
+//     label, so the pronouns group read as its description sentence.
+const leverLabelWrappedControls = `
+<div class="application-question"><label><div class="application-label">Gender</div><div class="application-field"><div class="application-dropdown">
+  <select name="eeo[gender]"><option value="">Select ...</option><option value="Male">Male</option><option value="Female">Female</option><option value="Decline to self-identify">Decline to self-identify</option></select>
+</div></div></label></div>
+
+<li class="application-question custom-question"><div>
+  <div class="application-label full-width multiple-select"><div class="text">AHEAD will consider the contents of an uploaded resume only insofar as it pertains to employment history<span class="required">&#10033;</span></div></div>
+  <div class="application-field full-width required-field"><ul data-qa="multiple-select">
+    <li><label><input type="checkbox" name="cards[6c653c7d][field5]" value="I Acknowledge" required="required" /><span class="application-answer-alternative">I Acknowledge</span></label></li>
+  </ul></div>
+</div></li>
+
+<li class="application-question"><div class="application-label multiple-select">Pronouns</div><div class="application-field"><ul id="candidatePronounsCheckboxes">
+  <div class="column-wrapper"><div class="table-row">
+    <li class="column"><label><input type="checkbox" name="pronouns" value="He/him" /><span class="application-answer-alternative">He/him</span></label></li>
+    <li class="column"><label><input type="checkbox" name="pronouns" value="She/her" /><span class="application-answer-alternative">She/her</span></label></li>
+  </div></div>
+  <p class="description">Let the employer know what pronouns you use so that they can address you correctly.</p>
+</ul></div></li>`
+
+func TestControlInventory_LabelWrappedAndSingleOptionControlsReportTheQuestion(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, leverLabelWrappedControls)
+
+	// A <label> around a <select>. The choices belong in Options and nowhere
+	// else; repeating them in the question is what made this unreadable.
+	gender := assertLabel(t, byKey, "eeo[gender]", "Gender")
+	if strings.Join(gender.Options, "|") != "Male|Female|Decline to self-identify" {
+		t.Errorf("the options must still be reported, got %v", gender.Options)
+	}
+
+	// A one-option group: the question is the attestation, not the option.
+	ack := assertLabel(t, byKey, "group:cards[6c653c7d][field5]",
+		"AHEAD will consider the contents of an uploaded resume only insofar as it pertains to employment history✱")
+	if strings.Join(ack.Options, "|") != "I Acknowledge" {
+		t.Errorf("the single option must survive as an option, got %v", ack.Options)
+	}
+	if !ack.Required {
+		t.Error("the attestation is required")
+	}
+
+	// A help note inside the group's own container must not outrank the group's
+	// label outside it.
+	pronouns := assertLabel(t, byKey, "group:pronouns", "Pronouns")
+	if strings.Contains(pronouns.Label, "Let the employer know") {
+		t.Error("the description is a help note, not the question")
+	}
+	if strings.Join(pronouns.Options, "|") != "He/him|She/her" {
+		t.Errorf("the option text must be unchanged, got %v", pronouns.Options)
+	}
+}
+
+// TestControlInventory_TrailingTextStillResolvesWhenNothingPrecedes pins the
+// second pass. Preferring text that precedes the control is what fixes the
+// pronouns description, but a form whose label genuinely follows its input must
+// not lose its label because of it.
+func TestControlInventory_TrailingTextStillResolvesWhenNothingPrecedes(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `<form><div class="field"><input type="text" name="trailing"> Referral code</div></form>`)
+	assertLabel(t, byKey, "trailing", "Referral code")
+}
