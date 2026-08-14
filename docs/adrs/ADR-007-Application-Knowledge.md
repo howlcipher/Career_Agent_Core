@@ -165,6 +165,12 @@ configured" and then offer nothing but "go and edit a YAML file". Constraints:
   within a filesystem.
 * `RepairPrivatePaths` re-asserted afterwards.
 * No value logged or echoed, on any path. A test proves it.
+* **Backups are bounded and gitignored.** Each one holds the same personal data
+  as `pii.yaml` itself, so five are kept and older ones deleted; and `.gitignore`
+  matches `pii.yaml.*` as well as `pii.yaml`, because the bare name does not
+  cover a timestamped backup and an untracked file full of somebody's address
+  sitting in the repository root is one `git add -A` from being published. Found
+  while reviewing this branch's own diff, not by a test.
 
 Two limits are documented rather than papered over: **YAML comments do not survive a save** (hence
 the backup), and `requireSameOrigin` is not authentication — it admits requests carrying none of

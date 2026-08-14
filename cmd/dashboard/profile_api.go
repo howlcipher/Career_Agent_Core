@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -332,6 +333,14 @@ func writePrivateFileAtomically(path string, content []byte) error {
 		if err := os.WriteFile(backup, existing, security.PrivateFileMode); err != nil {
 			return fmt.Errorf("previous details could not be backed up")
 		}
+		// Every backup holds the same real personal data as the file itself, so
+		// they are bounded rather than left to accumulate: an unbounded pile of
+		// copies of somebody's address and phone number is a worse outcome than
+		// losing the tenth-oldest one. Failing to prune is not worth failing the
+		// save over -- the new file is already written correctly.
+		if err := pruneProfileBackups(path); err != nil {
+			log.Printf("serveKnowledgeProfile: could not prune old backups: %v", err)
+		}
 	}
 	temporary, err := os.CreateTemp(directory, filepath.Base(path)+".*.tmp")
 	if err != nil {
@@ -359,6 +368,33 @@ func writePrivateFileAtomically(path string, content []byte) error {
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("details could not be saved")
+	}
+	return nil
+}
+
+// maxProfileBackups is how many previous versions are kept beside pii.yaml.
+// Enough to recover from a mistaken save or two, few enough that copies of the
+// operator's personal data do not pile up unbounded.
+const maxProfileBackups = 5
+
+// pruneProfileBackups deletes all but the newest maxProfileBackups backups.
+//
+// Names are timestamped in a sortable format, so lexical order is chronological
+// order and no file has to be stat-ed to rank it.
+func pruneProfileBackups(path string) error {
+	pattern := path + ".*.bak"
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	if len(matches) <= maxProfileBackups {
+		return nil
+	}
+	sort.Strings(matches)
+	for _, stale := range matches[:len(matches)-maxProfileBackups] {
+		if err := os.Remove(stale); err != nil {
+			return err
+		}
 	}
 	return nil
 }

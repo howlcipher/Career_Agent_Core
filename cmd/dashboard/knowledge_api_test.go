@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -361,6 +363,53 @@ func TestServeKnowledgeProfile_SavesAtomicallyAndKeepsTheFilePrivate(t *testing.
 	}
 	if backups != 1 {
 		t.Errorf("expected exactly one backup, found %d", backups)
+	}
+}
+
+func TestServeKnowledgeProfile_KeepsBackupsBoundedAndPrivate(t *testing.T) {
+	setupTestDB(t)
+	path := usePrivatePII(t, "first_name: Existing\n")
+
+	// Every backup holds the same real personal data as pii.yaml itself. An
+	// unbounded pile of copies of somebody's address is a worse outcome than
+	// losing the tenth-oldest one, so they are capped.
+	for i := 0; i < maxProfileBackups+4; i++ {
+		recorder := postJSON(t, serveKnowledgeProfile, "/api/knowledge/profile", map[string]any{
+			"fields": map[string]string{"city": fmt.Sprintf("City%d", i)},
+		})
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("save %d: status = %d, body %q", i, recorder.Code, recorder.Body.String())
+		}
+		// The timestamp has one-second resolution, so distinct names need a gap.
+		// Rather than sleep, write the backups directly for the surplus.
+		if err := os.WriteFile(fmt.Sprintf("%s.2026081%d-120000.bak", path, i), []byte("old"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := pruneProfileBackups(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	backups, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) > maxProfileBackups {
+		t.Fatalf("kept %d backups, want at most %d", len(backups), maxProfileBackups)
+	}
+	for _, backup := range backups {
+		info, err := os.Stat(backup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("%s permissions = %v, want 0600", filepath.Base(backup), info.Mode().Perm())
+		}
+	}
+	// The newest are the ones kept, so a recent mistake is still recoverable.
+	sort.Strings(backups)
+	if len(backups) > 0 && !strings.Contains(backups[len(backups)-1], "2026081") {
+		t.Errorf("newest backup looks wrong: %s", backups[len(backups)-1])
 	}
 }
 

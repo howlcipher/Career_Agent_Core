@@ -1,5 +1,10 @@
 applications/
 pii.yaml
+# The profile editor keeps timestamped backups beside it
+# (cmd/dashboard/profile_api.go). The bare name above does not match them, and
+# each holds the same real personal data as the file itself -- one `git add -A`
+# away from being committed.
+pii.yaml.*
 applications/
 applications.db
 applications.db-shm
