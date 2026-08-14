@@ -25,6 +25,7 @@ const REASONS: Record<string, string> = {
   navigation_failed: 'The page could not be loaded.',
   no_form_found: 'The page loaded and holds no application form.',
   browser_rejected: 'This ATS rejects applications from Career Agent’s browser; you will apply in your own.',
+  already_applied: 'You have already applied to this one, so there is nothing to prepare.',
   unclassified: 'The form could not be read.',
 };
 

@@ -68,6 +68,11 @@ const (
 	// Agent's browser, so inspecting it would tell the operator about a form
 	// they will have to complete in their own browser anyway.
 	PreflightBrowserRejected = "browser_rejected"
+	// PreflightAlreadyApplied: this application has already been completed, so
+	// there is nothing to prepare. Distinct from every refusal above -- it is
+	// not a failure, and reporting it as one told the operator that an
+	// application they had already submitted was rejected by the ATS.
+	PreflightAlreadyApplied = "already_applied"
 	// PreflightUnclassified is the fallback, never the underlying error's text.
 	PreflightUnclassified = "unclassified"
 )

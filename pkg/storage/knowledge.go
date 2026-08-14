@@ -315,9 +315,12 @@ func PreflightCandidates(conn *sql.DB, jobIDs []string) ([]PreflightCandidate, e
 			return nil, fmt.Errorf("scan preflight candidate: %w", err)
 		}
 		candidate.ATS = SupportedAssistedATS(candidate.URL)
-		candidate.Skip = PreflightRefusalReason(candidate.URL)
+		if candidate.Skip = PreflightRefusalReason(candidate.URL); candidate.Skip != "" {
+			candidate.SkipKind = PreflightSkipUnreadable
+		}
 		if assistedState == "completed" {
 			candidate.Skip = "already completed"
+			candidate.SkipKind = PreflightSkipAlreadyApplied
 		}
 		out = append(out, candidate)
 	}
@@ -334,4 +337,17 @@ type PreflightCandidate struct {
 	URL     string
 	ATS     string
 	Skip    string
+	// SkipKind names *which* refusal this is, so a caller can record a truthful
+	// reason code rather than assuming. The two reasons had been collapsed into
+	// one recorded code, which told the operator that an application they had
+	// already submitted was refused by the ATS.
+	SkipKind string
 }
+
+// Why a candidate was not inspected. These are storage's own vocabulary;
+// cmd/preflight maps them onto the closed reason codes in pkg/submitter rather
+// than storage importing that package.
+const (
+	PreflightSkipUnreadable     = "unreadable"
+	PreflightSkipAlreadyApplied = "already_applied"
+)

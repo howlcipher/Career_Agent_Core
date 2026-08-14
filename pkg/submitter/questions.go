@@ -65,15 +65,179 @@ const controlInventoryJS = `() => {
   const MAX = %d, MAX_OPTIONS = %d, MAX_LABEL = %d;
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL);
 
-  // FILLABLE is the same set of elements this inventory enumerates, restated
-  // for questionTextFor's use. It deliberately never mentions <button> or any
-  // submit-shaped input, for the reason the enumeration itself does not.
+  // FILLABLE matches every form control. countedControl narrows it to the ones
+  // this inventory actually enumerates, and the two are not the same set: the
+  // enumeration below skips submit-shaped and hidden inputs, and anything
+  // aria-hidden. The walk has to agree with it, or it throws away a question
+  // because some invisible state input shares a container with the real
+  // control -- Lever emits exactly that, a hidden cards[<uuid>][baseTemplate]
+  // beside every card.
   const FILLABLE = 'input, textarea, select, [role="combobox"]';
+  const SKIPPED_INPUT_TYPES = ['submit', 'button', 'reset', 'image', 'hidden'];
 
-  // MAX_ANCESTORS bounds the upward walk. Past this depth a container is the
+  const countedControl = (el) => {
+    if (!el.matches(FILLABLE)) return false;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && SKIPPED_INPUT_TYPES.includes(type)) return false;
+    if (el.closest('[aria-hidden="true"]')) return false;
+    return true;
+  };
+
+  // controlBearing reports whether a subtree holds a control the operator will
+  // actually be shown. Only the cheap structural checks are mirrored here, not
+  // visible()'s computed-style read: this runs for every child of every
+  // ancestor of every control, and a getComputedStyle per node would make the
+  // inventory quadratic on a large form.
+  const controlBearing = (node) => {
+    if (node.nodeType !== 1) return false;
+    if (countedControl(node)) return true;
+    for (const candidate of node.querySelectorAll(FILLABLE)) {
+      if (countedControl(candidate)) return true;
+    }
+    return false;
+  };
+
+  // MAX_ANCESTORS bounds every upward walk. Past this depth a container is the
   // page's layout rather than a question, and reading its text would attach
   // section prose to a field.
   const MAX_ANCESTORS = 8;
+
+  const atWalkBoundary = (node) => {
+    const tag = node && node.tagName ? node.tagName.toLowerCase() : '';
+    return tag === '' || tag === 'form' || tag === 'body' || tag === 'html';
+  };
+
+  // textOutsideControlBranches reads only the parts of a container that hold no
+  // control at all.
+  const textOutsideControlBranches = (root) => {
+    const parts = [];
+    for (const child of root.childNodes) {
+      if (child.nodeType === 3) { parts.push(child.nodeValue); continue; }
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) continue;
+      parts.push(child.textContent);
+    }
+    return clean(parts.join(' '));
+  };
+
+  // labelTextOf reads an element's text while ignoring only the text that lives
+  // *inside* a control -- a <select>'s own <option>s, above all. It is not the
+  // same as dropping every branch that contains a control: the label of
+  // "<label><span><input> I agree to the terms</span></label>" lives in the
+  // same span as its checkbox, and dropping the span would lose it.
+  const labelTextOf = (root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let text = '';
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      let insideControl = false;
+      for (let parent = node.parentElement; parent && parent !== root.parentElement; parent = parent.parentElement) {
+        if (parent.matches(FILLABLE)) { insideControl = true; break; }
+      }
+      if (!insideControl) text += node.nodeValue;
+    }
+    return clean(text);
+  };
+
+  // childContaining finds which of node's children holds el, so text can be
+  // read relative to the control's own position.
+  const childContaining = (node, el) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1 && child.contains(el)) return child;
+    }
+    return null;
+  };
+
+  // precedingText reads the run of text immediately before the control's own
+  // branch, stopping at the previous control.
+  //
+  // Stopping there is the whole rule, and it is what makes this work without
+  // knowing anything about a particular ATS. A control's own field wrapper
+  // contributes nothing because it holds the control; the question above it
+  // does contribute; and the question above *that* is cut off by its own
+  // control sitting between them. Without the stop, a flat form glues one
+  // field's label onto every question printed before it.
+  //
+  // forGroup is set when resolving a *group's* question, and excludes two kinds
+  // of text that are not it.
+  //
+  // A <label> holds an option's text, which would otherwise read as part of the
+  // question -- "Pick one Yes No" instead of "Pick one".
+  //
+  // A heading names a section, not a control. The distinction matters because a
+  // group has somewhere better to fall back to than a heading: its own option
+  // text. For "<div class=section><h3>Legal</h3><label><input type=checkbox> I
+  // agree to the terms</label>…", the option *is* the question and "Legal" is
+  // not. A non-group control has no such fallback -- only a placeholder or a
+  // generated name -- so there a heading is still better than nothing.
+  const HEADINGS = 'h1, h2, h3, h4, h5, h6';
+  const precedingText = (node, before, forGroup) => {
+    const children = Array.prototype.slice.call(node.childNodes);
+    let index = before ? children.indexOf(before) : children.length;
+    if (index < 0) index = children.length;
+    const parts = [];
+    for (let i = index - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child.nodeType === 3) { parts.unshift(child.nodeValue); continue; }
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) break;
+      if (forGroup && (child.matches('label') || child.querySelector('label'))) continue;
+      if (forGroup && (child.matches(HEADINGS) || child.querySelector(HEADINGS))) continue;
+      parts.unshift(child.textContent);
+    }
+    return clean(parts.join(' '));
+  };
+
+  // trailingLabel reads a <label> or <legend> that follows the control inside
+  // the same container.
+  //
+  // Only a labelling element counts, never loose prose. That asymmetry is the
+  // point: a question may sit on either side of its field, but text that
+  // follows a field and is not marked up as its label is a help note. Lever's
+  // pronouns group has both -- a label before the options and a
+  // <p class="description"> after them -- and reading the note in preference to
+  // the label is the exact mistake this avoids.
+  const trailingLabel = (node, before) => {
+    if (!before) return '';
+    const children = Array.prototype.slice.call(node.childNodes);
+    const index = children.indexOf(before);
+    if (index < 0) return '';
+    for (let i = index + 1; i < children.length; i++) {
+      const child = children[i];
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) break;
+      const label = child.matches('label, legend') ? child : child.querySelector('label, legend');
+      if (label) {
+        const text = labelTextOf(label);
+        if (text) return text;
+      }
+    }
+    return '';
+  };
+
+  // questionTextFor walks outward from the control looking for the question
+  // that owns it, nearest container first and never past the form.
+  //
+  // Both directions are considered at each level before climbing, rather than
+  // sweeping the whole tree for preceding text first. A label sitting right
+  // beside the field must beat a section heading three levels up, whichever
+  // side of the field it is on.
+  const questionTextFor = (start, el, forGroup) => {
+    let node = start;
+    for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
+      if (atWalkBoundary(node)) break;
+      const before = childContaining(node, el);
+      const preceding = precedingText(node, before, forGroup);
+      if (preceding) return preceding;
+      if (!forGroup) {
+        const trailing = trailingLabel(node, before);
+        if (trailing) return trailing;
+      }
+      node = node.parentElement;
+    }
+    return '';
+  };
 
   // accessibleName is the part of the chain the platform actually defines.
   // Nothing below it is a standard; everything below it is inference.
@@ -91,87 +255,31 @@ const controlInventoryJS = `() => {
     if (el.id) {
       try {
         const bound = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-        if (bound) return clean(bound.textContent);
+        if (bound) return labelTextOf(bound);
       } catch (e) { /* an id CSS.escape cannot express is not a lookup key */ }
     }
-    // A wrapping <label> is read without the control's own subtree. textContent
-    // includes descendants, so a <label> around a <select> used to return the
-    // question followed by every option: observed live on a real Lever form as
-    // "GenderSelect ...MaleFemaleDecline to self-identify". An option is never
-    // part of the question, and Options already carries the choices.
+    // A wrapping <label> is read in two steps, and it needs both.
+    //
+    // First, the branches that hold no control at all. textContent would
+    // otherwise return the question followed by everything the widget renders
+    // inside the same label: observed live on real Lever forms as
+    // "GenderSelect ...MaleFemaleDecline to self-identify", as a Race label
+    // trailing every option's legal definition, and as a location field
+    // carrying "No location found. Try entering a different location". None of
+    // that is the question, and Options already carries the choices.
+    //
+    // Then, if that leaves nothing, the label's text minus only what is inside
+    // the control itself. The commonest checkbox markup there is --
+    // "<label><span><input> I agree to the terms</span></label>" -- keeps its
+    // text in the same branch as its control, and the first step alone would
+    // throw the question away and fall through to whatever prose an ancestor
+    // happened to carry.
     const wrapping = el.closest('label');
     if (wrapping) {
-      const own = textOutsideControls(wrapping, null, false);
+      const outside = textOutsideControlBranches(wrapping);
+      if (outside) return outside;
+      const own = labelTextOf(wrapping);
       if (own) return own;
-    }
-    return '';
-  };
-
-  // controlBearing reports whether a subtree holds a form control.
-  const controlBearing = (child) => child.matches(FILLABLE) || !!child.querySelector(FILLABLE);
-
-  // childContaining finds which of node's children holds el, so text can be
-  // read relative to the control's own position.
-  const childContaining = (node, el) => {
-    for (const child of node.children) {
-      if (child.contains(el)) return child;
-    }
-    return null;
-  };
-
-  // textOutsideControls reads the text a container holds *itself*, ignoring
-  // every child subtree that contains a form control.
-  //
-  // That single exclusion is what makes the walk work without knowing anything
-  // about a particular ATS, and it is why this replaced closest(). A control's
-  // own field wrapper contributes nothing, because it contains the control. A
-  // container holding several questions contributes nothing, because each of
-  // those questions' text sits inside a subtree that contains its own control.
-  // So the first non-empty text found on the way up belongs to this control and
-  // to nothing else.
-  //
-  // before, when set, stops the read at the child holding the control: a
-  // question precedes its field, while a help note follows it. Observed live on
-  // Lever's pronouns group, where a <p class="description"> sits inside the
-  // group container and would otherwise outrank the group's own label outside.
-  //
-  // skipLabels is set when resolving a *group's* question. An option's text
-  // lives in a <label>, and a <label> holding no control (the "for" form) would
-  // otherwise be read as part of the question — "Pick one Yes No" instead of
-  // "Pick one". A form that puts a group's question in a <label> loses nothing
-  // by this: it falls back to the option text, which is what it did before.
-  const textOutsideControls = (node, before, skipLabels) => {
-    let text = '';
-    for (const child of node.childNodes) {
-      if (before && child === before) break;
-      if (child.nodeType === 3) { text += ' ' + child.nodeValue; continue; }
-      if (child.nodeType !== 1) continue;
-      if (controlBearing(child)) continue;
-      if (skipLabels && (child.matches('label') || child.querySelector('label'))) continue;
-      text += ' ' + child.textContent;
-    }
-    return clean(text);
-  };
-
-  // questionTextFor walks up from a starting node looking for the question that
-  // owns the control, nearest first.
-  //
-  // Two passes. The first reads only text that precedes the control, because
-  // that is where a question sits. Trailing text counts only when nothing
-  // precedes the control anywhere on the way up, which keeps every shape the
-  // previous fallback resolved rather than trading one set of wrong labels for
-  // another.
-  const questionTextFor = (start, el, skipLabels) => {
-    for (const precedingOnly of [true, false]) {
-      let node = start;
-      for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
-        const tag = node.tagName ? node.tagName.toLowerCase() : '';
-        if (tag === 'form' || tag === 'body' || tag === 'html' || tag === '') break;
-        const before = precedingOnly ? childContaining(node, el) : null;
-        const text = textOutsideControls(node, before, skipLabels);
-        if (text) return text;
-        node = node.parentElement;
-      }
     }
     return '';
   };
@@ -204,13 +312,25 @@ const controlInventoryJS = `() => {
         if (text) return text;
       }
     }
+    // Escaping the option's own <label> is what actually matters and is done
+    // unconditionally. Climbing to the group's common ancestor on top of that
+    // is an optimisation, and it is bounded: the member count is document-wide,
+    // so a page carrying a second copy of the form -- a mobile duplicate, a
+    // hidden mirror input -- would otherwise send this climbing to <body>,
+    // where questionTextFor stops immediately and the group silently falls back
+    // to its first option. That is the bug this function exists to fix, so it
+    // must not be reachable by walking too far. Failing to reach the common
+    // ancestor simply leaves the walk starting lower, which still climbs.
     let node = (el.closest('label') || el).parentElement;
     if (name) {
       try {
         const selector = '[name="' + CSS.escape(name) + '"]';
         const total = document.querySelectorAll(selector).length;
-        while (node && node.querySelectorAll(selector).length < total) {
-          node = node.parentElement;
+        let candidate = node;
+        for (let hops = 0; candidate && hops < MAX_ANCESTORS; hops++) {
+          if (atWalkBoundary(candidate)) break;
+          if (candidate.querySelectorAll(selector).length >= total) { node = candidate; break; }
+          candidate = candidate.parentElement;
         }
       } catch (e) { /* a name CSS.escape cannot express: read from where we are */ }
     }

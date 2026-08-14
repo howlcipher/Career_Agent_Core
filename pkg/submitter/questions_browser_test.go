@@ -414,12 +414,122 @@ func TestControlInventory_LabelWrappedAndSingleOptionControlsReportTheQuestion(t
 	}
 }
 
-// TestControlInventory_TrailingTextStillResolvesWhenNothingPrecedes pins the
-// second pass. Preferring text that precedes the control is what fixes the
-// pronouns description, but a form whose label genuinely follows its input must
-// not lose its label because of it.
-func TestControlInventory_TrailingTextStillResolvesWhenNothingPrecedes(t *testing.T) {
+// TestControlInventory_ATrailingLabelStillResolves pins the asymmetry between
+// the two directions. Text before a control is read whatever it is; text after
+// one is read only when it is marked up as a <label> or <legend>.
+//
+// That is deliberate, and it is what keeps Lever's pronouns description from
+// outranking the group's own label. Loose prose after a field is a help note.
+// The old fallback read trailing text only through querySelector('legend,
+// label') too, so nothing that used to resolve stops resolving.
+func TestControlInventory_ATrailingLabelStillResolves(t *testing.T) {
 	requireChromium(t)
-	byKey := inventoryFixture(t, `<form><div class="field"><input type="text" name="trailing"> Referral code</div></form>`)
+	byKey := inventoryFixture(t, `<form>
+<div class="field"><input type="text" name="trailing"><label>Referral code</label></div>
+<div class="field"><input type="text" name="loose"> just a note about this field</div>
+</form>`)
 	assertLabel(t, byKey, "trailing", "Referral code")
+	// Loose trailing prose is not a label, so this control keeps falling
+	// through to its name rather than claiming a note as its question.
+	assertLabel(t, byKey, "loose", "loose")
+}
+
+// The shapes below are the code review's findings on the first version of this
+// fix. Each one is a real form layout that the walk got wrong, and each would
+// have put a wrong label on a real employer's question — the exact failure
+// bugs.md #545 is about, reintroduced through a different door.
+
+// TestControlInventory_LabelSharedWithItsControlSurvives covers the most common
+// checkbox markup there is. Reading a wrapping <label> by dropping every branch
+// that contains a control loses the text entirely when the label and the input
+// share one wrapper, and the control then falls through to whatever prose an
+// ancestor happens to carry.
+func TestControlInventory_LabelSharedWithItsControlSurvives(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="section"><h3>Legal</h3>
+  <label><span><input type="checkbox" name="agree"> I agree to the terms</span></label>
+  <label>Desired salary <input type="text" name="salary"></label>
+</div>`)
+	agree := assertLabel(t, byKey, "group:agree", "I agree to the terms")
+	if agree.Label == "Legal" {
+		t.Error("the section heading is not this checkbox's question")
+	}
+	assertLabel(t, byKey, "salary", "Desired salary")
+}
+
+// TestControlInventory_AnAdjacentLabelBeatsASectionHeading pins the ordering.
+// Sweeping the whole tree for preceding text before ever looking at trailing
+// text let a heading three levels up win over the field's own label.
+func TestControlInventory_AnAdjacentLabelBeatsASectionHeading(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="section"><h3>Additional Information</h3>
+  <div class="field"><input type="text" name="q1"><label>Portfolio URL</label></div>
+</div>`)
+	assertLabel(t, byKey, "q1", "Portfolio URL")
+}
+
+// TestControlInventory_AFlatFormDoesNotGlueQuestionsTogether covers layouts
+// where labels and inputs are siblings rather than nested. Reading every
+// preceding sibling accumulated each earlier question onto the next field.
+func TestControlInventory_AFlatFormDoesNotGlueQuestionsTogether(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="fields">
+  <div class="q">Question A</div><input type="text" name="a">
+  <div class="q">Question B</div><input type="text" name="b">
+  <div class="q">Question C</div><input type="text" name="c">
+</div>`)
+	assertLabel(t, byKey, "a", "Question A")
+	assertLabel(t, byKey, "b", "Question B")
+	assertLabel(t, byKey, "c", "Question C")
+}
+
+// TestControlInventory_AHiddenInputDoesNotHideTheQuestion pins the walk to the
+// same definition of "control" the enumeration uses. A hidden state input
+// sharing a container with the real control is common — Lever emits one beside
+// every custom-question card — and treating it as a control discarded the
+// question's text.
+func TestControlInventory_AHiddenInputDoesNotHideTheQuestion(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <div class="application-label">Country<input type="hidden" name="country_code" value="US"></div>
+  <div><input type="text" name="country"></div>
+</div>
+<div class="field">
+  <div class="application-label">Referral source</div>
+  <input type="submit" value="Go">
+  <div><input type="text" name="referral"></div>
+</div>`)
+	assertLabel(t, byKey, "country", "Country")
+	assertLabel(t, byKey, "referral", "Referral source")
+}
+
+// TestControlInventory_ADuplicateFormDoesNotStrandAGroup pins the bound on the
+// group climb. The member count is document-wide, so a second copy of the same
+// form — a mobile duplicate, a hidden mirror — used to send the climb to
+// <body>, where the walk stops immediately and the group falls back to its
+// first option. That is the original bug, reached by walking too far.
+func TestControlInventory_ADuplicateFormDoesNotStrandAGroup(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="desktop"><div class="card">
+  <div class="application-label">Are you willing to relocate?</div>
+  <div class="application-field">
+    <label><input type="radio" name="relocate" value="Yes">Yes</label>
+    <label><input type="radio" name="relocate" value="No">No</label>
+  </div>
+</div></div>
+<div class="mobile" aria-hidden="true"><div class="card">
+  <div class="application-label">Are you willing to relocate?</div>
+  <div class="application-field">
+    <label><input type="radio" name="relocate" value="Yes">Yes</label>
+  </div>
+</div></div>`)
+	group := assertLabel(t, byKey, "group:relocate", "Are you willing to relocate?")
+	if group.Label == "Yes" {
+		t.Error("the group fell back to its first option, which is the original defect")
+	}
 }

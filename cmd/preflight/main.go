@@ -135,9 +135,13 @@ func inspectAll(browser playwright.Browser, candidates []storage.PreflightCandid
 	for _, candidate := range candidates {
 		now := time.Now().UTC()
 		if candidate.Skip != "" {
+			reason := submitter.PreflightBrowserRejected
+			if candidate.SkipKind == storage.PreflightSkipAlreadyApplied {
+				reason = submitter.PreflightAlreadyApplied
+			}
 			record(storage.PreflightResult{
 				JobID: candidate.JobID, State: storage.PreflightUnavailable,
-				Reason: submitter.PreflightBrowserRejected, ATS: candidate.ATS,
+				Reason: reason, ATS: candidate.ATS,
 			}, now)
 			unavailable++
 			continue
