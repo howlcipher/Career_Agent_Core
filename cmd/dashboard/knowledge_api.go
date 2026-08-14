@@ -269,7 +269,7 @@ var startPreflight = func(jobIDs []string) error {
 		// The same filter cmd/assist's stderr goes through, for the same reason:
 		// what a child writes is decided by its dependencies, and Playwright's
 		// diagnostics quote page content (ADR-006).
-		readAssistedStderr(stderr, func() {})
+		readAssistedStderr(preflightLogLabel, stderr, func() {})
 		if err := cmd.Wait(); err != nil {
 			log.Printf("Preparation run ended with an error: %v", err)
 		}

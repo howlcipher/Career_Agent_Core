@@ -914,3 +914,29 @@ func TestResolve_ACompositeLocationQuestionIsLeftToTheOperator(t *testing.T) {
 		t.Fatalf("a composite question auto-filled the half it knew: %q", resolution.Answer)
 	}
 }
+
+func TestResolve_AnswersTheConfiguredSocialLink(t *testing.T) {
+	store := newTestStore(t)
+	pii := identityPII()
+	pii.Links.Twitter = "https://twitter.com/example"
+	pii.Links.LinkedIn = "https://linkedin.com/in/example"
+	pii.Links.GitHub = "https://github.com/example"
+
+	// pii.Links.Twitter had existed since the vault shipped and nothing read it,
+	// so "Twitter" was an operator interruption on four of six real forms.
+	resolution := store.Resolve(routineQuestion("Twitter"), Context{}, pii)
+	if !resolution.AutoFill || resolution.Answer != "https://twitter.com/example" {
+		t.Fatalf("Twitter should resolve from configured links, got %+v", resolution)
+	}
+
+	// The link patterns must stay apart: each has exactly one right answer.
+	for prompt, want := range map[string]string{
+		"LinkedIn profile URL": "https://linkedin.com/in/example",
+		"GitHub":               "https://github.com/example",
+	} {
+		got := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if got.Answer != want {
+			t.Errorf("%q resolved to %q, want %q", prompt, got.Answer, want)
+		}
+	}
+}

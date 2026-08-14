@@ -167,3 +167,38 @@ func TestControlInventory_NeverEnumeratesAControlThatCouldSubmit(t *testing.T) {
 		t.Fatal("the inventory must never enumerate <button> elements")
 	}
 }
+
+func TestIsWidgetArtifact_SuppressesAComboboxOwnSearchBoxAndNothingElse(t *testing.T) {
+	// Observed across six real Greenhouse forms: every location and country
+	// combobox renders an internal filter input whose accessible name is
+	// "Search". Surfacing those made "Search" the second most common entry in
+	// the operator's inbox — by that count, asked more often than any
+	// declaration on the form — for something that is not a question and never
+	// blocks a submission.
+	artifacts := []FormControl{
+		{Label: "Search", ControlType: "combobox"},
+		{Label: "  search  ", ControlType: "combobox"},
+		{Label: "Filter", ControlType: "COMBOBOX"},
+	}
+	for _, control := range artifacts {
+		if !IsWidgetArtifact(control) {
+			t.Errorf("expected %q/%q to be a widget artifact", control.Label, control.ControlType)
+		}
+	}
+
+	// The rule is narrow on purpose. A text input labelled "Search" on some
+	// other form might mean something, and every real question must survive.
+	real := []FormControl{
+		{Label: "Search", ControlType: "text"},
+		{Label: "Location (City)", ControlType: "combobox"},
+		{Label: "Country", ControlType: "combobox"},
+		{Label: "Which of the following best describes you?", ControlType: "combobox"},
+		{Label: "Gender", ControlType: "combobox"},
+		{Label: "", ControlType: "combobox"},
+	}
+	for _, control := range real {
+		if IsWidgetArtifact(control) {
+			t.Errorf("a real control %q/%q was suppressed", control.Label, control.ControlType)
+		}
+	}
+}

@@ -1302,7 +1302,7 @@ var launchAssistedApplication = func(jobID string) error {
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		readAssistedStderr(stderr, func() {
+		readAssistedStderr(assistedLogLabel, stderr, func() {
 			select {
 			case <-ready:
 			default:

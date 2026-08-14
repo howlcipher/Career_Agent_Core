@@ -317,6 +317,32 @@ func (c FormControl) AsQuestion() answers.Question {
 // operator can type an answer into.
 var documentControlTypes = map[string]bool{"file": true}
 
+// widgetArtifactLabels are labels that belong to a control's own machinery
+// rather than to anything the employer is asking.
+//
+// The case this exists for, observed across six real Greenhouse forms: a
+// combobox renders an internal filter input whose accessible name is "Search".
+// It is not a question, it never blocks a submission, and surfacing it made
+// "Search" the second most common thing in the operator's inbox -- asked, by
+// that count, more often than every declaration on the form.
+//
+// The rule is deliberately narrow: an exact label match, and only on a
+// combobox. A text input actually labelled "Search" on some other form is left
+// alone, because there it might mean something.
+var widgetArtifactLabels = map[string]bool{
+	"search": true,
+	"filter": true,
+}
+
+// IsWidgetArtifact reports whether a control is part of another control's
+// machinery rather than a question in its own right.
+func IsWidgetArtifact(control FormControl) bool {
+	if !strings.EqualFold(control.ControlType, "combobox") {
+		return false
+	}
+	return widgetArtifactLabels[strings.ToLower(strings.TrimSpace(control.Label))]
+}
+
 // QuestionsFromControls converts the still-empty controls into questions for
 // the operator, dropping the ones no answer applies to.
 func QuestionsFromControls(controls []FormControl) []answers.Question {

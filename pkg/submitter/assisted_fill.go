@@ -113,6 +113,10 @@ func resolveAndApply(target fillTarget, plan AssistedFillPlan, stillEmpty []Form
 			// already reported through FillReport.Documents.
 			continue
 		}
+		if IsWidgetArtifact(control) {
+			// A combobox's own search box is not something the employer asked.
+			continue
+		}
 		byKey[control.Key] = control
 		questions = append(questions, control.AsQuestion())
 	}
