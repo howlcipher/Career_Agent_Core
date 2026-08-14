@@ -115,6 +115,14 @@ var patterns = []pattern{
 		Value:       func(pii *config.PII) string { return pii.Links.GitHub },
 	},
 	{
+		ID:          "twitter",
+		RequireAll:  [][]string{{"twitter", "x"}},
+		Deny:        []string{"linkedin", "github"},
+		Sensitivity: Routine,
+		Kind:        KindURL,
+		Value:       func(pii *config.PII) string { return pii.Links.Twitter },
+	},
+	{
 		ID:          "portfolio",
 		RequireAll:  [][]string{{"portfolio", "website", "personal", "blog"}},
 		Deny:        []string{"linkedin", "github"},

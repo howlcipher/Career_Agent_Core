@@ -196,6 +196,9 @@ func questionsFrom(candidate storage.PreflightCandidate, inventory submitter.Inv
 		if strings.EqualFold(control.ControlType, "file") {
 			continue
 		}
+		if submitter.IsWidgetArtifact(control) {
+			continue
+		}
 		question := control.AsQuestion()
 		question.Company = candidate.Company
 		resolution := vault.Resolve(question, context, pii)

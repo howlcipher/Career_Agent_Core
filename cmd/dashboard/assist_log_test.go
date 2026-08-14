@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net/http"
@@ -36,7 +37,7 @@ func captureAssistedLog(t *testing.T, input string) (string, bool) {
 		log.SetFlags(previousFlags)
 	})
 	readySeen := false
-	readAssistedStderr(strings.NewReader(input), func() { readySeen = true })
+	readAssistedStderr(assistedLogLabel, strings.NewReader(input), func() { readySeen = true })
 	return persisted.String(), readySeen
 }
 
@@ -300,7 +301,7 @@ func TestAssistedBrowserLogging_RealPlaywrightDiagnosticNeverReachesTheLogFile(t
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		readAssistedStderr(stderr, func() { once.Do(func() { ready = true }) })
+		readAssistedStderr(assistedLogLabel, stderr, func() { once.Do(func() { ready = true }) })
 	}()
 
 	select {
@@ -407,4 +408,30 @@ func runAssistLogChild(t *testing.T) {
 	fmt.Fprintf(os.Stderr, "[0813/101002.482913:ERROR:renderer.cc(77)] <input value=\"%s\">\n", logPrivacyCanary)
 
 	log.Print("Assisted browser closed; releasing its lease.")
+}
+
+func TestReadAssistedStderr_NamesWhichChildProducedALine(t *testing.T) {
+	// Two children now share this reader. Reporting a preparation run's output
+	// as "assisted browser:" would tell an operator reading dashboard.log that a
+	// visible browser was open on an application when none was.
+	var persisted bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&persisted)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+
+	record := "2026/08/13 21:29:16 Preflight inspected one application: fields=28 questions=12\n"
+	readAssistedStderr(preflightLogLabel, strings.NewReader(record), func() {})
+
+	got := persisted.String()
+	if !strings.Contains(got, "preparation: Preflight inspected") {
+		t.Fatalf("expected the preparation label, got %q", got)
+	}
+	if strings.Contains(got, "assisted browser") {
+		t.Fatalf("a preparation run was labelled as an assisted browser: %q", got)
+	}
 }

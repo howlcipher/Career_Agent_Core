@@ -18,6 +18,14 @@ import (
 // answer different questions (bugs.md #543).
 const assistedReadySentinel = "Assisted application is open."
 
+// Labels for the two children whose stderr this file persists. They are
+// distinct so a reader of dashboard.log can tell a visible browser session from
+// a background preparation run.
+const (
+	assistedLogLabel  = "assisted browser"
+	preflightLogLabel = "preparation"
+)
+
 // maxAssistedLogLineBytes bounds how much of one child line is held in memory
 // at a time. Anything longer is truncated and the remainder discarded as it
 // arrives, so a diagnostic whose length an employer's page controls can neither
@@ -25,7 +33,12 @@ const assistedReadySentinel = "Assisted application is open."
 // pipe draining.
 const maxAssistedLogLineBytes = 8192
 
-// readAssistedStderr consumes the assisted browser's stderr to end of stream.
+// readAssistedStderr consumes a child process's stderr to end of stream.
+//
+// The label names which child, because two of them now use this: the assisted
+// browser and the preparation run. Reporting a preparation run's lines as
+// "assisted browser:" would tell an operator reading dashboard.log that a
+// visible browser was open on an application when none was.
 //
 // It has two jobs and keeps them apart. Readiness is decided from the raw line
 // in memory, which is the only way the sentinel survives a filter that does not
@@ -34,7 +47,7 @@ const maxAssistedLogLineBytes = 8192
 //
 // It always reads to EOF. Returning early would leave the child blocked on a
 // full pipe, which is how a filter turns into a hang.
-func readAssistedStderr(stderr io.Reader, onReady func()) {
+func readAssistedStderr(label string, stderr io.Reader, onReady func()) {
 	reader := bufio.NewReaderSize(stderr, maxAssistedLogLineBytes)
 	withheld := 0
 	for {
@@ -47,7 +60,7 @@ func readAssistedStderr(stderr io.Reader, onReady func()) {
 				if truncated {
 					safe += " " + security.TruncatedMarker
 				}
-				log.Printf("assisted browser: %s", safe)
+				log.Printf("%s: %s", label, safe)
 			} else {
 				withheld++
 			}
@@ -61,7 +74,7 @@ func readAssistedStderr(stderr io.Reader, onReady func()) {
 		// normal -- Playwright and Chromium both write to this stream -- and is
 		// only interesting when it is large enough to suggest the child is
 		// failing in a way its own records are not describing.
-		log.Printf("assisted browser: withheld %d line(s) of third-party diagnostic output", withheld)
+		log.Printf("%s: withheld %d line(s) of third-party diagnostic output", label, withheld)
 	}
 }
 
