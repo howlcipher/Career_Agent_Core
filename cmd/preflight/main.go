@@ -135,15 +135,24 @@ func inspectAll(browser playwright.Browser, candidates []storage.PreflightCandid
 	for _, candidate := range candidates {
 		now := time.Now().UTC()
 		if candidate.Skip != "" {
-			reason := submitter.PreflightBrowserRejected
+			// An application already applied to is not a failure to inspect --
+			// there is simply nothing left to prepare -- so it is recorded with
+			// its own reason and kept out of the "could not inspect" count. The
+			// other skip means the form needs the operator signed in before it
+			// exists, which is auth_required: the same thing InspectApplication
+			// reports when it discovers a sign-in wall mid-run. It is not
+			// browser_rejected, which asserts a submit rejection that this check
+			// never established.
+			reason := submitter.PreflightAuthRequired
 			if candidate.SkipKind == storage.PreflightSkipAlreadyApplied {
 				reason = submitter.PreflightAlreadyApplied
+			} else {
+				unavailable++
 			}
 			record(storage.PreflightResult{
 				JobID: candidate.JobID, State: storage.PreflightUnavailable,
 				Reason: reason, ATS: candidate.ATS,
 			}, now)
-			unavailable++
 			continue
 		}
 

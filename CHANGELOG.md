@@ -47,6 +47,14 @@ Agent.
 every Lever label is now the question a human sees on the page, and Greenhouse's
 labels are byte-for-byte what they were before.
 
+Code review then found six more ways the new rule could still name a question
+wrongly — most importantly that the commonest checkbox markup there is,
+`<label><span><input> I agree to the terms</span></label>`, lost its text and
+took the nearest heading instead. All six are fixed and pinned. Fixing that one
+re-broke the Race and location fields on the live form, which no unit test
+noticed; a wrapping label is now read in two ordered steps so that both shapes
+come out right.
+
 ## 2026-08-13 — The Copy Application Packet now lists what the form in front of you actually asks
 
 The packet listed everything Career Agent had prepared — name, email, links,

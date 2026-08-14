@@ -111,7 +111,10 @@ func InspectApplication(browser playwright.Browser, filter *security.QuarantineL
 	// operator must finish by hand is the one whose questions they most need in
 	// advance -- refusing to read it is the opposite of helping.
 	if reason := assistedBrowserRejectionForPreflight(applyURL); reason != "" {
-		inventory.Reason = PreflightBrowserRejected
+		// auth_required, not browser_rejected: this check is about whether the
+		// form can be read without the operator signed in. Reporting a submit
+		// rejection here would tell them a fact nothing established.
+		inventory.Reason = PreflightAuthRequired
 		return inventory
 	}
 	// Workday and friends have no pre-auth form at all. Bug #18 established

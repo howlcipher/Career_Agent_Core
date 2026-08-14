@@ -105,8 +105,14 @@ func TestPreflightReasons_AreAClosedVocabulary(t *testing.T) {
 }
 
 // TestPreflightRefusals_HappenBeforeAnyPageIsLoaded proves the two refusals
-// that must not cost a page load: an ATS that rejects Career Agent's browser,
-// and one with no pre-auth form at all.
+// that must not cost a page load: an ATS whose form cannot be read without the
+// operator signed in, and one with no pre-auth form at all.
+//
+// Both report auth_required, because that is what both of them are. This check
+// used to report browser_rejected -- a claim about whether the ATS accepts a
+// *submission*, which nothing here establishes and which the dashboard renders
+// as "this ATS rejects applications from Career Agent's browser". Preflight
+// only ever asks whether the form can be read (bugs.md #545).
 //
 // Passing a nil browser is the assertion. If either refusal were made after the
 // navigation rather than before it, this would panic instead of returning a
@@ -122,8 +128,8 @@ func TestPreflightRefusals_HappenBeforeAnyPageIsLoaded(t *testing.T) {
 	})
 
 	rejected := InspectApplication(nil, nil, "Lever Co", "https://jobs.lever.co/example/abc")
-	if rejected.Reason != PreflightBrowserRejected {
-		t.Fatalf("reason = %q, want %q", rejected.Reason, PreflightBrowserRejected)
+	if rejected.Reason != PreflightAuthRequired {
+		t.Fatalf("reason = %q, want %q", rejected.Reason, PreflightAuthRequired)
 	}
 	if rejected.Inspected() {
 		t.Fatal("a rejected ATS must not report an inspection")

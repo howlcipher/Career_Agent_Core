@@ -533,3 +533,137 @@ func TestControlInventory_ADuplicateFormDoesNotStrandAGroup(t *testing.T) {
 		t.Error("the group fell back to its first option, which is the original defect")
 	}
 }
+
+// The shapes below are the second code review's findings. Two of them return
+// the group's first option as its question — the original bugs.md #545 defect,
+// reached through doors the first round of fixtures did not cover.
+
+// TestControlInventory_AQuestionDirectlyInsideTheFormResolves pins that <form>
+// bounds the walk without being a floor. Stopping *before* reading the form
+// level meant any question written as a plain sibling of its control inside the
+// form was lost: a group fell back to its first option, a text input to its raw
+// name attribute.
+func TestControlInventory_AQuestionDirectlyInsideTheFormResolves(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="page"><form>
+  <div class="q">Are you authorized to work?</div>
+  <label><input type="radio" name="auth" value="Yes">Yes</label>
+  <label><input type="radio" name="auth" value="No">No</label>
+</form></div>
+<div class="page"><form>
+  <label>Email address</label><input type="text" name="email">
+</form></div>`)
+	group := assertLabel(t, byKey, "group:auth", "Are you authorized to work?")
+	if group.Label == "Yes" {
+		t.Error("the group fell back to its first option, which is the original defect")
+	}
+	assertLabel(t, byKey, "email", "Email address")
+}
+
+// TestControlInventory_ADisabledNeighbourDoesNotHideTheQuestion completes the
+// agreement between the walk and the enumeration. visible() drops a disabled
+// control, so a container holding only one is not control-bearing as far as the
+// operator is concerned, and its text is still the question.
+func TestControlInventory_ADisabledNeighbourDoesNotHideTheQuestion(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <div class="application-label">Start date<input name="helper" disabled></div>
+  <div><input type="text" name="start"></div>
+</div>`)
+	assertLabel(t, byKey, "start", "Start date")
+}
+
+// TestControlInventory_ScriptAndStyleAreNotQuestions covers inline markup that
+// carries text which is never rendered. Beyond being unreadable, such a label
+// can trip SanitizeControls' injection quarantine and be replaced wholesale —
+// which loses the question entirely rather than merely garbling it.
+func TestControlInventory_ScriptAndStyleAreNotQuestions(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <div class="q">What is your desired salary?</div>
+  <script>window.__DATA__={"ignore me":"please"};</script>
+  <input type="text" name="salary">
+</div>
+<div class="field">
+  <div class="q">Where are you located?</div>
+  <style>.field label { color: red; }</style>
+  <input type="text" name="located">
+</div>`)
+	salary := assertLabel(t, byKey, "salary", "What is your desired salary?")
+	if strings.Contains(salary.Label, "__DATA__") {
+		t.Error("script contents reached a question label")
+	}
+	located := assertLabel(t, byKey, "located", "Where are you located?")
+	if strings.Contains(located.Label, "color") {
+		t.Error("stylesheet contents reached a question label")
+	}
+}
+
+// TestControlInventory_TheNearestLabelWinsOverItsNeighbours pins that a
+// labelling element is the question outright. Reading the whole run of
+// preceding siblings appended section headings and hints to it — and the prompt
+// is what the answer vault keys and matches on, so a polluted one silently
+// stops matching a question the operator already answered.
+func TestControlInventory_TheNearestLabelWinsOverItsNeighbours(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="section"><h3>Additional Information</h3>
+  <label>Portfolio URL</label><input type="text" name="q1">
+</div>
+<div class="field">
+  <label>Email</label><span class="hint">We never share this.</span><input type="text" name="q2">
+</div>
+<fieldset>
+  <legend>Contact</legend><label>Phone number</label><input type="text" name="q3">
+</fieldset>`)
+	assertLabel(t, byKey, "q1", "Portfolio URL")
+	assertLabel(t, byKey, "q2", "Email")
+	assertLabel(t, byKey, "q3", "Phone number")
+}
+
+// TestControlInventory_ABareLabelIsAGroupsQuestion covers the very common shape
+// where a group's question is a <label> with no `for`. Skipping every label
+// while resolving a group threw it away and fell back to the first option. Only
+// a label *wrapping one of the controls* is an option's own text.
+func TestControlInventory_ABareLabelIsAGroupsQuestion(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <label>Which pronouns do you use?</label>
+  <div>
+    <label><input type="checkbox" name="p" value="He/him">He/him</label>
+    <label><input type="checkbox" name="p" value="She/her">She/her</label>
+  </div>
+</div>`)
+	group := assertLabel(t, byKey, "group:p", "Which pronouns do you use?")
+	if strings.Join(group.Options, "|") != "He/him|She/her" {
+		t.Errorf("the options must survive intact, got %v", group.Options)
+	}
+}
+
+// TestControlInventory_AnOptionIsNeverTheGroupsQuestion is the most damaging of
+// the set. Option text used to fall through to the outward walk, so an
+// unwrapped radio was named with the *group's question* — which then appeared
+// in the operator's choice list and pushed a real option off the end of it.
+// Offering answers the employer never offered is worse than an ugly label.
+func TestControlInventory_AnOptionIsNeverTheGroupsQuestion(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <div class="q">Are you willing to relocate?</div>
+  <input type="radio" name="r" value="Y"> Yes
+  <input type="radio" name="r" value="N"> No
+</div>`)
+	group := assertLabel(t, byKey, "group:r", "Are you willing to relocate?")
+	if strings.Join(group.Options, "|") != "Yes|No" {
+		t.Fatalf("options = %v, want exactly the employer's two choices", group.Options)
+	}
+	for _, option := range group.Options {
+		if option == group.Label {
+			t.Error("the question was offered as a selectable answer")
+		}
+	}
+}
