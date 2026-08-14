@@ -35,21 +35,24 @@
 
 ## Plan
 
-- [ ] 1. `fix(answers)` — skill-scoped experience questions must not resolve to total years (#544)
-- [ ] 2. `feat(storage)` — canonical key + auto_fillable on the question inventory, preflight table
-- [ ] 3. `feat(knowledge)` — `pkg/knowledge`: inbox, layered dedup, approve, re-evaluate
-- [ ] 4. `feat(submitter)` — discovery-only preflight, `cmd/preflight`
-- [ ] 5. `feat(dashboard)` — the Application Knowledge HTTP API, including the `pii.yaml` write path
-- [ ] 6. `feat(dashboard)` — the Application Knowledge UI
-- [ ] 7. `feat(dashboard)` — apply-session integration
-- [ ] 8. `docs` — ADR-007, ADR-005 update, ARCHITECTURE, README, CHANGELOG, backlog rows
+- [x] 1. `fix(answers)` — skill-scoped experience questions must not resolve to total years (#544)
+- [x] 2. `feat(storage)` — canonical key + auto_fillable on the question inventory, preflight table
+- [x] 3. `feat(knowledge)` — `pkg/knowledge`: inbox, layered dedup, approve, re-evaluate
+- [x] 4. `feat(submitter)` — discovery-only preflight, `cmd/preflight`
+- [x] 5. `feat(dashboard)` — the Application Knowledge HTTP API, including the `pii.yaml` write path
+- [x] 6. `feat(dashboard)` — the Application Knowledge UI
+- [x] 7. `feat(dashboard)` — apply-session integration
+- [x] 8. `docs` — ADR-007, ADR-005 update, ARCHITECTURE, README, CHANGELOG, backlog rows
 - [ ] 9. Full verification (Go + frontend), live check, PR
 
 ## Progress Log
 
 - 2026-08-13 — Branch `feat/application-knowledge` cut from `main` at `67a1d94`. Baseline confirmed
   clean before any edit: `go build ./...` and `go test ./...` both pass.
+- 2026-08-13 — Slices 1-8 committed (`b263bf2`, `546a233`, `13428da`, `5bcfdfb`, `35fa806`,
+  `38b0126`, docs). Go and frontend suites both green throughout. Bug #544 confirmed real by
+  disabling the fix and watching six of eight phrasings auto-fill the career total.
 
 ## Next Step
 
-Implement slice 1: `skillExperienceSubject` + the `Reject` predicate in `pkg/answers/patterns.go`.
+Slice 9: live verification inside the `career-agent` distrobox, then push and open the PR.

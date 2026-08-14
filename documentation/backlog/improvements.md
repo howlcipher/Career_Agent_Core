@@ -38,10 +38,17 @@ Pending rows are ranked by a diminishing-returns score:
 
 Scores apply to Pending rows only; Done and Closed rows show `—`.
 
-**2026-08-06 groom pass.** #513 was filed this pass and is now the highest-scoring Pending row here at 1.5. Every other Pending row re-verified against current code and live state. **#485 holds at 0.67:** no shared inference scheduler exists anywhere in the tree, and its premise was checked live rather than assumed — `OLLAMA_MAX_LOADED_MODELS=1` is genuinely in force (`systemctl --user show ollama` on the running MainPID, not just the unit file on disk). **#497 holds at 0.50**, exactly at the floor: no answer store, and the 26 `MANUAL_REQUIRED` rows its Value rests on are still 26. **#493 stays 0.33 ⚠️** — its "2 APPLIED rows" was stale and is corrected in its Details section (7 confirmed applications now exist — **not** the 58 `applied_jobs` rows this paragraph originally cited; 51 of those predate bug #94's 2026-07-25 fix and record document generation, not submission, per bugs.md #529's close), but the correction does not move the score: the binding constraint was always zero *outcomes*, and that is still zero against 49 processed emails, which this pass filed as bugs.md #529. **#473 stays 0.38 ⚠️** — all three `attemptQuarantinedVisionSubmit` call sites confirmed present with no target-closed handling. **#488 stays 0.40 ⚠️**, unchanged user decision. Three closed rows still carrying inline narratives were archived under the Working Protocol's step 8, and **#509's row pointed at an archive entry that had never been written** — the live file held the only copy, now rescued. *(Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.)*
+**2026-08-13, Application Knowledge.** #538-#542 shipped together on one branch and are Done; #543 and #544 were filed by that work as its explicitly-not-built follow-ons. The starting state was measured against the live database rather than assumed, and it was worse than the backlog implied: after 372 assisted applications, `approved_answers`, `answer_aliases` and `application_questions` all held **0 rows**, and `answers.Store.SeedFromPII` had shipped, been tested, and never once been called from production code. **#544 (bugs.md) was found by reading `patterns.go` while planning this and fixed first**, before anything was built on top of it: `years_experience` matched on a duration word plus "experience" and auto-filled the operator's whole career total into questions about a single technology, which six of eight real phrasings reproduced. #536 is unchanged at 0.6 and is now partly served: its companion field query exists as `GET /api/knowledge/field`, so what remains of that row is the extension itself, not the answer API. #513 remains the highest-scoring Pending row at 1.5. #485, #473, #493 and #488 were not re-examined this pass and carry forward unchanged. *(Prior status paragraph archived in `documentation/backlog_history/improvements_groom_history.md`.)*
 
 | # | Improvement | Status | Score (V×D÷E) | Tier | ROI rationale |
 |---|---|---|---|---|---|
+| 538 | [Cross-application question inventory and deduplication](#538-cross-application-question-inventory-and-deduplication) | Done (2026-08-13) | — | deep-reasoning | The vault answered one question on one open form; nothing grouped questions across the queue. `application_questions` gains a `canonical_key` derived from the prompt (not the DOM key), and `pkg/knowledge` groups by the vault's own pattern families, the skill reduction, then normalized text. Full account in `docs/adrs/ADR-007-Application-Knowledge.md`. |
+| 539 | [Approving an answer re-evaluates every queued application immediately](#539-approving-an-answer-re-evaluates-every-queued-application-immediately) | Done (2026-08-13) | — | standard | Previously an approved answer reached other applications only when each was next opened, one at a time. `Service.Approve` now re-resolves the queue and reports what it resolved. Inventory is advisory; the live browser still re-resolves and wins. |
+| 540 | [Application Knowledge dashboard section and bulk resolution](#540-application-knowledge-dashboard-section-and-bulk-resolution) | Done (2026-08-13) | — | standard | The vault had no UI at all — `/api/answer-vault` was reachable only by curl. Four views, one question at a time with Enter to advance, and the two-checkbox declaration rule shared with the per-application card rather than reimplemented. |
+| 541 | [Prepare applications: read what a form asks without filling or submitting it](#541-prepare-applications-read-what-a-form-asks-without-filling-or-submitting-it) | Done (2026-08-13) | — | deep-reasoning | Without it the inbox has no input on a real installation: questions were only ever recorded during a live assisted session. Reuses `AttemptSubmit`'s prologue; the no-submit boundary is asserted by parsing the source, since a behavioural test cannot prove a negative over every employer form. |
+| 542 | [Editable application profile, answer management, and the companion field query](#542-editable-application-profile-answer-management-and-the-companion-field-query) | Done (2026-08-13) | — | standard | `pii.yaml` edited in place rather than copied, with atomic replace, a backup and no value ever logged; vault edit/revoke with derived policies and recognised phrasings; `GET /api/knowledge/field` implements ADR-005's companion query. |
+| 543 | [Gated semantic suggestions for equivalent questions](#543-gated-semantic-suggestions-for-equivalent-questions) | Pending | 0.4 = 2×1.0÷5 | deep-reasoning | ⚠️ below floor — needs explicit user confirmation. Deduplication deliberately stops at curated determinism (ADR-007 decision 2). A model could propose that two differently-worded questions match, but the failure mode is a wrong answer on a real application, so it would need confirmation below a very high threshold and must never touch declarations. No evidence yet that the curated layers leave enough on the table to justify it. |
+| 544 | [Predict application effort from this installation's own history](#544-predict-application-effort-from-this-installations-own-history) | Pending | 0.5 = 2×1.0÷4 | standard | `EstimateAssistedEffort` is a hand-tuned additive model. `human_interactions` now records real durations per application, and preflight records real field counts, so the inputs for a measured estimate exist. Worth doing only once enough sessions have accumulated to fit against; today there are too few. |
 | 536 | [Normal-browser Career Agent companion](#536-normal-browser-career-agent-companion) | Pending | 0.6 = 3×1.0÷5 | deep-reasoning | Designed in `docs/adrs/ADR-005-Browser-Companion.md`, deliberately not built. The Copy Application Packet already recovers most of the operator time in the handoff case at none of the complexity, so the remaining benefit does not yet justify shipping a browser extension that handles PII. |
 | 537 | [Apply-session auto-advance is only exercised by unit tests, never by a live multi-application run](#537-apply-session-auto-advance-is-only-exercised-by-unit-tests-never-by-a-live-multi-application-run) | Done (2026-08-13) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #537 for the full account. Found five defects that all passed `go test`, two of them Major. |
 | 512 | [Application Mode selector and configurable fit threshold](#512-application-mode-selector-and-configurable-fit-threshold) | Done (2026-08-04) | — | deep-reasoning | See `documentation/backlog_history/improvements_done_details.md` item #512 for the full account. |
@@ -219,6 +226,74 @@ Done — full account archived in `documentation/backlog_history/improvements_do
 ### 498. Company and role-family duplicate/cooldown protection
 
 Done — full account archived in `documentation/backlog_history/improvements_done_details.md` item #498.
+
+### 538. Cross-application question inventory and deduplication
+
+Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decisions 1 and 2) and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 539. Approving an answer re-evaluates every queued application immediately
+
+Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decision 1) and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 540. Application Knowledge dashboard section and bulk resolution
+
+Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decisions 3, 4 and 7) and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 541. Prepare applications: read what a form asks without filling or submitting it
+
+Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decision 5) and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 542. Editable application profile, answer management, and the companion field query
+
+Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decisions 4 and 6), the amendment at the top of `docs/adrs/ADR-005-Browser-Companion.md`, and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 543. Gated semantic suggestions for equivalent questions
+
+**Pending, and below the ROI floor — do not work this without asking the user first.**
+
+ADR-007 decision 2 stops deduplication at three curated, deterministic layers: a match against the
+vault's own 19 question families, the skill-experience reduction, and text that differs only in
+presentation. A fourth layer — "these two questions look like they mean the same thing" — is
+deliberately absent.
+
+What it would take to build it safely, if it is ever worth building:
+
+* It must never silently reuse an uncertain match. A candidate is a *proposal shown to the operator*,
+  never a resolution.
+* Confirmation is required below a very high threshold, and the threshold has to be justified by
+  measurement rather than chosen.
+* It must never apply to a sensitive question at all. The vocabulary of attestations is small and
+  treacherous — "authorized to work" and "require sponsorship" share most of their tokens and mean
+  opposite things — and that is precisely where a plausible-looking wrong match does the most damage.
+* An accepted candidate becomes a stored alias, so the *next* occurrence is deterministic. The model
+  would be a one-time suggestion mechanism, never part of the resolution path.
+
+**Why it is not obviously worth it.** The curated layers already collapse every phrasing of the 19
+recognised families plus every phrasing of a skill duration question. Nobody has yet measured how
+many genuinely distinct questions survive that on a real queue. Until somebody has — which the
+Application Knowledge inbox now makes easy, since it lists exactly the residue — this is speculative
+work with a bad failure mode. Measure first.
+
+### 544. Predict application effort from this installation's own history
+
+**Pending.** `storage.EstimateAssistedEffort` is a hand-written additive model: base 1–2 minutes,
+plus fixed increments for a missing handler, missing documents, an expected account gate, a prior
+CAPTCHA, and outstanding questions. Nothing in it was fitted to anything; the numbers were chosen.
+
+Two things have changed that make a measured estimate possible. `human_interactions` records real
+per-application durations for the `answering` and `review_submit` phases, both from server
+timestamps. And preflight now records a real field count and ATS per application before the operator
+opens it, which is the strongest single predictor available and was previously unknown until too
+late to be useful.
+
+The work is to fit the existing bands against observed durations rather than to invent a new model:
+same output shape (a band and a range, never a false precise number), same ±4% ranking cap. Keep it
+local, and keep the honest-range property — an estimate that reports a single number would be a
+regression in truthfulness even if it were more accurate on average.
+
+**Do not start yet.** On this installation there are too few completed sessions to fit anything: the
+`human_interactions` table is empty and `application_sessions` has no finished rows. Revisit once a
+few dozen applications have gone through an apply session end to end.
 
 ### 536. Normal-browser Career Agent companion
 

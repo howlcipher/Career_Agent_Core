@@ -80,6 +80,16 @@ you confirm the last one was received.
   in the path. Legal and protected-class declarations are never learned
   silently: Career Agent may suggest, but reuse requires two separate,
   explicit acknowledgements. See `docs/ARCHITECTURE.md`.
+* **Application Knowledge**: every unresolved question across your queue,
+  deduplicated. Nine applications asking for your Kubernetes experience in nine
+  wordings is one thing to answer, and answering it reports what it resolved
+  across the rest of the queue. Questions are only grouped by rules you can
+  inspect — a curated question family, a skill reduction, or text that differs
+  only in presentation — never by similarity, and never by a model.
+* **Prepare applications**: Career Agent opens a selected batch once, reads what
+  each form asks, and closes it. It fills nothing and submits nothing, and it
+  names what it could not inspect and why — a CAPTCHA, a sign-in gate, an expired
+  posting — rather than working around it.
 * **Exception-only review**: each card leads with what Career Agent completed and
   the short list that needs you. Full diagnostics remain available behind
   expandable details.

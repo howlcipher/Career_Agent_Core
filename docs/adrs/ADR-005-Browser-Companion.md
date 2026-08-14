@@ -4,6 +4,23 @@
 
 **Proposed — design only. No extension code exists in this repository.**
 
+**Amended 2026-08-13 (ADR-007).** One piece of the contract below now exists: the companion's
+"what does Career Agent know about this field?" query is served by `GET /api/knowledge/field`,
+implemented by `knowledge.Service.Field`. It returns the normalized question, the derived reuse
+policy, a `requires_human` flag, the sensitivity, the scope and the provenance — so a companion never
+implements an answer system of its own, which is the part of this design that mattered most.
+
+Two notes on how it differs from the sketch below. First, it returns a **value** when the policy
+permits filling, where this ADR's "structure out, values in" phrasing anticipated it would not; that
+is consistent with `/api/assisted/packet`, which has always served the operator their own details
+over the same loopback, same-origin boundary, and a companion that cannot receive an answer cannot
+fill a field. Second, a fillable answer and a suggestion arrive in **different response fields**
+(`answer` and `suggested`), so a caller cannot fill a proposal by reading the wrong key — the same
+`Resolved`/`AutoFill` split the vault enforces internally, made explicit on the wire.
+
+Everything else here is still unbuilt and still binding: there is no pairing token, no origin
+allowlist, no extension, and — deliberately — **no submit verb anywhere in the protocol**.
+
 This ADR records the contract a browser companion would have to satisfy before
 it is built, so that the decision is made once, in the open, rather than
 implicitly by whatever the first implementation happened to do. It is filed
