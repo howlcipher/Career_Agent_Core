@@ -287,6 +287,17 @@ func assistedBrowserIsLive(conn *sql.DB) (bool, error) {
 	return live > 0, nil
 }
 
+// AssistedBrowserIsLive is the exported form, for callers outside this package
+// that must not start work while the operator has an application open --
+// currently the preflight launcher, which would otherwise put a second Chromium
+// on the machine while the first one is mid-application.
+func AssistedBrowserIsLive(conn *sql.DB) (bool, error) {
+	if conn == nil {
+		return false, errors.New("database not initialized")
+	}
+	return assistedBrowserIsLive(conn)
+}
+
 // AssistedWorkFinished reports whether this job's place in the open apply
 // session has reached an outcome, so the process holding its browser knows its
 // work is done.
