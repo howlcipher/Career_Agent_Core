@@ -57,6 +57,20 @@ seven other questions.
   is still pressed by you. Preparing is an option and never a gate. Newly approved
   answers reach the next application only because assisted fill already re-resolves
   from the vault when it opens a page.
+* **Verified against real employer forms, not only against tests.** A preflight
+  run over live Greenhouse and Lever postings inspected two applications (46
+  fields), correctly refused two Lever postings before loading a page, and
+  reported one expired posting as dead. Three differently-worded sponsorship
+  questions across two employers collapsed into one entry, and approving it once
+  resolved all three and bound the other two wordings. That run found four
+  defects that had all passed `go test` — the vault could not answer the
+  operator's own name, readiness counted remaining work and called it the form,
+  a global answer was filed under one employer's wording, and a declaration the
+  operator had granted reuse for was labelled "always ask you" while
+  auto-filling. All four are fixed. The run's stderr was scanned against all 80
+  values in `pii.yaml` and against markup, `value="`, `Call log:` and
+  `locator resolved to`, and contained none of them, nor any employer question
+  text.
 * Recorded in `docs/adrs/ADR-007-Application-Knowledge.md`. `ADR-005` is amended:
   the browser companion's field query now exists as `GET /api/knowledge/field`.
 

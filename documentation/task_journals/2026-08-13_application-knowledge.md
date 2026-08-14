@@ -43,7 +43,7 @@
 - [x] 6. `feat(dashboard)` — the Application Knowledge UI
 - [x] 7. `feat(dashboard)` — apply-session integration
 - [x] 8. `docs` — ADR-007, ADR-005 update, ARCHITECTURE, README, CHANGELOG, backlog rows
-- [ ] 9. Full verification (Go + frontend), live check, PR
+- [x] 9. Full verification (Go + frontend), live check, PR
 
 ## Progress Log
 
@@ -53,6 +53,11 @@
   `38b0126`, docs). Go and frontend suites both green throughout. Bug #544 confirmed real by
   disabling the fix and watching six of eight phrasings auto-fill the career total.
 
+- 2026-08-13 — Live verification complete inside the `career-agent` container. Preflight run against
+  real Greenhouse/Lever postings; 4 defects found and fixed (`479fd04`). Full Go and frontend suites
+  green. Production dashboard on :8080 untouched throughout; verification instances ran on 8097-8099
+  against a snapshot and were stopped, and the snapshot (which held real PII) was deleted.
+
 ## Next Step
 
-Slice 9: live verification inside the `career-agent` distrobox, then push and open the PR.
+Push the branch and open the PR.
