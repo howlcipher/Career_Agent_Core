@@ -13,6 +13,12 @@ import { TriageList } from './components/TriageList';
 import { ApplySessionBar } from './components/ApplySessionBar';
 import { ConfirmDialog, ConfirmActions } from './components/ConfirmDialog';
 import { ConsoleButton } from './components/ConsoleButton';
+import { KnowledgePanel } from './components/KnowledgePanel';
+import { MissingInfoInbox } from './components/MissingInfoInbox';
+import { PreparePanel } from './components/PreparePanel';
+import { AnswerVaultTable } from './components/AnswerVaultTable';
+import { ProfileEditor } from './components/ProfileEditor';
+import { useKnowledge } from './hooks/useKnowledge';
 
 function App() {
   const {
@@ -52,6 +58,24 @@ function App() {
     submitAnswers,
     submittingAnswers,
   } = useDashboard();
+
+  const [showKnowledge, setShowKnowledge] = useState<boolean>(false);
+  const [knowledgeView, setKnowledgeView] = useState<'resolve' | 'prepare' | 'vault' | 'profile'>('resolve');
+  const {
+    snapshot,
+    preflight,
+    profile,
+    vault,
+    busy: knowledgeBusy,
+    knowledgeError,
+    approveResult,
+    profileResult,
+    approve,
+    prepare,
+    saveProfile,
+    updateAnswer,
+    revokeAnswer,
+  } = useKnowledge(showKnowledge || showAssisted);
 
   const [showModeConfirm, setShowModeConfirm] = useState<boolean>(false);
   const [confirmJob, setConfirmJob] = useState<AssistedJob | null>(null);
@@ -96,6 +120,16 @@ function App() {
 
   const sessionRunning = applySession !== null && applySession.state !== 'finished';
 
+  const readiness = snapshot?.readiness ?? null;
+  // Never a bare percentage of an imagined universe of questions: the headline
+  // is what the operator's next few minutes actually buy them.
+  const knowledgeSummary =
+    !readiness || readiness.fields === 0
+      ? 'Application knowledge: nothing inspected yet'
+      : readiness.answers_needed > 0
+        ? `${readiness.answers_needed} ${readiness.answers_needed === 1 ? 'answer unlocks' : 'answers unlock'} ${readiness.fields_unlockable} ${readiness.fields_unlockable === 1 ? 'field' : 'fields'}`
+        : `Career Agent can handle ${readiness.resolved} of ${readiness.fields} known fields`;
+
   const unsaved =
     operatorSettings &&
     (JSON.stringify(draftSettings) !== JSON.stringify(operatorSettings) ||
@@ -125,6 +159,7 @@ function App() {
           <div className="rail-group">
             <span className="rail-group-label">Operations</span>
             <a href="#action-queues" className="rail-link">Queues</a>
+            <a href="#application-knowledge" className="rail-link">Knowledge</a>
             <a href="#mission-metrics" className="rail-link">Applications</a>
           </div>
           <div className="rail-group">
@@ -288,6 +323,17 @@ function App() {
                 Open Assisted Apply
               </ConsoleButton>
             </div>
+            <div className="queue-banner" aria-label="Application Knowledge">
+              <div>
+                <strong>
+                  {knowledgeSummary}
+                </strong>
+                <span> Answer a question once and Career Agent uses it on every application that asks it.</span>
+              </div>
+              <ConsoleButton variant="secondary" className="btn btn-knowledge" onClick={() => { setKnowledgeView('resolve'); setShowKnowledge(true); }}>
+                Open Application Knowledge
+              </ConsoleButton>
+            </div>
           </div>
         </section>
 
@@ -302,6 +348,90 @@ function App() {
             Daemon watchdog: {metrics.watchdog_alert}
             {metrics.watchdog_alert_at && ` (${metrics.watchdog_alert_at})`}
           </p>
+        )}
+
+        {showKnowledge && (
+          <section className="deck-section knowledge-queue" id="application-knowledge" aria-labelledby="knowledge-heading">
+            <CommandSection
+              title="Application Knowledge"
+              subtitle="What Career Agent knows, what it is missing, and what one answer would unlock."
+              id="knowledge-heading"
+            >
+              <div className="queue-actions">
+                <ConsoleButton variant="ghost" onClick={() => setShowKnowledge(false)}>
+                  Return to dashboard
+                </ConsoleButton>
+              </div>
+
+              {knowledgeError && (
+                <p className="action-error" role="alert">
+                  {knowledgeError}
+                </p>
+              )}
+
+              {readiness && (
+                <KnowledgePanel
+                  readiness={readiness}
+                  onResolve={() => setKnowledgeView('resolve')}
+                  resolveDisabled={knowledgeView === 'resolve'}
+                />
+              )}
+
+              <div className="knowledge-tabs" role="tablist" aria-label="Application knowledge views">
+                {([
+                  ['resolve', `Needs your input${snapshot ? ` (${snapshot.groups.length})` : ''}`],
+                  ['prepare', 'Prepare applications'],
+                  ['vault', `What Career Agent knows (${vault.length})`],
+                  ['profile', 'Your details'],
+                ] as const).map(([view, label]) => (
+                  <ConsoleButton
+                    key={view}
+                    variant={knowledgeView === view ? 'primary' : 'ghost'}
+                    onClick={() => setKnowledgeView(view)}
+                  >
+                    {label}
+                  </ConsoleButton>
+                ))}
+              </div>
+
+              {knowledgeView === 'resolve' && (
+                <MissingInfoInbox
+                  groups={snapshot?.groups ?? []}
+                  submitting={knowledgeBusy}
+                  lastResult={approveResult}
+                  onApprove={approve}
+                />
+              )}
+
+              {knowledgeView === 'prepare' && (
+                <PreparePanel
+                  status={preflight}
+                  selectedCount={selectedJobs.length}
+                  canPrepare={selectedJobs.length > 0 && !assistedBrowserOpen && !preflight?.running}
+                  preparing={Boolean(preflight?.running)}
+                  onPrepare={() => prepare(selectedJobs)}
+                />
+              )}
+
+              {knowledgeView === 'vault' && (
+                <AnswerVaultTable
+                  answers={vault}
+                  busy={knowledgeBusy}
+                  onUpdate={updateAnswer}
+                  onRevoke={revokeAnswer}
+                />
+              )}
+
+              {knowledgeView === 'profile' && (
+                <ProfileEditor
+                  profile={profile}
+                  saving={knowledgeBusy}
+                  lastResult={profileResult}
+                  onSave={saveProfile}
+                />
+              )}
+            </CommandSection>
+          </section>
         )}
 
         {showQualified && (
@@ -339,6 +469,10 @@ function App() {
                   onStart={() => startApplySession(selectedJobs)}
                   onControl={(action) => controlApplySession(action)}
                   onSkip={() => controlApplySession('skip', applySession?.current_job_id)}
+                  onPrepare={() => prepare(selectedJobs)}
+                  preparing={Boolean(preflight?.running)}
+                  unresolvedQuestions={readiness && readiness.fields > 0 ? readiness.unresolved : undefined}
+                  answersNeeded={readiness?.answers_needed}
                 />
               )}
               {assistedJobs.length === 0 ? (

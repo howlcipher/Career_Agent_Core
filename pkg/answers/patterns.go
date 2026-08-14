@@ -34,6 +34,17 @@ type pattern struct {
 	// Returning "" means "the operator has not provided this", which resolves
 	// to unresolved rather than to a guess.
 	Value func(pii *config.PII) string
+	// Reject refuses a question this pattern's tokens would otherwise claim.
+	//
+	// Deny handles the case where a *token* disqualifies a match. Reject exists
+	// for the case where the disqualifying fact is a property of the whole
+	// question that no fixed token list can express -- currently only
+	// years_experience, which must not answer a question scoped to one skill
+	// with the operator's total career years (bugs.md #544). It is stated as a
+	// predicate rather than left to table ordering plus an empty Value, because
+	// a refusal that depends on which row happens to come first is a refusal
+	// nobody can see when reading the table.
+	Reject func(Question) bool
 }
 
 // patterns is ordered: the first match wins, so narrower families are listed
@@ -123,6 +134,15 @@ var patterns = []pattern{
 		Sensitivity: Routine,
 		Kind:        KindNumber,
 		Value:       func(pii *config.PII) string { return pii.Work.YearsExperience },
+		// bugs.md #544. pii.Work.YearsExperience is a career total, and it is
+		// the right answer to "How many years of professional experience do you
+		// have?" and the wrong answer to "How many years of Kubernetes
+		// experience do you have?" -- which this pattern's tokens match just as
+		// readily. Answering the second with the first states a qualification
+		// the operator does not have, on a real application, under their name.
+		// A skill-scoped question is therefore refused here and left for the
+		// vault's own skill-experience lookup or for the operator.
+		Reject: func(question Question) bool { return SkillExperienceSubject(question) != "" },
 	},
 	{
 		ID:          "current_title",
@@ -194,6 +214,160 @@ var patterns = []pattern{
 		Kind:        KindBoolean,
 		Value:       func(pii *config.PII) string { return pii.Work.Over18 },
 	},
+
+	// Identity and contact facts.
+	//
+	// These are last in the table on purpose. Every attestation family above
+	// shares vocabulary with one of them -- "Are you eligible to work in your
+	// country of residence?" contains "country", and matching it here would
+	// offer a country name as the answer to a yes/no legal question. First match
+	// wins, so the attestation patterns claim those questions before these are
+	// ever consulted. Do not move them.
+	//
+	// They exist because the vault could not previously answer "First Name",
+	// which made it look, to anything that asked, as though Career Agent did not
+	// know the operator's own name. The per-ATS handlers fill these on the
+	// boards they support, so on a real Greenhouse form nothing here changes;
+	// what changes is that a question inventory taken *before* a handler runs no
+	// longer reports the operator's own contact details back to them as work to
+	// do. Observed live on 2026-08-13: 6 of 19 "questions" on a real Grafana
+	// Labs form were the operator's name, email, phone and location.
+	//
+	// The Deny lists all guard the same mistake in different words: a form
+	// asking for somebody *else's* name, email or phone -- a reference, a
+	// manager, a recruiter, a previous employer -- must not be handed the
+	// operator's.
+	{
+		ID:          "first_name",
+		RequireAll:  [][]string{{"first", "given", "forename", "preferred"}, {"name"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.FirstName },
+	},
+	{
+		ID:          "last_name",
+		RequireAll:  [][]string{{"last", "surname", "family"}, {"name"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.LastName },
+	},
+	{
+		ID:          "full_name",
+		RequireAll:  [][]string{{"full", "legal", "name"}, {"name"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value: func(pii *config.PII) string {
+			full := strings.TrimSpace(pii.FirstName + " " + pii.LastName)
+			if full == "" {
+				return ""
+			}
+			return full
+		},
+	},
+	{
+		ID:          "email",
+		RequireAll:  [][]string{{"email", "mail"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.Email },
+	},
+	{
+		ID:          "phone",
+		RequireAll:  [][]string{{"phone", "mobile", "cell", "telephone"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.Phone },
+	},
+	{
+		ID:          "city",
+		RequireAll:  [][]string{{"city", "town", "municipality"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.City },
+	},
+	{
+		ID:         "state_region",
+		RequireAll: [][]string{{"state", "province", "region"}},
+		// "United States" normalizes to "united states", so the plural does not
+		// collide -- but a question mentioning the country by name still should
+		// not be answered with a state.
+		Deny:        append([]string{"united", "country"}, otherPartyTokens...),
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value: func(pii *config.PII) string {
+			if pii.FullState != "" {
+				return pii.FullState
+			}
+			return pii.State
+		},
+	},
+	{
+		ID:          "postal_code",
+		RequireAll:  [][]string{{"zip", "postal", "postcode"}},
+		Deny:        otherPartyTokens,
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.Zip },
+	},
+	{
+		ID:         "country",
+		RequireAll: [][]string{{"country"}},
+		// Two different refusals in one list.
+		//
+		// A question asking for a country *and* something else wants a composite
+		// answer this pattern does not have; offering only half of it would be a
+		// wrong answer that looks like a right one.
+		//
+		// And "What is your country of citizenship?" is an immigration question,
+		// not a location one. No pattern above claims it -- "citizenship" is not
+		// sponsorship vocabulary -- so without this entry it fell through to here
+		// and proposed the operator's residence as their citizenship. Classify
+		// marks it Sensitive so it could never have auto-filled, but a suggestion
+		// on a legal question is still a guess Career Agent has no business
+		// making. Caught by a test written after the identity patterns were
+		// added, not before.
+		Deny: append([]string{
+			"zone", "timezone", "code",
+			"citizenship", "citizen", "national", "nationality", "passport",
+		}, otherPartyTokens...),
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value: func(pii *config.PII) string {
+			if pii.FullCountry != "" {
+				return pii.FullCountry
+			}
+			return pii.Country
+		},
+	},
+	{
+		ID:          "street_address",
+		RequireAll:  [][]string{{"street", "address"}},
+		Deny:        append([]string{"email", "ip", "web"}, otherPartyTokens...),
+		Sensitivity: Routine,
+		Kind:        KindText,
+		Value: func(pii *config.PII) string {
+			if pii.Street != "" {
+				return pii.Street
+			}
+			return pii.Address
+		},
+	},
+}
+
+// otherPartyTokens mark a question asking about somebody who is not the
+// applicant. A reference's phone number and the applicant's phone number are
+// different facts, and only one of them is in pii.yaml.
+var otherPartyTokens = []string{
+	"reference", "references", "referrer", "referral",
+	"manager", "supervisor", "recruiter", "contact",
+	"emergency", "spouse", "parent", "guardian",
+	"employer", "company", "school", "university", "institution",
 }
 
 // matchPattern returns the first curated pattern whose token requirements the
@@ -209,14 +383,17 @@ func matchPattern(question Question) *pattern {
 	}
 	for i := range patterns {
 		candidate := &patterns[i]
-		if matchesPattern(present, candidate) {
+		if matchesPattern(present, question, candidate) {
 			return candidate
 		}
 	}
 	return nil
 }
 
-func matchesPattern(present map[string]bool, candidate *pattern) bool {
+func matchesPattern(present map[string]bool, question Question, candidate *pattern) bool {
+	if candidate.Reject != nil && candidate.Reject(question) {
+		return false
+	}
 	for _, denied := range candidate.Deny {
 		if present[denied] {
 			return false
@@ -235,6 +412,25 @@ func matchesPattern(present map[string]bool, candidate *pattern) bool {
 		}
 	}
 	return len(candidate.RequireAll) > 0
+}
+
+// MatchedPatternID names the curated family a question belongs to, or "".
+//
+// It is exported so cross-application grouping can use the same recognizers the
+// resolver uses. That matters more than it sounds: if grouping had its own idea
+// of which questions are the same family, the operator could answer a group and
+// find the resolver disagreed about half of it. One table, one answer to
+// "which question is this", and the Deny lists that keep sponsorship apart from
+// work authorization apply to both.
+//
+// Note this reports the family a question *belongs to*, not whether it can be
+// answered -- a match here says nothing about whether the operator has
+// configured the corresponding fact.
+func MatchedPatternID(question Question) string {
+	if candidate := matchPattern(question); candidate != nil {
+		return candidate.ID
+	}
+	return ""
 }
 
 // PatternIDs lists every curated pattern, so tests and the operator

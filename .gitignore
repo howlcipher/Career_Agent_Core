@@ -1,5 +1,10 @@
 applications/
 pii.yaml
+# The profile editor keeps timestamped backups beside it
+# (cmd/dashboard/profile_api.go). The bare name above does not match them, and
+# each holds the same real personal data as the file itself -- one `git add -A`
+# away from being committed.
+pii.yaml.*
 applications/
 applications.db
 applications.db-shm
@@ -30,6 +35,10 @@ career_agent_bin
 dashboard_bin
 career_dashboard_bin
 career_assist_bin
+# Same reasoning for the preparation command: cmd/dashboard's preflightCommand
+# looks for a sibling career_preflight_bin, so it is built beside the others and
+# is the same 18MB one-rebuild-away-from-a-commit hazard.
+career_preflight_bin
 
 Omni_CoverLetter.pdf
 

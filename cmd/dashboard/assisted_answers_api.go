@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
+	"github.com/howlcipher/Career_Agent_Core/pkg/knowledge"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
 )
 
@@ -324,6 +326,68 @@ func contains(values []string, want string) bool {
 // serveAnswerVault lists and revokes approved answers, so the operator can see
 // exactly what Career Agent has been given permission to reuse and withdraw
 // any of it.
+// seedAnswerVaultFromPII writes suggestion rows for the facts the operator has
+// already configured, so the vault is useful on its first application rather
+// than after a dozen.
+//
+// This call is the whole reason SeedFromPII stops being dead code. It has
+// existed and been tested since the vault shipped, and nothing in production
+// ever called it — which is why `approved_answers` was empty on a machine that
+// had processed 372 assisted applications, and why the operator was being asked
+// for their own LinkedIn URL.
+//
+// It is safe to run on every start by construction: every seeded row is written
+// with reuse withheld, so it can only ever be a suggestion the operator sees
+// pre-filled and never something Career Agent types on their behalf, and it
+// never overwrites a row they have approved. A failure here is logged and
+// otherwise ignored: a dashboard that will not start because it could not
+// pre-fill some suggestions would be a worse outcome than one that starts
+// without them.
+func seedAnswerVaultFromPII() {
+	pii, err := config.LoadPII("pii.yaml")
+	if err != nil {
+		log.Printf("Answer vault seeding skipped; pii.yaml could not be read: %v", err)
+		return
+	}
+	vault, err := answers.OpenStore(db)
+	if err != nil {
+		log.Printf("Answer vault seeding skipped; the vault is unavailable: %v", err)
+		return
+	}
+	seeded, err := vault.SeedFromPII(pii)
+	if err != nil {
+		log.Printf("Answer vault seeding stopped early: %v", err)
+		return
+	}
+	if seeded > 0 {
+		// A count, never the facts themselves.
+		log.Printf("Answer vault seeded %d suggestion(s) from your configured details; none of them auto-fill until you approve them.", seeded)
+	}
+}
+
+// vaultPolicy names what Career Agent may do with a stored answer, in the same
+// vocabulary the Application Knowledge inbox uses.
+//
+// It goes through knowledge.Policy rather than restating the rules, so the
+// management view and the inbox cannot come to describe the same answer
+// differently -- which would leave the operator with two screens disagreeing
+// about whether a declaration auto-fills.
+func vaultPolicy(entry answers.Answer) string {
+	return knowledge.Policy(answers.Resolution{
+		Resolved:    true,
+		AutoFill:    entry.ReuseAllowed,
+		Sensitivity: entry.Sensitivity,
+		Source:      answers.SourceVault,
+	})
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.Format(time.RFC3339)
+}
+
 func serveAnswerVault(w http.ResponseWriter, r *http.Request) {
 	vault, err := answers.OpenStore(db)
 	if err != nil {
@@ -340,27 +404,72 @@ func serveAnswerVault(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		type vaultEntry struct {
-			ID           int64  `json:"id"`
-			Question     string `json:"question"`
-			Answer       string `json:"answer"`
-			Sensitivity  string `json:"sensitivity"`
-			Scope        string `json:"scope"`
-			ReuseAllowed bool   `json:"reuse_allowed"`
-			Provenance   string `json:"provenance"`
-			UseCount     int    `json:"use_count"`
+			ID           int64    `json:"id"`
+			Question     string   `json:"question"`
+			Answer       string   `json:"answer"`
+			Sensitivity  string   `json:"sensitivity"`
+			Scope        string   `json:"scope"`
+			ReuseAllowed bool     `json:"reuse_allowed"`
+			Provenance   string   `json:"provenance"`
+			UseCount     int      `json:"use_count"`
+			Policy       string   `json:"policy"`
+			Aliases      []string `json:"aliases"`
+			LastUsedAt   string   `json:"last_used_at,omitempty"`
 		}
 		out := make([]vaultEntry, 0, len(stored))
 		for _, entry := range stored {
+			// The recognised phrasings are the answer to "why did Career Agent
+			// use this here?", which is the first thing an operator asks of a
+			// vault they cannot see into. Aliases are cheap to read and there is
+			// no reason to make them a separate round trip.
+			aliases, err := vault.Aliases(entry.ID)
+			if err != nil {
+				aliases = []string{}
+			}
 			out = append(out, vaultEntry{
 				ID: entry.ID, Question: entry.CanonicalQuestion, Answer: entry.AnswerText,
 				Sensitivity: string(entry.Sensitivity), Scope: entry.Scope,
 				ReuseAllowed: entry.ReuseAllowed, Provenance: string(entry.Provenance),
-				UseCount: entry.UseCount,
+				UseCount: entry.UseCount, Policy: vaultPolicy(entry), Aliases: aliases,
+				LastUsedAt: formatOptionalTime(entry.LastUsedAt),
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]any{"answers": out})
+
+	case http.MethodPatch:
+		// Editing an answer, or withdrawing its reuse. What cannot be edited
+		// here is a question's sensitivity, key or scope: those decide which
+		// rules apply to the row, so changing one means revoking this answer and
+		// approving a new one -- which is also the honest description of what
+		// actually happened. answers.Store.UpdateAnswer enforces that.
+		var request struct {
+			ID           int64  `json:"id"`
+			Answer       string `json:"answer"`
+			ReuseAllowed bool   `json:"reuse_allowed"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAnswersRequestBytes))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || request.ID == 0 {
+			http.Error(w, "an answer identifier and a replacement answer are required", http.StatusBadRequest)
+			return
+		}
+		updated, err := vault.UpdateAnswer(request.ID, request.Answer, request.ReuseAllowed)
+		if err != nil {
+			if errors.Is(err, answers.ErrSensitiveNeedsApproval) {
+				http.Error(w, "this is a declaration. Re-granting automatic reuse means approving it again on an application, not editing it here.", http.StatusConflict)
+				return
+			}
+			http.Error(w, fmt.Sprintf("could not update that answer: %v", err), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": updated.ID, "answer": updated.AnswerText,
+			"reuse_allowed": updated.ReuseAllowed, "policy": vaultPolicy(updated),
+		})
 	case http.MethodDelete:
 		var request struct {
 			ID int64 `json:"id"`

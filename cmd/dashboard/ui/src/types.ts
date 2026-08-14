@@ -242,3 +242,129 @@ export interface AssistedJob {
   questions?: ApplicationQuestion[] | null;
   effort: AssistedEffort;
 }
+
+/**
+ * Application Knowledge — what Career Agent needs to know across the whole
+ * queue, rather than for one open application.
+ */
+
+/** The five reuse policies, derived by the server from what it stores. */
+export type KnowledgePolicy =
+  | 'safe_auto_fill'
+  | 'approved_reusable'
+  | 'suggest_ask'
+  | 'human_review'
+  | 'generate_per_job'
+  | 'unknown';
+
+/** One question, however many applications are waiting on it. */
+export interface KnowledgeGroup {
+  key: string;
+  prompt: string;
+  phrasings: string[];
+  occurrences: number;
+  applications: number;
+  job_ids: string[];
+  companies: string[];
+  control_type: string;
+  options?: string[];
+  /** Employers offer genuinely different choices; one answer cannot serve all. */
+  options_vary?: boolean;
+  required: boolean;
+  sensitivity: string;
+  policy: KnowledgePolicy;
+  suggested?: string;
+  source?: string;
+  resolved: boolean;
+  company_scope_available: boolean;
+  company_scope?: string;
+  skill_subject?: string;
+}
+
+/** Demand-driven readiness, measured against the queue and nothing else. */
+export interface KnowledgeReadiness {
+  applications: number;
+  fields: number;
+  resolved: number;
+  unresolved: number;
+  unique_questions: number;
+  sensitive_decisions: number;
+  per_job_responses: number;
+  fields_unlockable: number;
+  answers_needed: number;
+  applications_blocked: number;
+}
+
+export interface PreflightResult {
+  job_id: string;
+  company: string;
+  role: string;
+  state: 'inspected' | 'unavailable';
+  reason?: string;
+  ats?: string;
+  control_count: number;
+  inspected_at: string;
+}
+
+export interface KnowledgeSnapshot {
+  readiness: KnowledgeReadiness;
+  groups: KnowledgeGroup[];
+  preflight: PreflightResult[];
+}
+
+export interface KnowledgeApproval {
+  group_key: string;
+  answer: string;
+  save_for_reuse: boolean;
+  allow_sensitive_reuse: boolean;
+  confirmed_equivalent: boolean;
+  scope: string;
+}
+
+export interface KnowledgeApproveResult {
+  saved: boolean;
+  answer_id?: number;
+  canonical_question?: string;
+  aliases_added: number;
+  questions_resolved: number;
+  applications_helped: number;
+  still_unresolved: number;
+}
+
+export interface PreflightStatus {
+  running: boolean;
+  applications: number;
+  started_at?: string;
+  results: PreflightResult[];
+}
+
+/** One editable fact from pii.yaml. */
+export interface ProfileField {
+  key: string;
+  label: string;
+  value: string;
+  section: string;
+  sensitive?: boolean;
+  note?: string;
+}
+
+export interface ProfileSnapshot {
+  sections: string[];
+  fields: ProfileField[];
+  path: string;
+}
+
+/** One answer in the vault, as the management view shows it. */
+export interface VaultAnswer {
+  id: number;
+  question: string;
+  answer: string;
+  sensitivity: string;
+  scope: string;
+  reuse_allowed: boolean;
+  provenance: string;
+  use_count: number;
+  policy: KnowledgePolicy;
+  aliases: string[];
+  last_used_at?: string;
+}

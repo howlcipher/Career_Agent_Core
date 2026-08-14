@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/answers"
 )
 
 // Question statuses. A question is pending until the operator deals with it,
@@ -52,7 +54,16 @@ type ApplicationQuestion struct {
 	Suggested   string `json:"suggested,omitempty"`
 	Source      string `json:"source,omitempty"`
 	LabelUnsafe bool   `json:"label_unsafe,omitempty"`
-	CreatedAt   string `json:"created_at"`
+	// CanonicalKey groups this question with the same question asked by other
+	// employers. It is derived from Prompt by the store, never supplied by a
+	// caller, and it is not the same thing as Key -- see the column comment in
+	// EnsureQuestionSchema.
+	CanonicalKey string `json:"canonical_key,omitempty"`
+	// AutoFillable is what the vault concluded about this question the last
+	// time it was re-evaluated: Career Agent may type this answer without
+	// asking. Advisory only; the live browser re-resolves and wins.
+	AutoFillable bool   `json:"auto_fillable,omitempty"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // AssistedFillSummary is the "Career Agent completed" half of a card: counts
@@ -85,6 +96,21 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 		proposed_answer TEXT NOT NULL DEFAULT '',
 		answer_source TEXT NOT NULL DEFAULT '',
 		label_unsafe INTEGER NOT NULL DEFAULT 0,
+		-- canonical_key is what makes the same question asked by nine employers
+		-- one thing to answer instead of nine. question_key above is the DOM
+		-- control's key (name, then id, then a hash of the label) and is unique
+		-- to one rendering of one form; canonical_key is derived from the
+		-- question's *text* and is therefore comparable across applications.
+		-- The two are separate columns because they answer different questions:
+		-- question_key decides which control an answer is typed into,
+		-- canonical_key decides which questions are the same question.
+		canonical_key TEXT NOT NULL DEFAULT '',
+		-- auto_fillable records what the vault concluded the last time this row
+		-- was re-evaluated. It is advisory: the live browser re-resolves from
+		-- the vault when it opens the page and always wins. Keeping it here is
+		-- what lets the dashboard say "9 of these are now resolved" without
+		-- opening nine browsers to find out.
+		auto_fillable INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME NOT NULL,
 		answered_at DATETIME,
 		UNIQUE(job_id, question_key)
@@ -108,11 +134,122 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 		created_at DATETIME NOT NULL,
 		PRIMARY KEY (job_id, question_key)
 	);
+	-- Preflight's per-application verdict. Deliberately separate from
+	-- application_questions: "we looked and found nothing" and "we could not
+	-- look" are different facts, and only this table can tell them apart.
+	CREATE TABLE IF NOT EXISTS application_preflight (
+		job_id INTEGER PRIMARY KEY,
+		state TEXT NOT NULL,
+		reason TEXT NOT NULL DEFAULT '',
+		ats TEXT NOT NULL DEFAULT '',
+		control_count INTEGER NOT NULL DEFAULT 0,
+		inspected_at DATETIME NOT NULL
+	);
 	CREATE INDEX IF NOT EXISTS idx_application_questions_job ON application_questions(job_id, status);`)
 	if err != nil {
 		return fmt.Errorf("create question schema: %w", err)
 	}
+	return upgradeQuestionSchema(conn)
+}
+
+// upgradeQuestionSchema adds the columns a database created before them is
+// missing, and backfills the one that can be derived from what is already
+// stored.
+//
+// The backfill matters more than it looks. canonical_key is how every
+// cross-application view finds its rows, so a database that upgraded without it
+// would not be missing a column -- it would silently report that the operator
+// has no repeated questions, which is indistinguishable from good news.
+func upgradeQuestionSchema(conn *sql.DB) error {
+	rows, err := conn.Query(`PRAGMA table_info(application_questions)`)
+	if err != nil {
+		return fmt.Errorf("inspect question schema: %w", err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan question schema: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, column := range []struct{ name, definition string }{
+		{"canonical_key", "TEXT NOT NULL DEFAULT ''"},
+		{"auto_fillable", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := conn.Exec("ALTER TABLE application_questions ADD COLUMN " + column.name + " " + column.definition); err != nil {
+			return fmt.Errorf("add question schema column %s: %w", column.name, err)
+		}
+	}
+	// After the ALTERs, never alongside the CREATE TABLE: on a database that
+	// already had the table, the column this index covers does not exist until
+	// the loop above has run, and SQLite rejects the whole batch.
+	if _, err := conn.Exec(`CREATE INDEX IF NOT EXISTS idx_application_questions_canonical
+		ON application_questions(canonical_key, status)`); err != nil {
+		return fmt.Errorf("index questions by canonical key: %w", err)
+	}
+	return backfillCanonicalKeys(conn)
+}
+
+// backfillCanonicalKeys fills in any row whose canonical key was never
+// computed, whether because it predates the column or because it was written
+// with an empty prompt.
+func backfillCanonicalKeys(conn *sql.DB) error {
+	rows, err := conn.Query(`SELECT id, prompt_text FROM application_questions WHERE canonical_key = ''`)
+	if err != nil {
+		return fmt.Errorf("read questions needing a canonical key: %w", err)
+	}
+	type pending struct {
+		id     int64
+		prompt string
+	}
+	var todo []pending
+	for rows.Next() {
+		var row pending
+		if err := rows.Scan(&row.id, &row.prompt); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan question needing a canonical key: %w", err)
+		}
+		todo = append(todo, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, row := range todo {
+		key := CanonicalQuestionKey(row.prompt)
+		if key == "" {
+			continue
+		}
+		if _, err := conn.Exec(`UPDATE application_questions SET canonical_key = ? WHERE id = ?`, key, row.id); err != nil {
+			return fmt.Errorf("backfill canonical key: %w", err)
+		}
+	}
 	return nil
+}
+
+// CanonicalQuestionKey reduces an employer's question text to the key every
+// cross-application view groups on.
+//
+// It is a thin wrapper over answers.QuestionKey rather than its own
+// normalization, because two normalizations of the same text is exactly how a
+// question ends up in one group here and a different one in the vault -- and
+// the vault's is the one that decides whether an approved answer applies.
+func CanonicalQuestionKey(prompt string) string {
+	return answers.QuestionKey(prompt)
 }
 
 // ReplaceApplicationQuestions records the outcome of one refill: the questions
@@ -149,9 +286,16 @@ func ReplaceApplicationQuestions(conn *sql.DB, jobID string, questions []Applica
 			}
 			options = string(encoded)
 		}
+		// The canonical key is computed here rather than taken from the caller,
+		// for the reason answers.Store.Save enforces its own rule rather than
+		// trusting a handler: a check at the single write point protects every
+		// caller, including the ones written next year. A caller that forgot it
+		// would not produce an error, it would produce a question that silently
+		// belongs to no group.
+		canonical := CanonicalQuestionKey(question.Prompt)
 		if _, err := tx.Exec(`INSERT INTO application_questions
-			(job_id, question_key, prompt_text, control_type, options_json, required, status, sensitivity, proposed_answer, answer_source, label_unsafe, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(job_id, question_key, prompt_text, control_type, options_json, required, status, sensitivity, proposed_answer, answer_source, label_unsafe, canonical_key, auto_fillable, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(job_id, question_key) DO UPDATE SET
 				prompt_text = excluded.prompt_text,
 				control_type = excluded.control_type,
@@ -160,10 +304,13 @@ func ReplaceApplicationQuestions(conn *sql.DB, jobID string, questions []Applica
 				sensitivity = excluded.sensitivity,
 				proposed_answer = excluded.proposed_answer,
 				answer_source = excluded.answer_source,
-				label_unsafe = excluded.label_unsafe`,
+				label_unsafe = excluded.label_unsafe,
+				canonical_key = excluded.canonical_key,
+				auto_fillable = excluded.auto_fillable`,
 			jobID, question.Key, question.Prompt, question.ControlType, options,
 			boolToInt(question.Required), QuestionPending, question.Sensitivity,
-			question.Suggested, question.Source, boolToInt(question.LabelUnsafe), now); err != nil {
+			question.Suggested, question.Source, boolToInt(question.LabelUnsafe),
+			canonical, boolToInt(question.AutoFillable), now); err != nil {
 			return fmt.Errorf("record application question: %w", err)
 		}
 	}
@@ -192,7 +339,8 @@ func GetPendingQuestions(conn *sql.DB, jobID string) ([]ApplicationQuestion, err
 		return nil, errors.New("database not initialized")
 	}
 	rows, err := conn.Query(`SELECT id, job_id, question_key, prompt_text, control_type, options_json,
-		required, status, sensitivity, proposed_answer, answer_source, label_unsafe, created_at
+		required, status, sensitivity, proposed_answer, answer_source, label_unsafe,
+		canonical_key, auto_fillable, created_at
 		FROM application_questions WHERE job_id = ? AND status = ?
 		ORDER BY required DESC, id ASC`, jobID, QuestionPending)
 	if err != nil {
@@ -206,15 +354,17 @@ func GetPendingQuestions(conn *sql.DB, jobID string) ([]ApplicationQuestion, err
 	for rows.Next() {
 		var question ApplicationQuestion
 		var options string
-		var required, labelUnsafe int
+		var required, labelUnsafe, autoFillable int
 		var createdAt sql.NullString
 		if err := rows.Scan(&question.ID, &question.JobID, &question.Key, &question.Prompt,
 			&question.ControlType, &options, &required, &question.Status, &question.Sensitivity,
-			&question.Suggested, &question.Source, &labelUnsafe, &createdAt); err != nil {
+			&question.Suggested, &question.Source, &labelUnsafe,
+			&question.CanonicalKey, &autoFillable, &createdAt); err != nil {
 			return nil, err
 		}
 		question.Required = required != 0
 		question.LabelUnsafe = labelUnsafe != 0
+		question.AutoFillable = autoFillable != 0
 		if options != "" {
 			_ = json.Unmarshal([]byte(options), &question.Options)
 		}

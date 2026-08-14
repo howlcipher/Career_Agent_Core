@@ -9,6 +9,14 @@ interface ApplySessionBarProps {
   onStart: () => void;
   onControl: (action: 'pause' | 'resume' | 'stop_after_current' | 'stop') => void;
   onSkip: () => void;
+  /** Inspect the selected applications before starting, so the session opens on
+   *  forms Career Agent has already resolved what it can. */
+  onPrepare?: () => void;
+  preparing?: boolean;
+  /** How many of the selected applications still need something from the
+   *  operator, when that is known. Undefined means nothing has been inspected. */
+  unresolvedQuestions?: number;
+  answersNeeded?: number;
 }
 
 /**
@@ -24,18 +32,47 @@ export function ApplySessionBar({
   onStart,
   onControl,
   onSkip,
+  onPrepare,
+  preparing,
+  unresolvedQuestions,
+  answersNeeded,
 }: ApplySessionBarProps) {
   if (!session) {
     return (
       <div className="apply-session-bar">
-        <ConsoleButton variant="primary" onClick={onStart} disabled={!canStart}>
-          Start Apply Session
-        </ConsoleButton>
+        <div className="apply-session-controls">
+          {onPrepare && (
+            <ConsoleButton
+              variant="secondary"
+              onClick={onPrepare}
+              disabled={preparing || selectedCount === 0}
+            >
+              {preparing
+                ? 'Preparing…'
+                : `Prepare ${selectedCount || ''} ${selectedCount === 1 ? 'application' : 'applications'}`.replace('  ', ' ')}
+            </ConsoleButton>
+          )}
+          <ConsoleButton variant="primary" onClick={onStart} disabled={!canStart}>
+            Start Apply Session
+          </ConsoleButton>
+        </div>
         <span className="detail-meta">
           {selectedCount === 0
             ? 'Select applications below to start a session.'
             : `${selectedCount} selected. Career Agent will open each in turn and move on once you confirm.`}
         </span>
+        {/* Readiness is only stated when it is actually known. Preparing is not
+            required before a session — the flow works exactly as it did — but
+            an operator who has prepared should see what it bought them, and one
+            who has not should not be told a number nobody measured. */}
+        {selectedCount > 0 && unresolvedQuestions !== undefined && (
+          <span className="detail-meta">
+            {unresolvedQuestions === 0
+              ? 'Career Agent has an answer for everything it found in your queue.'
+              : `${unresolvedQuestions} field${unresolvedQuestions === 1 ? '' : 's'} still need you` +
+                (answersNeeded ? `, behind ${answersNeeded} unanswered question${answersNeeded === 1 ? '' : 's'}.` : '.')}
+          </span>
+        )}
       </div>
     );
   }

@@ -44,6 +44,9 @@ func (s *Store) Resolve(question Question, ctx Context, pii *config.PII) Resolut
 			if resolution, ok := s.resolveFromVault(question, scope); ok {
 				return escalateSensitivity(resolution, question)
 			}
+			if resolution, ok := s.resolveFromSkillExperience(question, scope); ok {
+				return escalateSensitivity(resolution, question)
+			}
 		}
 	}
 	if resolution, ok := resolveFromPattern(question, pii); ok {
@@ -98,7 +101,31 @@ func (s *Store) resolveFromAlias(question Question, scope string) (Resolution, b
 }
 
 func (s *Store) resolveFromVault(question Question, scope string) (Resolution, bool) {
-	key := QuestionKey(question.Prompt)
+	return s.resolveFromKey(QuestionKey(question.Prompt), scope, SourceVault)
+}
+
+// resolveFromSkillExperience answers "how many years of <skill>?" from the one
+// value the operator approved for that skill, whatever wording the employer
+// used.
+//
+// This is the deterministic half of bugs.md #544. The pattern table now refuses
+// a skill-scoped duration question rather than answering it with a career
+// total, which on its own would mean every phrasing of every skill question
+// became a separate operator interruption forever. Reducing the question to its
+// subject is a closed, curated transformation over the token list in
+// experience.go -- no stemming, no similarity, no model -- so "Years of
+// Kubernetes experience", "How long have you worked with Kubernetes?" and
+// "Kubernetes experience (years)" reach the same stored answer, and a skill the
+// operator has never approved still reaches nobody.
+func (s *Store) resolveFromSkillExperience(question Question, scope string) (Resolution, bool) {
+	subject := SkillExperienceSubject(question)
+	if subject == "" {
+		return Resolution{}, false
+	}
+	return s.resolveFromKey(SkillExperienceKey(subject), scope, SourceSkillExperience)
+}
+
+func (s *Store) resolveFromKey(key, scope string, source Source) (Resolution, bool) {
 	if key == "" {
 		return Resolution{}, false
 	}
@@ -109,7 +136,7 @@ func (s *Store) resolveFromVault(question Question, scope string) (Resolution, b
 	if err != nil {
 		return Resolution{}, false
 	}
-	return s.resolutionFrom(answer, SourceVault), true
+	return s.resolutionFrom(answer, source), true
 }
 
 // resolutionFrom converts a stored answer into a resolution.
@@ -221,6 +248,20 @@ func (s *Store) SeedFromPII(pii *config.PII) (int, error) {
 		seeded++
 	}
 	return seeded, nil
+}
+
+// CanonicalQuestionForPattern returns Career Agent's own wording for a curated
+// question family, or "" for a family that has none.
+//
+// It matters because a group collapsed by pattern can hold several employers'
+// phrasings, and the shortest of them is still one employer's. Filing a global
+// answer under "Do you require immigration sponsorship to work for Affirm in
+// the United States?*" -- observed on a real form -- labels an answer that
+// applies everywhere with one company's name and a required marker. The
+// operator reading their vault later has no way to tell it is not scoped to
+// that employer.
+func CanonicalQuestionForPattern(patternID string) string {
+	return seedQuestions[patternID]
 }
 
 // seedQuestions is the canonical wording each seeded fact is filed under. These

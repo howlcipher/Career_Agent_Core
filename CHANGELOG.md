@@ -1,5 +1,118 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Answer a question once, for every application waiting on it
+
+`improvements.md` #538–#542. The Approved Answer Vault already knew how to answer
+one question on one open form, safely and deterministically. What it could not do
+was tell you that nine queued applications ask the same thing, let you answer it
+outside a browser session, or notice that approving one answer had just resolved
+seven other questions.
+
+* **The starting point, measured rather than assumed.** On this machine, after
+  372 assisted applications: `approved_answers` 0 rows, `answer_aliases` 0 rows,
+  `application_questions` 0 rows. `SeedFromPII` had shipped, was tested, and was
+  never called from production code. No query anywhere grouped questions by
+  anything but job. So the operator answered the same screening question on every
+  application and Career Agent's knowledge never compounded.
+* **Application Knowledge** is a new dashboard section with four views: what needs
+  your input, prepare applications, what Career Agent knows, and your details.
+  The vault has never had a UI before this — `/api/answer-vault` was reachable
+  only by curl.
+* **Deduplication you can inspect.** Two questions are the same question only when
+  a curated rule says so: one of the vault's own 19 question families, the
+  skill-experience reduction, or text that differs only in presentation. **No
+  embedding, no similarity threshold, no model call enters this path**, for the
+  same reason none enters the resolver — a heuristic that quietly equates two
+  attestations puts a false statement on a real application. Whenever a group
+  holds more than one wording, all of them are shown; for a declaration, Career
+  Agent will not bind them together until you confirm they mean the same thing,
+  and without that confirmation the unconfirmed wording simply stays unresolved.
+* **Approving re-evaluates the queue immediately**, and reports what it found:
+  *"Saved. That resolved 9 questions across 9 applications."* That number comes
+  from actually re-resolving, not from an estimate.
+* **Prepare applications** opens each selected application once, reads what it
+  asks, and closes it. It fills nothing, submits nothing, and cannot reach a
+  submit control — that boundary is asserted by parsing the source, because a
+  behavioural test would have to enumerate every employer form to prove a
+  negative. Anything it could not inspect is named with a reason from a closed
+  vocabulary: a CAPTCHA, a sign-in gate, an expired posting, an ATS that rejects
+  Career Agent's browser. None of those is worked around. A sign-in wall and an
+  empty form both look like "nothing to answer", so a password field reports
+  *needs you signed in* rather than *no form found*.
+* **Your details are edited where they live.** The profile view reads and writes
+  `pii.yaml` rather than keeping a second copy that could disagree with the one
+  the fill path uses. Only known fields are accepted, it is read-modify-write so a
+  patch cannot erase what it did not mention, a timestamped backup is written
+  before every overwrite, the file is replaced atomically at owner-only
+  permissions, and no value is ever logged or echoed. Two limits are stated rather
+  than hidden: comments in `pii.yaml` do not survive a save, and the same-origin
+  check is not authentication — what is new is that the set of things a local
+  process can already do now includes rewriting that file.
+* **Readiness is demand-driven.** "Answer 5 questions and Career Agent can handle
+  38 fields it currently cannot", measured against the applications you actually
+  have. There is deliberately no "profile 93% complete", and an empty queue reports
+  that nothing has been inspected rather than rendering as fully known.
+* **Nothing about submission changed.** Automatic Apply, `AttemptSubmit` and the
+  submit gate are untouched, `cmd/assist` is unchanged, and the employer's Submit
+  is still pressed by you. Preparing is an option and never a gate. Newly approved
+  answers reach the next application only because assisted fill already re-resolves
+  from the vault when it opens a page.
+* **Verified against real employer forms, not only against tests.** A preflight
+  run over live Greenhouse and Lever postings inspected two applications (46
+  fields), correctly refused two Lever postings before loading a page, and
+  reported one expired posting as dead. Three differently-worded sponsorship
+  questions across two employers collapsed into one entry, and approving it once
+  resolved all three and bound the other two wordings. That run found four
+  defects that had all passed `go test` — the vault could not answer the
+  operator's own name, readiness counted remaining work and called it the form,
+  a global answer was filed under one employer's wording, and a declaration the
+  operator had granted reuse for was labelled "always ask you" while
+  auto-filling. All four are fixed. The run's stderr was scanned against all 80
+  values in `pii.yaml` and against markup, `value="`, `Call log:` and
+  `locator resolved to`, and contained none of them, nor any employer question
+  text.
+* Recorded in `docs/adrs/ADR-007-Application-Knowledge.md`. `ADR-005` is amended:
+  the browser companion's field query now exists as `GET /api/knowledge/field`.
+
+## 2026-08-13 — Career Agent no longer answers "years of Kubernetes?" with your whole career
+
+`bugs.md` #544, found by reading the code while planning the Application
+Knowledge work, and fixed before anything was built on top of it.
+
+* **What it did.** The Approved Answer Vault's `years_experience` pattern
+  matched on a duration word plus the word "experience", and every pattern
+  classified Routine is allowed to auto-fill. So a screening question about one
+  technology — "How many years of **Kubernetes** experience do you have?" —
+  matched it, and Career Agent typed the operator's total years of professional
+  experience into it. On a real employer's form, under the operator's name,
+  with no interruption. The fill summary keeps labels and discards values, so
+  nothing on the card would have shown it either.
+* **Reproduced as a failing test before the fix.** Six of eight real phrasings
+  (Kubernetes, Terraform, Azure, Go, Python, and the "years of professional X
+  experience" shape) auto-filled the career total. The two that escaped did so
+  only because they omit the literal word "experience" and were therefore
+  already unresolved — nothing was stopping them.
+* **The fix tells the two questions apart deterministically.** A new
+  `SkillExperienceSubject` reduces a duration question to the thing it asks
+  about, using a closed curated token list — strip the interrogatives, the
+  duration and experience vocabulary, and the qualifiers that describe the
+  measure rather than its subject ("professional", "total", "overall",
+  "relevant", "full-time"). Whatever survives is the skill. The employer's own
+  name is subtracted first, the same way #540 subtracts it, so "How many years
+  have you worked at Affirm?" reads as tenure rather than as a skill called
+  Affirm. No stemming, no similarity score, no model — the same standard the
+  rest of the resolution path is held to.
+* **And it gives the skill question somewhere honest to get an answer.** A
+  refusal on its own would have made every phrasing of every skill question a
+  permanent interruption. So an approved *years of `<skill>`* value now resolves
+  **any** phrasing of that skill's duration question through the same
+  reduction: approve Kubernetes once and "Years of Kubernetes experience",
+  "How long have you worked with Kubernetes?" and "Kubernetes experience
+  (years)" are all answered. A skill nobody approved still reaches nobody.
+* **The general question is untouched.** "How many years of professional
+  experience do you have?" still resolves and still auto-fills from the
+  configured career total, which is the answer it actually wants.
+
 ## 2026-08-13 — Operator answers can no longer reach the dashboard log
 
 `bugs.md` #543, filed by the live apply-session run earlier today and fixed here.

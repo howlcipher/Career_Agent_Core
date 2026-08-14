@@ -504,6 +504,7 @@ func main() {
 			log.Fatalf("Failed to prepare assisted apply schema: %v", err)
 		}
 	}
+	seedAnswerVaultFromPII()
 
 	mux := http.NewServeMux()
 
@@ -537,6 +538,15 @@ func main() {
 	mux.HandleFunc("/api/assisted/answers", requireSameOrigin(serveAssistedAnswers))
 	mux.HandleFunc("/api/assisted/packet", requireSameOrigin(serveApplicationPacket))
 	mux.HandleFunc("/api/answer-vault", requireSameOrigin(serveAnswerVault))
+	// Application Knowledge. Same-origin gated like every other route that
+	// reads or writes the operator's own answers, and deliberately separate
+	// from /api/assisted, which the UI polls at 2 Hz and which already does
+	// per-row work for every queued application.
+	mux.HandleFunc("/api/knowledge", requireSameOrigin(serveKnowledge))
+	mux.HandleFunc("/api/knowledge/approve", requireSameOrigin(serveKnowledgeApprove))
+	mux.HandleFunc("/api/knowledge/preflight", requireSameOrigin(servePreflight))
+	mux.HandleFunc("/api/knowledge/field", requireSameOrigin(serveKnowledgeField))
+	mux.HandleFunc("/api/knowledge/profile", requireSameOrigin(serveKnowledgeProfile))
 	mux.HandleFunc("/api/apply-session", requireSameOrigin(serveApplySession))
 	mux.HandleFunc("/api/apply-session/start", requireSameOrigin(serveApplySessionStart))
 	mux.HandleFunc("/api/apply-session/control", requireSameOrigin(serveApplySessionControl))

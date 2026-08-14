@@ -219,7 +219,65 @@ are allowing a declaration to be reused. Ticking only the first is refused, and
 the dashboard tells you it was refused rather than letting you believe
 otherwise. Questions like "Why this company?" are never stored at all.
 
-You can review and revoke everything in the vault through `/api/answer-vault`.
+You can review, edit and revoke everything in the vault under **Application
+Knowledge → What Career Agent knows**, which also shows the other wordings each
+answer is recognised by, where it came from, and how many applications have used
+it.
+
+### Application Knowledge
+
+The vault answers questions one open form at a time. Application Knowledge asks
+the question one level up: *what do the applications in my queue need from me
+that Career Agent does not already know?*
+
+Open it from the dashboard, or from the rail. It has four views.
+
+**Needs your input.** Every unresolved question across your queue, deduplicated.
+If nine applications ask how many years of Kubernetes experience you have — in
+nine different wordings — that is one entry saying "seen on 9 queued
+applications", not nine. Answer it once and Career Agent tells you exactly what
+that bought: *"Saved. That resolved 9 questions across 9 applications."* It is
+one question at a time with a running position, Enter advances, and a yes/no
+question is two buttons rather than a text box.
+
+Two questions are only ever treated as the same question by a rule you can
+inspect: one of the curated question families the vault already recognises, the
+skill-experience reduction, or text that differs only in presentation. **There is
+no similarity matching and no model anywhere in this path.** Whenever a group
+holds more than one wording, all of them are shown — and for a declaration,
+Career Agent will not bind them together until you confirm they are asking the
+same thing.
+
+Some questions cannot be answered once for everyone, and those are listed
+separately with the reason rather than quietly folded in: "Why this company?" is
+written per employer and never reused, and a question whose employers offer
+genuinely different choices is answered on each application.
+
+**Prepare applications.** Select applications and Career Agent opens each one
+once, reads what it asks, and closes it. It fills nothing and submits nothing,
+and it tells you how many employer pages it is about to load before it starts.
+Anything it could not inspect is named with the reason — a CAPTCHA in front of
+the form, a Workday application that needs you signed in before any form exists,
+an expired posting, an ATS that rejects Career Agent's browser. **Career Agent
+does not work around any of those**, and "preflight unavailable until
+authenticated" is the honest answer rather than a spinner that never resolves.
+
+**What Career Agent knows.** The vault, with what it is allowed to do with each
+answer: *Auto-fill*, *Suggest and ask*, *Always ask you*, or *Written per
+employer*. Edit an answer or revoke it. What you cannot change here is a
+question's sensitivity or scope — those decide which rules apply to it, so
+changing one means revoking that answer and approving a new one, which is also
+the honest description of what happened.
+
+**Your details.** The facts in your `pii.yaml`, edited in place rather than
+copied. Saving rewrites that file, keeps a timestamped backup alongside it, and
+preserves its owner-only permissions; comments in the file are not preserved,
+which is what the backup is for. Anything left blank becomes a question an
+employer asks you instead, and the view says how many of those there are.
+
+Readiness is always measured against the applications you actually have — "answer
+5 questions and Career Agent can handle 38 fields it currently cannot" — never a
+percentage of some imagined universe of questions an employer might one day ask.
 
 ### Application effort
 
