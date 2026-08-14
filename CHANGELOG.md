@@ -1,5 +1,27 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — The knowledge inbox stops asking about things nobody asked
+
+Found by running Prepare over the real actionable queue after merging
+Application Knowledge — the first time the inbox had enough real input to judge.
+
+* **A combobox's own search box was the second most common "question".** Every
+  Greenhouse location and country picker renders an internal filter input whose
+  accessible name is "Search", and surfacing those put "Search" above every
+  declaration on the form. It is not a question and never blocks a submission.
+  Suppressed at both places a control becomes a question, so the assisted card
+  and the inbox agree; the rule is an exact label match on a combobox only,
+  because a text input labelled "Search" elsewhere might mean something.
+* **Your configured Twitter link had never been read by anything.** It shipped
+  with the vault and no pattern used it, so "Twitter" was an interruption on four
+  of six forms for a value already in your configuration.
+* Measured on the same six real forms, before and after: **88 → 94** fields
+  Career Agent can handle, **55 → 49** needing you, and the headline "answer N
+  questions to unlock M fields" went from 6 to 12.
+* `dashboard.log` no longer labels a background preparation run as
+  "assisted browser:", which told anyone reading it that a visible browser was
+  open on an application when none was.
+
 ## 2026-08-13 — Answer a question once, for every application waiting on it
 
 `improvements.md` #538–#542. The Approved Answer Vault already knew how to answer
