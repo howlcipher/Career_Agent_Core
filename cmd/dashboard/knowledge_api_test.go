@@ -485,3 +485,72 @@ func TestServeKnowledgeMethods_AreGated(t *testing.T) {
 		})
 	}
 }
+
+func TestServeApplicationPacket_ListsWhatThisFormActuallyAsks(t *testing.T) {
+	setupTestDB(t)
+	usePrivatePII(t, "first_name: Ada\nlast_name: Lovelace\nemail: ada@example.com\n")
+	seedQueuedQuestion(t, 1, "LeverCo",
+		storage.ApplicationQuestion{Key: "a", Prompt: "What is your notice period?", ControlType: "text",
+			Sensitivity: "routine", Suggested: "Two weeks", AutoFillable: true},
+		storage.ApplicationQuestion{Key: "b", Prompt: "Pronouns", ControlType: "text", Sensitivity: "sensitive"},
+		storage.ApplicationQuestion{Key: "c", Prompt: "Why do you want to work here?", ControlType: "textarea",
+			Sensitivity: "generate_per_job"},
+	)
+
+	recorder := httptest.NewRecorder()
+	serveApplicationPacket(recorder, httptest.NewRequest(http.MethodGet, "/api/assisted/packet?job_id=1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Entries []struct {
+			Label        string `json:"label"`
+			Value        string `json:"value"`
+			Sensitive    bool   `json:"sensitive"`
+			Status       string `json:"status"`
+			FromThisForm bool   `json:"from_this_form"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	byLabel := map[string]struct {
+		Label        string `json:"label"`
+		Value        string `json:"value"`
+		Sensitive    bool   `json:"sensitive"`
+		Status       string `json:"status"`
+		FromThisForm bool   `json:"from_this_form"`
+	}{}
+	for _, entry := range payload.Entries {
+		byLabel[entry.Label] = entry
+	}
+
+	// The general prepared values are still there.
+	if byLabel["Full name"].Value != "Ada Lovelace" || byLabel["Full name"].FromThisForm {
+		t.Fatalf("prepared values must survive: %+v", byLabel["Full name"])
+	}
+
+	// And now so is what this employer actually asks, which is the whole point
+	// when the operator has to fill the form by hand.
+	notice := byLabel["What is your notice period?"]
+	if !notice.FromThisForm || notice.Value != "Two weeks" || notice.Status != "" {
+		t.Fatalf("an answered question should be copyable with no caveat: %+v", notice)
+	}
+
+	// A question with nothing prepared is listed rather than omitted: "this form
+	// will ask about pronouns and Career Agent has nothing" is worth knowing
+	// before opening it, and hiding it would make the packet look complete.
+	pronouns := byLabel["Pronouns"]
+	if !pronouns.FromThisForm || pronouns.Status != "needs you" || pronouns.Value != "" {
+		t.Fatalf("an unanswered question must say so: %+v", pronouns)
+	}
+	if !pronouns.Sensitive {
+		t.Error("a declaration must still be flagged sensitive in the packet")
+	}
+
+	// A per-employer answer is never offered as something to paste.
+	why := byLabel["Why do you want to work here?"]
+	if why.Value != "" || why.Status != "write this one for this employer" {
+		t.Fatalf("a per-job answer must not be offered for copying: %+v", why)
+	}
+}

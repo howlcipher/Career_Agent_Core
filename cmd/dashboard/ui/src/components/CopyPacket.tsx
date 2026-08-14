@@ -60,6 +60,39 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
   if (!entries) return <p className="detail-meta">Loading your prepared details…</p>;
   if (entries.length === 0) return <p className="detail-meta">Nothing prepared for this application yet.</p>;
 
+  // Prepared values first, then what this employer actually asks. The second
+  // list is the one that turns copying from a memory exercise into a checklist,
+  // and it only exists once the form has been inspected.
+  const prepared = entries.filter((entry) => !entry.from_this_form);
+  const asked = entries.filter((entry) => entry.from_this_form);
+
+  const row = (entry: PacketEntry) => {
+    const hidden = entry.sensitive && !revealed[entry.label];
+    const nothingToCopy = entry.value.trim() === '';
+    return (
+      <li key={`${entry.label}-${entry.value}-${entry.status ?? ''}`}>
+        <span className="copy-packet-label">{entry.label}</span>
+        <span className="copy-packet-value">
+          {nothingToCopy ? <em className="detail-meta">{entry.status}</em> : hidden ? '••••••••' : entry.value}
+        </span>
+        {entry.sensitive && !nothingToCopy && (
+          <ConsoleButton
+            variant="ghost"
+            onClick={() => setRevealed((current) => ({ ...current, [entry.label]: !hidden }))}
+          >
+            {hidden ? 'Show' : 'Hide'}
+          </ConsoleButton>
+        )}
+        {!nothingToCopy && (
+          <ConsoleButton variant="ghost" onClick={() => copy(entry)}>
+            Copy
+          </ConsoleButton>
+        )}
+        {entry.status && !nothingToCopy && <span className="detail-meta"> {entry.status}</span>}
+      </li>
+    );
+  };
+
   return (
     <div className="copy-packet">
       <p className="detail-meta">
@@ -68,28 +101,18 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
       <p aria-live="polite" className="copy-packet-status">
         {copied ? `${copied} copied` : ''}
       </p>
-      <ul className="copy-packet-list">
-        {entries.map((entry) => {
-          const hidden = entry.sensitive && !revealed[entry.label];
-          return (
-            <li key={`${entry.label}-${entry.value}`}>
-              <span className="copy-packet-label">{entry.label}</span>
-              <span className="copy-packet-value">{hidden ? '••••••••' : entry.value}</span>
-              {entry.sensitive && (
-                <ConsoleButton
-                  variant="ghost"
-                  onClick={() => setRevealed((current) => ({ ...current, [entry.label]: !hidden }))}
-                >
-                  {hidden ? 'Show' : 'Hide'}
-                </ConsoleButton>
-              )}
-              <ConsoleButton variant="ghost" onClick={() => copy(entry)}>
-                Copy
-              </ConsoleButton>
-            </li>
-          );
-        })}
-      </ul>
+      <ul className="copy-packet-list">{prepared.map(row)}</ul>
+
+      {asked.length > 0 && (
+        <>
+          <h5 className="copy-packet-heading">This form also asks ({asked.length})</h5>
+          <p className="detail-meta">
+            Read from the employer's own form. Anything marked “needs you” has no prepared answer, so
+            you will be writing it rather than pasting it.
+          </p>
+          <ul className="copy-packet-list">{asked.map(row)}</ul>
+        </>
+      )}
     </div>
   );
 }

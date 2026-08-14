@@ -256,7 +256,7 @@ func serveApplicationPacket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid assisted job identifier", http.StatusBadRequest)
 		return
 	}
-	pii, err := config.LoadPII("pii.yaml")
+	pii, err := config.LoadPII(piiPath)
 	if err != nil {
 		log.Printf("serveApplicationPacket: %v", err)
 		http.Error(w, "could not read your configured details", http.StatusInternalServerError)
@@ -266,6 +266,13 @@ func serveApplicationPacket(w http.ResponseWriter, r *http.Request) {
 		Label     string `json:"label"`
 		Value     string `json:"value"`
 		Sensitive bool   `json:"sensitive"`
+		// Status is set only on entries that came from this form's own
+		// questions: "" when there is a value to copy, otherwise a short note
+		// saying why there is not.
+		Status string `json:"status,omitempty"`
+		// FromThisForm separates what this employer actually asks from the
+		// general prepared values above it.
+		FromThisForm bool `json:"from_this_form,omitempty"`
 	}
 	entries := []packetEntry{}
 	add := func(label, value string, sensitive bool) {
@@ -298,6 +305,39 @@ func serveApplicationPacket(w http.ResponseWriter, r *http.Request) {
 			for _, entry := range stored {
 				add(entry.CanonicalQuestion, entry.AnswerText, entry.Sensitivity == answers.Sensitive)
 			}
+		}
+	}
+
+	// This form's own questions, in the order it asks them.
+	//
+	// Without this the packet is a list of facts the operator has to match up
+	// against a form themselves — it says what Career Agent knows, not what this
+	// employer wants. That gap matters most exactly where the packet matters
+	// most: an ATS that refuses the assisted browser (Lever, bug #520) has to be
+	// completed by hand, and on a real queue that is 20 of 26 applications.
+	//
+	// A question with no answer is listed too, with a note. "This form will ask
+	// you about pronouns and Career Agent has nothing for it" is worth knowing
+	// before opening the form, and silently omitting it would make the packet
+	// look complete when it is not.
+	if questions, err := storage.GetPendingQuestions(db, jobID); err == nil {
+		for _, question := range questions {
+			entry := packetEntry{
+				Label:        question.Prompt,
+				Value:        question.Suggested,
+				Sensitive:    question.Sensitivity == string(answers.Sensitive),
+				FromThisForm: true,
+			}
+			switch {
+			case question.Sensitivity == string(answers.GeneratePerJob):
+				entry.Value = ""
+				entry.Status = "write this one for this employer"
+			case strings.TrimSpace(question.Suggested) == "":
+				entry.Status = "needs you"
+			case !question.AutoFillable:
+				entry.Status = "confirm before using"
+			}
+			entries = append(entries, entry)
 		}
 	}
 
@@ -344,7 +384,7 @@ func contains(values []string, want string) bool {
 // pre-fill some suggestions would be a worse outcome than one that starts
 // without them.
 func seedAnswerVaultFromPII() {
-	pii, err := config.LoadPII("pii.yaml")
+	pii, err := config.LoadPII(piiPath)
 	if err != nil {
 		log.Printf("Answer vault seeding skipped; pii.yaml could not be read: %v", err)
 		return

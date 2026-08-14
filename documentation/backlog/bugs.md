@@ -54,6 +54,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
+| 545 | [Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question](#545-levers-custom-question-cards-extract-a-placeholder-an-option-or-a-raw-name-attribute-instead-of-the-question) | Minor | Pending | 1.3 = 4×1.0÷3 | deep-reasoning | Found 2026-08-13 by inspecting four real Lever postings. Greenhouse labels come out clean; every Lever custom question comes out as `Type your response`, `Yes`, or `cards[<uuid>][field0]`. Blocks preflight from being useful on Lever, which is 20 of 26 applications in the real actionable queue. Latent today only because Lever never reaches the assisted browser at all (#520). |
 | 544 | [A skill-scoped experience question is answered with the operator's total career years](#544-a-skill-scoped-experience-question-is-answered-with-the-operators-total-career-years) | Major | Fixed (2026-08-13) | — | standard | Found by reading `patterns.go` while planning the Application Knowledge work. `years_experience` needs only a duration token and `experience`, is Routine, and every Routine pattern auto-fills — so "How many years of Kubernetes experience?" typed the operator's whole career total onto a real screening question. A fabricated qualification, submitted under their name. |
 | 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Done (2026-08-13) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #543 for the full account. |
 | 541 | [The two-checkbox guarantee fails when the UI and the vault classify a question differently](#541-the-two-checkbox-guarantee-fails-when-the-ui-and-the-vault-classify-a-question-differently) | Major | Fixed (2026-08-13) | — | standard | Found by the improvements.md #537 live run on a real Greenhouse form. A declaration was stored with reuse permission the operator was never asked for, because the card and the store disagreed about whether the question was sensitive. |
@@ -250,6 +251,28 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 545. Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question
+
+**Found 2026-08-13**, while evaluating whether preflight should inspect Lever postings. It should — Lever refuses *submissions*, not page reads, and four real postings inspected cleanly (30, 18, 18, 18 controls). The problem is what came back.
+
+`controlInventoryJS` resolves a label through: `aria-label` → `aria-labelledby` → `label[for]` → wrapping `<label>` → the first `legend, label` inside `closest('fieldset, .field, .form-group, li, div')` → `placeholder` → `name`. On Greenhouse that produces real questions. On Lever's custom "cards" questions it falls all the way through:
+
+| Greenhouse | Lever |
+|---|---|
+| `Do you now or in the future require visa sponsorship?` | `Type your response` |
+| `Are you currently eligible to work in your country of residence?` | `Yes` |
+| `Why are you interested in an Observability Architect role?` | `cards[24537723-bc35-433d-9173-…][field0]` |
+
+Three distinct fallbacks are firing: the **placeholder** (`Type your response`), an **option's own label** on radio/checkbox groups (`Yes`, `He/him`, `Custom`), and the raw **name attribute**.
+
+**Suspected cause, not yet confirmed against the live DOM.** `closest('fieldset, .field, .form-group, li, div')` returns the *nearest* match, and `div` is in that list — so a tight wrapper `<div>` around the input wins over the `<li>` that also contains the question text, and the search for `legend, label` then runs inside a container that has none. If so, the fix is about which ancestor is chosen rather than about adding more fallbacks.
+
+**Why it is only Minor today.** Lever never reaches the assisted browser (#520), and preflight currently refuses Lever too, so nothing surfaces these labels to the operator. It becomes Major the moment either of those changes.
+
+**Fix direction.** Confirm the cause against a real Lever form in a browser session — the page renders client-side, so fetching the HTML is not enough. Then correct the ancestor selection rather than appending Lever-specific fallbacks. **This is shared with the fill path**, so any change needs a live run against both a Greenhouse and a Lever posting to show Greenhouse's labels are unchanged before it ships.
+
+**Do not "fix" this by filtering unusable labels out.** A control whose question cannot be read is still a control the operator has to fill; hiding it makes the packet and the readiness summary look complete when they are not.
 
 ### 544. A skill-scoped experience question is answered with the operator's total career years
 
