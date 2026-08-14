@@ -40,7 +40,18 @@ their own browser instead.
 That routing is correct and stays. But today it is also where Career Agent's
 help stops: the operator gets a URL and a prepared résumé, and fills the form by
 hand. The Copy Application Packet (`/api/assisted/packet`) narrows that gap, and
-a browser companion would close it — the operator's own authenticated browser,
+a browser companion would close it
+
+> **Amended 2026-08-14 (bugs.md #545).** The gap is now narrower than this
+> section describes, which weakens the case for building the companion rather
+> than strengthening it. Refusing to *submit* from the assisted browser no
+> longer implies refusing to *read* the form, so Lever applications are
+> inspected and their packets carry the employer's real questions in the order
+> the form asks them. The operator handed a Lever posting now gets the URL, the
+> prepared documents, **and a checklist of what that specific form will ask** —
+> most of what the companion was meant to recover, at none of the complexity of
+> shipping a browser extension that handles PII. `improvements.md` #536 stays
+> below the ROI floor. — the operator's own authenticated browser,
 with their own session and their own cookies, assisted locally by the same
 prepared application packet.
 

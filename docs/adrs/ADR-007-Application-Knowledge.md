@@ -130,9 +130,27 @@ This is the same technique, and the same reasoning, as
 Unavailability is a closed vocabulary in the shape ADR-006 established: `captcha_blocked`,
 `auth_required`, `posting_dead`, `quarantined`, `navigation_failed`, `no_form_found`,
 `browser_rejected`, `unclassified`. Never an error's text, which can quote the page. Two refusals
-happen before any page is loaded — an ATS that rejects Career Agent's browser, and one with no
+happen before any page is loaded — an ATS whose form cannot be read at all, and one with no
 pre-auth form at all (bug #18's Workday case) — and a test passes a nil browser to prove that
 ordering.
+
+**Amended 2026-08-14 (bugs.md #545).** The first of those refusals originally asked
+`storage.AssistedBrowserRejectionReason`: *does this ATS accept a submission from the assisted
+browser?* That is the wrong question for a read. Preflight fills nothing and cannot submit — the
+paragraph above is the proof — so an employer refusing an automated submission has said nothing
+about whether their form can be inspected, and Lever answers no to the first question and yes to the
+second: its `/apply` form is served to an anonymous request.
+
+The conflation inverted the feature's value. An ATS Career Agent may not submit to is precisely the
+one the operator finishes by hand, and therefore precisely the one whose questions are worth having
+in advance — yet those were the only applications never inspected. On the live queue that was 20 of
+26. The registry now carries `blocksPreflight` alongside the submit rejection, and preflight asks
+`storage.PreflightRefusalReason`: one evidence-backed registry, two questions, each needing its own
+observation. `browser_rejected` keeps its meaning for an ATS genuinely unreadable without the
+operator signed in.
+
+Nothing about the submit boundary moved. Lever still never opens an assisted browser and still
+routes through `actionForOperatorBrowser`.
 
 A sign-in wall and an empty application form both look like "nothing to answer", so a password
 control or an auth-wall phrase reports `auth_required` rather than `no_form_found`. Telling the

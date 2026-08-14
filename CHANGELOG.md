@@ -1,5 +1,52 @@
 # Career Agent Core - Changelog
 
+## 2026-08-14 — Career Agent can now prepare a Lever application, which is most of your queue
+
+Yesterday's entry filed `bugs.md` #545 and held Lever preparation back rather
+than ship it: the inspection worked, but the questions it came back with were
+`Type your response`, `Yes` and `cards[<uuid>][field0]`. Fixed, and shipped.
+
+**What you get.** Twenty of the twenty-six applications in your actionable queue
+are on Lever, and Lever is the one platform you have to finish in your own
+browser — so those twenty are exactly the ones where the Copy Application Packet
+*is* the product. Their packets were empty. They now list the employer's real
+questions, in the order the form asks them.
+
+**What was wrong.** The label chain's last resort picked the nearest container
+around a control, and Lever wraps every control in a tight `div` of its own. The
+search for a question then ran inside a box that never contains one, so it fell
+through to the placeholder, to an option's own text, or to a generated `name`.
+It is now a bounded walk outward that reads only the parts of a container which
+hold no form control — a rule that needs no knowledge of Lever, of Greenhouse,
+or of any word list, because a container full of other questions has nothing of
+its own left to read.
+
+Running it against real postings then found three more labels of the same kind,
+which no unit test would have caught:
+
+* A `<label>` around a dropdown returned the question *and every option*:
+  `GenderSelect ...MaleFemaleDecline to self-identify`. Options belong in the
+  option list, not in the question.
+* A one-option attestation reported the option — `I Acknowledge` — rather than
+  the paragraph you would be acknowledging.
+* A help note inside a group of checkboxes outranked the group's own label, so
+  the pronouns question read as its explanatory sentence.
+
+**And a separate mistake, corrected.** Career Agent knew Lever refuses
+applications submitted from its assisted browser (bug #520). It was using that
+same fact to refuse to *read* a Lever form — but reading is not submitting.
+Preparation fills nothing and cannot submit, and Lever serves its application
+form to anyone. So the applications you most need prepared were the only ones
+never looked at. Those are now two separate questions with separate evidence.
+
+**Nothing about submitting changed.** Lever still never opens an assisted
+browser, still hands you the link, and still cannot be submitted by Career
+Agent.
+
+**Verified** against four real Lever postings and a real Greenhouse posting:
+every Lever label is now the question a human sees on the page, and Greenhouse's
+labels are byte-for-byte what they were before.
+
 ## 2026-08-13 — The Copy Application Packet now lists what the form in front of you actually asks
 
 The packet listed everything Career Agent had prepared — name, email, links,
