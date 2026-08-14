@@ -104,6 +104,71 @@ func QueuedQuestions(conn *sql.DB, now time.Time) ([]QueuedQuestion, error) {
 	return out, rows.Err()
 }
 
+// DiscoveredFieldCounts returns how many controls each inspected application
+// actually has, keyed by job.
+//
+// This exists because `application_questions` holds only what Career Agent
+// *cannot* answer -- a control it can fill never becomes a row. Counting that
+// table therefore measures the operator's remaining work, not the size of the
+// form, and a readiness summary built from it alone would report "22 fields, 0
+// of which Career Agent can handle" for two applications that between them have
+// 46 controls and 24 already resolved. Observed on real Greenhouse forms on
+// 2026-08-13.
+//
+// Two sources, because two things inspect a form. Preflight records the control
+// count directly. An assisted session instead records what it filled, so its
+// total is what it filled plus what it could not. Whichever is larger is the
+// better lower bound on the form's real size; neither can overstate it.
+func DiscoveredFieldCounts(conn *sql.DB) (map[string]int, error) {
+	if conn == nil {
+		return nil, errors.New("database not initialized")
+	}
+	counts := map[string]int{}
+	rows, err := conn.Query(`
+		SELECT CAST(job_id AS TEXT), control_count FROM application_preflight WHERE state = ?`,
+		PreflightInspected)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return counts, nil
+		}
+		return nil, fmt.Errorf("read discovered field counts: %w", err)
+	}
+	for rows.Next() {
+		var jobID string
+		var count int
+		if err := rows.Scan(&jobID, &count); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		counts[jobID] = count
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	filled, err := conn.Query(`SELECT CAST(job_id AS TEXT), filled_count, unresolved_count FROM assisted_fill_summary`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return counts, nil
+		}
+		return nil, fmt.Errorf("read fill summaries: %w", err)
+	}
+	defer filled.Close()
+	for filled.Next() {
+		var jobID string
+		var filledCount, unresolvedCount int
+		if err := filled.Scan(&jobID, &filledCount, &unresolvedCount); err != nil {
+			return nil, err
+		}
+		if total := filledCount + unresolvedCount; total > counts[jobID] {
+			counts[jobID] = total
+		}
+	}
+	return counts, filled.Err()
+}
+
 // SetQuestionResolution records what the vault concluded about one question.
 //
 // It writes only the advisory columns -- never `status`, never `answered_at`.

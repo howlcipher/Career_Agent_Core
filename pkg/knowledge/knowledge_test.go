@@ -628,3 +628,95 @@ func TestField_SeparatesAFillableAnswerFromASuggestion(t *testing.T) {
 		t.Fatalf("the suggestion should still be offered: %q", reply.Suggested)
 	}
 }
+
+func TestReadiness_CountsTheWholeFormNotJustTheOperatorsRemainingWork(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+
+	// Preflight found 25 controls and could only turn 3 of them into questions,
+	// because it answered the rest. Counting question rows alone would report
+	// "3 fields, 0 of which Career Agent can handle" for a form where it in fact
+	// handles 22 of 25 — which is the opposite of the truth, and the number the
+	// operator uses to decide whether to start a session.
+	ask(t, conn, "1",
+		storage.ApplicationQuestion{Key: "a", Prompt: "What is your T-shirt size?", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "b", Prompt: "Gender", ControlType: "select", Options: []string{"Male", "Female", "Decline"}},
+		storage.ApplicationQuestion{Key: "c", Prompt: "Why do you want to work here?", ControlType: "textarea"},
+	)
+	if err := storage.RecordPreflight(conn, storage.PreflightResult{
+		JobID: "1", State: storage.PreflightInspected, ATS: "Greenhouse", ControlCount: 25,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	readiness, err := service.Readiness(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Fields != 25 {
+		t.Fatalf("fields = %d, want the 25 controls actually found", readiness.Fields)
+	}
+	if readiness.Unresolved != 3 {
+		t.Fatalf("unresolved = %d, want 3", readiness.Unresolved)
+	}
+	if readiness.Resolved != 22 {
+		t.Fatalf("resolved = %d, want 22", readiness.Resolved)
+	}
+	if readiness.KnownPercent() != 88 {
+		t.Fatalf("known percent = %d, want 88", readiness.KnownPercent())
+	}
+}
+
+func TestReadiness_AnApplicationNothingInspectedStillContributesItsQuestions(t *testing.T) {
+	service, conn := newTestService(t)
+	now := time.Now().UTC()
+	seedJob(t, conn, 1, "Acme")
+	// No preflight row: this inventory came from a live assisted session that
+	// recorded questions without a field count. It must not vanish from the
+	// summary.
+	ask(t, conn, "1",
+		storage.ApplicationQuestion{Key: "a", Prompt: "What is your T-shirt size?", ControlType: "text"},
+	)
+	if _, err := conn.Exec(`DELETE FROM assisted_fill_summary`); err != nil {
+		t.Fatal(err)
+	}
+
+	readiness, err := service.Readiness(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readiness.Fields != 1 || readiness.Unresolved != 1 || readiness.Resolved != 0 {
+		t.Fatalf("readiness = %+v, want 1 field, 1 unresolved, 0 resolved", readiness)
+	}
+}
+
+func TestPolicy_ADeclarationTheOperatorGrantedReuseForIsNotReportedAsAlwaysAsking(t *testing.T) {
+	// Store.Save is the only route to a sensitive answer with reuse granted, and
+	// it demands two separate acknowledgements to get there. Once the operator
+	// has given them, the answer genuinely auto-fills — observed live resolving
+	// three real sponsorship questions — and labelling it "always ask you" would
+	// tell them the opposite of what they authorised.
+	granted := answers.Resolution{
+		Resolved: true, AutoFill: true,
+		Sensitivity: answers.Sensitive, Source: answers.SourceVault,
+	}
+	if got := Policy(granted); got != PolicyApprovedReusable {
+		t.Fatalf("policy = %q, want %q", got, PolicyApprovedReusable)
+	}
+	if RequiresHuman(granted) {
+		t.Fatal("an answer Career Agent fills does not require a human at fill time")
+	}
+
+	// Without the grant it is still, and always, a question for the operator.
+	withheld := answers.Resolution{
+		Resolved: true, AutoFill: false,
+		Sensitivity: answers.Sensitive, Source: answers.SourceVault,
+	}
+	if got := Policy(withheld); got != PolicyHumanReview {
+		t.Fatalf("policy = %q, want %q", got, PolicyHumanReview)
+	}
+	if !RequiresHuman(withheld) {
+		t.Fatal("a declaration without a reuse grant must require a human")
+	}
+}

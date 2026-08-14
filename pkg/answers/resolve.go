@@ -250,6 +250,20 @@ func (s *Store) SeedFromPII(pii *config.PII) (int, error) {
 	return seeded, nil
 }
 
+// CanonicalQuestionForPattern returns Career Agent's own wording for a curated
+// question family, or "" for a family that has none.
+//
+// It matters because a group collapsed by pattern can hold several employers'
+// phrasings, and the shortest of them is still one employer's. Filing a global
+// answer under "Do you require immigration sponsorship to work for Affirm in
+// the United States?*" -- observed on a real form -- labels an answer that
+// applies everywhere with one company's name and a required marker. The
+// operator reading their vault later has no way to tell it is not scoped to
+// that employer.
+func CanonicalQuestionForPattern(patternID string) string {
+	return seedQuestions[patternID]
+}
+
 // seedQuestions is the canonical wording each seeded fact is filed under. These
 // are Career Agent's own labels, not any employer's, so the operator reading
 // the vault sees a question rather than a config key.

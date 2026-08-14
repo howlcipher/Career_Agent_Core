@@ -194,6 +194,16 @@ counting it would overstate what the number buys them.
   from a re-resolution rather than an estimate.
 * Preflight is the only new outbound traffic in this change, and it is bounded, operator-initiated,
   read-only, and shown as a page count before it runs.
+* **`dashboard.log` gains one new class of line: the posting URL.** `newSubmitPage` logs
+  `Navigating to <url>` and preflight runs through it, so that record now reaches the dashboard's log
+  where previously only `cmd/assist` — which logs hostnames only — did. This was checked rather than
+  assumed: a real preflight run's stderr was scanned against all 80 values in `pii.yaml` and against
+  markup, `value="`, `Call log:` and `locator resolved to`, and contained none of them, nor any
+  employer question text. A public job-posting URL from this project's own database is not operator
+  data and not page content, so it is within ADR-006's boundary; it is recorded here because it is a
+  change in what that file contains and a future reader should not have to rediscover why. The same
+  shared code also stamps preflight's records `[Auto-Submit]`, which is misleading for a path that
+  cannot submit; renaming it touches the automatic path and was left alone deliberately.
 * `bugs.md` #544 was found while writing this and fixed first: `years_experience` matched on a
   duration word plus "experience" and auto-filled the operator's whole career total into questions
   about one technology. Building demand-driven surfacing of skill questions on top of that would have

@@ -75,6 +75,16 @@ func Policy(resolution answers.Resolution) string {
 	switch {
 	case resolution.Sensitivity == answers.GeneratePerJob:
 		return PolicyGeneratePerJob
+	case resolution.AutoFill && resolution.Sensitivity == answers.Sensitive:
+		// A declaration Career Agent actually fills. This can only arise from an
+		// explicit operator grant -- Store.Save refuses any other route to it,
+		// and a pattern's own resolution has AutoFill stripped by
+		// escalateSensitivity. Reporting it as "always ask you" would be a
+		// comfortable lie: observed live on 2026-08-13, an approved sponsorship
+		// answer with reuse granted was labelled "Always ask you" in the vault
+		// view while auto-filling three real questions. The operator is entitled
+		// to see what they granted.
+		return PolicyApprovedReusable
 	case resolution.Sensitivity == answers.Sensitive:
 		return PolicyHumanReview
 	case !resolution.Resolved:
@@ -212,6 +222,19 @@ func (s *Service) Inbox(now time.Time) ([]Group, error) {
 	return out, nil
 }
 
+// canonicalPromptFor picks the wording an approved answer is stored under.
+func canonicalPromptFor(group *Group) string {
+	if group.SkillSubject != "" {
+		return answers.SkillExperienceQuestion(group.SkillSubject)
+	}
+	if id, found := strings.CutPrefix(group.Key, "pattern:"); found {
+		if canonical := answers.CanonicalQuestionForPattern(id); canonical != "" {
+			return canonical
+		}
+	}
+	return group.Prompt
+}
+
 func sortGroups(groups []Group) {
 	sort.SliceStable(groups, func(i, j int) bool {
 		if groups[i].Applications != groups[j].Applications {
@@ -257,14 +280,23 @@ func (s *Service) collect(now time.Time) (map[string]*Group, Readiness, error) {
 		return nil, readiness, err
 	}
 
+	// The size of each form, from whoever inspected it. Counting question rows
+	// instead would measure the operator's remaining work and call it the form,
+	// so "Career Agent can handle N of M" would always read 0 of N.
+	discovered, err := storage.DiscoveredFieldCounts(s.conn)
+	if err != nil {
+		return nil, readiness, err
+	}
+
 	groups := map[string]*Group{}
 	applications := map[string]bool{}
 	blocked := map[string]bool{}
 	optionSets := map[string][]string{}
 
+	questionsPerJob := map[string]int{}
 	for _, queuedQuestion := range queued {
 		applications[queuedQuestion.JobID] = true
-		readiness.Fields++
+		questionsPerJob[queuedQuestion.JobID]++
 
 		question := answers.Question{
 			Key:         queuedQuestion.Key,
@@ -280,8 +312,8 @@ func (s *Service) collect(now time.Time) (map[string]*Group, Readiness, error) {
 
 		if resolution.AutoFill {
 			// Career Agent can handle this one already; it is not something to
-			// put in front of the operator.
-			readiness.Resolved++
+			// put in front of the operator. It reaches this loop at all only
+			// when it became answerable after the inventory was taken.
 			continue
 		}
 		readiness.Unresolved++
@@ -321,6 +353,26 @@ func (s *Service) collect(now time.Time) (map[string]*Group, Readiness, error) {
 			}
 		}
 	}
+	for jobID := range discovered {
+		applications[jobID] = true
+	}
+	for _, count := range discovered {
+		readiness.Fields += count
+	}
+	// An application inspected by nothing still contributes its known questions,
+	// so a queue whose inventory came from live sessions rather than preflight
+	// is not reported as having no fields at all.
+	for jobID := range applications {
+		if _, known := discovered[jobID]; !known {
+			readiness.Fields += questionsPerJob[jobID]
+		}
+	}
+	if readiness.Fields < readiness.Unresolved {
+		// Cannot happen from consistent data, but reporting more unresolved
+		// fields than fields would be visibly nonsense rather than merely wrong.
+		readiness.Fields = readiness.Unresolved
+	}
+	readiness.Resolved = readiness.Fields - readiness.Unresolved
 	readiness.Applications = len(applications)
 	readiness.ApplicationsBlocked = len(blocked)
 	return groups, readiness, nil
@@ -559,13 +611,13 @@ func (s *Service) Approve(request ApproveRequest, now time.Time) (ApproveResult,
 		return result, errors.New("this answer was not marked for reuse, so there is nothing to save")
 	}
 
-	// The canonical question a skill group is filed under is Career Agent's own
-	// wording, not whichever employer happened to be asked first -- that is what
-	// lets a future phrasing of the same skill resolve without an alias.
-	prompt := group.Prompt
-	if group.SkillSubject != "" {
-		prompt = answers.SkillExperienceQuestion(group.SkillSubject)
-	}
+	// The canonical question a group is filed under is Career Agent's own
+	// wording wherever it has one, not whichever employer happened to be asked
+	// first. For a skill group that is what lets a future phrasing resolve
+	// without an alias; for a pattern group it stops a global answer being
+	// labelled with one company's name (observed live: a sponsorship answer
+	// filed as "...to work for Affirm in the United States?*").
+	prompt := canonicalPromptFor(group)
 	question := answers.Question{
 		Key:         group.Key,
 		Prompt:      prompt,

@@ -784,3 +784,133 @@ func TestUpdateAnswer_ChangesTheTextAndRecordsThatTheOperatorEditedIt(t *testing
 		t.Fatalf("the edited answer should resolve, got %q", resolution.Answer)
 	}
 }
+
+// --- Identity and contact facts -------------------------------------------
+
+func identityPII() *config.PII {
+	pii := &config.PII{
+		FirstName:   "Ada",
+		LastName:    "Lovelace",
+		Email:       "ada@example.com",
+		Phone:       "555-0100",
+		Street:      "12 Analytical Way",
+		City:        "Denver",
+		State:       "CO",
+		FullState:   "Colorado",
+		Zip:         "80202",
+		Country:     "US",
+		FullCountry: "United States",
+	}
+	pii.Work.AuthorizedToWorkUS = "Yes"
+	pii.Work.RequiresSponsorship = "No"
+	return pii
+}
+
+func TestResolve_AnswersTheOperatorsOwnContactDetails(t *testing.T) {
+	store := newTestStore(t)
+	pii := identityPII()
+
+	// Observed live on a real Grafana Labs form: 6 of 19 "questions" preflight
+	// reported were the operator's own name, email, phone and location, because
+	// the vault had no pattern for any of them.
+	cases := map[string]string{
+		"First Name":                 "Ada",
+		"Preferred First Name":       "Ada",
+		"Last Name":                  "Lovelace",
+		"Email":                      "ada@example.com",
+		"Phone":                      "555-0100",
+		"Location (City)":            "Denver",
+		"Country":                    "United States",
+		"Zip code":                   "80202",
+		"What state do you live in?": "Colorado",
+		"Street address":             "12 Analytical Way",
+	}
+	for prompt, want := range cases {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if !resolution.Resolved || !resolution.AutoFill {
+				t.Fatalf("expected %q to resolve and auto-fill, got %+v", prompt, resolution)
+			}
+			if resolution.Answer != want {
+				t.Fatalf("answer = %q, want %q", resolution.Answer, want)
+			}
+		})
+	}
+}
+
+func TestResolve_IdentityPatternsNeverClaimAnAttestation(t *testing.T) {
+	store := newTestStore(t)
+	pii := identityPII()
+
+	// These share vocabulary with the identity patterns and are legal questions.
+	// The attestation families are earlier in the table and must claim them
+	// first; if one ever did not, escalateSensitivity would still stop the
+	// auto-fill, but the operator would be shown a country name as the proposed
+	// answer to a yes/no question.
+	cases := []struct {
+		prompt    string
+		wantMatch string
+	}{
+		{"Are you currently eligible to work in your country of residence?", "work_authorization"},
+		{"Do you now or in the future require visa sponsorship to work in this country?", "sponsorship"},
+		// Nothing claims this one: "citizenship" is not sponsorship vocabulary,
+		// and the country pattern denies it. Unresolved and sensitive is the
+		// honest outcome -- the answer to "which country are you a citizen of"
+		// is not the country you live in, and is not "No".
+		{"What is your country of citizenship?", ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.prompt, func(t *testing.T) {
+			question := routineQuestion(testCase.prompt)
+			if got := MatchedPatternID(question); got != testCase.wantMatch {
+				t.Fatalf("pattern = %q, want %q", got, testCase.wantMatch)
+			}
+			resolution := store.Resolve(question, Context{}, pii)
+			if resolution.AutoFill {
+				t.Fatalf("a legal question auto-filled %q", resolution.Answer)
+			}
+			if resolution.Sensitivity != Sensitive {
+				t.Fatalf("sensitivity = %q, want sensitive", resolution.Sensitivity)
+			}
+		})
+	}
+}
+
+func TestResolve_IdentityPatternsNeverAnswerForSomebodyElse(t *testing.T) {
+	store := newTestStore(t)
+	pii := identityPII()
+
+	// A reference's phone number and the applicant's phone number are different
+	// facts, and only one of them is in pii.yaml. Handing over the wrong one is
+	// not a formatting error, it is a false statement about a third party.
+	for _, prompt := range []string{
+		"Reference name",
+		"Reference email address",
+		"Manager's phone number",
+		"Emergency contact name",
+		"Emergency contact phone",
+		"Recruiter email",
+		"Name of the company you currently work for",
+		"What city is your university in?",
+	} {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if resolution.AutoFill {
+				t.Fatalf("a question about somebody else auto-filled %q", resolution.Answer)
+			}
+		})
+	}
+}
+
+func TestResolve_ACompositeLocationQuestionIsLeftToTheOperator(t *testing.T) {
+	store := newTestStore(t)
+	pii := identityPII()
+
+	// Observed live: "What country and time zone are you based in?" wants two
+	// things. Filling only the country would be a wrong answer that looks like a
+	// right one, so it is left unresolved.
+	resolution := store.Resolve(routineQuestion("What country and time zone are you based in?"), Context{}, pii)
+	if resolution.AutoFill {
+		t.Fatalf("a composite question auto-filled the half it knew: %q", resolution.Answer)
+	}
+}

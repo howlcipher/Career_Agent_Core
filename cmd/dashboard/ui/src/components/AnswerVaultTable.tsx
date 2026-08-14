@@ -83,8 +83,16 @@ export function AnswerVaultTable({ answers, busy, onUpdate, onRevoke }: AnswerVa
         <li key={entry.id} className="vault-entry">
           <div className="vault-entry-head">
             <strong className="vault-question">{entry.question}</strong>
-            <span className={`vault-policy vault-policy-${entry.policy}`}>
-              {POLICY_LABELS[entry.policy] ?? entry.policy}
+            <span className="vault-badges">
+              {/* A declaration the operator granted reuse for genuinely does
+                  auto-fill, and the policy says so. It is still a declaration,
+                  and "Auto-fill" on its own would read as routine. */}
+              {entry.sensitivity === 'sensitive' && (
+                <span className="vault-policy vault-policy-human_review">Declaration</span>
+              )}
+              <span className={`vault-policy vault-policy-${entry.policy}`}>
+                {POLICY_LABELS[entry.policy] ?? entry.policy}
+              </span>
             </span>
           </div>
 
