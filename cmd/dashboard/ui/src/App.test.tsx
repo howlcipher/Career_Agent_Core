@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import App from './App';
 
 // Every field is required on the Metrics interface except the "last X"
@@ -926,5 +926,331 @@ describe('Fast triage', () => {
     expect(screen.getAllByRole('button', { name: 'Apply' })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: 'Skip' })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: 'Details' })).toHaveLength(2);
+  });
+});
+
+// ─── Application Knowledge ───────────────────────────────────────────────
+
+const emptyReadiness = {
+  applications: 0,
+  fields: 0,
+  resolved: 0,
+  unresolved: 0,
+  unique_questions: 0,
+  sensitive_decisions: 0,
+  per_job_responses: 0,
+  fields_unlockable: 0,
+  answers_needed: 0,
+  applications_blocked: 0,
+};
+
+const kubernetesGroup = {
+  key: 'experience:kubernetes',
+  prompt: 'Years of Kubernetes experience',
+  phrasings: [
+    'How many years of Kubernetes experience do you have?',
+    'Years of Kubernetes experience',
+  ],
+  occurrences: 9,
+  applications: 9,
+  job_ids: ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
+  companies: ['Acme', 'Globex'],
+  control_type: 'text',
+  required: true,
+  sensitivity: 'routine',
+  policy: 'unknown' as const,
+  resolved: false,
+  company_scope_available: false,
+  skill_subject: 'kubernetes',
+};
+
+const declarationGroup = {
+  key: 'pattern:criminal_history',
+  prompt: 'Have you ever been convicted of a felony?',
+  phrasings: ['Have you ever been convicted of a felony?'],
+  occurrences: 3,
+  applications: 3,
+  job_ids: ['1', '2', '3'],
+  companies: ['Acme'],
+  control_type: 'radio',
+  options: ['Yes', 'No'],
+  required: true,
+  sensitivity: 'sensitive',
+  policy: 'human_review' as const,
+  resolved: false,
+  company_scope_available: true,
+  company_scope: 'company:acme',
+};
+
+const perJobGroup = {
+  key: 'q:why work here',
+  prompt: 'Why do you want to work here?',
+  phrasings: ['Why do you want to work here?'],
+  occurrences: 4,
+  applications: 4,
+  job_ids: ['1', '2', '3', '4'],
+  companies: ['Acme'],
+  control_type: 'textarea',
+  required: false,
+  sensitivity: 'generate_per_job',
+  policy: 'generate_per_job' as const,
+  resolved: false,
+  company_scope_available: true,
+};
+
+/**
+ * Routes every endpoint the dashboard polls, plus the knowledge ones, so a
+ * knowledge test does not have to restate the base dashboard's payloads.
+ */
+function installKnowledgeFetch(
+  overrides: Record<string, (init?: RequestInit) => Promise<Response> | Response>,
+  snapshot: { readiness?: object; groups?: object[]; preflight?: object[] } = {}
+) {
+  installFetch((input, init) => {
+    const url = String(input);
+    const override = overrides[`${init?.method ?? 'GET'} ${url}`] ?? overrides[url];
+    if (override) return Promise.resolve(override(init));
+    switch (url) {
+      case '/api/metrics':
+        return Promise.resolve(jsonResponse(baseMetrics));
+      case '/api/agent/status':
+        return Promise.resolve(jsonResponse({ running: false }));
+      case '/api/operator-settings':
+        return Promise.resolve(jsonResponse({ mode: 'find_only', minimum_fit_score: 70 }));
+      case '/api/qualified-jobs':
+        return Promise.resolve(jsonResponse([]));
+      case '/api/apply-session':
+        return Promise.resolve(jsonResponse({ session: null }));
+      case '/api/assisted':
+        return Promise.resolve(jsonResponse({ jobs: [] }));
+      case '/api/knowledge':
+        return Promise.resolve(
+          jsonResponse({
+            readiness: snapshot.readiness ?? emptyReadiness,
+            groups: snapshot.groups ?? [],
+            preflight: snapshot.preflight ?? [],
+          })
+        );
+      case '/api/knowledge/preflight':
+        return Promise.resolve(jsonResponse({ running: false, applications: 0, results: snapshot.preflight ?? [] }));
+      case '/api/answer-vault':
+        return Promise.resolve(jsonResponse({ answers: [] }));
+      case '/api/knowledge/profile':
+        return Promise.resolve(jsonResponse({ sections: [], fields: [], path: 'pii.yaml' }));
+      default:
+        throw new Error(`unexpected fetch: ${url} ${init?.method ?? 'GET'}`);
+    }
+  });
+}
+
+async function openKnowledge() {
+  render(<App />);
+  await flush();
+  fireEvent.click(screen.getByText('Open Application Knowledge'));
+  await flush();
+}
+
+describe('Application Knowledge', () => {
+  it('tells the operator what their next answers buy them, in queue terms', async () => {
+    installKnowledgeFetch({}, {
+      readiness: {
+        ...emptyReadiness,
+        applications: 12,
+        fields: 226,
+        resolved: 181,
+        unresolved: 45,
+        unique_questions: 8,
+        sensitive_decisions: 3,
+        per_job_responses: 2,
+        answers_needed: 5,
+        fields_unlockable: 38,
+      },
+      groups: [kubernetesGroup],
+    });
+    await openKnowledge();
+
+    // The headline is the trade, not an invented completeness percentage.
+    expect(screen.getByText(/and Career Agent can handle/)).toBeInTheDocument();
+    expect(screen.getAllByText('38').length).toBeGreaterThan(0);
+    expect(screen.getByText('226')).toBeInTheDocument();
+    // The text is split across a <strong>, so match on the list item as a whole.
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName === 'LI' && /3\s*legal or personal/.test(element.textContent ?? '')
+      )
+    ).toBeInTheDocument();
+    // No invented completeness figure anywhere on the panel.
+    expect(screen.queryByText(/% complete/)).not.toBeInTheDocument();
+  });
+
+  it('shows one deduplicated question with how many applications wait on it', async () => {
+    installKnowledgeFetch({}, { groups: [kubernetesGroup] });
+    await openKnowledge();
+
+    const question = screen.getByRole('region', { name: 'Question needing your input' });
+    expect(within(question).getByText('Question 1 / 1')).toBeInTheDocument();
+    expect(within(question).getByRole('heading', { name: /Years of Kubernetes experience/ })).toBeInTheDocument();
+    expect(within(question).getByText(/Seen on 9 queued applications/)).toBeInTheDocument();
+    // The claim that several wordings mean the same thing is shown, not hidden.
+    expect(within(question).getByText(/2 wordings ask this same thing/)).toBeInTheDocument();
+  });
+
+  it('reports how many applications one approved answer just resolved', async () => {
+    const approvals: unknown[] = [];
+    installKnowledgeFetch(
+      {
+        'POST /api/knowledge/approve': (init) => {
+          approvals.push(JSON.parse(String(init?.body)));
+          return jsonResponse({
+            saved: true,
+            aliases_added: 1,
+            questions_resolved: 9,
+            applications_helped: 9,
+            still_unresolved: 0,
+          });
+        },
+      },
+      { groups: [kubernetesGroup] }
+    );
+    await openKnowledge();
+
+    const region = screen.getByRole('region', { name: 'Question needing your input' });
+    fireEvent.change(within(region).getByRole('textbox'), { target: { value: '5' } });
+    fireEvent.click(screen.getByText('Save & Next'));
+    await flush();
+
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ group_key: 'experience:kubernetes', answer: '5', save_for_reuse: true });
+    expect(screen.getByText(/resolved 9 questions across 9 applications/)).toBeInTheDocument();
+  });
+
+  it('gates a declaration behind its second acknowledgement, in bulk as on one application', async () => {
+    installKnowledgeFetch({}, { groups: [declarationGroup] });
+    await openKnowledge();
+
+    // The declaration warning is present, and the answer cannot be saved on the
+    // save checkbox alone.
+    expect(screen.getByText(/legal or personal declaration/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText('No'));
+    await flush();
+    expect(screen.getByText('Save & Next')).toBeDisabled();
+
+    const declaration = screen.getByRole('region', { name: 'Question needing your input' });
+    const acknowledgement = within(declaration).getByLabelText(/I understand this is a declaration/);
+    fireEvent.click(acknowledgement);
+    await flush();
+    expect(screen.getByText('Save & Next')).not.toBeDisabled();
+  });
+
+  it('never offers to reuse an answer written for one employer', async () => {
+    installKnowledgeFetch({}, { groups: [perJobGroup] });
+    await openKnowledge();
+
+    // It is listed, so the operator knows it exists and where it will be asked,
+    // but it is not answerable in bulk and carries no reuse control.
+    expect(screen.getByText('Answered on each application (1)')).toBeInTheDocument();
+    expect(screen.getByText(/never reuses one of these/)).toBeInTheDocument();
+    expect(screen.queryByText('Save & Next')).not.toBeInTheDocument();
+  });
+
+  it('refuses to bulk-answer a question whose employers offer different choices', async () => {
+    installKnowledgeFetch({}, {
+      groups: [{ ...kubernetesGroup, key: 'pattern:how_did_you_hear', prompt: 'How did you hear about us?', options_vary: true, policy: 'unknown' as const }],
+    });
+    await openKnowledge();
+
+    expect(screen.getByText(/one answer would not fit them all/)).toBeInTheDocument();
+    expect(screen.queryByText('Save & Next')).not.toBeInTheDocument();
+  });
+
+  it('says honestly when nothing has been inspected yet', async () => {
+    installKnowledgeFetch({}, {});
+    await openKnowledge();
+
+    // Zero fields must not render as "everything is known".
+    expect(screen.getByText(/has not inspected any of your queued applications/)).toBeInTheDocument();
+  });
+
+  it('names why an application could not be prepared instead of omitting it', async () => {
+    installKnowledgeFetch({}, {
+      preflight: [
+        { job_id: '1', company: 'Acme', role: 'Engineer', state: 'inspected', ats: 'Greenhouse', control_count: 19, inspected_at: '2026-08-13T10:00:00Z' },
+        { job_id: '2', company: 'Workiva', role: 'Engineer', state: 'unavailable', reason: 'auth_required', control_count: 0, inspected_at: '2026-08-13T10:00:00Z' },
+      ],
+    });
+    await openKnowledge();
+    fireEvent.click(screen.getByText('Prepare applications'));
+    await flush();
+
+    expect(screen.getByText(/Needs you signed in before any form exists/)).toBeInTheDocument();
+    expect(screen.getByText(/fills nothing and submits nothing/)).toBeInTheDocument();
+  });
+});
+
+describe('Application Knowledge and apply sessions', () => {
+  const assistedJob = {
+    id: '41',
+    company: 'Acme',
+    role: 'Platform Engineer',
+    provider: 'Greenhouse',
+    original_status: 'AWAITING_REVIEW',
+    interruption: '',
+    last_updated: '2026-08-13T10:00:00Z',
+    resume_ready: true,
+    cover_letter_ready: true,
+    mapping_ready: true,
+    completed_work: '',
+    legacy: false,
+    live_browser: false,
+    assisted_attempt_count: 0,
+    priority_reason: '',
+    next_action: {
+      code: 'review_and_submit',
+      label: 'Review and submit',
+      instruction: 'Review the application and press the employer’s Submit.',
+      primary_button: 'Open Application',
+      requires_browser: true,
+    },
+    completed: { job_id: '41', filled_count: 0, reused_answers: 0, documents: [], filled_labels: [], unresolved_count: 0, recorded_at: '' },
+    effort: { band: 'LOW', low_minutes: 1, high_minutes: 2, signals: [] },
+  };
+
+  it('offers Prepare before Start, and states readiness only once something is known', async () => {
+    const prepared: unknown[] = [];
+    installKnowledgeFetch(
+      {
+        '/api/assisted': () => jsonResponse({ jobs: [assistedJob] }),
+        'POST /api/knowledge/preflight': (init) => {
+          prepared.push(JSON.parse(String(init?.body)));
+          return jsonResponse({ status: 'preparing', applications: 1 });
+        },
+      },
+      {
+        readiness: { ...emptyReadiness, applications: 1, fields: 20, resolved: 17, unresolved: 3, answers_needed: 2 },
+        groups: [kubernetesGroup],
+      }
+    );
+
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByText('Open Assisted Apply'));
+    await flush();
+
+    // Nothing selected yet: no readiness claim about a selection that does not exist.
+    expect(screen.getByText('Select applications below to start a session.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Include in apply session/i }));
+    // useKnowledge chains Promise.all over three fetches and then three json()
+    // reads, so it needs more microtask hops than the base dashboard polls.
+    await flush();
+    await flush();
+
+    expect(screen.getByText(/3 fields still need you/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Prepare 1 application/));
+    await flush();
+
+    expect(prepared).toEqual([{ job_ids: ['41'] }]);
+    // Preparing is an option, never a gate: Start is still available.
+    expect(screen.getByText('Start Apply Session')).not.toBeDisabled();
   });
 });
