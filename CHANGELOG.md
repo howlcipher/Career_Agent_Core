@@ -1,5 +1,37 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — The Copy Application Packet now lists what the form in front of you actually asks
+
+The packet listed everything Career Agent had prepared — name, email, links,
+approved answers — but never what the employer was asking. It told you what
+Career Agent knows, not what this form wants, so completing an application by
+hand was still a matching exercise done from memory.
+
+* Once a form has been inspected, the packet carries **that form's own
+  questions, in the order it asks them**, each with its resolved answer and a
+  copy button.
+* A question with **no** prepared answer is listed too, marked *needs you*.
+  Knowing in advance that a form will ask about pronouns and that Career Agent
+  has nothing for it is worth more than a shorter list; omitting it would make
+  the packet look complete when it is not.
+* An answer written per employer is shown as *write this one for this employer*
+  and is never offered as something to paste.
+* An answer Career Agent holds but has not been granted reuse for is marked
+  *confirm before using*, so a suggestion never looks like a decision.
+
+This matters most where automation cannot help at all — an unsupported ATS, a
+platform that must be finished in your own browser — which is exactly where the
+packet was always the floor under the feature.
+
+**Also filed, not fixed:** `bugs.md` #545. Lever's custom question cards extract
+a placeholder, an option label, or a raw `name` attribute instead of the
+question text, so preflight can read a Lever form but not usefully describe it.
+Four real Lever postings inspected cleanly and returned `Type your response`,
+`Yes` and `cards[<uuid>][field0]` where Greenhouse returns real questions. The
+inspection was built and then deliberately held back rather than shipped: on the
+real queue it would have put a `Type your response` group across 20 applications
+into the knowledge inbox, which is worse than the honest refusal it replaced.
+
 ## 2026-08-13 — Correction: the Twitter pattern fixed nothing yet, and the measured gain was all from "Search"
 
 The entry below claims your configured Twitter link "had never been read by

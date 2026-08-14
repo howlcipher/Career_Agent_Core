@@ -189,6 +189,10 @@ export interface PacketEntry {
   label: string;
   value: string;
   sensitive: boolean;
+  /** Set only on this form's own questions: why there is nothing to copy. */
+  status?: string;
+  /** True when the entry is a question this employer's form actually asks. */
+  from_this_form?: boolean;
 }
 
 export interface DocumentSummary {
