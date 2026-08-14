@@ -64,9 +64,14 @@ const (
 	// PreflightNoFormFound: the page loaded and holds no application form.
 	// Distinct from every reason above: this one means Career Agent looked.
 	PreflightNoFormFound = "no_form_found"
-	// PreflightBrowserRejected: this ATS refuses applications from Career
-	// Agent's browser, so inspecting it would tell the operator about a form
-	// they will have to complete in their own browser anyway.
+	// PreflightBrowserRejected has no producer and is kept only so a stored
+	// verdict written before bugs.md #545 still renders.
+	//
+	// It used to be what preflight reported for an ATS that refuses submissions
+	// from the assisted browser -- which is a claim about submitting, made by
+	// a check that only ever asked whether the form could be read. Those are
+	// different questions, and conflating them is the defect #545 closed. An
+	// unreadable ATS now reports auth_required, which is what it is.
 	PreflightBrowserRejected = "browser_rejected"
 	// PreflightAlreadyApplied: this application has already been completed, so
 	// there is nothing to prepare. Distinct from every refusal above -- it is

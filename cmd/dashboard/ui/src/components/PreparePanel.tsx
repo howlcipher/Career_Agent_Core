@@ -49,7 +49,14 @@ export function PreparePanel({
 }: PreparePanelProps) {
   const results = status?.results ?? [];
   const inspected = results.filter((result) => result.state === 'inspected');
-  const unavailable = results.filter((result) => result.state === 'unavailable');
+  // An application already applied to is stored as "unavailable" because there
+  // is no inventory for it, but it is not a failure to inspect: there was
+  // nothing left to prepare. Counting it as one contradicts the sentence shown
+  // beside it and overstates what went wrong.
+  const alreadyApplied = results.filter((result) => result.reason === 'already_applied');
+  const unavailable = results.filter(
+    (result) => result.state === 'unavailable' && result.reason !== 'already_applied',
+  );
   const fields = inspected.reduce((total, result) => total + result.control_count, 0);
 
   return (
@@ -89,6 +96,9 @@ export function PreparePanel({
           <p className="knowledge-headline">
             <strong>{inspected.length}</strong> inspected · <strong>{fields}</strong> fields
             discovered · <strong>{unavailable.length}</strong> could not be inspected
+            {alreadyApplied.length > 0 && (
+              <> · <strong>{alreadyApplied.length}</strong> already applied to</>
+            )}
           </p>
           {unavailable.length > 0 && (
             <ul className="prepare-unavailable">

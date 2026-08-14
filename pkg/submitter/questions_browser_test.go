@@ -24,12 +24,24 @@ import (
 // content read from a public /apply page; no answer, no pii.yaml value and no
 // personal data appears anywhere in this file.
 
-// requireChromium gates these tests the same way the log-privacy regression in
-// this package does. They are real browser tests, so they are opt-in.
+// requireChromium skips only when Chromium is genuinely unavailable, and
+// deliberately does *not* sit behind CAREER_AGENT_PLAYWRIGHT_INTEGRATION the way
+// the log-privacy regression in this package does.
+//
+// The env gate was the wrong choice here and a review caught it. AGENTS.md
+// documents `go test ./...` as the verification loop, and this file argues at
+// length that a Go reimplementation of the label walk would only ever test
+// itself — so gating it meant `controlInventoryJS` had no coverage at all in the
+// loop anyone actually runs, and a future edit to it would pass unnoticed. These
+// tests serve one page from an httptest server and read it; they touch no
+// employer, no network and no database, so there is nothing to opt into.
+//
+// Where Chromium is missing, openCanaryPage skips cleanly on its own. That is a
+// missing dependency, not a passing test.
 func requireChromium(t *testing.T) {
 	t.Helper()
-	if os.Getenv("CAREER_AGENT_PLAYWRIGHT_INTEGRATION") != "1" {
-		t.Skip("set CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1 to run the Chromium form-inventory regressions")
+	if os.Getenv("CAREER_AGENT_SKIP_BROWSER_TESTS") == "1" {
+		t.Skip("CAREER_AGENT_SKIP_BROWSER_TESTS=1 is set")
 	}
 }
 
@@ -665,5 +677,116 @@ func TestControlInventory_AnOptionIsNeverTheGroupsQuestion(t *testing.T) {
 		if option == group.Label {
 			t.Error("the question was offered as a selectable answer")
 		}
+	}
+}
+
+// TestControlInventory_NamelessCheckboxesStayDistinctQuestions is a regression
+// I introduced while fixing an earlier review finding, and it is the worst kind:
+// it drops questions silently.
+//
+// Keying a group by its option text collapsed every nameless checkbox whose
+// text could not be read into one bucket. The first created the group; every
+// other one was skipped entirely — its question never reached the operator, and
+// its required flag was OR-ed onto an unrelated question.
+func TestControlInventory_NamelessCheckboxesStayDistinctQuestions(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field"><label>Do you have a driver's license?</label><input type="checkbox"></div>
+<div class="field"><label>Are you over 18?</label><input type="checkbox" required></div>
+<div class="field"><label>Do you consent to a background check?</label><input type="checkbox"></div>`)
+
+	if len(byKey) != 3 {
+		t.Fatalf("expected 3 distinct questions, got %d: %s", len(byKey), describe(byKey))
+	}
+	labels := map[string]bool{}
+	for _, control := range byKey {
+		labels[control.Label] = true
+	}
+	for _, want := range []string{
+		"Do you have a driver's license?",
+		"Are you over 18?",
+		"Do you consent to a background check?",
+	} {
+		if !labels[want] {
+			t.Errorf("question %q was dropped: %s", want, describe(byKey))
+		}
+	}
+	// The required flag must stay on its own question rather than being folded
+	// onto whichever one happened to be created first.
+	required := 0
+	for _, control := range byKey {
+		if control.Required {
+			required++
+			if control.Label != "Are you over 18?" {
+				t.Errorf("required landed on the wrong question: %q", control.Label)
+			}
+		}
+	}
+	if required != 1 {
+		t.Errorf("expected exactly one required question, got %d", required)
+	}
+}
+
+// TestControlInventory_ATrailingLabelBelongsToTheFieldItPrecedes pins that a
+// label with another control after it labels *that* control. Reading forward
+// for any label gave two fields the same prompt — and the prompt is what the
+// vault keys on, so a duplicate silently answers one question with another's
+// answer.
+func TestControlInventory_ATrailingLabelBelongsToTheFieldItPrecedes(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<form>
+  <input type="text" name="a" placeholder="Your answer">
+  <label>Referral code</label><input type="text" name="b">
+</form>`)
+	assertLabel(t, byKey, "b", "Referral code")
+	// a must not steal b's label. Its own placeholder is the honest fallback.
+	if got := byKey["a"].Label; got == "Referral code" {
+		t.Error("a control took the next field's label")
+	} else if got != "Your answer" {
+		t.Errorf("a's label = %q, want its own placeholder", got)
+	}
+}
+
+// TestControlInventory_AHeadingBesideAQuestionDoesNotDiscardIt covers a
+// container that holds both a section heading and the real question. Skipping
+// the whole container because it contained a heading threw the question away
+// and the group fell back to its first option.
+func TestControlInventory_AHeadingBesideAQuestionDoesNotDiscardIt(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="card">
+  <div class="q"><h5>Section</h5><div class="application-label">Do you have a valid work permit?</div></div>
+  <label><input type="radio" name="permit" value="Yes">Yes</label>
+  <label><input type="radio" name="permit" value="No">No</label>
+</div>`)
+	// The heading's own text is dropped; the question beside it is not.
+	group := assertLabel(t, byKey, "group:permit", "Do you have a valid work permit?")
+	if group.Label == "Yes" {
+		t.Fatal("the group fell back to its first option, which is the original defect")
+	}
+}
+
+// TestControlInventory_NestedScriptTextNeverReachesALabel extends the
+// non-rendered guard past direct siblings. A <script> one level down inside a
+// question container leaked its whole payload into the label.
+func TestControlInventory_NestedScriptTextNeverReachesALabel(t *testing.T) {
+	requireChromium(t)
+	byKey := inventoryFixture(t, `
+<div class="field">
+  <div class="q">What is your desired salary?<script>window.__DATA__={"leak":"me"};</script></div>
+  <input type="text" name="salary">
+</div>
+<div class="field">
+  <label>Notice period<script>window.__ALSO__=1;</script></label>
+  <input type="text" name="notice">
+</div>`)
+	salary := assertLabel(t, byKey, "salary", "What is your desired salary?")
+	if strings.Contains(salary.Label, "__DATA__") {
+		t.Error("nested script contents reached a question label")
+	}
+	notice := assertLabel(t, byKey, "notice", "Notice period")
+	if strings.Contains(notice.Label, "__ALSO__") {
+		t.Error("nested script contents reached a wrapping label")
 	}
 }

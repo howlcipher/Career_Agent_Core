@@ -127,7 +127,7 @@ const controlInventoryJS = `() => {
       if (child.nodeType === 3) { parts.push(child.nodeValue); continue; }
       if (child.nodeType !== 1) continue;
       if (controlBearing(child)) continue;
-      parts.push(child.textContent);
+      parts.push(renderedTextOf(child));
     }
     return clean(parts.join(' '));
   };
@@ -142,13 +142,43 @@ const controlInventoryJS = `() => {
     let text = '';
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      let insideControl = false;
+      let skip = false;
       for (let parent = node.parentElement; parent && parent !== root.parentElement; parent = parent.parentElement) {
-        if (parent.matches(FILLABLE)) { insideControl = true; break; }
+        if (parent.matches(FILLABLE) || parent.matches(NON_RENDERED)) { skip = true; break; }
       }
-      if (!insideControl) text += node.nodeValue;
+      if (!skip) text += node.nodeValue;
     }
     return clean(text);
+  };
+
+  // renderedTextOf is labelTextOf's counterpart for an arbitrary node: the text
+  // a reader actually sees, with script and style source removed. A <script>
+  // nested one level down inside a question container leaked its whole payload
+  // into the label, which is not merely unreadable -- it can trip
+  // SanitizeControls' injection quarantine, whose replacement loses the
+  // question altogether.
+  // also, when given, names further elements whose text is not part of the
+  // question. Groups pass HEADINGS: a heading names a section, and a container
+  // may hold both the heading and the real question -- discarding the whole
+  // container because of the heading threw the question away and sent the group
+  // back to its first option.
+  const renderedTextOf = (node, also) => {
+    const ignored = also ? NON_RENDERED + ', ' + also : NON_RENDERED;
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1) return '';
+    if (node.matches(ignored)) return '';
+    if (!node.querySelector(ignored)) return node.textContent;
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    let text = '';
+    while (walker.nextNode()) {
+      const child = walker.currentNode;
+      let skip = false;
+      for (let parent = child.parentElement; parent && parent !== node.parentElement; parent = parent.parentElement) {
+        if (parent.matches(ignored)) { skip = true; break; }
+      }
+      if (!skip) text += child.nodeValue;
+    }
+    return text;
   };
 
   // childContaining finds which of node's children holds el, so text can be
@@ -190,18 +220,6 @@ const controlInventoryJS = `() => {
   // quarantine, replacing the question wholesale and losing it.
   const NON_RENDERED = 'script, style, noscript, template';
 
-  // optionLabel reports whether an element is an option's own label rather than
-  // a question: a <label> wrapping one of the group's controls.
-  const optionLabel = (child) => {
-    if (!child.matches('label') && !child.querySelector('label')) return false;
-    for (const label of (child.matches('label') ? [child] : child.querySelectorAll('label'))) {
-      for (const candidate of label.querySelectorAll(FILLABLE)) {
-        if (countedControl(candidate)) return true;
-      }
-    }
-    return false;
-  };
-
   // precedingText reads the question sitting before the control's own branch.
   //
   // Two rules, in order. A <label> or <legend> among the preceding siblings is
@@ -228,8 +246,6 @@ const controlInventoryJS = `() => {
       // An option's text is not the group's question. Only a label wrapping one
       // of the controls is an option label; a bare <label> beside a group is
       // very often the group's own question.
-      if (forGroup && optionLabel(child)) continue;
-      if (forGroup && (child.matches(HEADINGS) || child.querySelector(HEADINGS))) continue;
       usable.push(child);
     }
 
@@ -244,7 +260,7 @@ const controlInventoryJS = `() => {
 
     const parts = [];
     for (const child of usable) {
-      parts.unshift(child.nodeType === 3 ? child.nodeValue : child.textContent);
+      parts.unshift(renderedTextOf(child, forGroup ? HEADINGS : ''));
     }
     return clean(parts.join(' '));
   };
@@ -268,10 +284,18 @@ const controlInventoryJS = `() => {
       if (child.nodeType !== 1) continue;
       if (controlBearing(child)) break;
       const label = child.matches('label, legend') ? child : child.querySelector('label, legend');
-      if (label) {
-        const text = labelTextOf(label);
-        if (text) return text;
+      if (!label) continue;
+      // A label that has another control after it labels *that* control: a
+      // question precedes its field. "<input a><label>Referral code</label>
+      // <input b>" would otherwise give a and b the same prompt, and the vault
+      // keys on the prompt.
+      let claimedByNext = false;
+      for (let j = i + 1; j < children.length; j++) {
+        if (children[j].nodeType === 1 && controlBearing(children[j])) { claimedByNext = true; break; }
       }
+      if (claimedByNext) break;
+      const text = labelTextOf(label);
+      if (text) return text;
     }
     return '';
   };
@@ -474,7 +498,14 @@ const controlInventoryJS = `() => {
     // only a standalone control asks the walk for a question.
     if (tag === 'input' && (type === 'radio' || type === 'checkbox')) {
       const optionText = optionTextFor(el);
-      const name = el.getAttribute('name') || ('group-' + optionText);
+      // A checkbox with no name is its own question, not a member of a group.
+      // Keying those by option text alone collapsed every nameless checkbox
+      // whose text could not be read into one bucket -- the first created the
+      // group and every other one was dropped, question and all, with its
+      // required flag OR-ed onto something unrelated. The selector, then the
+      // running index, keeps them distinct.
+      const name = el.getAttribute('name') ||
+        ('group-' + (optionText || selectorFor(el) || ('control-' + out.length)));
       let group = groups.get(name);
       if (!group) {
         group = {

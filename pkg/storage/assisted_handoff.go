@@ -90,6 +90,11 @@ func AssistedBrowserRejectionReason(rawURL string) string {
 // and treating the two as one answer left the operator's Copy Application
 // Packet empty for the applications that depend on it most -- 20 of the 26 in
 // the live queue.
+//
+// Note for whoever first sets blocksPreflight: the reason string returned here
+// is the registry's, and it is worded as a *submit* rejection. An entry that
+// blocks reading needs its own wording, or the operator is told why they cannot
+// submit when the actual answer is that nobody can see the form.
 func PreflightRefusalReason(rawURL string) string {
 	if rejection, matched := rejectionFor(rawURL); matched && rejection.blocksPreflight {
 		return rejection.reason
