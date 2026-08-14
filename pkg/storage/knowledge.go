@@ -274,10 +274,16 @@ func PreflightResults(conn *sql.DB, jobIDs []string) ([]PreflightResult, error) 
 // inspect, in queue order.
 //
 // It refuses the same things GetAssistedLaunchInfo refuses, for the same
-// reasons, plus one more: an ATS that rejects the assisted browser is not
-// inspected either. Career Agent cannot see that application without an
-// operator signed in, and reporting "preflight unavailable, needs
+// reasons, plus one more: an ATS whose form cannot be read without the operator
+// signed in is not inspected, because "preflight unavailable, needs
 // authentication" is the honest answer rather than something to work around.
+//
+// That refusal used to be AssistedBrowserRejectionReason, which asks a
+// different question -- whether the ATS accepts a *submission* from the
+// assisted browser. Lever answers no to that and yes to this one, and reusing
+// the submit answer here meant the 20 Lever applications in the live queue,
+// the ones the operator has to complete by hand and most needs prepared, were
+// the only ones never inspected (bugs.md #545).
 func PreflightCandidates(conn *sql.DB, jobIDs []string) ([]PreflightCandidate, error) {
 	if conn == nil {
 		return nil, errors.New("database not initialized")
@@ -309,9 +315,12 @@ func PreflightCandidates(conn *sql.DB, jobIDs []string) ([]PreflightCandidate, e
 			return nil, fmt.Errorf("scan preflight candidate: %w", err)
 		}
 		candidate.ATS = SupportedAssistedATS(candidate.URL)
-		candidate.Skip = AssistedBrowserRejectionReason(candidate.URL)
+		if candidate.Skip = PreflightRefusalReason(candidate.URL); candidate.Skip != "" {
+			candidate.SkipKind = PreflightSkipUnreadable
+		}
 		if assistedState == "completed" {
 			candidate.Skip = "already completed"
+			candidate.SkipKind = PreflightSkipAlreadyApplied
 		}
 		out = append(out, candidate)
 	}
@@ -328,4 +337,17 @@ type PreflightCandidate struct {
 	URL     string
 	ATS     string
 	Skip    string
+	// SkipKind names *which* refusal this is, so a caller can record a truthful
+	// reason code rather than assuming. The two reasons had been collapsed into
+	// one recorded code, which told the operator that an application they had
+	// already submitted was refused by the ATS.
+	SkipKind string
 }
+
+// Why a candidate was not inspected. These are storage's own vocabulary;
+// cmd/preflight maps them onto the closed reason codes in pkg/submitter rather
+// than storage importing that package.
+const (
+	PreflightSkipUnreadable     = "unreadable"
+	PreflightSkipAlreadyApplied = "already_applied"
+)

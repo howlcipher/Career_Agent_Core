@@ -2,6 +2,133 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 545. Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question
+
+**Found 2026-08-13** while evaluating whether preflight should inspect Lever postings. **Closed 2026-08-14.**
+
+### The row's own premises, re-checked first
+
+Two claims in the filed row were wrong, and correcting them changed both the effort and the priority.
+
+* *"The page renders client-side, so fetching the HTML is not enough."* False. Three real Lever `/apply` pages returned HTTP 200 to an anonymous `curl` with the complete server-rendered form markup. The live-browser DOM investigation the row's Effort 3 was budgeted for was done statically in minutes.
+* The row was scored **1.3 = 4x1.0÷3** and ranked *below* improvements.md #545 (2.0). Re-scored to **2.0 = 6x1.0÷3** on a live queue measurement: `AWAITING_REVIEW` is 20 Lever + 6 Greenhouse, so Lever is 77% of the actionable queue, and because Lever cannot be submitted from the assisted browser (bug #520) those 20 are precisely the applications the operator finishes by hand — the case the Copy Application Packet from PR #23 exists for. The row itself said it "becomes Major the moment either of those changes"; PR #23 was that change.
+
+### Cause, confirmed rather than suspected
+
+The suspected cause in the row was correct. `labelFor`'s last resort was `closest('fieldset, .field, .form-group, li, div')`, which returns the *nearest* match. Lever wraps every control in its own `div.application-field`:
+
+```html
+<li class="application-question custom-question"><div>
+  <div class="application-label full-width text"><div class="text">Where do you currently reside? (City/State)?<span class="required">*</span></div></div>
+  <div class="application-field full-width required-field">
+    <input required class="card-field-input" type="text" placeholder="Type your response" name="cards[<uuid>][field0]">
+  </div>
+</div></li>
+```
+
+`querySelector('legend, label')` inside that wrapper finds nothing, so the chain fell through to `placeholder` (text inputs), to `name` (textarea and select, which have no placeholder), or — for radio/checkbox — to the option's own wrapping `<label>`. Three fallbacks, one cause. The question sat in the sibling `div.application-label`, one level up.
+
+### Fix
+
+Not a word list, not a placeholder blocklist, not a Lever selector. A bounded upward walk that, at each ancestor, reads **only the child subtrees containing no form control**.
+
+That single exclusion is self-limiting and ATS-agnostic: a control's own field wrapper contributes nothing because it contains the control, and a container holding several questions contributes nothing because each of those questions' text sits inside its own control's subtree. So the first non-empty text found on the way up belongs to this control and to nothing else.
+
+Radio and checkbox groups resolve their question separately from their option text, starting above the option's own `<label>` and climbing to the group's common ancestor before reading. `fieldset > legend` still wins over all of it. Option text is unchanged.
+
+### Three more defects the live run found, which no unit test would have
+
+The synthetic fixtures all passed before these existed. Running the shipped read-only inspection against a real posting is what surfaced them — the fifth time on this project that a live run has found what `go test` could not.
+
+1. **A `<label>` wrapping a `<select>` returned the question and every option.** `textContent` includes descendants, so the EEO questions read as `GenderSelect ...MaleFemaleDecline to self-identify`. A wrapping label is now read with the control's own subtree excluded. Pre-existing, not introduced by this fix.
+2. **A one-option attestation card reported its option, `I Acknowledge`,** instead of the paragraph being acknowledged, because the group resolution never climbed above the option's `<label>` when the group had a single member.
+3. **A help note inside a group's container outranked the group's label outside it** — Lever's pronouns group read as `Let the employer know what pronouns you use...`. Text preceding the control is now preferred; trailing text is used only when nothing precedes the control anywhere on the way up, so a form whose label genuinely follows its input keeps working.
+
+### The second, separate mistake: reading is not submitting
+
+`storage.AssistedBrowserRejectionReason` records one evidence-backed fact — Lever's submission verification refuses the assisted browser (bug #520). It was also being used to decide whether preflight may **read** a form, in `PreflightCandidates` and in `cmd/preflight`. Preflight fills nothing and cannot submit, and Lever's `/apply` form is public, so those are different questions with different answers.
+
+The cost was exact: the 20 Lever applications were the only ones never inspected, and they are the ones that most need preparing. `assistedBrowserRejection` gains `blocksPreflight` (false for Lever, verified against four real postings) and `storage.PreflightRefusalReason` asks the read question. One registry, two questions.
+
+`TestPreflightCandidates_RefuseWhatTheAssistedBrowserItselfRefuses` asserted the conflation, so it was rewritten rather than deleted and now records why its old assertion was wrong. **The submit boundary is untouched**: Lever still never opens an assisted browser, still routes to `open_in_own_browser`, and still cannot be submitted by Career Agent.
+
+### Tests
+
+`pkg/submitter/questions_browser_test.go` (new) runs the **shipped** `controlInventoryJS` against a **real DOM in Chromium**, gated on `CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1` like the existing log-privacy regression. A Go reimplementation of the walk would only ever prove the copy agrees with itself. Every assertion checks the label **and** the control key together, because a right label on the wrong control is worse than an ugly label.
+
+Six tests: Lever custom cards (text, textarea, select, radio, required and optional, five distinct questions none borrowing a neighbour's); Lever standard fields plus the pronouns group; label-wrapped select, one-option attestation and in-group help note; trailing text when nothing precedes; generic sibling-label, fieldset/legend and bare-text-node shapes; and a **Greenhouse fixture that passed before the change as well as after**.
+
+`pkg/storage`: `TestPreflightRefusalReason_IsSeparateFromTheSubmitRejection` pins both directions.
+
+### Live verification, no submission
+
+Read-only inspection against three real Lever postings and one real Greenhouse posting, before and after, using the shipped `submitter.InspectApplication`:
+
+| Real Lever posting, 30 controls | before | after |
+|---|---|---|
+| 8 text card questions | `Type your response` x8 | 8 distinct real questions |
+| 2 textarea/select card questions | `cards[<uuid>][fieldN]` | the real questions |
+| 1 radio card question | `Yes` | `Are you willing to relocate if needed?` |
+| pronouns group | `He/him` | `Pronouns` |
+| attestation checkbox | `I Acknowledge` | the full paragraph |
+| 4 EEO selects | question + every option | `Gender`, `Race`, `Veteran status`, `Disability status` |
+| `Current location` | + widget status text | `Current location` |
+
+Greenhouse (`job-boards.greenhouse.io/affirm/jobs/7833950003`, 25 controls) was **byte-identical** pre-fix and post-fix, verified by diffing the two runs. Greenhouse never reaches the changed fallback: every real control carries `aria-label` or `aria-labelledby`, and its only unlabelled inputs are `aria-hidden` and already dropped by `visible()`.
+
+End to end: binaries rebuilt, dashboard restarted, **Prepare** run through `POST /api/knowledge/preflight` against four real Lever applications. All four came back `state: inspected` (30, 18, 18, 18 controls) where all four were previously skipped outright. The Copy Application Packet for one of them now lists 11 real questions under "This form also asks" where it previously listed none. Readiness now covers 10 applications, 227 fields.
+
+### Six more defects found in code review, and one fixture that was wrong
+
+A `/code-review high` pass on PR #24 found six ways the new walk could still attach a wrong label to a real question — the same failure this bug is about, reached through a different door. All six are now pinned by browser fixtures.
+
+1. **A wrapping `<label>` whose text shares a branch with its control lost the text entirely.** `<label><span><input type="checkbox"> I agree to the terms</span></label>` is the commonest checkbox markup there is; dropping every control-bearing branch dropped the question with it, and the control then fell through to whatever prose an ancestor carried (`Legal`).
+2. **Sweeping the whole tree for preceding text before considering trailing text** let a section heading three levels up beat the field's own adjacent `<label>`.
+3. **Reading every preceding sibling glued each earlier question onto the next field** on a flat form: `Question A Question B`.
+4. **The walk's notion of "control" included submit-shaped, hidden and `aria-hidden` inputs the enumeration itself skips**, so a hidden state input sharing a container discarded the question. Lever emits exactly that beside every card.
+5. **The group climb was unbounded and keyed on a document-wide name count**, so a page carrying a second copy of a form sent it to `<body>`, where the walk stops and the group falls back to its first option — the original defect, reached by walking too far.
+6. **An already-completed application was recorded as "this ATS rejects Career Agent's browser".** Both skips shared one reason code, and once no registry entry blocked preflight, that mislabel became the only thing that branch could produce. `already_applied` is now its own code with its own operator-facing sentence.
+
+**Fixing #1 then caused a live regression the fixtures could not see.** Reading a wrapping label by keeping text that shares a branch with the control re-admitted a Race label trailing every option's legal definition, and a location widget's `No location found. Try entering a different location`. Both readings are individually right for different markup, so the wrapping-label read now does **both, in order**: the branches holding no control at all, and only if that is empty, the label's text minus what is inside the control itself. Caught by re-running against the live form rather than trusting the fixtures — the second time in this one task that the live run was the thing that found it.
+
+**A group's question is never a section heading.** This fell out of #1: a group has somewhere better to fall back to than a heading — its own option text — which a non-group control does not, having only a placeholder or a generated name. So the exclusion applies to groups alone, and the asymmetry is deliberate.
+
+**One fixture was wrong and was corrected rather than kept.** `TestControlInventory_TrailingTextStillResolvesWhenNothingPrecedes` asserted that loose prose after a field becomes its label. It should not: the old fallback only ever read trailing text through `querySelector('legend, label')`, so refusing loose prose costs nothing that previously resolved. It was a test written to match the implementation instead of the requirement. Replaced by `TestControlInventory_ATrailingLabelStillResolves`, which pins both halves of the asymmetry — a trailing `<label>` resolves, trailing prose does not.
+
+### A second review round, and the two doors it found back to the same defect
+
+A second `/code-review high` pass, which verified each finding by running the shipped JS in Chromium, found eight more. Two of them returned a group's first option as its question -- the original defect, reached through doors the first round of fixtures did not cover.
+
+1. **`<form>` was treated as a floor rather than a bound**, so the walk never read at the form level. Any question written as a plain sibling of its control directly inside the form was lost: `group:auth` came back as `Yes`, and a text input as its raw `name`. The form level is now read before the walk stops.
+2. **An option's text fell through to the outward walk**, so an unwrapped radio was named with the *group's question* -- which then appeared in the operator's choice list and pushed a real option off the end of it. `options` became `["Are you willing to relocate?", "Yes"]` and "No" vanished. This is the worst of the set: it offers the operator answers the employer never offered, and those options flow into the knowledge inbox and answer grouping. Option text now stops at the accessible name plus the adjacent text, and never walks outward.
+3. **Skipping every `<label>` while resolving a group** threw away the very common shape where a group's question is a bare `<label>` with no `for`. Only a label *wrapping one of the controls* is an option's own text.
+4. **`precedingText` read the whole run of preceding siblings**, gluing a section heading or a hint onto the question: `Additional Information Portfolio URL`, `Email We never share this.`, `Contact Phone number`. All three returned just the label under the old fallback, so this was a regression -- and the prompt is what the vault keys and matches on, so a polluted one silently stops matching a question the operator already answered. A `<label>`/`<legend>` among the preceding siblings is now the question outright, nearest first.
+5. **`<script>`, `<style>` and `<noscript>` text was read as a question.** An inline `<script>` between a question and its input produced a JSON blob as the label -- which is not merely unreadable but can trip `SanitizeControls`' injection quarantine and be replaced wholesale, losing the question entirely.
+6. **`countedControl` did not mirror `visible()` for `disabled`**, so a disabled neighbour made a container look control-bearing and discarded its text. The `disabled` check is free; only `getComputedStyle` is not, which is why the CSS-hidden half remains unmirrored and is documented as such.
+7. **`PreflightSkipUnreadable` mapped to `browser_rejected`**, whose operator-facing sentence asserts a submit rejection that this check never establishes -- the same conflation this bug is about, reappearing in the reason code. Both it and `InspectApplication`'s equivalent now report `auth_required`, which is what "the form cannot be read without you signed in" actually is.
+8. **An already-applied candidate still incremented the "could not inspect" count**, so the dashboard reported it as a failure beside the new sentence saying it was not one.
+
+**The pattern worth keeping.** Across two review rounds and two live runs, every defect in this task was of one kind: text that is *near* a control being mistaken for the question it asks. The fixtures written before each round all passed. What caught them was a reviewer running the shipped JS against adversarial markup, and a live run against a real employer's form -- in that order, twice.
+
+### A third review round, and where this stopped
+
+Nine more, one of them a regression introduced by the *second* round's own fix. Fixed: nameless checkboxes collapsing into a single group key (the worst of the three rounds -- it dropped questions silently and OR-ed one question's `required` flag onto another); a trailing `<label>` stealing the label of the field it precedes; a container discarded whole because it happened to contain a heading; nested `<script>`/`<style>` text still reaching labels through `textContent`; `already_applied` still counted under "could not be inspected" in the dashboard, since the earlier fix reached only a log line; dead `optionLabel` code that the `break` above it made unreachable; and the now-producerless `browser_rejected`, kept for stored verdicts and documented as such.
+
+**The tests now run in `go test ./...`.** They were behind `CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1`, copied from the log-privacy regression without asking whether the gate made sense here. It did not: `AGENTS.md` documents `go test ./...` as the verification loop, this file argues that a Go reimplementation of the walk would only test itself, and between those two facts `controlInventoryJS` had no coverage at all in the loop anyone runs. They serve one local page and read it -- no employer, no network, no database -- so there was nothing to opt into. They now skip only when Chromium is genuinely missing, and cost about 24s.
+
+**Two findings were deliberately not fixed**, and this is the honest boundary of the heuristic rather than an oversight:
+
+* A question authored *as* a heading (`<div class="card-header"><h4>Do you require sponsorship?</h4></div>`) is still discarded for a group, because a heading beside a group is more often a section name whose group has better text of its own -- the mirror case, `<h3>Legal</h3>` above `<label><input type=checkbox> I agree to the terms</label>`, wants the option. Both are structurally identical and neither was observed on a real form.
+* A farther `<label>` still beats a nearer plain-text question, for the same reason in reverse: `<label>Email</label><span class="hint">We never share this.</span>` wants the label, and `<label>Optional</label><div class="application-label">Why do you want to work here?</div>` wants the div.
+
+Both are adversarial constructions with no live evidence on either side, and each available "fix" trades one hypothetical for its mirror image. The fallback is a heuristic; where two readings are equally defensible it picks one, and the accessible-name chain above it -- which is what Greenhouse and any WCAG-compliant ATS actually use -- is never reached in these cases anyway.
+
+**Three review rounds found 6, 8 and 9 defects.** The rate did not fall, which is the honest measure of how hard "which text near this control is its question" is to get right. What kept it convergent was that every round ran the shipped JavaScript against real markup, and every round was followed by a live run against a real employer's form -- the live run caught two regressions that all the fixtures of the moment had passed.
+
+**Known cosmetic residue, accepted deliberately.** Lever's optional "Custom" pronouns opt-in is a second control belonging to the same question, so it also reads `Pronouns`. It is not a duplicate in the inbox: `canonical_key` is derived from the prompt, so both controls collapse into one group, which is the correct outcome. Adding a special case to distinguish them would be unprincipled machinery for one marginal control.
+
+The required glyph (`*`/`✱`) is left in labels rather than trimmed. Trimming would be a small improvement on Lever and a **change to Greenhouse's labels**, which this fix must not make. It costs nothing: `Required` carries the fact as its own field, and `answers.Normalize` reduces every non-alphanumeric to a space, so no canonical key, alias or vault match ever sees it.
+
 ## 522. Agent lifecycle and liveness reporting are unreliable in four distinct ways
 
 **Found 2026-08-05/06** and confirmed live. Closed 2026-08-12. Four independent defects in `cmd/dashboard` and `pkg/config` made the dashboard's answer to "is the agent running?" unsafe when operating real child processes.

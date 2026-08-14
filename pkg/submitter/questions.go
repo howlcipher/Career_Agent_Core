@@ -49,10 +49,15 @@ const maxLabelLength = 400
 // controlInventoryJS reads the form's structure in one pass.
 //
 // Label resolution follows the accessibility chain first (aria-label,
-// aria-labelledby, <label for>, wrapping <label>) and only then falls back to a
-// nearby <label>/<legend> in the field's group — the same reasoning
+// aria-labelledby, <label for>, wrapping <label>) — the same reasoning
 // GetByLabelLoc rests on, that a WCAG-compliant ATS exposes a stable
-// accessible name even when its name/id attributes are vendor noise.
+// accessible name even when its name/id attributes are vendor noise. Greenhouse
+// is entirely served by that chain: every real control on its forms carries
+// aria-label or aria-labelledby, and the only inputs without one are
+// aria-hidden and dropped by visible() before a label is ever needed.
+//
+// When no accessible name exists at all, questionTextFor takes over. See its
+// own comment for why it walks rather than reaching for closest().
 //
 // Radio and checkbox groups collapse to one entry keyed by their shared name,
 // because a group of five radios is one question to the operator, not five.
@@ -60,7 +65,268 @@ const controlInventoryJS = `() => {
   const MAX = %d, MAX_OPTIONS = %d, MAX_LABEL = %d;
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL);
 
-  const labelFor = (el) => {
+  // FILLABLE matches every form control. countedControl narrows it to the ones
+  // this inventory actually enumerates, and the two are not the same set: the
+  // enumeration below skips submit-shaped and hidden inputs, and anything
+  // aria-hidden. The walk has to agree with it, or it throws away a question
+  // because some invisible state input shares a container with the real
+  // control -- Lever emits exactly that, a hidden cards[<uuid>][baseTemplate]
+  // beside every card.
+  const FILLABLE = 'input, textarea, select, [role="combobox"]';
+  const SKIPPED_INPUT_TYPES = ['submit', 'button', 'reset', 'image', 'hidden'];
+
+  const countedControl = (el) => {
+    if (!el.matches(FILLABLE)) return false;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && SKIPPED_INPUT_TYPES.includes(type)) return false;
+    if (el.disabled === true || el.hasAttribute('disabled')) return false;
+    if (el.closest('[aria-hidden="true"]')) return false;
+    return true;
+  };
+
+  // controlBearing reports whether a subtree holds a control the operator will
+  // actually be shown. Only the cheap structural checks are mirrored here, not
+  // visible()'s computed-style read: this runs for every child of every
+  // ancestor of every control, and a getComputedStyle per node would make the
+  // inventory quadratic on a large form.
+  const controlBearing = (node) => {
+    if (node.nodeType !== 1) return false;
+    if (countedControl(node)) return true;
+    for (const candidate of node.querySelectorAll(FILLABLE)) {
+      if (countedControl(candidate)) return true;
+    }
+    return false;
+  };
+
+  // MAX_ANCESTORS bounds every upward walk. Past this depth a container is the
+  // page's layout rather than a question, and reading its text would attach
+  // section prose to a field.
+  const MAX_ANCESTORS = 8;
+
+  // atWalkBoundary marks where climbing stops. <form> is deliberately absent:
+  // it bounds the walk but must still be *read* before stopping, because a
+  // question is often a plain sibling of its control directly inside the form.
+  // Treating it as a floor lost those questions entirely -- a group fell back
+  // to its first option, which is the defect this whole change exists to fix.
+  const atWalkBoundary = (node) => {
+    const tag = node && node.tagName ? node.tagName.toLowerCase() : '';
+    return tag === '' || tag === 'body' || tag === 'html';
+  };
+
+  const endsTheWalk = (node) => {
+    const tag = node && node.tagName ? node.tagName.toLowerCase() : '';
+    return tag === 'form';
+  };
+
+  // textOutsideControlBranches reads only the parts of a container that hold no
+  // control at all.
+  const textOutsideControlBranches = (root) => {
+    const parts = [];
+    for (const child of root.childNodes) {
+      if (child.nodeType === 3) { parts.push(child.nodeValue); continue; }
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) continue;
+      parts.push(renderedTextOf(child));
+    }
+    return clean(parts.join(' '));
+  };
+
+  // labelTextOf reads an element's text while ignoring only the text that lives
+  // *inside* a control -- a <select>'s own <option>s, above all. It is not the
+  // same as dropping every branch that contains a control: the label of
+  // "<label><span><input> I agree to the terms</span></label>" lives in the
+  // same span as its checkbox, and dropping the span would lose it.
+  const labelTextOf = (root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let text = '';
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      let skip = false;
+      for (let parent = node.parentElement; parent && parent !== root.parentElement; parent = parent.parentElement) {
+        if (parent.matches(FILLABLE) || parent.matches(NON_RENDERED)) { skip = true; break; }
+      }
+      if (!skip) text += node.nodeValue;
+    }
+    return clean(text);
+  };
+
+  // renderedTextOf is labelTextOf's counterpart for an arbitrary node: the text
+  // a reader actually sees, with script and style source removed. A <script>
+  // nested one level down inside a question container leaked its whole payload
+  // into the label, which is not merely unreadable -- it can trip
+  // SanitizeControls' injection quarantine, whose replacement loses the
+  // question altogether.
+  // also, when given, names further elements whose text is not part of the
+  // question. Groups pass HEADINGS: a heading names a section, and a container
+  // may hold both the heading and the real question -- discarding the whole
+  // container because of the heading threw the question away and sent the group
+  // back to its first option.
+  const renderedTextOf = (node, also) => {
+    const ignored = also ? NON_RENDERED + ', ' + also : NON_RENDERED;
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1) return '';
+    if (node.matches(ignored)) return '';
+    if (!node.querySelector(ignored)) return node.textContent;
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    let text = '';
+    while (walker.nextNode()) {
+      const child = walker.currentNode;
+      let skip = false;
+      for (let parent = child.parentElement; parent && parent !== node.parentElement; parent = parent.parentElement) {
+        if (parent.matches(ignored)) { skip = true; break; }
+      }
+      if (!skip) text += child.nodeValue;
+    }
+    return text;
+  };
+
+  // childContaining finds which of node's children holds el, so text can be
+  // read relative to the control's own position.
+  const childContaining = (node, el) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1 && child.contains(el)) return child;
+    }
+    return null;
+  };
+
+  // precedingText reads the run of text immediately before the control's own
+  // branch, stopping at the previous control.
+  //
+  // Stopping there is the whole rule, and it is what makes this work without
+  // knowing anything about a particular ATS. A control's own field wrapper
+  // contributes nothing because it holds the control; the question above it
+  // does contribute; and the question above *that* is cut off by its own
+  // control sitting between them. Without the stop, a flat form glues one
+  // field's label onto every question printed before it.
+  //
+  // forGroup is set when resolving a *group's* question, and excludes two kinds
+  // of text that are not it.
+  //
+  // A <label> holds an option's text, which would otherwise read as part of the
+  // question -- "Pick one Yes No" instead of "Pick one".
+  //
+  // A heading names a section, not a control. The distinction matters because a
+  // group has somewhere better to fall back to than a heading: its own option
+  // text. For "<div class=section><h3>Legal</h3><label><input type=checkbox> I
+  // agree to the terms</label>…", the option *is* the question and "Legal" is
+  // not. A non-group control has no such fallback -- only a placeholder or a
+  // generated name -- so there a heading is still better than nothing.
+  const HEADINGS = 'h1, h2, h3, h4, h5, h6';
+
+  // NON_RENDERED elements carry text that is not on the page at all. An inline
+  // <script> between a question and its input turned the label into a JSON blob
+  // -- which is unreadable in the inbox and can trip SanitizeControls' injection
+  // quarantine, replacing the question wholesale and losing it.
+  const NON_RENDERED = 'script, style, noscript, template';
+
+  // precedingText reads the question sitting before the control's own branch.
+  //
+  // Two rules, in order. A <label> or <legend> among the preceding siblings is
+  // the question outright, nearest one first -- that is what the old
+  // querySelector('legend, label') fallback found, and reading its neighbours
+  // too would append a section heading or a hint ("Email We never share this.").
+  // Absent any labelling element, the run of preceding text is read instead,
+  // which is how Lever's div.application-label and a bare text node resolve.
+  //
+  // Either way the read stops at the previous control, so a flat form cannot
+  // glue one field's label onto every question printed above it.
+  const precedingText = (node, before, forGroup) => {
+    const children = Array.prototype.slice.call(node.childNodes);
+    let index = before ? children.indexOf(before) : children.length;
+    if (index < 0) index = children.length;
+
+    const usable = [];
+    for (let i = index - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child.nodeType === 3) { usable.push(child); continue; }
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) break;
+      if (child.matches(NON_RENDERED)) continue;
+      // An option's text is not the group's question. Only a label wrapping one
+      // of the controls is an option label; a bare <label> beside a group is
+      // very often the group's own question.
+      usable.push(child);
+    }
+
+    for (const child of usable) {
+      if (child.nodeType !== 1) continue;
+      const label = child.matches('label, legend') ? child : child.querySelector('label, legend');
+      if (label) {
+        const text = labelTextOf(label);
+        if (text) return text;
+      }
+    }
+
+    const parts = [];
+    for (const child of usable) {
+      parts.unshift(renderedTextOf(child, forGroup ? HEADINGS : ''));
+    }
+    return clean(parts.join(' '));
+  };
+
+  // trailingLabel reads a <label> or <legend> that follows the control inside
+  // the same container.
+  //
+  // Only a labelling element counts, never loose prose. That asymmetry is the
+  // point: a question may sit on either side of its field, but text that
+  // follows a field and is not marked up as its label is a help note. Lever's
+  // pronouns group has both -- a label before the options and a
+  // <p class="description"> after them -- and reading the note in preference to
+  // the label is the exact mistake this avoids.
+  const trailingLabel = (node, before) => {
+    if (!before) return '';
+    const children = Array.prototype.slice.call(node.childNodes);
+    const index = children.indexOf(before);
+    if (index < 0) return '';
+    for (let i = index + 1; i < children.length; i++) {
+      const child = children[i];
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child)) break;
+      const label = child.matches('label, legend') ? child : child.querySelector('label, legend');
+      if (!label) continue;
+      // A label that has another control after it labels *that* control: a
+      // question precedes its field. "<input a><label>Referral code</label>
+      // <input b>" would otherwise give a and b the same prompt, and the vault
+      // keys on the prompt.
+      let claimedByNext = false;
+      for (let j = i + 1; j < children.length; j++) {
+        if (children[j].nodeType === 1 && controlBearing(children[j])) { claimedByNext = true; break; }
+      }
+      if (claimedByNext) break;
+      const text = labelTextOf(label);
+      if (text) return text;
+    }
+    return '';
+  };
+
+  // questionTextFor walks outward from the control looking for the question
+  // that owns it, nearest container first and never past the form.
+  //
+  // Both directions are considered at each level before climbing, rather than
+  // sweeping the whole tree for preceding text first. A label sitting right
+  // beside the field must beat a section heading three levels up, whichever
+  // side of the field it is on.
+  const questionTextFor = (start, el, forGroup) => {
+    let node = start;
+    for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
+      if (atWalkBoundary(node)) break;
+      const before = childContaining(node, el);
+      const preceding = precedingText(node, before, forGroup);
+      if (preceding) return preceding;
+      if (!forGroup) {
+        const trailing = trailingLabel(node, before);
+        if (trailing) return trailing;
+      }
+      if (endsTheWalk(node)) break;
+      node = node.parentElement;
+    }
+    return '';
+  };
+
+  // accessibleName is the part of the chain the platform actually defines.
+  // Nothing below it is a standard; everything below it is inference.
+  const accessibleName = (el) => {
     const aria = el.getAttribute('aria-label');
     if (aria) return clean(aria);
     const labelledby = el.getAttribute('aria-labelledby');
@@ -74,17 +340,119 @@ const controlInventoryJS = `() => {
     if (el.id) {
       try {
         const bound = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-        if (bound) return clean(bound.textContent);
+        if (bound) return labelTextOf(bound);
       } catch (e) { /* an id CSS.escape cannot express is not a lookup key */ }
     }
+    // A wrapping <label> is read in two steps, and it needs both.
+    //
+    // First, the branches that hold no control at all. textContent would
+    // otherwise return the question followed by everything the widget renders
+    // inside the same label: observed live on real Lever forms as
+    // "GenderSelect ...MaleFemaleDecline to self-identify", as a Race label
+    // trailing every option's legal definition, and as a location field
+    // carrying "No location found. Try entering a different location". None of
+    // that is the question, and Options already carries the choices.
+    //
+    // Then, if that leaves nothing, the label's text minus only what is inside
+    // the control itself. The commonest checkbox markup there is --
+    // "<label><span><input> I agree to the terms</span></label>" -- keeps its
+    // text in the same branch as its control, and the first step alone would
+    // throw the question away and fall through to whatever prose an ancestor
+    // happened to carry.
     const wrapping = el.closest('label');
-    if (wrapping) return clean(wrapping.textContent);
-    const group = el.closest('fieldset, .field, .form-group, li, div');
-    if (group) {
-      const nearby = group.querySelector('legend, label');
-      if (nearby) return clean(nearby.textContent);
+    if (wrapping) {
+      const outside = textOutsideControlBranches(wrapping);
+      if (outside) return outside;
+      const own = labelTextOf(wrapping);
+      if (own) return own;
     }
+    return '';
+  };
+
+  const labelFor = (el) => {
+    const name = accessibleName(el);
+    if (name) return name;
+    const question = questionTextFor(el.parentElement, el, false);
+    if (question) return question;
     return clean(el.getAttribute('placeholder') || el.getAttribute('name') || '');
+  };
+
+  // optionTextFor names one choice in a radio or checkbox group.
+  //
+  // It stops at the accessible name and never walks outward, because outward is
+  // where the *group's question* lives. A radio written as
+  // "<div><div>Are you willing to relocate?</div><input type=radio value=Y> Yes
+  // <input type=radio value=N> No</div>" would otherwise report the question
+  // itself as a selectable choice and push a real one off the end of the list --
+  // handing the operator a set of answers the employer never offered. The
+  // adjacent text beside the control is read, since that is where an unwrapped
+  // option's text sits, and nothing beyond it.
+  const optionTextFor = (el) => {
+    const name = accessibleName(el);
+    if (name) return name;
+    const parent = el.parentElement;
+    if (!parent) return '';
+    const children = Array.prototype.slice.call(parent.childNodes);
+    const index = children.indexOf(el);
+    if (index < 0) return '';
+    for (let i = index + 1; i < children.length; i++) {
+      const child = children[i];
+      if (child.nodeType === 3) {
+        const text = clean(child.nodeValue);
+        if (text) return text;
+        continue;
+      }
+      if (child.nodeType !== 1) continue;
+      if (controlBearing(child) || child.matches(NON_RENDERED)) break;
+      const text = clean(child.textContent);
+      if (text) return text;
+    }
+    return '';
+  };
+
+  // groupQuestionFor resolves the question a radio or checkbox group asks, as
+  // opposed to the text of any one of its options.
+  //
+  // The walk cannot start at the option's own wrapper: that wrapper holds the
+  // option's text, which is exactly the wrong answer ("Yes", "He/him"). So it
+  // starts above the option's own <label> and then climbs to the nearest
+  // ancestor holding the whole group before reading anything. Starting above
+  // the label matters even for a one-option group -- a Lever attestation card
+  // came out as its single option, "I Acknowledge", instead of the paragraph
+  // being acknowledged. A fieldset's legend is preferred over all of it,
+  // because that is the platform's own way of naming a group's question.
+  const groupQuestionFor = (el, name) => {
+    const fieldset = el.closest('fieldset');
+    if (fieldset) {
+      const legend = fieldset.querySelector('legend');
+      if (legend) {
+        const text = clean(legend.textContent);
+        if (text) return text;
+      }
+    }
+    // Escaping the option's own <label> is what actually matters and is done
+    // unconditionally. Climbing to the group's common ancestor on top of that
+    // is an optimisation, and it is bounded: the member count is document-wide,
+    // so a page carrying a second copy of the form -- a mobile duplicate, a
+    // hidden mirror input -- would otherwise send this climbing to <body>,
+    // where questionTextFor stops immediately and the group silently falls back
+    // to its first option. That is the bug this function exists to fix, so it
+    // must not be reachable by walking too far. Failing to reach the common
+    // ancestor simply leaves the walk starting lower, which still climbs.
+    let node = (el.closest('label') || el).parentElement;
+    if (name) {
+      try {
+        const selector = '[name="' + CSS.escape(name) + '"]';
+        const total = document.querySelectorAll(selector).length;
+        let candidate = node;
+        for (let hops = 0; candidate && hops < MAX_ANCESTORS; hops++) {
+          if (atWalkBoundary(candidate)) break;
+          if (candidate.querySelectorAll(selector).length >= total) { node = candidate; break; }
+          candidate = candidate.parentElement;
+        }
+      } catch (e) { /* a name CSS.escape cannot express: read from where we are */ }
+    }
+    return questionTextFor(node, el, true);
   };
 
   const visible = (el) => {
@@ -124,19 +492,31 @@ const controlInventoryJS = `() => {
     if (tag === 'input' && ['submit', 'button', 'reset', 'image', 'hidden'].includes(type)) continue;
     if (!visible(el)) continue;
 
-    const label = labelFor(el);
     const required = el.required === true || el.getAttribute('aria-required') === 'true';
 
+    // A group member is named as an *option*, never through the outward walk;
+    // only a standalone control asks the walk for a question.
     if (tag === 'input' && (type === 'radio' || type === 'checkbox')) {
-      const name = el.getAttribute('name') || ('group-' + label);
+      const optionText = optionTextFor(el);
+      // A checkbox with no name is its own question, not a member of a group.
+      // Keying those by option text alone collapsed every nameless checkbox
+      // whose text could not be read into one bucket -- the first created the
+      // group and every other one was dropped, question and all, with its
+      // required flag OR-ed onto something unrelated. The selector, then the
+      // running index, keeps them distinct.
+      const name = el.getAttribute('name') ||
+        ('group-' + (optionText || selectorFor(el) || ('control-' + out.length)));
       let group = groups.get(name);
       if (!group) {
         group = {
           key: 'group:' + name,
           selector: selectorFor(el),
-          // A radio's own label is its option text; the question is the
-          // group's legend. Prefer that when there is one.
-          label: clean((el.closest('fieldset') && el.closest('fieldset').querySelector('legend') || {}).textContent || '') || label,
+          // A radio's own label is its option text, never the question. The
+          // question comes from the group's legend or, failing that, from the
+          // card that owns the whole group. Falling back to the option text is
+          // the last resort and is what this used to do unconditionally --
+          // which is how a Lever question came out as "Yes".
+          label: groupQuestionFor(el, el.getAttribute('name')) || optionText,
           control_type: type === 'radio' ? 'radio' : 'checkbox',
           options: [],
           required: required,
@@ -145,12 +525,13 @@ const controlInventoryJS = `() => {
         groups.set(name, group);
         out.push(group);
       }
-      if (group.options.length < MAX_OPTIONS && label) group.options.push(label);
+      if (group.options.length < MAX_OPTIONS && optionText) group.options.push(optionText);
       if (el.checked) group.has_value = true;
       if (required) group.required = true;
       continue;
     }
 
+    const label = labelFor(el);
     let controlType = tag;
     if (tag === 'input') controlType = type || 'text';
     if (el.getAttribute('role') === 'combobox') controlType = 'combobox';

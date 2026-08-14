@@ -64,10 +64,20 @@ const (
 	// PreflightNoFormFound: the page loaded and holds no application form.
 	// Distinct from every reason above: this one means Career Agent looked.
 	PreflightNoFormFound = "no_form_found"
-	// PreflightBrowserRejected: this ATS refuses applications from Career
-	// Agent's browser, so inspecting it would tell the operator about a form
-	// they will have to complete in their own browser anyway.
+	// PreflightBrowserRejected has no producer and is kept only so a stored
+	// verdict written before bugs.md #545 still renders.
+	//
+	// It used to be what preflight reported for an ATS that refuses submissions
+	// from the assisted browser -- which is a claim about submitting, made by
+	// a check that only ever asked whether the form could be read. Those are
+	// different questions, and conflating them is the defect #545 closed. An
+	// unreadable ATS now reports auth_required, which is what it is.
 	PreflightBrowserRejected = "browser_rejected"
+	// PreflightAlreadyApplied: this application has already been completed, so
+	// there is nothing to prepare. Distinct from every refusal above -- it is
+	// not a failure, and reporting it as one told the operator that an
+	// application they had already submitted was rejected by the ATS.
+	PreflightAlreadyApplied = "already_applied"
 	// PreflightUnclassified is the fallback, never the underlying error's text.
 	PreflightUnclassified = "unclassified"
 )
@@ -97,12 +107,19 @@ func (i Inventory) Inspected() bool { return i.Reason == PreflightOK }
 func InspectApplication(browser playwright.Browser, filter *security.QuarantineLayer, companyName, applyURL string) Inventory {
 	inventory := Inventory{ATS: ATSName(applyURL)}
 
-	// An ATS that rejects applications from Career Agent's browser is not
-	// inspected. Whatever we learned would describe a form the operator has to
-	// complete somewhere else anyway, and loading it would be traffic spent for
-	// nothing.
+	// An ATS whose form cannot be read without the operator signed in is not
+	// inspected: there would be nothing there to read.
+	//
+	// This is deliberately *not* the same question as whether the ATS accepts a
+	// submission from Career Agent's browser. It was, until bugs.md #545, and
+	// the two answers differ on the ATS it matters most for. An application the
+	// operator must finish by hand is the one whose questions they most need in
+	// advance -- refusing to read it is the opposite of helping.
 	if reason := assistedBrowserRejectionForPreflight(applyURL); reason != "" {
-		inventory.Reason = PreflightBrowserRejected
+		// auth_required, not browser_rejected: this check is about whether the
+		// form can be read without the operator signed in. Reporting a submit
+		// rejection here would tell them a fact nothing established.
+		inventory.Reason = PreflightAuthRequired
 		return inventory
 	}
 	// Workday and friends have no pre-auth form at all. Bug #18 established
@@ -192,13 +209,14 @@ func looksLikePasswordGate(controls []FormControl) bool {
 }
 
 // assistedBrowserRejectionForPreflight is a seam over the storage-layer
-// rejection list, kept as a variable so this package's tests can exercise the
-// refusal without a database. It is set by cmd/preflight, which has storage
-// available; unset, preflight simply does not apply that refusal, which is
-// safe -- the inspection is read-only either way.
+// registry, kept as a variable so this package's tests can exercise the refusal
+// without a database. It is set by cmd/preflight, which has storage available,
+// to storage.PreflightRefusalReason -- the "can this be read" question, not the
+// "will a submission be accepted" one. Unset, preflight simply does not apply
+// the refusal, which is safe: the inspection is read-only either way.
 var assistedBrowserRejectionForPreflight = func(string) string { return "" }
 
-// SetAssistedBrowserRejectionCheck installs the rejection list.
+// SetAssistedBrowserRejectionCheck installs the read-refusal check.
 func SetAssistedBrowserRejectionCheck(check func(string) string) {
 	if check != nil {
 		assistedBrowserRejectionForPreflight = check
