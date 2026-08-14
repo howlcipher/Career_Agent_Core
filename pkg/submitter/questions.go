@@ -49,10 +49,15 @@ const maxLabelLength = 400
 // controlInventoryJS reads the form's structure in one pass.
 //
 // Label resolution follows the accessibility chain first (aria-label,
-// aria-labelledby, <label for>, wrapping <label>) and only then falls back to a
-// nearby <label>/<legend> in the field's group — the same reasoning
+// aria-labelledby, <label for>, wrapping <label>) — the same reasoning
 // GetByLabelLoc rests on, that a WCAG-compliant ATS exposes a stable
-// accessible name even when its name/id attributes are vendor noise.
+// accessible name even when its name/id attributes are vendor noise. Greenhouse
+// is entirely served by that chain: every real control on its forms carries
+// aria-label or aria-labelledby, and the only inputs without one are
+// aria-hidden and dropped by visible() before a label is ever needed.
+//
+// When no accessible name exists at all, questionTextFor takes over. See its
+// own comment for why it walks rather than reaching for closest().
 //
 // Radio and checkbox groups collapse to one entry keyed by their shared name,
 // because a group of five radios is one question to the operator, not five.
@@ -60,7 +65,19 @@ const controlInventoryJS = `() => {
   const MAX = %d, MAX_OPTIONS = %d, MAX_LABEL = %d;
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL);
 
-  const labelFor = (el) => {
+  // FILLABLE is the same set of elements this inventory enumerates, restated
+  // for questionTextFor's use. It deliberately never mentions <button> or any
+  // submit-shaped input, for the reason the enumeration itself does not.
+  const FILLABLE = 'input, textarea, select, [role="combobox"]';
+
+  // MAX_ANCESTORS bounds the upward walk. Past this depth a container is the
+  // page's layout rather than a question, and reading its text would attach
+  // section prose to a field.
+  const MAX_ANCESTORS = 8;
+
+  // accessibleName is the part of the chain the platform actually defines.
+  // Nothing below it is a standard; everything below it is inference.
+  const accessibleName = (el) => {
     const aria = el.getAttribute('aria-label');
     if (aria) return clean(aria);
     const labelledby = el.getAttribute('aria-labelledby');
@@ -79,12 +96,87 @@ const controlInventoryJS = `() => {
     }
     const wrapping = el.closest('label');
     if (wrapping) return clean(wrapping.textContent);
-    const group = el.closest('fieldset, .field, .form-group, li, div');
-    if (group) {
-      const nearby = group.querySelector('legend, label');
-      if (nearby) return clean(nearby.textContent);
+    return '';
+  };
+
+  // ownTextOf reads the text a container holds *itself*, ignoring every child
+  // subtree that contains a form control.
+  //
+  // That single exclusion is what makes the walk work without knowing anything
+  // about a particular ATS, and it is why this replaced closest(). A control's
+  // own field wrapper contributes nothing, because it contains the control. A
+  // container holding several questions contributes nothing, because each of
+  // those questions' text sits inside a subtree that contains its own control.
+  // So the first non-empty text found on the way up belongs to this control and
+  // to nothing else.
+  //
+  // skipLabels is set when resolving a *group's* question. An option's text
+  // lives in a <label>, and a <label> holding no control (the "for" form) would
+  // otherwise be read as part of the question — "Pick one Yes No" instead of
+  // "Pick one". A form that puts a group's question in a <label> loses nothing
+  // by this: it falls back to the option text, which is what it did before.
+  const ownTextOf = (node, skipLabels) => {
+    let text = '';
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) { text += ' ' + child.nodeValue; continue; }
+      if (child.nodeType !== 1) continue;
+      if (child.matches(FILLABLE) || child.querySelector(FILLABLE)) continue;
+      if (skipLabels && (child.matches('label') || child.querySelector('label'))) continue;
+      text += ' ' + child.textContent;
     }
+    return clean(text);
+  };
+
+  // questionTextFor walks up from a starting node looking for the question that
+  // owns the control, nearest first.
+  const questionTextFor = (start, skipLabels) => {
+    let node = start;
+    for (let hops = 0; node && hops < MAX_ANCESTORS; hops++) {
+      const tag = node.tagName ? node.tagName.toLowerCase() : '';
+      if (tag === 'form' || tag === 'body' || tag === 'html' || tag === '') break;
+      const text = ownTextOf(node, skipLabels);
+      if (text) return text;
+      node = node.parentElement;
+    }
+    return '';
+  };
+
+  const labelFor = (el) => {
+    const name = accessibleName(el);
+    if (name) return name;
+    const question = questionTextFor(el.parentElement, false);
+    if (question) return question;
     return clean(el.getAttribute('placeholder') || el.getAttribute('name') || '');
+  };
+
+  // groupQuestionFor resolves the question a radio or checkbox group asks, as
+  // opposed to the text of any one of its options.
+  //
+  // The walk cannot start at the option's own wrapper: that wrapper holds the
+  // option's text, which is exactly the wrong answer ("Yes", "He/him"). So it
+  // climbs first to the nearest ancestor holding the whole group, and only then
+  // starts reading. A fieldset's legend is preferred over both, because that is
+  // the platform's own way of saying "this is the group's question".
+  const groupQuestionFor = (el, name) => {
+    const fieldset = el.closest('fieldset');
+    if (fieldset) {
+      const legend = fieldset.querySelector('legend');
+      if (legend) {
+        const text = clean(legend.textContent);
+        if (text) return text;
+      }
+    }
+    let node = el.parentElement;
+    if (name) {
+      try {
+        const selector = '[name="' + CSS.escape(name) + '"]';
+        const total = document.querySelectorAll(selector).length;
+        while (node && node.querySelectorAll(selector).length < total) {
+          node = node.parentElement;
+        }
+      } catch (e) { /* a name CSS.escape cannot express: read from where we are */ }
+    }
+    return questionTextFor(node, true);
   };
 
   const visible = (el) => {
@@ -134,9 +226,12 @@ const controlInventoryJS = `() => {
         group = {
           key: 'group:' + name,
           selector: selectorFor(el),
-          // A radio's own label is its option text; the question is the
-          // group's legend. Prefer that when there is one.
-          label: clean((el.closest('fieldset') && el.closest('fieldset').querySelector('legend') || {}).textContent || '') || label,
+          // A radio's own label is its option text, never the question. The
+          // question comes from the group's legend or, failing that, from the
+          // card that owns the whole group. Falling back to the option text is
+          // the last resort and is what this used to do unconditionally --
+          // which is how a Lever question came out as "Yes".
+          label: groupQuestionFor(el, el.getAttribute('name')) || label,
           control_type: type === 'radio' ? 'radio' : 'checkbox',
           options: [],
           required: required,
