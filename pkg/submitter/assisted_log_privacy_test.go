@@ -118,6 +118,130 @@ func TestApplyApprovedAnswers_DoesNotLogTheValueItFailedToCommit(t *testing.T) {
 	}
 }
 
+// TestComboboxCommitRecord_NamesThePositionNotTheValue pins the producer-side
+// rule for the record fillComboboxFromCandidates writes when a candidate sticks.
+//
+// The candidates on that path are the operator's own address values, so the
+// record this replaced ("Location set to %q") wrote a home city and state into
+// career_agent.log. Nothing downstream caught it: security.SanitizeChildLogLine
+// only strips markup and truncates, so a well-formed prose line reaches
+// dashboard.log intact once cmd/assist runs a fill. The existing coverage in
+// this package and in pkg/security all guards markup and driver diagnostics --
+// there was no test asserting that an ordinary sentence carries no operator
+// value, which is exactly the shape that got through.
+//
+// It asserts the record's exact text rather than searching it for a value.
+// Searching would be worthless here and it is worth saying why: the helper is
+// not given the candidates at all, so "the record does not contain a candidate"
+// is true of every possible implementation and would pass forever. Pinning the
+// whole string is what actually bites -- widening the signature to thread the
+// typed value back in cannot leave this assertion standing, and whoever does it
+// has to edit a test whose name says not to.
+//
+// The call site itself -- that this helper is what the log line is built from --
+// is guarded by the Chromium test below, which is gated and does not run in a
+// default `go test ./...`.
+func TestComboboxCommitRecord_NamesThePositionNotTheValue(t *testing.T) {
+	for _, testCase := range []struct {
+		field    string
+		position int
+		total    int
+		want     string
+	}{
+		{"Location", 1, 3, "Location committed on the initial fill from candidate 1 of 3 (saved a validation-retry cycle)"},
+		{"Location", 2, 3, "Location committed on the initial fill from candidate 2 of 3 (saved a validation-retry cycle)"},
+		{"Country", 2, 2, "Country committed on the initial fill from candidate 2 of 2 (saved a validation-retry cycle)"},
+		{"Location", 1, 1, "Location committed on the initial fill from candidate 1 of 1 (saved a validation-retry cycle)"},
+	} {
+		if got := comboboxCommitRecord(testCase.field, testCase.position, testCase.total); got != testCase.want {
+			t.Errorf("comboboxCommitRecord(%q, %d, %d)\n got: %q\nwant: %q",
+				testCase.field, testCase.position, testCase.total, got, testCase.want)
+		}
+	}
+}
+
+// comboboxCanaryForm is a local synthetic Location autocomplete shaped like the
+// react-select widget Greenhouse serves: a role="combobox" input inside a
+// .select__control shell, an aria-controls listbox of [role="option"] entries,
+// and a .select__single-value that the shell renders once a selection commits.
+// That is what readComboboxValueJS reads, so the commit is recognised by the
+// production rule.
+//
+// It is not a full stand-in for a live react-select and should not be read as
+// one: it never sets aria-activedescendant, so waitForComboboxReady times out on
+// every attempt (which is where this test's ~14s goes) and the keyboard-selection
+// fork is never exercised. What is being pinned here is what reaches the log,
+// not the commit mechanism -- browser_test.go covers that.
+//
+// Only the second option matches the second candidate below, so the first
+// candidate genuinely fails and the run commits at position 2 -- which is the
+// case where the position record has to carry real information.
+const comboboxCanaryForm = `<!doctype html>
+<html><body>
+<form>
+<label for="loc">Location</label>
+<div class="select__control">
+  <span class="select__single-value"></span>
+  <input id="loc" name="loc" type="text" role="combobox" aria-controls="loc-listbox" autocomplete="off">
+</div>
+<div id="loc-listbox">
+  <div id="loc-option-0" role="option">CA_TEST_OTHERPLACE</div>
+  <div id="loc-option-1" role="option">CA_TEST_CITY, CA_TEST_STATE</div>
+</div>
+</form>
+<script>
+document.querySelectorAll('#loc-listbox [role="option"]').forEach(function (opt) {
+  opt.addEventListener('click', function () {
+    document.querySelector('.select__single-value').textContent = opt.textContent;
+  });
+});
+</script>
+</body></html>`
+
+// TestFillComboboxFromCandidates_DoesNotLogTheValueItCommitted is the live
+// re-verification for the address-value leak, on the producer side.
+//
+// The unit test above pins the record's shape; this drives the shipped function
+// through a real Chromium against a real page and asserts on what actually
+// reached the log. That distinction is the whole reason this file exists: the
+// defect it replaces passed every unit test in the repository, because the
+// value only ever appeared at the moment a selection committed against a
+// browser.
+func TestFillComboboxFromCandidates_DoesNotLogTheValueItCommitted(t *testing.T) {
+	if os.Getenv("CAREER_AGENT_PLAYWRIGHT_INTEGRATION") != "1" {
+		t.Skip("set CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1 to run the Chromium log-privacy regression")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, comboboxCanaryForm)
+	}))
+	defer server.Close()
+
+	page, cleanup := openCanaryPage(t, server.URL)
+	defer cleanup()
+
+	// Stand-ins for the operator's address values, in the order the caller
+	// fixes them. Synthetic: no pii.yaml value appears in this file.
+	candidates := []string{"CA_TEST_UNMATCHED_CITY", "CA_TEST_CITY, CA_TEST_STATE"}
+
+	captured := captureLog(t)
+	fillComboboxFromCandidates(resolveFillTarget(page), "#loc", "Location", candidates, nil)
+
+	emitted := captured.String()
+	if emitted == "" {
+		t.Fatal("the commit logged nothing at all; the diagnostic was lost rather than made safe")
+	}
+	for _, candidate := range candidates {
+		if strings.Contains(emitted, candidate) {
+			t.Fatalf("a typed address value reached the log: %q", emitted)
+		}
+	}
+	if !strings.Contains(emitted, "candidate 2 of 2") {
+		t.Fatalf("the log does not say which candidate committed: %q", emitted)
+	}
+}
+
 // openCanaryPage launches Chromium and returns a page on url.
 func openCanaryPage(t *testing.T, url string) (playwright.Page, func()) {
 	t.Helper()

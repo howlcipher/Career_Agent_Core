@@ -2,6 +2,102 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 546. The fill path logs the operator's own address values, and nothing downstream strips them
+
+**Found and fixed 2026-08-14**, by the adversarial pass of the audit of the first two real
+applications. Not found by a test — the value only ever appears at the instant a combobox selection
+commits against a live browser, so every unit test in the repository passed over it.
+
+**The defect.** `fillComboboxFromCandidates` (`pkg/submitter/browser.go`) logged the value it had just
+typed:
+
+```go
+log.Printf("[Auto-Submit] %s set to %q on the initial fill (saved a validation-retry cycle)", what, want)
+```
+
+The candidates on that path are the operator's own address values — Location and Country are required
+react-select fields on every Greenhouse form — so the record wrote a home city, state and country into
+the log. Confirmed against the live logs by matching every `pii.yaml` value and reporting counts only:
+51 records of the shape `[Auto-Submit] (Location|Country) set to …` exist across three log files —
+13 in `career_agent.log`, 33 in the rotated `2026-08-12` log, 5 in the `2026-08-03` one. Redacted
+shape: `[Auto-Submit] Location set to "<CITY>, MI" on the initial fill`.
+
+**Why it was worse than a legacy-path artifact.** `pkg/submitter` is shared with `cmd/assist`'s fill
+path, whose stderr reaches `dashboard.log` through `security.SanitizeChildLogLine`. That filter strips
+markup and truncates (`pkg/security/logsafe.go:171`); a well-formed prose line passes through
+untouched. So the first time the operator clicks **Continue** on an assisted application their address
+values land in `dashboard.log` as well. That half had not fired yet — `dashboard.log` is clean —
+because no *assisted* fill has ever run here: `assisted_fill_summary` reads `0 filled, 0 reused` on
+all ten prepared jobs. The autonomous path plainly has run, which is where the 51 records come from;
+the two paths share this function, which is the point. This is the boundary ADR-006 draws, and logs
+get zipped for sharing.
+
+**Scope — the first sweep was wrong, and how it was wrong is the useful part.** Every `log.Printf` in
+`pkg/submitter` carrying `%q` was read, which found nothing else: the rest carry selectors, control
+types, or bounded reason codes, and `uploadName` at the cover-letter upload is the constant
+`cover_letter.<ext>`. On that basis this was written up as the only site logging an operator value.
+**Post-fix review falsified it.** Two further sites format the value into a nested `fmt.Sprintf`
+first and log the result with `%s`, so a `log.Printf.*%q` grep cannot see them at all:
+`browser.go:2019` (`fmt.Sprintf("%s (tried %q)", selector, value)`, emitted at `:2031`) and
+`browser.go:3313` (`rejectedDespiteLanding`, emitted at `:1832`). Both take `value` from `fixesMap`,
+which `SolveValidationErrors` produces from `pii.ApplicationFacts()` plus `pii.EEO.Summary()` — the
+same operator fields, on the same Location and Country controls, into the same two log destinations.
+A grep for a format verb finds only the sites that hold the verb; the next audit of this kind should
+trace the *value* to its source instead.
+
+Those two are filed as **#549** rather than folded in here, and the reason is not size. Each was added
+deliberately — bugs.md #97 and #100 — with a written rationale about telling a broken mechanism apart
+from a value the widget does not offer, and each sits directly beneath a comment at `browser.go:1969`
+asserting the opposite invariant (*"Selectors only, never values: the values are drawn from the PII
+profile and this log is not a place for them"*). Reversing two prior decisions and resolving a
+contradiction the file states about itself is its own task with its own test, and burying it inside a
+PR named for the combobox leak would hide it. Neither has ever fired: zero occurrences of either
+record across all four `career_agent*.log` files, against 51 for the one fixed here.
+
+Deliberately left alone for a different reason: `browser.go`'s label-fill fallback and custom-question
+failure records log employer question text, which is a real concern of the same family (ADR-007:
+*"never a label, never a value"*) but a different confidentiality category.
+
+**The fix.** Keep the diagnostic, drop the value. The record exists to answer which phrasing a
+geocoder accepted (improvements.md #28), and because the caller fixes the candidate order, the
+candidate's *position* answers that completely: `Location committed on the initial fill from candidate
+2 of 3 (saved a validation-retry cycle)`. Split into `comboboxCommitRecord(what, position, total)` so
+the rule is testable without a browser — the same bounded-record-at-the-producer shape as
+`security.BrowserFailureReason`. The sibling `commitFilledCombobox` twenty lines below already logged
+the field name only; this brings the two into line.
+
+**Verification.** Two tests in `pkg/submitter/assisted_log_privacy_test.go`:
+
+* A gated Chromium regression (`CAREER_AGENT_PLAYWRIGHT_INTEGRATION=1`) driving the shipped function
+  against a synthetic react-select Location widget, with the first candidate deliberately unmatched so
+  the run commits at position 2. **This is the one that demonstrates the catch.** Reverting the fix
+  and re-running reproduced the leak verbatim:
+  `[Auto-Submit] Location set to "CA_TEST_CITY, CA_TEST_STATE" on the initial fill` — the same shape
+  found in `career_agent.log`, from a real browser. No employer was contacted and no application was
+  submitted for this.
+* A unit test pinning `comboboxCommitRecord`'s exact output. Its first draft asserted that the record
+  contained none of the candidate strings, which post-fix review correctly called a tautology: the
+  helper is never given the candidates, so that assertion is true of every possible implementation and
+  would pass forever. It now asserts the whole string, so widening the signature to thread the typed
+  value back in cannot leave it standing. Note the honest limit this leaves: the gated browser test is
+  the only thing guarding the *call site*, and it does not run in a default `go test ./...`.
+
+An earlier version of this account claimed both tests were "confirmed to fail against the original
+line". Only the Chromium one was — the unit test could not have failed against code where
+`comboboxCommitRecord` did not exist; that would have been a compile error, which is not the same
+thing as a demonstrated catch. Corrected here rather than quietly, because overstating what a test
+proves is the failure mode this whole session was auditing for.
+
+`gofmt -l ./cmd ./pkg ./internal` clean, `go build ./...`, `go vet ./...`, `go test ./...` all pass.
+
+**What the pre-existing logs still hold.** The fix stops new records; it does not rewrite the ones
+already written. Precisely, so a scrub does not miss a file: five paths match `career_agent*.log`,
+and **three carry records** — `career_agent.log` (13), `career_agent-2026-08-12T21-27-10.908.log`
+(33), `career_agent-2026-08-03T13-23-42.195.log` (5). `career_agent-2026-08-01T14-50-23.490.log` has
+none. `career_agent_live.log` is root-owned `0600` and could not be read by this user, so it was
+**not** checked in either direction. All are gitignored, so nothing left the machine, but anyone
+zipping logs to share should scrub or delete them first — and needs `sudo` for the fifth.
+
 ## 545. Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question
 
 **Found 2026-08-13** while evaluating whether preflight should inspect Lever postings. **Closed 2026-08-14.**
