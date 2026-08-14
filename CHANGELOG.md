@@ -1,5 +1,73 @@
 # Career Agent Core - Changelog
 
+## 2026-08-14 — Your first two real applications, audited: your home address was going into a log
+
+You sent one Lever and one Greenhouse application on the shipped product. This
+entry is what the audit of those two found.
+
+**Fixed: the fill path was writing your own address into a log file.** When
+Career Agent commits a Location or Country dropdown — required react-select
+fields on every Greenhouse form — it recorded which value it had just typed.
+That put your home city, state and country into `career_agent.log`, in plain
+text, in 51 records across three log files on this machine. Nothing downstream
+caught it: the filter that keeps page content out of `dashboard.log` strips
+markup and truncates, and an ordinary sentence goes straight through it. So the
+first time you clicked **Continue** on an assisted application, those values
+would have landed in `dashboard.log` too. That half has not happened yet only
+because no *assisted* fill has ever run here — the 51 records come from the
+autonomous path, and the two share the same code.
+
+The record now names the field and which position in the candidate list
+committed — `Location committed on the initial fill from candidate 2 of 3` —
+which keeps what that line was actually for: different job boards accept
+different phrasings of the same address, and comparing positions still shows
+that. It is a real trade, so it is worth being straight about the cost: you can
+no longer read the exact text out of the line, and reconstructing it needs your
+`pii.yaml` as it was that day.
+
+It is pinned by a test that drives a real browser and was confirmed to
+reproduce the leak when the fix is reverted — this is exactly the kind of defect
+a unit test cannot see, because the value only appears at the instant a
+selection commits.
+
+**Already on disk.** The fix stops new records. The existing
+`career_agent*.log` files still hold the old ones. They are gitignored so
+nothing left the machine, but scrub or delete them before zipping logs to share.
+
+**And the review of that fix found two more of the same, filed as `bugs.md`
+#549.** The sweep that decided this was the only such record grepped for the
+wrong thing, and an independent adversarial review caught it: two sites in the
+validation-retry path build the value into a nested format string, so the
+search could not see them. They draw on the same profile fields and reach the
+same logs. Neither has ever actually fired — zero occurrences, against 51 for
+the one fixed here — and both were added on purpose, so undoing them is its own
+decision rather than a quiet edit tacked onto this one.
+
+**Not fixed, filed: the two things that actually cost you time.** Neither
+application received any automation at all — nothing filled, no document
+attached, no approved answer used — and the audit found why.
+
+* `bugs.md` #547 — the Lever application had never been prepared, and its Copy
+  Application Packet did not say so. It listed your stored details and the whole
+  answer vault and nothing at all about the form in front of you: no heading, no
+  zero-count, no notice. That is the section shipped yesterday, on the ATS where
+  the packet *is* the product, and 15 of your 19 queued Lever jobs are in the
+  same state.
+* `bugs.md` #548 — the Greenhouse card told you *"Nothing could be filled
+  automatically on this application."* It had never tried. Preparing an
+  application stamps a fill outcome, and the card reads that stamp as "a fill
+  ran" — while Career Agent was holding usable answers for 8 of that form's 10
+  questions.
+
+**What the audit did not find.** Both outcome records are truthful: one funnel
+row, one applied record and one transition each, timestamps identical across
+four tables, nothing else in the database touched that day, no lease or session
+left open, and both marked as confirmed by you rather than by Career Agent. The
+submit boundary held. The answer vault's authorization gate was attacked
+directly and did not give: every reusable sensitive answer traces to a decision
+you made. And yesterday's Lever fix works where it ran — the four prepared Lever
+jobs carry the employer's real questions and clean option lists.
+
 ## 2026-08-14 — Career Agent can now prepare a Lever application, which is most of your queue
 
 Yesterday's entry filed `bugs.md` #545 and held Lever preparation back rather

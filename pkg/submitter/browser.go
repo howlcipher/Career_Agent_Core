@@ -3738,13 +3738,46 @@ func fillComboboxFromCandidates(target fillTarget, selector, what string, candid
 	if err != nil {
 		return
 	}
-	for _, want := range candidates {
+	for index, want := range candidates {
 		if committed, err := setComboboxValue(target, el, want, mustContain); err == nil && committed {
-			log.Printf("[Auto-Submit] %s set to %q on the initial fill (saved a validation-retry cycle)", what, want)
+			log.Printf("[Auto-Submit] %s", comboboxCommitRecord(what, index+1, len(candidates)))
 			return
 		}
 	}
 	log.Printf("[Auto-Submit] Could not commit a %s selection from %d candidate(s); leaving it to the validation retry", what, len(candidates))
+}
+
+// comboboxCommitRecord names which candidate committed without repeating what
+// was typed into the control.
+//
+// The candidates here are the operator's own address values -- Location and
+// Country are required react-select fields on every Greenhouse form -- so the
+// obvious record ("Location set to %q") writes a home city and state into
+// career_agent.log, and into dashboard.log too once cmd/assist runs a fill:
+// security.SanitizeChildLogLine strips markup and truncates, and a well-formed
+// prose line passes through it untouched. That is the boundary ADR-006 draws.
+//
+// The position carries the comparative diagnostic the value was there for: what
+// this loop exists to answer is that different boards accept different phrasings
+// (improvements #28), and a run that commits at 1 where another commits at 4
+// says so, because the caller fixes the candidate order.
+//
+// Two honest limits. The record is no longer self-contained -- decoding "4 of 6"
+// needs pii.yaml as it was at run time, and the list length itself changes with
+// which address keys are set, so an old line's meaning shifts. And it names the
+// candidate, not the query: setComboboxValue types searchPrefixes(want), so the
+// commit may have landed on a prefix of candidate 4 rather than candidate 4
+// itself. The record it replaced could not distinguish those either -- it logged
+// `want`, not what was typed -- so this loses the absolute value, not a precision
+// that ever existed.
+//
+// Note that bugs.md #97 made the opposite trade in the validation-retry path
+// above (browser.go:2019), and bugs.md #549 is where that contradiction is being
+// held for decision. Split out as a function so the rule is testable without a
+// browser.
+func comboboxCommitRecord(what string, position, total int) string {
+	return fmt.Sprintf("%s committed on the initial fill from candidate %d of %d (saved a validation-retry cycle)",
+		what, position, total)
 }
 
 // commitFilledCombobox finishes an autocomplete the initial fill only typed

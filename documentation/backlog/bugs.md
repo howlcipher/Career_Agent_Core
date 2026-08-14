@@ -49,11 +49,15 @@ The narrow detections that **are** safe — #99, #101, #104 — all fire only **
 
 Pending bugs carry the same diminishing-returns score defined in `improvements.md` (Score = Value × Decay ÷ Effort, ROI floor 0.5). Bugs rarely decay — a defect's cost does not shrink because other defects were fixed — so Decay is normally 1.0. A bug below the floor stays open, flagged ⚠️, and needs explicit user confirmation before being worked. When a new bug is found (including one surfaced while checking the Usability Gate above), add a row here with a Severity (`Blocker` | `Major` | `Minor`) and a matching detail section, then work the table top down.
 
-**2026-08-14, bugs.md #545 closed.** Lever question extraction fixed and Lever preparation enabled; full account in `documentation/backlog_history/bugs_done_details.md` item #545. Two things worth carrying forward. First, the row was **re-scored before being worked** (1.3 -> 2.0, Value 4 -> 6) because its premises were stale: its claim that Lever renders client-side is false — three real `/apply` pages returned complete server-rendered markup to an anonymous `curl` — and a live queue measurement (`AWAITING_REVIEW` = 20 Lever + 6 Greenhouse) put the defect across 77% of actionable applications, the ones that must be finished by hand. Re-verifying a row against the code *and against live data* before picking it up is Working Protocol step 5 doing its job. Second, the live run found **three further label defects after every synthetic fixture already passed** — a `<label>` wrapping a `<select>` returning its own options, a one-option group reporting its option, a help note outranking its group's label. That is now the fifth time on this project that a live run has found what `go test` could not, and it remains the reason no form-facing change ships on unit tests alone. **One Pending row remains: #524** (1.5), unchanged. *(Prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
+**2026-08-14, audit of the first two real applications; #546 closed, #547/#548/#549 filed.** The operator completed one Lever and one Greenhouse application on the shipped product, and the session audited them rather than picking the next row. **The outcome records are sound** — one funnel row, one `applied_jobs` row and one APPLIED transition each, five timestamps byte-identical per application across four tables, zero collateral writes anywhere in the database that day, no lease or session stuck, no duplicate under a `?gh_src=` variant or an `eu.greenhouse.io` mirror, `manual_user_confirmation` on both. The submit boundary held and the answer-vault authorization gate survived adversarial attack (all 14 sensitive-and-reusable answers carry operator provenance; all 15 `seeded_from_pii` rows carry `reuse_allowed=0`). **What the audit found instead was that neither application received any automation at all** — 0 fields filled, 0 documents attached, 0 approved answers applied across both — and three defects explaining why, of which one was fixed. #546 (the fill path logging the operator's own city and state) was taken first because it is a confidentiality boundary ADR-006 exists to draw, and it is one Continue click from reaching `dashboard.log`. #547 and #548 are the two the applications themselves suffered and are the ranked Pending work now. #549 was then filed by #546's own post-fix review, which falsified that fix's scope claim — two more sites log the same operator fields through a nested `fmt.Sprintf` that the sweep's `%q` grep could not see. Two notes for a future session: the most valuable findings here came from *reading durable state against the code*, not from the test suite — every one of these passed `go test`; and an adversarial review of a finished fix earned its keep by disproving the finished fix's own claim about itself. **Seven Pending rows: #547 (2.0), #548 (1.5), #524 (1.5), #549 (1.0), #532 (0.7), #526 (1.0), #528 (1.0).** The last three were omitted from the previous two status paragraphs' enumerations while their table rows still carried a Pending status, which is how a Minor row starves: the prose said the backlog was shorter than it was, and `internal/backlog` validates the Tier cell of every Pending row but never checks a prose count against the table. (Writing this paragraph tripped that test in a different way, which is worth recording: quoting a pipe-delimited Pending cell inline made the independent counter read the sentence as a row. The guard-the-guard floor fired exactly as designed.) *(Prior status paragraph archived in `documentation/backlog_history/bugs_groom_history.md`.)*
 
 | # | Bug | Severity | Status | Score (V×D÷E) | Tier | ROI rationale |
 
 |---|---|---|---|---|---|---|
+| 547 | [The Copy Application Packet omits the form's questions silently, so an application nobody prepared looks fully described](#547-the-copy-application-packet-omits-the-forms-questions-silently-so-an-application-nobody-prepared-looks-fully-described) | Major | Pending | 2.0 = 6×1.0÷3 | standard | Found on the operator's real Lever application, 2026-08-14. Job 308177 was never preflighted, so its packet listed stored details and the whole vault and said nothing about the form in front of them — no heading, no zero-count, no notice. The handler's own comment states the rule it breaks one level up. 15 of 19 queued Lever jobs are in the same state, and Lever is the ATS that must be finished by hand, so this is exactly where #545's fix was supposed to land and did not. |
+| 548 | [Preparing an application stamps a fill outcome, so the card reports a fill that never ran](#548-preparing-an-application-stamps-a-fill-outcome-so-the-card-reports-a-fill-that-never-ran) | Major | Pending | 1.5 = 6×1.0÷4 | standard | Found on the operator's real Greenhouse application, 2026-08-14. `cmd/preflight` writes a zero-value `assisted_fill_summary`, `recorded_at` is stamped unconditionally, and the UI reads that as "a fill ran" — so the card said "Nothing could be filled automatically on this application" about work never attempted, while the vault held answers for 8 of that form's 10 questions. The operator hand-filled all 21 controls. All 10 prepared jobs are in this state. The row itself must stay: readiness reads `filled_count + unresolved_count` as a field-count fallback. |
+| 549 | [The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that](#549-the-validation-retry-log-records-the-value-the-model-proposed-directly-under-a-comment-forbidding-exactly-that) | Minor | Pending | 1.0 = 3×1.0÷3 | standard | Found by the post-fix review of #546, which falsified that fix's scope claim. Two sites build the value into a nested `fmt.Sprintf` so a `%q` grep misses them; both draw from the same PII profile and the same Location/Country controls. Latent — zero occurrences across all four logs, against 51 for #546 — but each reverses a written decision (#97, #100) and sits under a comment asserting the opposite, so it needs its own reasoning rather than a quiet edit. |
+| 546 | [The fill path logs the operator's own address values, and nothing downstream strips them](#546-the-fill-path-logs-the-operators-own-address-values-and-nothing-downstream-strips-them) | Major | Fixed (2026-08-14) | — | mechanical | Found by the adversarial pass of the same audit. `fillComboboxFromCandidates` logged `%q` of the value it typed; Location and Country are required react-select fields on every Greenhouse form, so `career_agent.log` holds the operator's home city, state and country. `SanitizeChildLogLine` strips markup and truncates and passes clean prose through, so `cmd/assist`'s first fill would put them in `dashboard.log` too. |
 | 545 | [Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question](#545-levers-custom-question-cards-extract-a-placeholder-an-option-or-a-raw-name-attribute-instead-of-the-question) | Minor | Done (2026-08-14) | — | deep-reasoning | See `documentation/backlog_history/bugs_done_details.md` item #545 for the full account. Re-scored 1.3 -> 2.0 (V 4 -> 6) before working, on a live queue measurement: Lever is 20 of 26 actionable applications and is the ATS that must be finished by hand, so it is where the Copy Application Packet is the product. |
 | 544 | [A skill-scoped experience question is answered with the operator's total career years](#544-a-skill-scoped-experience-question-is-answered-with-the-operators-total-career-years) | Major | Fixed (2026-08-13) | — | standard | Found by reading `patterns.go` while planning the Application Knowledge work. `years_experience` needs only a duration token and `experience`, is Routine, and every Routine pattern auto-fills — so "How many years of Kubernetes experience?" typed the operator's whole career total onto a real screening question. A fabricated qualification, submitted under their name. |
 | 543 | [The assisted browser's stderr is echoed verbatim into the dashboard log, and Playwright's retry diagnostics include element HTML](#543-the-assisted-browsers-stderr-is-echoed-verbatim-into-the-dashboard-log-and-playwrights-retry-diagnostics-include-element-html) | Minor | Done (2026-08-13) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #543 for the full account. |
@@ -251,6 +255,107 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 19 | [Workday URL parsing takes the locale/site segment as the company name](#19-workday-url-parsing-takes-the-localesite-segment-as-the-company-name) | Minor | Resolved (2026-07-21) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #19 for the full fix account. |
 
 ## Details
+
+### 547. The Copy Application Packet omits the form's questions silently, so an application nobody prepared looks fully described
+
+**Found 2026-08-14**, on the operator's own Lever application (`job_funnel.id` 308177), the day after
+#545 shipped the packet's form-questions section.
+
+`serveApplicationPacket` (`cmd/dashboard/assisted_answers_api.go:323`) sources the form's own
+questions solely from `storage.GetPendingQuestions`, and `CopyPacket.tsx:106` renders the
+"This form also asks" block only when `asked.length > 0`. That job was never preflighted — no
+`application_preflight` row, no `application_questions` rows, and it appears nowhere in
+`dashboard.log` — so the packet showed the stored `pii.yaml` values plus the entire answer vault and
+**nothing about the form the operator was filling in**, with no heading, no zero-count, and no notice
+that preparation was available.
+
+The handler's own comment states the principle, one level down: *"A question with no answer is listed
+too, with a note … silently omitting it would make the packet look complete when it is not."* The same
+reasoning applies to the section as a whole and was not applied to it.
+
+**Why it recurs.** Preparation is manual opt-in: `prepare(selectedJobs)` (`App.tsx:412`) posts an
+operator-ticked checkbox list, `PreflightCandidates` only ever looks at the ids it is handed, and
+`PreparePanel` counts verdicts over the rows that exist — it never says how many queued applications
+have never been attempted. Live: 9 of 24 `AWAITING_REVIEW` rows have a preflight row, 4 of 19 on
+Lever. `maxPreflightBatch` is 25, so the whole queue fits in one run; nothing surfaces that.
+
+**Fix direction.** The packet must distinguish *this form asks nothing extra* from *nobody has read
+this form*, and say which. It should offer the fix where the operator already is, rather than sending
+them to another panel. Do not weaken the section that exists — the failure is the missing third
+state, not the rendering of the other two.
+
+**Verification.** Beyond unit coverage: open the packet for a queued Lever job with no preflight row
+and confirm it says so; prepare it; confirm the section appears with the employer's real questions.
+
+### 548. Preparing an application stamps a fill outcome, so the card reports a fill that never ran
+
+**Found 2026-08-14**, on the operator's own Greenhouse application (`job_funnel.id` 310026).
+
+`ReplaceApplicationQuestions` (`pkg/storage/questions.go:319`) upserts an `assisted_fill_summary` row
+with `recorded_at` set unconditionally, and `cmd/preflight/main.go:175` calls it with a zero-value
+summary. `CompletedSummary.tsx:17` derives `hasRun` from `Boolean(summary.recorded_at)`. So merely
+*preparing* an application flips the card from "Nothing filled yet — open the application to let
+Career Agent prepare it" to **"Nothing could be filled automatically on this application."** — a
+past-tense claim about work that was never attempted.
+
+On that application it was false in the most expensive direction available: the vault held usable
+answers for 8 of the form's 10 questions (`auto_fillable=1`, `answer_source='alias'`), preflight had
+counted 21 controls, and the operator hand-filled all of them. `assisted_fill_summary` for the job
+still reads `filled_count=0, reused_answers=0, documents=''` with `recorded_at` 17 hours before the
+application. All 10 prepared jobs on this installation are in the same state, and no application in
+this database has ever recorded a fill.
+
+The component's own doc comment states the invariant preflight breaks: *"A job whose refill has not
+run yet has no filled-field count, and says so, rather than showing a reassuring zero that reads like
+'nothing needed doing'."*
+
+**Constraint.** Do not stop writing the row. `pkg/storage/knowledge.go:151` reads
+`filled_count + unresolved_count` as a field-count fallback, and `interactions.go:121` sums
+`unresolved_count`. The defect is that `recorded_at` means two different things — "questions were
+recorded" and "a fill ran" — so the fix is to separate them, not to delete a writer.
+
+**Adjacent, same root, worth checking in the same pass but not the same fix:**
+`assistedReviewStartedAt` (`cmd/dashboard/main.go:1051`) starts the review clock at `recorded_at`, so
+on an application prepared the evening before, `review_submit` is always older than
+`maxCredibleInteraction` (30 minutes) and is silently dropped. `human_interactions` is empty across
+the whole database, which is also why improvements.md #544 cannot be fitted yet.
+
+### 549. The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that
+
+**Found 2026-08-14** by the independent post-fix review of #546, which set out to falsify that fix's
+scope claim and did.
+
+`browser.go:1969` states the invariant plainly: *"Selectors only, never values: the values are drawn
+from the PII profile and this log is not a place for them."* Twelve lines below it, and again in
+`rejectedDespiteLanding`, the value is put back:
+
+* `browser.go:2019` — `fmt.Sprintf("%s (tried %q)", selector, value)`, emitted at `:2031`.
+* `browser.go:3313` — the same shape, emitted at `:1832`.
+
+`value` comes from `fixesMap`, which `SolveValidationErrors` produces from `pii.ApplicationFacts()`
+plus `pii.EEO.Summary()`. That is the same operator data, on the same Location and Country controls,
+reaching the same two destinations (`career_agent.log`, and `dashboard.log` via `cmd/assist` —
+`SanitizeChildLogLine` passes clean prose through).
+
+**Why it was missed by #546's sweep, which matters more than the sites themselves.** The `%q` lives
+in a nested `fmt.Sprintf`, not in the `log.Printf`, so grepping for a format verb in logging calls
+cannot find it. Trace the *value* to its source, not the verb to its call site.
+
+**Why this is not simply a follow-on edit.** Both records were added deliberately, as bugs.md #97 and
+#100, each with a written rationale: the value distinguishes a broken commit mechanism from a value
+the widget does not offer, which need opposite fixes. Removing them reverses two decisions and
+resolves a contradiction the file states about itself — the comment and the code beneath it cannot
+both stand. The fix should keep the diagnostic and drop the value, as #546 did: what a debugger needs
+is whether the same *selector* keeps failing across attempts, and #546's candidate-position shape is
+the precedent.
+
+**Latent, not observed.** Zero occurrences of either record across all four `career_agent*.log`
+files, against 51 for #546 — which is why it is Minor and ranked below the two defects the real
+applications actually suffered.
+
+### 546. The fill path logs the operator's own address values, and nothing downstream strips them
+
+Fixed 2026-08-14 — full account in `documentation/backlog_history/bugs_done_details.md` item #546.
 
 ### 545. Lever's custom question cards extract a placeholder, an option, or a raw name attribute instead of the question
 
