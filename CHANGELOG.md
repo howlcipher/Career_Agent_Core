@@ -1,5 +1,27 @@
 # Career Agent Core - Changelog
 
+## 2026-08-13 — Correction: the Twitter pattern fixed nothing yet, and the measured gain was all from "Search"
+
+The entry below claims your configured Twitter link "had never been read by
+anything", implying the new pattern resolved four fields that were previously
+interruptions. Checked against `pii.yaml` after merging: **`links.twitter` is not
+set**, so the pattern returns nothing and "Twitter" correctly remains a question
+in the inbox.
+
+* The measured improvement on the six real forms — **88 → 94** fields Career
+  Agent can handle — came **entirely from suppressing the combobox "Search"
+  artifact**, which occurred exactly six times. Twitter contributed zero. The
+  before/after numbers themselves were right; the attribution was not.
+* The pattern is still worth having: it means setting a Twitter link under
+  **Application Knowledge → Your details** now resolves those four fields, where
+  before nothing would have read it. It just has not resolved anything yet.
+* "Twitter" appearing in the inbox is the feature working, not failing: four
+  employers ask for it, Career Agent has no value, and it says so instead of
+  inventing one.
+
+Recorded as its own entry rather than by editing the one below, following this
+file's convention for corrections.
+
 ## 2026-08-13 — The knowledge inbox stops asking about things nobody asked
 
 Found by running Prepare over the real actionable queue after merging
