@@ -37,6 +37,23 @@ type assistedBrowserRejection struct {
 	// so "lever.co" covers "jobs.lever.co" but never "notlever.co".
 	domainSuffix string
 	reason       string
+	// blocksPreflight says the ATS cannot even be *read* without the operator,
+	// which is a separate claim from refusing a submission and needs its own
+	// evidence.
+	//
+	// The two were the same field until bugs.md #545, and conflating them cost
+	// the operator the one thing that still works on a submit-rejected ATS. A
+	// posting Career Agent may not submit is precisely the posting whose
+	// questions the operator most needs in advance, because they are going to
+	// answer every one of them by hand. Lever proves the distinction: it
+	// refuses the assisted browser's submissions, and serves its /apply form to
+	// an anonymous request with no sign-in at all.
+	//
+	// Set this only for an ATS observed to be unreadable — a sign-in wall in
+	// front of the form, not a rejected submission. Everything reachable
+	// through it is read-only either way: preflight fills nothing and cannot
+	// submit.
+	blocksPreflight bool
 }
 
 // assistedBrowserRejections is intentionally a short, evidence-backed list.
@@ -47,6 +64,9 @@ var assistedBrowserRejections = []assistedBrowserRejection{
 	{
 		domainSuffix: "lever.co",
 		reason:       "Lever rejects applications submitted from the assisted browser with \"There was an error verifying your application\", while the same application succeeds in an ordinary browser (bug #520, observed 2026-08-06).",
+		// Readable. Verified 2026-08-13 against four real postings: the /apply
+		// form returns 200 to an anonymous request and inspects cleanly.
+		blocksPreflight: false,
 	},
 }
 
@@ -55,17 +75,41 @@ var assistedBrowserRejections = []assistedBrowserRejection{
 // their own browser. An empty string means the assisted browser is usable for
 // that posting, which is the case for every ATS not in the registry.
 func AssistedBrowserRejectionReason(rawURL string) string {
+	if rejection, matched := rejectionFor(rawURL); matched {
+		return rejection.reason
+	}
+	return ""
+}
+
+// PreflightRefusalReason reports why a posting cannot be *inspected* at all.
+//
+// This is a different question from AssistedBrowserRejectionReason, and asking
+// the wrong one is what bugs.md #545 closed. Preflight neither fills nor
+// submits: it loads a page and reads the form's structure. An ATS that refuses
+// an automated submission has said nothing about whether its form can be read,
+// and treating the two as one answer left the operator's Copy Application
+// Packet empty for the applications that depend on it most -- 20 of the 26 in
+// the live queue.
+func PreflightRefusalReason(rawURL string) string {
+	if rejection, matched := rejectionFor(rawURL); matched && rejection.blocksPreflight {
+		return rejection.reason
+	}
+	return ""
+}
+
+// rejectionFor matches a posting URL against the registry.
+func rejectionFor(rawURL string) (assistedBrowserRejection, bool) {
 	host := assistedPostingHost(rawURL)
 	if host == "" {
-		return ""
+		return assistedBrowserRejection{}, false
 	}
 	for _, rejection := range assistedBrowserRejections {
 		if host == rejection.domainSuffix ||
 			strings.HasSuffix(host, "."+rejection.domainSuffix) {
-			return rejection.reason
+			return rejection, true
 		}
 	}
-	return ""
+	return assistedBrowserRejection{}, false
 }
 
 // assistedPostingHost extracts a lowercase hostname from a posting URL.

@@ -63,7 +63,7 @@ func main() {
 	// The rejection list lives in pkg/storage; pkg/submitter is given it here
 	// rather than importing storage, which would be a dependency in the wrong
 	// direction for a package the agent's own fill path depends on.
-	submitter.SetAssistedBrowserRejectionCheck(storage.AssistedBrowserRejectionReason)
+	submitter.SetAssistedBrowserRejectionCheck(storage.PreflightRefusalReason)
 
 	candidates, err := storage.PreflightCandidates(storage.GetDB(), jobIDs)
 	if err != nil {

@@ -97,10 +97,14 @@ func (i Inventory) Inspected() bool { return i.Reason == PreflightOK }
 func InspectApplication(browser playwright.Browser, filter *security.QuarantineLayer, companyName, applyURL string) Inventory {
 	inventory := Inventory{ATS: ATSName(applyURL)}
 
-	// An ATS that rejects applications from Career Agent's browser is not
-	// inspected. Whatever we learned would describe a form the operator has to
-	// complete somewhere else anyway, and loading it would be traffic spent for
-	// nothing.
+	// An ATS whose form cannot be read without the operator signed in is not
+	// inspected: there would be nothing there to read.
+	//
+	// This is deliberately *not* the same question as whether the ATS accepts a
+	// submission from Career Agent's browser. It was, until bugs.md #545, and
+	// the two answers differ on the ATS it matters most for. An application the
+	// operator must finish by hand is the one whose questions they most need in
+	// advance -- refusing to read it is the opposite of helping.
 	if reason := assistedBrowserRejectionForPreflight(applyURL); reason != "" {
 		inventory.Reason = PreflightBrowserRejected
 		return inventory
@@ -192,13 +196,14 @@ func looksLikePasswordGate(controls []FormControl) bool {
 }
 
 // assistedBrowserRejectionForPreflight is a seam over the storage-layer
-// rejection list, kept as a variable so this package's tests can exercise the
-// refusal without a database. It is set by cmd/preflight, which has storage
-// available; unset, preflight simply does not apply that refusal, which is
-// safe -- the inspection is read-only either way.
+// registry, kept as a variable so this package's tests can exercise the refusal
+// without a database. It is set by cmd/preflight, which has storage available,
+// to storage.PreflightRefusalReason -- the "can this be read" question, not the
+// "will a submission be accepted" one. Unset, preflight simply does not apply
+// the refusal, which is safe: the inspection is read-only either way.
 var assistedBrowserRejectionForPreflight = func(string) string { return "" }
 
-// SetAssistedBrowserRejectionCheck installs the rejection list.
+// SetAssistedBrowserRejectionCheck installs the read-refusal check.
 func SetAssistedBrowserRejectionCheck(check func(string) string) {
 	if check != nil {
 		assistedBrowserRejectionForPreflight = check

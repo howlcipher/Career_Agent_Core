@@ -39,6 +39,44 @@ func TestAssistedBrowserRejectionReason_MatchesRegisteredATSOnly(t *testing.T) {
 	}
 }
 
+// "This ATS refuses a submission from the assisted browser" and "this ATS
+// cannot be read at all" were one field until bugs.md #545, and collapsing them
+// left the Copy Application Packet empty for the applications that depend on it
+// most: an ATS Career Agent may not submit to is exactly the one whose questions
+// the operator has to answer by hand.
+//
+// Both directions matter. Lever must stay submit-rejected -- that is bug #520,
+// and weakening it would put Career Agent back in front of a Submit the
+// employer rejects. Lever must also be readable, because preflight fills
+// nothing and submits nothing.
+func TestPreflightRefusalReason_IsSeparateFromTheSubmitRejection(t *testing.T) {
+	const lever = "https://jobs.lever.co/veeva/abc-123"
+
+	if AssistedBrowserRejectionReason(lever) == "" {
+		t.Error("Lever must still be refused the assisted browser (bug #520)")
+	}
+	if reason := PreflightRefusalReason(lever); reason != "" {
+		t.Errorf("Lever's form is public and reads cleanly; preflight must not refuse it, got %q", reason)
+	}
+
+	// An ATS in neither category answers no to both questions.
+	const greenhouse = "https://boards.greenhouse.io/grafanalabs/jobs/1"
+	if AssistedBrowserRejectionReason(greenhouse) != "" || PreflightRefusalReason(greenhouse) != "" {
+		t.Error("an unregistered ATS must be refused by neither gate")
+	}
+
+	// The read refusal still exists as a mechanism; it is simply unclaimed. A
+	// registry entry that sets it must be refused inspection.
+	original := assistedBrowserRejections
+	t.Cleanup(func() { assistedBrowserRejections = original })
+	assistedBrowserRejections = []assistedBrowserRejection{
+		{domainSuffix: "example.com", reason: "sign-in wall in front of the form", blocksPreflight: true},
+	}
+	if PreflightRefusalReason("https://jobs.example.com/1") == "" {
+		t.Error("an ATS marked unreadable must be refused inspection")
+	}
+}
+
 // A rejected ATS must be refused at the single gate both the dashboard handler
 // and cmd/assist pass through, so no route can open a browser whose submission
 // the employer will refuse (bug #520).

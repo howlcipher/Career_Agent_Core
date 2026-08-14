@@ -175,7 +175,21 @@ func TestPreflight_RecordsAVerdictAndRefusesAnUnknownState(t *testing.T) {
 	}
 }
 
-func TestPreflightCandidates_RefuseWhatTheAssistedBrowserItselfRefuses(t *testing.T) {
+// This test used to assert the opposite: that an ATS refusing the assisted
+// browser was refused inspection too, on the reasoning that "preflight is not a
+// way around bug #520". That reasoning was wrong, and bugs.md #545 is what it
+// cost. Preflight is not a way around anything -- it fills nothing and cannot
+// submit -- so refusing a *submission* says nothing about whether the form can
+// be *read*. Lever answers no to the first and yes to the second, and the old
+// rule therefore withheld preparation from 20 of the 26 applications in the live
+// queue: precisely the ones the operator has to complete by hand, and so
+// precisely the ones worth preparing.
+//
+// What is unchanged is the submit boundary. Lever still never gets an assisted
+// browser and still cannot be submitted by Career Agent; the assertion for that
+// lives in TestPreflightRefusalReason_IsSeparateFromTheSubmitRejection and in
+// TestGetAssistedLaunchInfo_RefusesATSThatRejectsTheAssistedBrowser.
+func TestPreflightCandidates_RefuseOnlyWhatCannotBeRead(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 	now := time.Now().UTC()
@@ -208,10 +222,14 @@ func TestPreflightCandidates_RefuseWhatTheAssistedBrowserItselfRefuses(t *testin
 	if bySkip["1"] != "" {
 		t.Fatalf("a Greenhouse posting should be inspectable, got skip %q", bySkip["1"])
 	}
-	// Lever rejects the assisted browser (bug #520). Preflight is not a way
-	// around that, and must say so rather than try.
-	if bySkip["2"] == "" {
-		t.Fatal("an ATS that rejects the assisted browser must not be preflighted either")
+	// Lever rejects the assisted browser (bug #520) and serves its form to
+	// anyone. Reading it is exactly what the operator needs.
+	if bySkip["2"] != "" {
+		t.Fatalf("a Lever posting is readable and must be inspectable, got skip %q", bySkip["2"])
+	}
+	// The submit boundary is untouched by that: no assisted browser may open.
+	if AssistedBrowserRejectionReason("https://jobs.lever.co/example/abc") == "" {
+		t.Fatal("Lever must still be refused the assisted browser")
 	}
 }
 
