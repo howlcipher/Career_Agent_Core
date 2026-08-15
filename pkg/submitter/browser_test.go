@@ -2518,6 +2518,60 @@ func TestApplyValidationFix_ChecksCheckboxes(t *testing.T) {
 	}
 }
 
+// bugs.md #549 (found by post-fix review of #549 itself): applyValidationFix
+// used to format the proposed value straight into its returned error
+// (`fmt.Errorf("select option %q not available: %w", value, err)`), which
+// browser.go:1993 then logged verbatim with %v -- a third leak in the same
+// retry loop the rest of #549 fixed, and one where even the *underlying*
+// Playwright error could carry the value back in if wrapped raw. The
+// synthetic underlying error here deliberately echoes the canary, the way a
+// real "strict mode violation: no options matched %q" message might, to prove
+// wrapping it with security.BrowserFailureReason (rather than %w on the raw
+// error) is what keeps it out.
+func TestApplyValidationFix_DropdownFailureNeverIncludesTheProposedValue(t *testing.T) {
+	const canary = "CA_TEST_SECRET_549_7f3a91"
+	loc := &MockLocator{
+		countFunc:    func() (int, error) { return 1, nil },
+		evaluateFunc: func(string) (interface{}, error) { return "select|select-one", nil },
+		selectOptionFunc: func(playwright.SelectOptionValues) ([]string, error) {
+			return nil, fmt.Errorf("strict mode violation: no options matched %q", canary)
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	err := applyValidationFix(pageTarget{page: page}, "#work_auth", canary)
+	if err == nil {
+		t.Fatal("expected an error when the option is not available")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Errorf("error must never carry the proposed value (or the raw underlying error), got %q", err.Error())
+	}
+}
+
+// Same defect, the checkbox-group branch: the previous shape was
+// fmt.Errorf("no option in the checkbox group matches %q", value).
+func TestApplyValidationFix_CheckboxGroupMismatchNeverIncludesTheProposedValue(t *testing.T) {
+	const canary = "CA_TEST_SECRET_549_7f3a91"
+	loc := &MockLocator{
+		countFunc: func() (int, error) { return 1, nil },
+		evaluateFunc: func(expr string) (interface{}, error) {
+			if strings.Contains(expr, "querySelectorAll") {
+				return []interface{}{"opt_a|Yes", "opt_b|No"}, nil
+			}
+			return "input|checkbox", nil
+		},
+	}
+	page := &MockPage{locatorFunc: func(string, ...playwright.PageLocatorOptions) playwright.Locator { return loc }}
+
+	err := applyValidationFix(pageTarget{page: page}, "#agree_group", canary)
+	if !errors.Is(err, ErrNoMatchingCheckboxOption) {
+		t.Fatalf("expected ErrNoMatchingCheckboxOption, got %v", err)
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Errorf("error must never carry the proposed value, got %q", err.Error())
+	}
+}
+
 // A selector that matches nothing must report an error rather than being
 // swallowed — a silent no-op is what made the retry loop unwinnable.
 func TestApplyValidationFix_ReportsUnmatchedSelector(t *testing.T) {
@@ -3333,16 +3387,19 @@ func TestDecideSubmissionOutcome_ErrorWordingIsRejectionWithoutAriaInvalid(t *te
 	}
 }
 
-// bugs.md #97: an uncommittable field must name the value that was attempted,
-// not just the control. Reddit's veteran-status question (#434) refused two
-// consecutive attempts and the log said only that #434 was left empty --
-// giving no way to tell a broken commit mechanism from a value the widget
-// does not offer. Those need opposite fixes, so the log has to distinguish
-// them. The option list is real: typing "I don't wish to answer" filters it
-// to exactly that entry, so the control is genuinely selectable.
-func TestUncommittableFieldNamesTheAttemptedValue(t *testing.T) {
+// bugs.md #97 originally made an uncommittable field name the value that was
+// attempted, to tell a broken commit mechanism apart from a value the widget
+// does not offer (Reddit's veteran-status question, #434, refused two
+// consecutive attempts and the log said only that #434 was left empty). bugs.md
+// #549: that put the operator's value in career_agent.log directly beneath the
+// "Selectors only, never values" comment forbidding it. notLandedRecord keeps
+// #97's actual diagnostic -- which control -- and drops the value, and this
+// still routes through the real ErrUncommittableField wrapping so an error
+// message that starts threading the value back in fails here first.
+func TestUncommittableFieldNamesTheSelectorNotTheValue(t *testing.T) {
+	const canary = "CA_TEST_SECRET_549_7f3a91"
 	notLanded := []string{
-		fmt.Sprintf("%s (tried %q)", "#434", "I am not a protected veteran"),
+		notLandedRecord("#434", canary),
 	}
 	err := fmt.Errorf("%w: %s", ErrUncommittableField, strings.Join(notLanded, ", "))
 
@@ -3351,10 +3408,10 @@ func TestUncommittableFieldNamesTheAttemptedValue(t *testing.T) {
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "#434") {
-		t.Errorf("message must name the control, got %q", msg)
+		t.Errorf("message must still name the control, got %q", msg)
 	}
-	if !strings.Contains(msg, "I am not a protected veteran") {
-		t.Errorf("message must name the attempted value, got %q", msg)
+	if strings.Contains(msg, canary) {
+		t.Errorf("message must never carry the attempted value, got %q", msg)
 	}
 }
 
@@ -3491,21 +3548,34 @@ func TestBotProtectionSrcPattern_MatchesKnownProvidersOnly(t *testing.T) {
 
 // bugs.md #100: Akuity applied 7/7 fixes with no not-landed line -- every
 // control reported as successfully set -- and the identical 7 fields came back
-// flagged. #97 names values only for fields that FAIL to land, so this case
-// had no diagnostic at all and the loop could only re-guess.
-func TestRejectedDespiteLanding_PairsFieldsWithWhatWasWritten(t *testing.T) {
+// flagged. #97 (now notLandedRecord) names a field only when it FAILS to land,
+// so this case had no diagnostic at all and the loop could only re-guess.
+//
+// bugs.md #549: the original diagnostic paired each id with the value that
+// had been written (`id = "value"`), truncated at 80 chars via truncateForLog
+// -- the same operator-data-in-the-log defect as #97's, and one where a value
+// longer than 80 chars would still have leaked its first 80 chars into the
+// log. The field-id list alone still answers what #100 needed -- which
+// already-applied fields the form keeps rejecting -- without the value, and
+// without any length at which a value could reappear.
+func TestRejectedDespiteLanding_NamesFieldsNotValues(t *testing.T) {
+	const canary = "CA_TEST_SECRET_549_7f3a91"
+	longCanaryValue := canary + strings.Repeat(" padding to push well past the old 80-char truncation boundary", 3)
 	applied := map[string]string{
-		"input#question_6039579009":    "https://linkedin.com/in/example",
-		"textarea#question_6051659009": "Ran production Kubernetes clusters for four years.",
+		"input#question_6039579009":    canary,
+		"textarea#question_6051659009": longCanaryValue,
 		"input#question_9999999999":    "not rejected, must not appear",
 	}
 	got := rejectedDespiteLanding([]string{"question_6039579009", "question_6051659009"}, applied)
 
-	if !strings.Contains(got, "question_6039579009 = \"https://linkedin.com/in/example\"") {
-		t.Errorf("missing the rejected input's value; got %q", got)
+	if !strings.Contains(got, "question_6039579009") {
+		t.Errorf("missing the rejected input's field id; got %q", got)
 	}
-	if !strings.Contains(got, "Ran production Kubernetes clusters") {
-		t.Errorf("missing the rejected textarea's value; got %q", got)
+	if !strings.Contains(got, "question_6051659009") {
+		t.Errorf("missing the rejected textarea's field id; got %q", got)
+	}
+	if strings.Contains(got, canary) {
+		t.Errorf("a written value must never reach this diagnostic, got %q", got)
 	}
 	if strings.Contains(got, "must not appear") {
 		t.Errorf("a field that was not rejected must not be reported; got %q", got)

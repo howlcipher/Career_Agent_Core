@@ -2010,13 +2010,14 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 					if committed, cErr := commitComboboxSelection(target, selector, value); cErr == nil && committed {
 						comboCommitted = append(comboCommitted, selector)
 					} else {
-						// bugs.md #97: record the value that was attempted, not
-						// just the control that refused it. Without it the log says
-						// a commit failed and gives no way to tell a broken
-						// mechanism from a value the widget simply does not offer --
-						// the difference between a code bug and a data mismatch,
-						// which need opposite fixes.
-						notLanded = append(notLanded, fmt.Sprintf("%s (tried %q)", selector, value))
+						// bugs.md #97 wanted the attempted value here, to tell a
+						// broken commit mechanism apart from a value the widget
+						// simply does not offer. bugs.md #549: that put the
+						// operator's value in the log the comment above forbids
+						// it from. The selector alone still answers #97's actual
+						// question -- whether the same field keeps failing across
+						// attempts -- without the value.
+						notLanded = append(notLanded, notLandedRecord(selector, value))
 					}
 				}
 			}
@@ -2605,6 +2606,13 @@ func firstVisibleSubmit(loc playwright.Locator, count int) (playwright.Locator, 
 
 var ErrEmptySelector = fmt.Errorf("empty selector provided for form filling")
 
+// ErrNoMatchingCheckboxOption reports that none of a checkbox group's options
+// matched the proposed value. bugs.md #549: named as a sentinel rather than
+// formatted with the value, which the group's options -- not what was
+// proposed -- is the safe thing to name, and the caller already knows which
+// selector this came from.
+var ErrNoMatchingCheckboxOption = fmt.Errorf("no option in the checkbox group matches the proposed value")
+
 func safeFill(target fillTarget, selector, text string) error {
 	if selector == "" {
 		return ErrEmptySelector
@@ -2757,7 +2765,18 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 		}
 		if _, err := el.SelectOption(playwright.SelectOptionValues{Values: &[]string{value}},
 			playwright.LocatorSelectOptionOptions{Timeout: playwright.Float(fillActionTimeoutMs)}); err != nil {
-			return fmt.Errorf("select option %q not available: %w", value, err)
+			// bugs.md #549 (found by post-fix review): this used to be
+			// fmt.Errorf("select option %q not available: %w", value, err),
+			// which put the model's proposed value into the error string --
+			// logged verbatim with %v at the call site a few lines below the
+			// "Selectors only, never values" comment, and again wherever this
+			// error propagates (the initial-fill path reuses this function).
+			// Also drop the raw Playwright error text: it can itself carry
+			// whatever the widget echoes back. security.BrowserFailureReason
+			// is the existing bounded-vocabulary classifier for exactly this
+			// (see its use a few hundred lines below at the refill-inventory
+			// log sites).
+			return fmt.Errorf("select option not available (%s)", security.BrowserFailureReason(err))
 		}
 		return nil
 
@@ -2776,7 +2795,11 @@ func applyValidationFix(target fillTarget, selector, value string) error {
 			// No option matches: tick nothing rather than guess, exactly as
 			// #79 requires for comboboxes. A wrong choice here is a wrong
 			// answer on a real application.
-			return fmt.Errorf("no option in the checkbox group matches %q", value)
+			//
+			// bugs.md #549: this used to be fmt.Errorf("no option in the
+			// checkbox group matches %q", value), putting the model's
+			// proposed value into an error later logged verbatim.
+			return ErrNoMatchingCheckboxOption
 		}
 		if isNegativeCheckboxValue(value) {
 			return el.Uncheck(playwright.LocatorUncheckOptions{Timeout: playwright.Float(fillActionTimeoutMs)})
@@ -3288,14 +3311,36 @@ func describeCodeFieldCandidates(page playwright.Page) string {
 	return strings.Join(parts, " | ")
 }
 
-// rejectedDespiteLanding pairs each still-rejected field with the value the
-// previous attempt successfully wrote into it.
+// notLandedRecord names the field that failed to land without repeating what
+// was typed into it.
 //
-// bugs.md #100. #97 names the value only when a fix fails to land. The
-// opposite case -- verifyFixLanded reports the control as set, and the form
-// rejects it anyway -- had no diagnostic at all. Akuity produced exactly that:
-// "applied 7/7", no not-landed line, and the identical 7 fields flagged again,
-// so nothing in the log said what had been written or why it was refused.
+// bugs.md #549: the previous shape (`fmt.Sprintf("%s (tried %q)", selector,
+// value)`) put the operator's value into the log directly beneath the
+// "Selectors only, never values" comment above its call site, reversing what
+// bugs.md #97 actually needed -- whether the same field keeps failing across
+// attempts, which the selector alone answers. value is still a parameter
+// (it's what the caller has in hand) so this stays honestly testable: a
+// future change that starts formatting it back in has something concrete to
+// break. Split out so the rule is testable without a browser, mirroring
+// comboboxCommitRecord (bugs.md #546).
+func notLandedRecord(selector, value string) string {
+	return selector
+}
+
+// rejectedDespiteLanding names each still-rejected field that the previous
+// attempt successfully wrote a value into, without repeating that value.
+//
+// bugs.md #100. #97 (now notLandedRecord) names a field only when a fix fails
+// to land. The opposite case -- verifyFixLanded reports the control as set,
+// and the form rejects it anyway -- had no diagnostic at all. Akuity produced
+// exactly that: "applied 7/7", no not-landed line, and the identical 7 fields
+// flagged again, so nothing in the log said which fields had been written and
+// then refused.
+//
+// bugs.md #549: the original shape paired each id with the value that was
+// written (`id = "value"`), which is the same operator-data-in-the-log defect
+// as #97's. The field-id list alone still answers what #100 needed -- which
+// already-applied fields the form keeps rejecting -- without the value.
 //
 // Matching is by suffix because the identifiers come from different places:
 // the model's selector is `input#question_6039579009` or `#question_...`,
@@ -3304,21 +3349,21 @@ func rejectedDespiteLanding(rejectedIDs []string, applied map[string]string) str
 	if len(applied) == 0 || len(rejectedIDs) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(rejectedIDs))
+	ids := make([]string, 0, len(rejectedIDs))
 	for _, id := range rejectedIDs {
-		for selector, value := range applied {
+		for selector := range applied {
 			if !selectorTargetsID(selector, id) {
 				continue
 			}
-			parts = append(parts, fmt.Sprintf("%s = %q", id, truncateForLog(value, 80)))
+			ids = append(ids, id)
 			break
 		}
 	}
-	if len(parts) == 0 {
+	if len(ids) == 0 {
 		return ""
 	}
-	sort.Strings(parts)
-	return strings.Join(parts, "; ")
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
 }
 
 // selectorTargetsID reports whether a model-supplied selector addresses the
@@ -3772,9 +3817,11 @@ func fillComboboxFromCandidates(target fillTarget, selector, what string, candid
 // that ever existed.
 //
 // Note that bugs.md #97 made the opposite trade in the validation-retry path
-// above (browser.go:2019), and bugs.md #549 is where that contradiction is being
-// held for decision. Split out as a function so the rule is testable without a
-// browser.
+// above (formerly browser.go:2019): it logged the attempted value. bugs.md
+// #549 resolved that contradiction by bringing notLandedRecord and
+// rejectedDespiteLanding in line with this function's rule -- name the
+// position or the field, never the value. Split out as a function so the rule
+// is testable without a browser.
 func comboboxCommitRecord(what string, position, total int) string {
 	return fmt.Sprintf("%s committed on the initial fill from candidate %d of %d (saved a validation-retry cycle)",
 		what, position, total)

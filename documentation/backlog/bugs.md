@@ -56,7 +56,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 |---|---|---|---|---|---|---|
 | 547 | [The Copy Application Packet omits the form's questions silently, so an application nobody prepared looks fully described](#547-the-copy-application-packet-omits-the-forms-questions-silently-so-an-application-nobody-prepared-looks-fully-described) | Major | Done (2026-08-14) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #547 for the full account. Live-verified end to end against the real queue: an unprepared Lever job went not_prepared -> preparing -> ready with five real employer questions, driven entirely from the packet. |
 | 548 | [Preparing an application stamps a fill outcome, so the card reports a fill that never ran](#548-preparing-an-application-stamps-a-fill-outcome-so-the-card-reports-a-fill-that-never-ran) | Major | Done (2026-08-15) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #548 for the full account. Fixed on `fix/548-fill-attempt-provenance`. The independent review round found six further defects in the fix itself, five of them this bug with its sign flipped, and filed three more it deliberately did not fold in. |
-| 549 | [The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that](#549-the-validation-retry-log-records-the-value-the-model-proposed-directly-under-a-comment-forbidding-exactly-that) | Minor | Pending | 1.0 = 3×1.0÷3 | standard | Found by the post-fix review of #546, which falsified that fix's scope claim. Two sites build the value into a nested `fmt.Sprintf` so a `%q` grep misses them; both draw from the same PII profile and the same Location/Country controls. Latent — zero occurrences across all four logs, against 51 for #546 — but each reverses a written decision (#97, #100) and sits under a comment asserting the opposite, so it needs its own reasoning rather than a quiet edit. |
+| 549 | [The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that](#549-the-validation-retry-log-records-the-value-the-model-proposed-directly-under-a-comment-forbidding-exactly-that) | Minor | Fixed (2026-08-15) | — | standard | Found by the post-fix review of #546, which falsified that fix's scope claim. Two sites built the value into a nested `fmt.Sprintf` so a `%q` grep missed them. A third site, `applyValidationFix`, was found by this fix's own independent reviewer and folded in: it embedded the value into returned errors logged verbatim in the same loop. All three now name the field/selector/reason, never the value. |
 | 551 | [Automatic Apply fills real employer forms and records nothing, so the card cannot describe its own agent's work](#551-automatic-apply-fills-real-employer-forms-and-records-nothing-so-the-card-cannot-describe-its-own-agents-work) | Major | Pending | 1.2 = 6×1.0÷5 | deep-reasoning | Filed 2026-08-15 by two of #548's three independent reviewers, independently. `cmd/agent` reaches `AWAITING_REVIEW` through `ErrAwaitingHumanReview` — its own log line reads "form filled — awaiting human review" and `completedWork` says "application form reached and filled for review" — and writes nothing to `assisted_fill_summary`. All 24 queued `AWAITING_REVIEW` jobs arrived that way. Not a #548 regression (the card was equally uninformative before), and not a mechanical fix: the copilot browser closes, so the typed values are gone by the time the operator opens the application, and whether that counts as work to report is a product question. |
 | 552 | [The review clock starts when an application was prepared, so every measurement exceeds the credibility cap and is silently discarded](#552-the-review-clock-starts-when-an-application-was-prepared-so-every-measurement-exceeds-the-credibility-cap-and-is-silently-discarded) | Minor | Pending | 1.5 = 3×1.0÷2 | standard | Filed 2026-08-15, carried out of #548 with its evidence rather than folded in. `assistedReviewStartedAt` reads `assisted_fill_summary.recorded_at`, which preparation writes. On job 310026 that is 2026-08-14 01:33:58 against a confirmation at 18:57:20 — 17h23m, against `maxCredibleInteraction` of 30 minutes, so `RecordHumanInteraction` returns nil and drops it. `human_interactions` is empty across the whole database, which is also why improvements.md #544 cannot be fitted. #548 was careful not to feed this clock, so the defect is unchanged in scope. |
 | 553 | [The Assisted card and the Copy Application Packet can describe the same form differently](#553-the-assisted-card-and-the-copy-application-packet-can-describe-the-same-form-differently) | Minor | Pending | 0.7 = 2×1.0÷3 | standard | Filed 2026-08-15 by #548's inverse-regression reviewer. In one narrow state — a fill that reached a form which was never preflighted and recorded no questions — `CompletedSummary` says Career Agent attempted the form while `CopyPacket`, one panel below on the same card, says "Career Agent has not read this employer's form". `DeriveFormInventory` deliberately does not consult `fill_attempted_at` (ADR-007 decision 8), which is right for its own question and is what leaves the two panels able to disagree. Rarer since #548's marker moved behind the fill's guards, but not closed. |
@@ -336,36 +336,7 @@ it — but reachable whenever a fill reaches a form and then fails.
 
 ### 549. The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that
 
-**Found 2026-08-14** by the independent post-fix review of #546, which set out to falsify that fix's
-scope claim and did.
-
-`browser.go:1969` states the invariant plainly: *"Selectors only, never values: the values are drawn
-from the PII profile and this log is not a place for them."* Twelve lines below it, and again in
-`rejectedDespiteLanding`, the value is put back:
-
-* `browser.go:2019` — `fmt.Sprintf("%s (tried %q)", selector, value)`, emitted at `:2031`.
-* `browser.go:3313` — the same shape, emitted at `:1832`.
-
-`value` comes from `fixesMap`, which `SolveValidationErrors` produces from `pii.ApplicationFacts()`
-plus `pii.EEO.Summary()`. That is the same operator data, on the same Location and Country controls,
-reaching the same two destinations (`career_agent.log`, and `dashboard.log` via `cmd/assist` —
-`SanitizeChildLogLine` passes clean prose through).
-
-**Why it was missed by #546's sweep, which matters more than the sites themselves.** The `%q` lives
-in a nested `fmt.Sprintf`, not in the `log.Printf`, so grepping for a format verb in logging calls
-cannot find it. Trace the *value* to its source, not the verb to its call site.
-
-**Why this is not simply a follow-on edit.** Both records were added deliberately, as bugs.md #97 and
-#100, each with a written rationale: the value distinguishes a broken commit mechanism from a value
-the widget does not offer, which need opposite fixes. Removing them reverses two decisions and
-resolves a contradiction the file states about itself — the comment and the code beneath it cannot
-both stand. The fix should keep the diagnostic and drop the value, as #546 did: what a debugger needs
-is whether the same *selector* keeps failing across attempts, and #546's candidate-position shape is
-the precedent.
-
-**Latent, not observed.** Zero occurrences of either record across all four `career_agent*.log`
-files, against 51 for #546 — which is why it is Minor and ranked below the two defects the real
-applications actually suffered.
+Fixed 2026-08-15 — full account in `documentation/backlog_history/bugs_done_details.md` item #549.
 
 ### 546. The fill path logs the operator's own address values, and nothing downstream strips them
 
