@@ -112,6 +112,74 @@ Collateral writes, before/after across 15 counters: the **only** changes were
 `assisted_fill_summary` rows with a non-zero `filled_count` still 0. Job 293710 remained
 `AWAITING_REVIEW`/`waiting_human`; jobs 308177 and 310026 remained `APPLIED`.
 
+### Independent review round, and what it caught
+
+Three read-only reviewers were run against the first commit. This is recorded because the review
+found more than the implementation did, and most of what it found was **this fix's own defect with
+its sign flipped** — a packet that overstates, or a prepared application described as unprepared.
+
+**Reviewer 3 (safety boundary): all five properties confirmed safe.** No fill path, no submit path,
+no operator-answer mutation, Lever's assisted-submit refusal untouched, no data leak. It traced the
+`[Auto-Submit] Clicked an Apply-labeled element` log line to `browser.go:1054-1070` and confirmed the
+locator matches `Apply` / `I'm interested` only — Playwright's `:has-text()` is substring-matched and
+`Applic` is not `Apply`, so it cannot land on a Greenhouse or Lever submit label. It also observed
+that `pkg/submitter`, `pkg/answers`, `pkg/knowledge`, `cmd/preflight` and `cmd/assist` are
+byte-identical to `main` in this diff. Its one substantive criticism was accepted: two of the new
+source assertion's forbidden strings (`FillForm`, `fillField`) named nothing that exists anywhere in
+the repository and were therefore unfalsifiable. They were replaced with real symbols, and the test
+now additionally proves every forbidden name exists somewhere under `pkg/` or `cmd/`.
+
+**Eight defects found and fixed** (Reviewers 1 and 2):
+
+1. **`already_applied` collapsed into `failed`**, rendering *"Career Agent could not read this form,
+   because this application is already complete"* — a sentence contradicting itself, permanently,
+   with no button offering a way out. `cmd/preflight:136-156` goes out of its way to keep that verdict
+   out of its own "could not inspect" count, and the derivation re-collapsed it one layer up. It now
+   resolves to what the same fact resolves to with no verdict at all.
+2. **A refill that resolved every control reported `not_prepared`.** `cmd/assist/main.go:701` passes
+   nil questions when nothing is left unresolved, so the best-prepared application in the queue said
+   *nobody has read this form* and offered to send a browser at a form already read control by
+   control. `filled_count` is now admissible evidence — and it is not #548's conflation, because
+   `recorded_at` is stamped unconditionally by preparation while a non-zero `filled_count` is only
+   ever written by a fill that ran.
+3. **A batch marked finished jobs as still in progress.** The run holds all 25 identifiers from the
+   moment it starts, so the first application inspected kept reporting "reading the employer's form"
+   for the remaining ten minutes, hiding a result already committed and readable. The overlay now
+   drops once this run has a verdict for this application.
+4. **An all-answered form was reported as asking nothing.** Answering does not delete the row, it
+   flips `status`; pending fell to 0 while the form still asked N questions whose wording is not in
+   the packet unless the operator saved it for reuse. An answered count now travels.
+5. **A failed re-read relabelled a good packet.** A Lever job with 11 current questions that hit
+   `navigation_failed` on a later batch flipped from *"This form also asks (11)"* to *"could not read
+   this form … treat as a starting point"*. #547's harm was silence being read as completeness; this
+   was a complete packet actively labelled unreliable. The list now leads and the failure is described
+   as a re-read that did not succeed.
+6. **An absent `form_inventory` produced two positive claims from nothing** — *"has not read this
+   employer's form"* plus an invented cause via the unknown-reason fallback. Ignorance now says so,
+   and the "cannot be read now either" clause renders only when a reason code actually exists.
+7. **`error` was never cleared on success.** The new 3-second poll made this dangerous: one dropped
+   request during a long run would replace a fully prepared packet with *"Could not load your prepared
+   details"* permanently, because the component outlives the panel and reopening would not clear it.
+8. **`starting` stuck true** when the panel was closed mid-request, because `live` was doing double
+   duty as "unmounted" and "panel closed" — silently removing the Prepare button on reopen with
+   nothing to explain its absence.
+
+**Found and deliberately not fixed**, each with its reason:
+
+* *The `failed` state offers retry with no attempt count or backoff*, so a permanently dead posting
+  invites repeated re-launches. Left: every attempt is operator-initiated, one run at a time is
+  already enforced, and adding a backoff model here would be a larger change than the defect warrants.
+* *`Preparable` does not predict the endpoint's assisted-browser refusal or its one-run-at-a-time
+  guard*, so the button can still return 409. Left deliberately: those are process facts not knowable
+  from a row, and the refusal is shown to the operator as sent. The docstring was corrected to stop
+  claiming otherwise.
+* *The `[Auto-Submit]` log prefix on a read-only preparation run is misleading* to anyone reading
+  `dashboard.log`. Pre-existing, cosmetic, outside this diff — filed as improvements.md #550.
+
+All findings were re-verified live after fixing: all five states still correct on the real queue,
+both APPLIED applications truthful (308177 `not_prepared`/`already_applied` and not preparable;
+310026 `ready` with its 10 real questions), and **zero database writes** from the read-only pass.
+
 ### Deliberately not done
 
 #548's card copy was left alone. It is a separate defect with a separate cause, and the state

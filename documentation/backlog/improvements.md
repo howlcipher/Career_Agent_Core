@@ -47,6 +47,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 540 | [Application Knowledge dashboard section and bulk resolution](#540-application-knowledge-dashboard-section-and-bulk-resolution) | Done (2026-08-13) | — | standard | The vault had no UI at all — `/api/answer-vault` was reachable only by curl. Four views, one question at a time with Enter to advance, and the two-checkbox declaration rule shared with the per-application card rather than reimplemented. |
 | 541 | [Prepare applications: read what a form asks without filling or submitting it](#541-prepare-applications-read-what-a-form-asks-without-filling-or-submitting-it) | Done (2026-08-13) | — | deep-reasoning | Without it the inbox has no input on a real installation: questions were only ever recorded during a live assisted session. Reuses `AttemptSubmit`'s prologue; the no-submit boundary is asserted by parsing the source, since a behavioural test cannot prove a negative over every employer form. Live-verified against real Greenhouse and Lever postings; the run found four defects that all passed `go test`. |
 | 542 | [Editable application profile, answer management, and the companion field query](#542-editable-application-profile-answer-management-and-the-companion-field-query) | Done (2026-08-13) | — | standard | `pii.yaml` edited in place rather than copied, with atomic replace, a backup and no value ever logged; vault edit/revoke with derived policies and recognised phrasings; `GET /api/knowledge/field` implements ADR-005's companion query. |
+| 550 | [Preparation runs log under an `[Auto-Submit]` prefix, so a read-only inspection reads like a submission](#550-preparation-runs-log-under-an-auto-submit-prefix-so-a-read-only-inspection-reads-like-a-submission) | Pending | 1.5 = 3×1.0÷2 | mechanical | Filed 2026-08-14 by bugs.md #547's independent safety review. `clickApplyIfPresent` (`browser.go:1068`) carries the prefix with the function rather than the caller, so a preparation run — which cannot fill or submit — writes `[Auto-Submit] Navigating to …` and `[Auto-Submit] Clicked an Apply-labeled element` into `dashboard.log`. Confirmed on a real run. ADR-007 already notes it. Cosmetic, but it makes the one log an operator would check to reassure themselves say the opposite of the truth. |
 | 545 | ["I don't have this" is a real answer the vault cannot represent](#545-i-dont-have-this-is-a-real-answer-the-vault-cannot-represent) | Pending | 2.0 = 4×1.0÷2 | standard | Found 2026-08-13 on the real queue: 5 optional Twitter fields the operator has no account for. `Store.Save` refuses an empty answer by design, so the only options are typing "N/A" into four employers' optional fields or letting the question sit in the inbox forever. Recurs for every optional field the operator does not have. |
 | 543 | [Gated semantic suggestions for equivalent questions](#543-gated-semantic-suggestions-for-equivalent-questions) | Pending | 0.4 = 2×1.0÷5 | deep-reasoning | ⚠️ below floor — needs explicit user confirmation. Deduplication deliberately stops at curated determinism (ADR-007 decision 2). A model could propose that two differently-worded questions match, but the failure mode is a wrong answer on a real application, so it would need confirmation below a very high threshold and must never touch declarations. No evidence yet that the curated layers leave enough on the table to justify it. |
 | 544 | [Predict application effort from this installation's own history](#544-predict-application-effort-from-this-installations-own-history) | Pending | 0.5 = 2×1.0÷4 | standard | `EstimateAssistedEffort` is a hand-tuned additive model. `human_interactions` now records real durations per application, and preflight records real field counts, so the inputs for a measured estimate exist. Worth doing only once enough sessions have accumulated to fit against; today there are too few. |
@@ -247,6 +248,34 @@ Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decisio
 ### 542. Editable application profile, answer management, and the companion field query
 
 Closed — full account in `docs/adrs/ADR-007-Application-Knowledge.md` (decisions 4 and 6), the amendment at the top of `docs/adrs/ADR-005-Browser-Companion.md`, and the 2026-08-13 `CHANGELOG.md` entry.
+
+### 550. Preparation runs log under an `[Auto-Submit]` prefix, so a read-only inspection reads like a submission
+
+**Filed 2026-08-14** by the independent safety review of bugs.md #547, which confirmed the boundary
+holds and then pointed out that the log says otherwise.
+
+`clickApplyIfPresent` (`pkg/submitter/browser.go:1054-1070`) is shared between the real fill flow and
+preflight's read-only inspection, and its log records carry an `[Auto-Submit]` prefix that travels
+with the function rather than with the caller. A preparation run — which cannot fill a field and
+cannot reach a submit control, asserted at the source level in two places — therefore writes this
+into `dashboard.log`:
+
+```
+preparation: [Auto-Submit] Navigating to https://jobs.lever.co/veeva/...
+preparation: [Auto-Submit] Clicked an Apply-labeled element to reveal the application form
+```
+
+Observed on a real run 2026-08-14. ADR-007 already notes the mislabelling in passing.
+
+**Why it is worth fixing rather than tolerating.** #547 shipped a button that starts a browser
+against a real employer, with UI copy promising that nothing is filled and nothing is submitted. The
+log is the one place an operator would go to check that promise, and it currently contradicts it. The
+fix is to pass the caller's own label down rather than hardcoding the prefix, so a read logs as a
+read.
+
+**Not a safety defect.** The click is the employer's own Apply affordance and is how the form is
+reached at all (ADR-007 decision 5); the locator matches `Apply` / `I'm interested` only, and
+Playwright's substring matching cannot reach "Submit Application". Only the wording is wrong.
 
 ### 545. "I don't have this" is a real answer the vault cannot represent
 
