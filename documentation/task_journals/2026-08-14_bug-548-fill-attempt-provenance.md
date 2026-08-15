@@ -71,7 +71,32 @@ any edit. What they added to the row:
   audits complete; plan approved. Operator chose the minimal card copy (no form-inventory plumbing
   onto the card) and declined the optional live employer run — synthetic proof plus the read-only
   310026 regression are the evidence of record.
+- 2026-08-15 — `786cf7d` storage + producers: nullable `fill_attempted_at`, writer split
+  (`RecordPreparedQuestions` has no summary parameter), `MarkFillAttempted` called *before* the fill
+  at both boundaries in `cmd/assist`. 22 backend tests. The extended source-level assertion in
+  `cmd/dashboard/packet_inventory_test.go` immediately caught a real slip — an explanatory comment in
+  `cmd/preflight/main.go` that named the fill writer — which is the guard working as designed.
+- 2026-08-15 — `5452296` frontend: four card states gated on `fill_attempted_at`, 11 new
+  `CompletedSummary.test.tsx` tests (the component had none). One `App.test.tsx` fixture needed the
+  marker: it asserts 24 filled fields, and without a marker the card correctly declines to report
+  them. `ui/dist` rebuilt and committed.
+- 2026-08-15 — `546e234` synthetic verification (`scripts/verify_548_synthetic_fill.go`,
+  `//go:build ignore`). Real Chromium, real `FillAssistedMappedPage`, throwaway DB. **Fill succeeds:**
+  4 fields typed, attempt recorded. **Fill legitimately does nothing:** the fill errors and writes no
+  summary at all, and the attempt is still recorded — the production path that previously left no
+  trace whatsoever, reproduced in a real browser. **Control:** preparation writes the row and claims
+  no fill.
+- 2026-08-15 — **Job 310026 read-only regression, on a byte-identical `.backup` copy** so production
+  was never migrated (confirmed: the real `applications.db` still has no `fill_attempted_at` column).
+  Branch dashboard on `127.0.0.1:8099`, production untouched on `:8080` throughout. Results: 10
+  prepared rows in the queue, **all with `recorded_at`, none with `fill_attempted_at`, all with
+  documents not ready** — precisely the combination that made the false sentence reachable. **Zero
+  rows in the whole database claim a fill attempt.** All 15 counters byte-identical before/after;
+  310026 still `APPLIED` / `completed` / `manual_user_confirmation`, its row's data unchanged. The
+  shipped bundle contains the three new sentences and no longer contains
+  "Nothing could be filled automatically on this application".
+- 2026-08-15 — Branch pushed. Three independent read-only reviewers running.
 
 ## Next Step
 
-Implement the storage layer in `pkg/storage/questions.go`.
+Reconcile reviewer findings, then close the backlog row, CHANGELOG, ADR-007, Usability Gate, and open the PR.
