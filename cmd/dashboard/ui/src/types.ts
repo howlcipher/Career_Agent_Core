@@ -195,6 +195,32 @@ export interface PacketEntry {
   from_this_form?: boolean;
 }
 
+/**
+ * What Career Agent knows about the employer's own form.
+ *
+ * `state` is carried explicitly and is never derived from `question_count`.
+ * A form that was read and asks nothing extra and a form nobody has ever
+ * opened both produce zero questions, and telling the operator those are the
+ * same thing is the defect this field exists to close (bugs.md #547).
+ */
+export type FormInventoryState = 'not_prepared' | 'preparing' | 'ready' | 'failed';
+
+export interface FormInventory {
+  state: FormInventoryState;
+  question_count: number;
+  /** Questions this form asks that have already been dealt with. */
+  answered_count: number;
+  /** The whole form's control count, which is larger than question_count. */
+  field_count: number;
+  /** A bounded code, never a driver message. */
+  reason?: string;
+  inspected_at?: string;
+  source?: 'preflight' | 'assisted_session';
+  /** False when asking for an inspection now would be refused anyway. */
+  preparable: boolean;
+  stale?: boolean;
+}
+
 export interface DocumentSummary {
   kind: string;
   ready: boolean;

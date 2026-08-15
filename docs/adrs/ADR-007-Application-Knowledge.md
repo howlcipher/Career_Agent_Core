@@ -163,6 +163,44 @@ counts and reason codes, never a label and never a value. The batch cap is about
 operator action may send to employers' servers, not about capability, and preflight is refused
 outright while a visible assisted browser is open.
 
+**Amended 2026-08-14 (bugs.md #547): preparation state is carried explicitly, and preparation has a
+second entry point.**
+
+Everything above was about *recording* an inspection. Nothing consumed the recording on the path
+where it mattered most. The Copy Application Packet sourced the employer's questions from
+`GetPendingQuestions` alone and rendered that section only when the list was non-empty, so a form
+nobody had ever opened and a form read and found quiet produced byte-identical output. On the
+operator's own Lever application that silence meant the first while looking like the second.
+
+`storage.DeriveFormInventory` now answers the question the packet was implicitly guessing at, from
+the table built for it — `application_preflight`, whose own schema comment already said *"we looked
+and found nothing" and "we could not look" are different facts, and only this table can tell them
+apart*. Four states travel on the wire (`not_prepared`, `preparing`, `ready`, `failed`) alongside the
+counts, and the UI is forbidden from deriving any of them from `len(questions)`.
+
+Three properties of the derivation are load-bearing:
+
+* **A verdict is the strongest evidence, but not the only evidence.** A live assisted session records
+  questions without writing a verdict (`assisted.go`'s `ReplaceApplicationQuestions` call), so "no
+  preflight row" cannot mean "never inspected" — that reading would print *nobody has read this form*
+  directly above questions read off that very form. Question rows are accepted as proof of a reading,
+  labelled with their source.
+* **`assisted_fill_summary` is not consulted at all.** Its `recorded_at` is stamped by preparation as
+  well as by filling (bugs.md #548), so it already carries two meanings; making it carry a third
+  would deepen that defect rather than route around it.
+* **`preparing` is process state, not durable state.** Only the dashboard that spawned a run knows it
+  is still going, and it tracks which job identifiers are in flight rather than only how many — a
+  run-wide busy flag would have claimed every open packet was being inspected. A dashboard restarted
+  mid-run falls back to what the database holds, which is the honest answer.
+
+The packet offers `Prepare this application` in the incomplete and failed states. It posts to
+`/api/knowledge/preflight` — the same endpoint, the same child process, the same one-run-at-a-time
+guard and the same refusal while an assisted browser is open — rather than adding a second way to
+read a form. Preparation stays **explicit** rather than firing on packet open: the batch cap exists
+to bound how much traffic one operator action sends to employers' servers, and a panel that launches
+Chromium because it was expanded would spend that budget without being asked. Everything in decision
+5 above still holds; this amendment adds a caller, not a capability.
+
 ### 6. The profile edits `pii.yaml` rather than copying it
 
 `pii.yaml` is the source of truth for the facts the curated patterns read. A dashboard-side copy

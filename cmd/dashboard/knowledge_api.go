@@ -180,14 +180,40 @@ func serveKnowledgeField(w http.ResponseWriter, r *http.Request) {
 }
 
 // preflightRun tracks the one preflight run this process allows at a time.
+//
+// It records *which* applications are in flight, not just how many. A count is
+// enough for the Prepare panel, which describes the run as a whole, but the
+// Copy Application Packet describes one application and has to answer a
+// narrower question: is this form being read right now? Without the
+// identifiers, a packet opened during a run of some other application would
+// have to choose between claiming "preparing" (wrong for this job) and
+// "not prepared" (about to become wrong for the other one).
 type preflightRun struct {
 	mutex   sync.Mutex
 	running bool
 	started time.Time
 	jobs    int
+	jobIDs  map[string]bool
 }
 
 var currentPreflight preflightRun
+
+// preparingJob reports whether an inspection of this application is in flight
+// right now.
+//
+// This is process state, not durable state: it is true only inside the
+// dashboard that spawned the run. A dashboard restarted mid-run reverts to
+// reporting whatever the database holds, which is the honest answer -- it no
+// longer knows the run exists, and claiming otherwise would be a guess.
+// It reports the run's start time alongside, because membership alone is not
+// enough: a batch holds every requested application for the whole run, so a job
+// the run has already finished would keep claiming to be in progress until the
+// last one completed. The caller compares against its recorded verdict.
+func (p *preflightRun) preparingJob(jobID string) (bool, time.Time) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	return p.running && p.jobIDs[jobID], p.started
+}
 
 // servePreflight starts a run, or reports the current one.
 func servePreflight(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +274,10 @@ var startPreflight = func(jobIDs []string) error {
 	currentPreflight.running = true
 	currentPreflight.started = time.Now().UTC()
 	currentPreflight.jobs = len(jobIDs)
+	currentPreflight.jobIDs = make(map[string]bool, len(jobIDs))
+	for _, id := range jobIDs {
+		currentPreflight.jobIDs[id] = true
+	}
 	currentPreflight.mutex.Unlock()
 
 	cmd, err := preflightCommand(jobIDs)
@@ -281,6 +311,7 @@ func finishPreflight() {
 	currentPreflight.mutex.Lock()
 	currentPreflight.running = false
 	currentPreflight.jobs = 0
+	currentPreflight.jobIDs = nil
 	currentPreflight.mutex.Unlock()
 }
 

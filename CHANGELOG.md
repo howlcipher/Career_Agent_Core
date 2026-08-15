@@ -1,5 +1,50 @@
 # Career Agent Core - Changelog
 
+## 2026-08-14 — The packet now tells you whether it has actually seen the form
+
+**Fixed: a Copy Application Packet for an application nobody had prepared looked
+exactly like one with nothing left to ask.** On your real Lever application the
+packet listed your stored details and your whole answer vault and then simply
+stopped. Nothing under it. That silence had two completely different meanings —
+*Career Agent read this form and it asks nothing else* and *Career Agent has
+never opened this form* — and no way to tell which you were looking at. You were
+looking at the second one. Fifteen of the nineteen Lever applications still in
+your queue are in the same state, and Lever is the one you finish by hand, so
+it is exactly where the packet is the product.
+
+The packet now always says what it knows about the employer's own form, in
+every state including the empty ones:
+
+* **Not prepared yet** — plus, in as many words, that this means the packet may
+  be incomplete, and a **Prepare this application** button right there.
+* **Reading the employer's form…** — with the reminder that nothing is being
+  filled and nothing is being submitted, because a button that opens a browser
+  should say what it is doing.
+* **This form also asks (11)** — unchanged, the real questions in the order the
+  form asks them.
+* **Form read. No questions beyond the details above, across 12 fields.** — the
+  genuinely-quiet form, which now reads nothing like the never-opened one.
+* **Career Agent could not read this form, because the posting is no longer
+  available.** — a bounded reason, never a browser error, and an offer to retry.
+
+The **Prepare this application** button starts the same preparation run the
+Prepare panel starts — same endpoint, same child process, same one-at-a-time
+guard — for that one application. It deliberately does not fire on its own when
+you open the packet: preparation opens a real browser against a real employer's
+server, and that should happen because you asked, not because you expanded a
+panel. When the run finishes the packet fills itself in without you refreshing
+anything.
+
+Preparation still cannot fill a field, attach a document, or click anything that
+submits, and there is now a test asserting that about `cmd/preflight` itself in
+addition to the existing one on the inspection path.
+
+One thing this deliberately did **not** do: the card above the packet still says
+"Nothing could be filled automatically on this application" for applications
+where no fill was ever attempted. That is a separate defect (#548) with a
+separate cause, and the state this change introduces is built so that fixing it
+does not require unpicking this one.
+
 ## 2026-08-14 — Your first two real applications, audited: your home address was going into a log
 
 You sent one Lever and one Greenhouse application on the shipped product. This
