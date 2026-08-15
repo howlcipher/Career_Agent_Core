@@ -7,6 +7,11 @@
 `cmd/dashboard/profile_api.go` and the dashboard UI. Closes `bugs.md` #544 and
 `improvements.md` #538–#542.
 
+**Amended 2026-08-14** with decision 7's form-inventory model (`bugs.md` #547) and
+**2026-08-15** with decision 8, which separates knowing a form from filling one
+(`bugs.md` #548) in `pkg/storage/questions.go`, `cmd/preflight`, `cmd/assist` and
+`CompletedSummary.tsx`.
+
 ## Context
 
 The Approved Answer Vault (ADR-adjacent; `pkg/answers`, `improvements.md` #497) already solved the
@@ -187,7 +192,9 @@ Three properties of the derivation are load-bearing:
   labelled with their source.
 * **`assisted_fill_summary` is not consulted at all.** Its `recorded_at` is stamped by preparation as
   well as by filling (bugs.md #548), so it already carries two meanings; making it carry a third
-  would deepen that defect rather than route around it.
+  would deepen that defect rather than route around it. *(#548 has since been fixed — see decision 8
+  — and the exclusion still stands, now for a stronger reason: what a fill did to a form is a
+  different fact from what Career Agent knows about it.)*
 * **`preparing` is process state, not durable state.** Only the dashboard that spawned a run knows it
   is still going, and it tracks which job identifiers are in flight rather than only how many — a
   run-wide busy flag would have claimed every open packet was being inspected. A dashboard restarted
@@ -246,6 +253,68 @@ session.
 `AnswersNeeded` and `FieldsUnlockable` count only groups that can honestly be answered once for
 everyone. A declaration the operator must read on every application unlocks nothing in bulk, and
 counting it would overstate what the number buys them.
+
+### 8. Knowing a form and filling a form are separate records, and preparation cannot speak about filling
+
+*Added 2026-08-15, closing bugs.md #548.*
+
+The invariant, in two lines, because everything below is a consequence of it:
+
+```
+FormInventory = what Career Agent knows about the form.
+FillSummary   = what Career Agent actually did to the form.
+```
+
+Decision 7's derivation already refused to read the fill summary. The defect was on the other side of
+the boundary: **preparation was writing it.** `cmd/preflight` passed a zero-value summary through the
+same storage function a real fill used, and that function stamps `recorded_at` unconditionally. The
+dashboard read the row's existence as proof a fill had run, so a prepared application was described
+as one Career Agent had tried and failed on — *"Nothing could be filled automatically on this
+application"* — while the vault held answers for 8 of that form's 10 questions and the operator
+filled all 21 controls by hand.
+
+Measured on the live database at fix time: **all 11 summary rows paired 1:1 with an `inspected`
+preflight verdict**, in batch clusters seconds apart. Every row was a preparation record. No fill had
+ever run on this installation, and nothing in the schema could say so.
+
+Three decisions follow.
+
+**The evidence is added, not inferred.** `assisted_fill_summary` gains a nullable `fill_attempted_at`.
+Every candidate inference was rejected on evidence: `recorded_at` is the defect itself; `filled_count
+> 0` is false for a fill that types nothing and for one whose closing snapshot fails
+(`browser.go:4250`), both of which write a row byte-identical to preparation's; and
+`form_inventory.ready` means the form was *read*, which is exactly the conflation being removed.
+
+**NULL means unknown, and the migration invents no history.** A row written before the column existed
+says nothing about whether a fill ran, so it is not backfilled into either a yes or a no — including
+the 11 rows whose provenance this project happens to know from other tables. A cleaner-looking
+dashboard is not worth a fabricated fact, and the UI has a state for ignorance.
+
+**Preparation cannot claim or erase a fill outcome, by signature.** `RecordPreparedQuestions` takes no
+summary parameter, so there is no argument through which a preparation run could say anything about
+filling. This closes a second defect found by the same audit and not in the original report: the old
+upsert wrote *every* column from the zero value it was handed, so re-preparing an already-filled
+application reset its `filled_count`, `documents` and `filled_labels` to nothing — silently weakening
+decision 7's own `filled_count > 0` evidence. Removing the parameter is the difference between an
+invariant and a convention that holds until someone edits a call site; the source-level assertion
+over `cmd/preflight` (decision 5) was extended to enforce it.
+
+**An attempt is marked when a fill begins, never when it succeeds.** `MarkFillAttempted` is called
+immediately before the employer's controls are touched, at both fill boundaries in `cmd/assist`. This
+is what makes the record true on the paths that report nothing at all — a Playwright error, a browser
+closed mid-fill, a posting that died between preparation and now. Every one of those previously left
+the database looking exactly like an application nobody had opened. A fill that runs and completes
+zero fields is still a fill, and only that state entitles the product to say the attempt completed
+nothing.
+
+Automatic Apply is unchanged and deliberately so: it never wrote this table, sharing the ATS handlers
+but not the reporting layer, and recording its own evidence in `application_attempts`. Defining the
+attempt once at the storage boundary is what keeps Assisted and Automatic from drifting into two
+definitions.
+
+The review clock (`assistedReviewStartedAt`) still reads `recorded_at` and is untouched by this
+change, so human-interaction timing is provably unaltered. That it starts at preparation is a real
+defect and is filed separately with its own evidence.
 
 ## Consequences
 

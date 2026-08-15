@@ -1,5 +1,55 @@
 # Career Agent Core - Changelog
 
+## 2026-08-15 — The card no longer claims it tried to fill a form it never touched
+
+**Fixed: preparing an application made the card report a fill that never ran.**
+On your real Greenhouse application the card said, in the past tense:
+
+> Nothing could be filled automatically on this application.
+
+That was not true. Nothing had been attempted. Career Agent had *read* that form
+the evening before — counting 21 controls and 10 questions, 8 of which your
+answer vault could already answer — and then never filled it. You typed all 21
+controls yourself while the card told you Career Agent had tried and failed.
+
+The cause was one timestamp doing two jobs. Preparing an application and filling
+one wrote the same row, so "this row exists" was being read as "a fill ran".
+Checked against your database: **all 11 of those rows were preparation records**,
+each one paired with the inspection that created it, seconds apart. No fill had
+ever run here, and nothing in the system could say so.
+
+Career Agent now records the moment a fill actually begins, and the card tells
+you which of four things happened:
+
+* **Nothing filled yet** — nothing has touched this application at all.
+* **Career Agent has read this form but has not filled it yet.** — the state
+  your ten prepared applications were really in, now said out loud.
+* **8 form fields filled · 3 approved answers reused · 1 document attached** —
+  unchanged, and now shown only when a fill genuinely ran.
+* **Career Agent attempted this form but could not fill any fields
+  automatically.** — the original sentence, which from now on you will only ever
+  see about a fill that really happened.
+
+Two things worth knowing about how this was built:
+
+The attempt is recorded **before** the fill starts, not after. A fill that hits
+an error, or one you interrupt by closing the browser, used to leave no record
+at all — indistinguishable from an application nobody had opened. Now it tells
+the truth: Career Agent tried, and here is what came of it. A fill that runs and
+completes nothing is still a fill, and only then may the card say so.
+
+The same audit found something the original report had missed: **re-preparing an
+application used to erase what an earlier fill had done to it**, resetting its
+filled-field count and attached documents to zero. Preparation can no longer
+write those at all — not by convention, but because the function it calls has no
+way to reach them.
+
+Applications you completed before this change are marked *unknown* rather than
+guessed at. Career Agent will not invent a history it cannot prove, so nothing
+about your existing applications is described as a fill that ran or as one that
+did not. Your completed applications, their statuses and their confirmations are
+untouched.
+
 ## 2026-08-14 — The packet now tells you whether it has actually seen the form
 
 **Fixed: a Copy Application Packet for an application nobody had prepared looked
