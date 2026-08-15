@@ -2,6 +2,125 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 547. The Copy Application Packet omits the form's questions silently, so an application nobody prepared looks fully described
+
+**Found 2026-08-14** on the operator's own Lever application (`job_funnel.id` 308177), the day after
+#545 shipped the packet's form-questions section. **Fixed 2026-08-14** on branch
+`fix/547-packet-preparation-state`.
+
+### What was wrong
+
+`serveApplicationPacket` sourced the form's own questions solely from `storage.GetPendingQuestions`,
+and `CopyPacket.tsx` rendered the "This form also asks" block only when `asked.length > 0`. Job
+308177 was never preflighted — verified against the live database at fix time: **0
+`application_preflight` rows, 0 `application_questions` rows** — so the packet showed 51 entries of
+stored `pii.yaml` values plus the entire answer vault and nothing at all about the form the operator
+was filling in.
+
+The failure was that silence carried two opposite meanings with no way to tell them apart:
+
+* *Career Agent read this form and it asks nothing beyond what you see*, and
+* *Career Agent has never opened this form.*
+
+The handler's own comment already stated the principle one level down — *"A question with no answer
+is listed too, with a note … silently omitting it would make the packet look complete when it is
+not"* — and it had never been applied to the section as a whole.
+
+Scope at fix time, measured rather than assumed: 24 `AWAITING_REVIEW` rows, 19 on Lever, **15 of
+those 19 with no preflight row**. Lever is the ATS deliberately handed to the operator to finish by
+hand, so it is exactly where the packet is the product.
+
+### The evidence already existed and was never read
+
+`application_preflight` has recorded a `state` (`inspected`/`unavailable`), a bounded `reason` from
+pkg/submitter's closed vocabulary, a `control_count` and an `inspected_at` since preflight shipped
+(#541). Its own schema comment says why it is a separate table: *"we looked and found nothing" and
+"we could not look" are different facts, and only this table can tell them apart.* Nothing on the
+packet path queried it. The fix is mostly a matter of consuming a record that was already being
+written.
+
+### The state model
+
+`storage.DeriveFormInventory` (`pkg/storage/form_inventory.go`) resolves four states —
+`not_prepared`, `preparing`, `ready`, `failed` — carried explicitly on the packet response as a
+`form_inventory` object, always present even when empty, so the UI can never again infer preparation
+from `len(questions)`.
+
+Three properties are load-bearing, and each closes a way the fix could have lied:
+
+1. **A verdict is the strongest evidence but not the only evidence.** A live assisted session records
+   questions without writing a verdict (`pkg/storage/assisted.go:430`). Mapping "no preflight row" to
+   "never prepared" would have printed *nobody has read this form* directly above questions read off
+   that very form — the original defect with its sign flipped. Question rows are therefore accepted as
+   proof of a reading, tagged `assisted_session` rather than `preflight`.
+2. **`assisted_fill_summary` is not consulted at all.** Its `recorded_at` is stamped by preparation as
+   well as by filling, which is bugs.md #548. Making it carry a third meaning would have deepened that
+   defect instead of routing around it.
+3. **`preparing` is process state, not durable state.** `preflightRun` now tracks *which* job
+   identifiers are in flight rather than only how many; a run-wide busy flag would have told every
+   open packet it was being inspected. A dashboard restarted mid-run falls back to the database, which
+   is the honest answer — it no longer knows the run exists.
+
+Staleness is a note on a real reading (`FormInventoryIsStale`, 14 days), never a demotion to
+`not_prepared`: a stale inventory is still a real reading of a real form, and demoting it would tell
+the operator Career Agent has nothing when it has something.
+
+### The one-action repair
+
+The packet offers **Prepare this application** in the incomplete and failed states, posting to
+`/api/knowledge/preflight` — the same endpoint, child process, one-run-at-a-time guard and
+assisted-browser refusal the Prepare panel already uses. No second inspection implementation exists.
+
+Preparation is **explicit, not automatic**, and the trade was made deliberately: `maxPreflightBatch`
+exists to bound how much traffic one operator action sends to employers' servers, and a panel that
+launched Chromium because it was expanded would spend that budget without being asked. The packet
+opens instantly with stored details and states its inventory; the browser only runs when asked.
+
+### Verification
+
+Unit: 11 tests in `pkg/storage/form_inventory_test.go`, 16 in `cmd/dashboard/packet_inventory_test.go`,
+15 in `cmd/dashboard/ui/src/components/CopyPacket.test.tsx` — all five operator-facing states, the
+zero-questions/never-prepared distinction asserted in both directions, bounded failure reasons,
+unrecognised reason codes degrading rather than printing, idempotent repeat preparation, keyboard
+operability, and a source-level assertion that `cmd/preflight` reaches no fill or submit path
+(alongside the pre-existing #541 assertion on the inspection path).
+
+Live, against the real queue, from a branch build on `127.0.0.1:8099` with production untouched on
+`:8080`:
+
+* **Case A — unprepared Lever (job 293710, Veeva).** Before: `not_prepared`, 51 stored entries, 0 from
+  the form. Prepare pressed from the packet → `preparing` observed live. A second press while running
+  returned **409** ("a preparation run is already in progress"); a bystander job (293749) correctly
+  stayed `not_prepared` rather than being claimed by the run. After: `ready`, **5 real Veeva
+  questions**, 16 fields, `source=preflight`, fresh timestamp.
+* **Case B — already-prepared Lever (job 293593, ThinkAhead).** `ready` immediately, 11 real questions,
+  30 fields, no second inspection triggered.
+* **Case C — Greenhouse reference (job 303990, Affirm).** `ready`, 11 real questions, 28 fields —
+  unchanged.
+* **Failed state (job 228).** Rendered `failed` with the bounded reason `posting_dead`.
+* **Zero-questions-ready** was not reachable live (no such row exists in this database) and is covered
+  by unit tests only.
+
+Safety: the run's log shows navigation, the quarantine check, one click on the employer's own
+Apply affordance (ADR-007 decision 5), and `fields=16 questions=5`. No fill, no submit.
+
+Collateral writes, before/after across 15 counters: the **only** changes were
+`application_questions` 90→95, `application_preflight` 11→12 (`inspected` 10→11) and
+`assisted_fill_summary` 10→11 — exactly what one successful preparation writes. Unchanged:
+`applied_jobs` 67, every `job_funnel` status count, `approved_answers` 36, `pending_answers` 0,
+`human_interactions` 0, `answer_aliases` 29, active leases 0, application sessions 0, and
+`assisted_fill_summary` rows with a non-zero `filled_count` still 0. Job 293710 remained
+`AWAITING_REVIEW`/`waiting_human`; jobs 308177 and 310026 remained `APPLIED`.
+
+### Deliberately not done
+
+#548's card copy was left alone. It is a separate defect with a separate cause, and the state
+introduced here is built so that fixing it does not require unpicking this one. Confirmed still open
+after this work against the real Greenhouse shape: `CompletedSummary.tsx:17` still derives `hasRun`
+from `Boolean(summary.recorded_at)`, and job 310026 still carries `recorded_at` with
+`filled_count=0`. Preparing job 293710 added one more application to that misleading state, which is
+inherent to preparing anything at all until #548 is fixed.
+
 ## 546. The fill path logs the operator's own address values, and nothing downstream strips them
 
 **Found and fixed 2026-08-14**, by the adversarial pass of the audit of the first two real
