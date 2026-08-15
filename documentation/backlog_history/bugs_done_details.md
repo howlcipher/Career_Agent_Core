@@ -2,6 +2,178 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 548. Preparing an application stamps a fill outcome, so the card reports a fill that never ran
+
+**Found 2026-08-14** on the operator's own Greenhouse application (`job_funnel.id` 310026, APPLIED,
+`manual_user_confirmation`). **Fixed 2026-08-15** on branch `fix/548-fill-attempt-provenance`.
+
+### What was wrong
+
+`ReplaceApplicationQuestions` stamped `recorded_at` unconditionally, `cmd/preflight` called it with a
+zero-value summary, and `CompletedSummary.tsx:17` derived `hasRun` from `Boolean(summary.recorded_at)`.
+So *preparing* an application flipped the card to **"Nothing could be filled automatically on this
+application."** — a past-tense claim about work never attempted.
+
+On that application it was false in the most expensive direction available: 21 controls discovered,
+10 questions surfaced, 8 of them answerable from the vault, and the operator hand-filled all 21.
+
+### The audit found the same root reaching further than the row did
+
+Four read-only auditors ran before any edit. Three findings were not in the report:
+
+1. **Preparation did not merely stamp fill state, it erased it.** The upsert set every column from
+   the zero value preflight handed it, so re-preparing an already-filled application reset its
+   `filled_count`, `documents` and `filled_labels` to nothing — silently weakening #547's own
+   `filled_count > 0` evidence. No test called the writer twice with different summaries, which is
+   why it had gone unseen.
+2. **A fill that errored wrote nothing at all.** `cmd/assist` records `manual_review` and returns, so
+   a real attempt was invisible whenever it failed — indistinguishable from an application nobody
+   had opened.
+3. **A real fill can legitimately record `filled_count = 0`** — one that resolves nothing, and one
+   whose closing `SnapshotControls` fails (`browser.go:4250`). Such a row is *byte-identical* to
+   preparation's, which is what rules `filled_count > 0` out as the attempt marker.
+
+Also established: Automatic Apply never writes this table at all, sharing the ATS handlers but not
+the reporting layer; and not every Continue runs a fill — the Workable direct-browser path records
+`manual_review` and never fills.
+
+### What durable evidence existed: none
+
+Measured read-only against the live database. All 11 `assisted_fill_summary` rows were
+`filled_count=0, reused_answers=0, documents='', filled_labels=''`. `application_preflight` held 11
+`inspected` verdicts and **the job set was identical, 1:1**, with timestamps in two batch clusters
+seconds apart — the signature of `cmd/preflight`'s loop. `human_interactions`: 0 rows.
+`application_questions`: 95 rows, all pending. Every existing row was a preparation record, and no
+column could say so.
+
+### The fix
+
+**`assisted_fill_summary` gains a nullable `fill_attempted_at`.** Every inference-based alternative
+was rejected on the evidence above; the discriminator had to be added rather than derived.
+
+**The writer is split so preparation cannot speak about filling.** `RecordPreparedQuestions` takes no
+summary parameter, so a preparation run has no argument through which it could claim *or erase* a
+fill outcome even if a future call site tried. That is the difference between an invariant and a
+convention that holds until someone edits a call site — and the convention had already broken twice.
+`ReplaceApplicationQuestions` remains the fill writer.
+
+**The attempt is marked before the fill begins**, at both boundaries in `cmd/assist`, which is what
+makes it true for the outcomes that report nothing: a Playwright error, a browser closed mid-fill, a
+posting that died since preparation. A fill that completes zero fields is still a fill, and only that
+state entitles the card to say the attempt completed nothing. A failed marker write is logged and
+non-fatal — refusing to fill the operator's application over a bookkeeping failure would be worse
+than a degraded card.
+
+**NULL means unknown, and nothing is backfilled.** The 1:1 preflight correlation proves *this*
+database has no fills, but that is verification evidence, not a rule another installation satisfies.
+The card has a state for ignorance and uses it.
+
+The column is added in `EnsureQuestionSchema`'s own upgrade rather than `InitDBWithPath`'s chain,
+because `cmd/dashboard` deliberately never runs that chain and is the process that reads it.
+
+### The card
+
+Four states instead of two, from the summary alone — the packet (#547) keeps sole ownership of
+form-inventory wording, and a test asserts this card does not borrow it:
+
+| State | Copy |
+|---|---|
+| fill ran, work done | the tick list, unchanged |
+| fill ran, nothing completed | *Career Agent attempted this form but could not fill any fields automatically.* |
+| form read, no fill yet | *Career Agent has read this form but has not filled it yet.* |
+| nothing recorded | *Nothing filled yet — open the application to let Career Agent prepare it.* |
+
+Counts are gated on the marker too, so a row of unknown provenance cannot contribute a tick.
+
+### Verification
+
+**33 new tests.** 14 in `pkg/storage/fill_provenance_test.go`, 8 in `cmd/assist/fill_provenance_test.go`,
+11 in `cmd/dashboard/ui/src/components/CompletedSummary.test.tsx` (the component had none). The
+source-level assertion over `cmd/preflight` was extended with the fill writer's name and immediately
+caught a real slip — an explanatory comment naming it — which is the guard working.
+
+**Synthetic real-fill proof** (`scripts/verify_548_synthetic_fill.go`, `//go:build ignore`): real
+Chromium, real `FillAssistedMappedPage`, throwaway database. A fillable form typed **4 fields** and
+recorded the attempt; an unfillable one **errored, wrote no summary at all, and still recorded the
+attempt** — the production path that previously left no trace, reproduced in a browser; preparation
+over the same table wrote the row and claimed no fill.
+
+**Job 310026 read-only regression**, on a byte-identical `.backup` copy so production was never
+migrated (confirmed afterwards: the real `applications.db` still has no such column). Branch
+dashboard on `127.0.0.1:8099`, production untouched on `:8080`. **10 prepared rows in the queue, all
+with `recorded_at`, none with `fill_attempted_at`, all with documents not ready** — precisely the
+combination that made the false sentence reachable. **Zero rows in the database claim a fill.** All
+15 counters byte-identical before/after; 310026 still `APPLIED` / `completed` /
+`manual_user_confirmation`. The shipped bundle carries the three new sentences and no longer contains
+the old one.
+
+`gofmt -l ./cmd ./pkg ./internal` empty; `go build`, `go vet`, `go test ./...`, `npm run lint`,
+`npm test`, `npm run build` all clean.
+
+### Deliberately not changed
+
+`assistedReviewStartedAt` still reads `recorded_at`, so human-interaction timing is *provably*
+unaltered by this fix. That it starts the review clock at preparation is a real defect — on 310026 it
+would measure 17h23m against a 30-minute credibility cap and be silently dropped — and is filed
+separately with its own evidence rather than folded in here.
+
+### Independent review round, and what it caught
+
+Three read-only reviewers ran against the first commit. This is recorded because the review found
+more than the implementation did, and — exactly as in #547's round — most of what it found was **this
+fix's own defect with its sign flipped**.
+
+**Six defects found and fixed:**
+
+1. **The marker was written before the fill, not before the *form*.** The worst of them.
+   `FillAssistedMappedPage` returns on four guards — expired posting, bot check, quarantined DOM,
+   unreadable content — before reading a single control. Marking ahead of the call made the card say
+   *"Career Agent attempted this form"* about a page with no form on it, and then offer to send the
+   operator to hand-fill a posting that no longer exists. `BLOCKED_CAPTCHA` is an eligible assisted
+   status and #524 established 18 dead postings in this queue, so the state was live, not theoretical.
+   The marker now travels into the fill as `AssistedFillPlan.OnFormReached`.
+2. **Refusing to backfill discarded evidence rather than protecting it.** Two reviewers independently
+   found the contradiction: `form_inventory.go` asserts in the same diff that a non-zero
+   `filled_count` is structural proof a fill ran, while the card refused that inference — so a
+   historical row holding eight filled fields had its work suppressed *and* was described as
+   unfilled. The migration now recovers rows with positive evidence; the card treats completed work
+   as proof in its own right. A component test that had pinned the suppression as intended behaviour
+   was replaced by one asserting the opposite.
+3. **The answers writer could record counts with no marker.** `RecordAssistedAnswersApplied` is a
+   bare UPDATE, and `MarkFillAttempted`'s failure is deliberately non-fatal, so a failed marker write
+   left answers the operator watched being typed looking like no fill at all. It now sets the column
+   under a `COALESCE`.
+4. **"Human-interaction timing is provably unaltered" was false when written.** `MarkFillAttempted`'s
+   insert branch supplied `recorded_at`, which the dashboard reads as the review-ready moment; a fill
+   that failed on a never-prepared job would have booked the operator's own hand-filling as review
+   time. The insert now leaves that column unset, and a test pins it.
+5. **Concurrent-startup migration race.** `PRAGMA` and `ALTER` are two statements with no lock
+   between them, and `cmd/dashboard` turns an error into `log.Fatalf` — so three processes starting
+   together during the upgrade could take the dashboard down with `duplicate column name`, which is
+   the migration having already succeeded. Now tolerated.
+6. **The generic column helper treated an absent table as a table with no columns**, because
+   `PRAGMA table_info` returns empty without erroring. Unreachable today; guarded anyway.
+
+Copy changed twice more as a result, in both cases to stop asserting what the card cannot know: a
+fill that errors discards its report, so *"could not fill any fields"* could be read while the browser
+visibly held filled ones; and a row with no marker cannot distinguish "never filled" from "filled
+before this was recorded".
+
+The forbidden-name guard over `cmd/preflight` was widened from Go symbols to the table and column
+names — it had been guarding spelling rather than capability, and a raw
+`UPDATE assisted_fill_summary` would have passed every entry.
+
+**Found and deliberately not fixed**, each filed with its own evidence:
+
+* *Automatic Apply writes no fill summary at all* (new row, Major). It fills real employer forms,
+  reaches `AWAITING_REVIEW`, and records nothing — so the invariant covers the assisted path only.
+  Not a regression: the card said something equally uninformative before. It is filed rather than
+  folded in because whether a copilot-mode fill whose browser has closed, and whose typed values are
+  therefore gone, counts as work to report to the operator is a product question, not an oversight.
+* *The review clock starts at preparation* (new row, Minor), with the 310026 measurement.
+* *The card and the Copy Application Packet can disagree* in the narrow state where a fill reached a
+  form that was never preflighted and recorded no questions (new row, Minor).
+
 ## 547. The Copy Application Packet omits the form's questions silently, so an application nobody prepared looks fully described
 
 **Found 2026-08-14** on the operator's own Lever application (`job_funnel.id` 308177), the day after

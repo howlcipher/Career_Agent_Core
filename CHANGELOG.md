@@ -22,21 +22,30 @@ Career Agent now records the moment a fill actually begins, and the card tells
 you which of four things happened:
 
 * **Nothing filled yet** — nothing has touched this application at all.
-* **Career Agent has read this form but has not filled it yet.** — the state
-  your ten prepared applications were really in, now said out loud.
+* **No fill has been recorded for this application.** — the state your ten
+  prepared applications were really in. Note what it does not say: not "this was
+  never filled", because for an application finished before Career Agent started
+  keeping this record, that is not something it can know.
 * **8 form fields filled · 3 approved answers reused · 1 document attached** —
-  unchanged, and now shown only when a fill genuinely ran.
-* **Career Agent attempted this form but could not fill any fields
-  automatically.** — the original sentence, which from now on you will only ever
-  see about a fill that really happened.
+  unchanged, and now shown whenever there is real evidence a fill did the work.
+* **Career Agent attempted this form and recorded no completed fields.** — the
+  replacement for the original sentence, and you will only ever see it about a
+  fill that really happened. It says *recorded* rather than *could not fill*
+  because a fill can type several fields and then hit an error that throws its
+  own report away; the form in front of you is the authority, not this card.
 
 Two things worth knowing about how this was built:
 
-The attempt is recorded **before** the fill starts, not after. A fill that hits
-an error, or one you interrupt by closing the browser, used to leave no record
-at all — indistinguishable from an application nobody had opened. Now it tells
-the truth: Career Agent tried, and here is what came of it. A fill that runs and
-completes nothing is still a fill, and only then may the card say so.
+The attempt is recorded the moment the fill reaches your actual form — not
+before it starts, and not after it finishes. A fill that hits an error, or one
+you interrupt by closing the browser, used to leave no record at all,
+indistinguishable from an application nobody had opened. Now it tells the truth.
+
+The "reaches your actual form" part was itself a correction. An independent
+review of this fix caught it claiming *"Career Agent attempted this form"* about
+postings that had been taken down since you queued them — pages with no form on
+them at all — and then offering to send you off to hand-fill them. Several
+queued applications in your list are in exactly that state.
 
 The same audit found something the original report had missed: **re-preparing an
 application used to erase what an earlier fill had done to it**, resetting its
