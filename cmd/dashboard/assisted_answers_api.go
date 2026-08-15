@@ -14,6 +14,7 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"github.com/howlcipher/Career_Agent_Core/pkg/knowledge"
 	"github.com/howlcipher/Career_Agent_Core/pkg/storage"
+	"github.com/howlcipher/Career_Agent_Core/pkg/submitter"
 )
 
 // maxAnswersRequestBytes bounds an answers submission. A screening form can
@@ -351,7 +352,74 @@ func serveApplicationPacket(w http.ResponseWriter, r *http.Request) {
 			"resume":       contains(summary.Documents, "resume"),
 			"cover_letter": contains(summary.Documents, "cover_letter"),
 		},
+		// Sent as its own object, always, even when there is nothing to report.
+		// The UI must not be able to infer preparation state from the length of
+		// the entry list -- that inference *is* bugs.md #547, and an omitted
+		// field would leave the same hole in a new shape.
+		"form_inventory": packetFormInventory(jobID),
 	})
+}
+
+// packetFormInventoryPayload is what the packet says about the employer's form,
+// as opposed to about the operator.
+type packetFormInventoryPayload struct {
+	State         string `json:"state"`
+	QuestionCount int    `json:"question_count"`
+	FieldCount    int    `json:"field_count"`
+	// Reason is a code from pkg/submitter's closed vocabulary, never a message.
+	// A driver's own error text quotes page content (ADR-006), so it stops at
+	// the process boundary and only the code travels.
+	Reason      string `json:"reason,omitempty"`
+	InspectedAt string `json:"inspected_at,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Preparable  bool   `json:"preparable"`
+	Stale       bool   `json:"stale,omitempty"`
+}
+
+// packetFormInventory resolves the durable inventory and overlays the one state
+// only this process knows about.
+//
+// A failure to read it is reported as not_prepared rather than as an error.
+// That is the conservative direction on purpose: not_prepared understates what
+// Career Agent may have, and the packet's whole contract after #547 is that it
+// may never overstate it. Failing the request outright would be worse still --
+// the operator would lose the stored details they came for.
+func packetFormInventory(jobID string) packetFormInventoryPayload {
+	inventory, err := storage.DeriveFormInventory(db, jobID)
+	if err != nil {
+		log.Printf("serveApplicationPacket: form inventory unavailable: %v", err)
+		inventory = storage.FormInventory{State: storage.FormInventoryNotPrepared}
+	}
+	payload := packetFormInventoryPayload{
+		State:         inventory.State,
+		QuestionCount: inventory.QuestionCount,
+		FieldCount:    inventory.FieldCount,
+		Reason:        inventory.Reason,
+		InspectedAt:   inventory.InspectedAt,
+		Source:        inventory.Source,
+		Preparable:    inventory.Preparable,
+		Stale:         storage.FormInventoryIsStale(inventory, time.Now().UTC()),
+	}
+	// A run in flight is the freshest fact there is, and it outranks whatever
+	// an earlier attempt left in the database: a form being re-read right now
+	// is neither ready nor failed yet.
+	if currentPreflight.preparingJob(jobID) {
+		payload.State = storage.FormInventoryPreparing
+		payload.Reason = ""
+		payload.Stale = false
+	}
+	// Why an inspection cannot be asked for, in the same closed vocabulary the
+	// preparation run itself records, mapped exactly the way cmd/preflight maps
+	// it so the packet and the Prepare panel cannot disagree about one job.
+	if !payload.Preparable && payload.State == storage.FormInventoryNotPrepared {
+		switch inventory.BlockedKind {
+		case storage.PreflightSkipAlreadyApplied:
+			payload.Reason = submitter.PreflightAlreadyApplied
+		case storage.PreflightSkipUnreadable:
+			payload.Reason = submitter.PreflightAuthRequired
+		}
+	}
+	return payload
 }
 
 func contains(values []string, want string) bool {
