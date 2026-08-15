@@ -1,5 +1,40 @@
 # Career Agent Core - Changelog
 
+## 2026-08-15 — Closed the two logging leaks `bugs.md` #549 named, and a third an independent reviewer found
+
+Yesterday's audit (below) fixed one confirmed leak — your address values reaching
+`career_agent.log` — and filed two more it found but didn't yet close: the
+validation-retry path built the same profile values into a *nested* format
+string before logging them, which the original search's grep-for-`%q`-in-`log.Printf`
+approach couldn't see. Both have never actually fired against your real
+logs — zero occurrences, against 51 for yesterday's fix — because the
+validation-*retry* path (as opposed to the initial fill) hasn't run much yet.
+That is exactly why this was worth closing now, before real Assisted Fill
+usage against more Greenhouse applications makes it live.
+
+**Fixed: both named sites, plus a third an independent review caught.** A field
+that failed to commit, and a field that landed but was rejected anyway, both
+used to record the value that had been tried. They now record only the field —
+which is what the diagnostic they were built for (telling a broken commit
+mechanism apart from a value the widget doesn't offer) actually needed. Before
+closing this out, an independent reviewer was asked to try to falsify the claim
+that this closed every value-bearing record in the same boundary, and did: a
+third site, `applyValidationFix`, was embedding the same values into error
+messages that got logged a few lines below the very comment forbidding it —
+missed by the first pass because it's a third variant of the same blind spot
+(the value travels through a returned `error`, not a format string, before it
+reaches `log.Printf`). Fixed the same way, in the same change.
+
+**The honest cost.** A second, independent review of *this* fix flagged that
+dropping the value is not free: two already-closed bugs (#107, and a leak that
+once showed the model was being handed an internal option id instead of its
+human-readable label) were originally caught specifically because the old
+diagnostics carried the value. That capability is genuinely gone. It is a
+trade this fix's own backlog entry chose on purpose — what the retry loop
+needs to stay diagnosable is whether the same field keeps failing across
+attempts, not the literal text that was tried — not an accident this change
+didn't notice.
+
 ## 2026-08-15 — The card no longer claims it tried to fill a form it never touched
 
 **Fixed: preparing an application made the card report a fill that never ran.**

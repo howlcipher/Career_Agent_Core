@@ -2,6 +2,135 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 549. The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that
+
+**Found 2026-08-14** by the independent post-fix review of #546, which set out to falsify that fix's
+scope claim and did. **Fixed 2026-08-15** on branch `fix/549-validation-retry-log-values`, at William's
+explicit request, as a bounded confidentiality-hardening pass ahead of running real Assisted Fill
+against additional Greenhouse applications.
+
+### What was wrong
+
+`browser.go:1969` (now `:1970`) states the invariant plainly: *"Selectors only, never values: the
+values are drawn from the PII profile and this log is not a place for them."* Two sites in
+`pkg/submitter/browser.go`'s validation-retry loop (inside `AttemptSubmit`, `cmd/agent`'s auto-submit
+path) violated it on purpose, each reversing a written decision from an earlier session:
+
+* `notLanded` (bugs.md #97), `browser.go:2019` — `fmt.Sprintf("%s (tried %q)", selector, value)`,
+  joined and emitted at `:2031` via `log.Printf`.
+* `rejectedDespiteLanding` (bugs.md #100), `browser.go:3313` — `fmt.Sprintf("%s = %q",
+  id, truncateForLog(value, 80))`, emitted at `:1832`.
+
+`value` in both cases comes from `fixesMap`, produced by `mapper.SolveValidationErrors(prunedHTML,
+fullProfileContext)` from `pii.ApplicationFacts()` + `pii.EEO.Summary()` — real operator/profile data.
+`lastNotLanded = notLanded` also flowed into the returned `ErrUncommittableField` at `browser.go:2178`
+(`fmt.Errorf("%w: %s", ErrUncommittableField, strings.Join(lastNotLanded, ", "))`), so the same value
+could reach a manual-review consumer through a second path — though tracing that consumer
+(`cmd/agent/pipeline.go`'s `classifyAttemptOutcome` and `storage.LogManualRequired`) found it only ever
+extracts a fixed reason code, never the error text, so nothing downstream was actually relying on the
+value being present there.
+
+**Why #546's sweep missed these.** That fix grepped `log.Printf(...%q...)` calls, which only finds
+sites where the `%q` verb lives in the logging call itself. Both sites here build the value into a
+*nested* `fmt.Sprintf` first and log the already-formatted string with a plain `%s`, which that grep
+cannot see. The lesson, stated in the code now: trace the *value* to its source, not the verb to its
+call site.
+
+**Why this was not a quiet follow-on edit.** `#97` and `#100` added these records deliberately, each
+with a written rationale distinguishing a broken commit mechanism from a value the widget simply
+doesn't offer — cases that need opposite fixes. Reversing them, and reconciling the resulting
+contradiction with the invariant comment sitting a few lines above the code, needed its own reasoning
+rather than a silent patch.
+
+**Latent, not observed.** Zero occurrences of either record across all four `career_agent*.log` files
+that exist locally, against 51 for #546 — the validation-*retry* path (as opposed to the initial fill
+#546 covered) hadn't fired much in real usage yet, which is exactly why this was worth closing before
+real Assisted Fill usage ramped up rather than after logs started accumulating it.
+
+### The fix
+
+Both sites now name the field without the value, following `comboboxCommitRecord`'s precedent from
+#546 (name the position/selector, not the value):
+
+* `notLandedRecord(selector, value string) string` returns `selector` only. `value` stays a parameter
+  — deliberately, so the function is honestly testable: it demonstrably *has* the value in hand and
+  chooses not to use it, which gives a future regression something concrete to break.
+* `rejectedDespiteLanding` now returns a sorted, comma-joined list of field ids, dropping the
+  `truncateForLog(value, 80)` call entirely (that function stays in the file, used by its own test and
+  potentially other callers, but is no longer called from this path).
+
+### A third site the reviewer found
+
+Two independent read-only reviewers ran against the two-site diff before it was closed:
+
+* **Reviewer A (scope falsifier)** — tasked with falsifying the claim that the fix closed every
+  value-bearing log record in this boundary — found a real third site: `applyValidationFix`
+  (`browser.go:2732`) embedded `value` into two returned errors via `%q`
+  (`fmt.Errorf("select option %q not available: %w", value, err)` on the `<select>` branch, and
+  `fmt.Errorf("no option in the checkbox group matches %q", value)` on the checkbox-group branch).
+  Those errors were logged verbatim with a plain `%v` at `browser.go:1993` — inside the exact retry
+  loop the rest of this fix touched, 22 lines below the invariant comment — and propagated to two more
+  sinks (`handleDynamic`'s cache-invalidation log at `:1567`, and the custom-question best-effort loop
+  at `:4201`, since `applyValidationFix` is shared with the *initial*-fill path via
+  `safeFillWithLabelFallback`), plus a generic catch-all at `cmd/agent/pipeline.go:659`.
+
+  Verified directly (not just taken on the reviewer's word) before fixing: read `browser.go:2761` and
+  `:2780` and confirmed both `%q`-embed the value, and read `browser.go:1993` and confirmed the `%v`
+  there logs the propagated error unredacted.
+
+  **Fixed as part of this same task**, per the instruction that a concrete leak found in the same
+  narrow boundary gets folded in rather than filed separately. The `<select>` branch now wraps the
+  underlying Playwright error with `security.BrowserFailureReason(err)` — the existing bounded-
+  vocabulary error classifier already used elsewhere in this file (`browser.go:4276`, `:4291`) —
+  instead of `%w`-wrapping the raw Playwright error, because the raw error text is not fully
+  controlled and could in principle echo the searched value back (a canary test proves this: the
+  synthetic underlying error deliberately contains the canary, and the fix keeps it out). The
+  checkbox-group branch now returns a static sentinel, `ErrNoMatchingCheckboxOption`, with no
+  formatting at all.
+
+* **Reviewer B (diagnostic regression)** — checked whether dropping the value cost real debugging
+  capability. It did, for two already-closed bugs specifically: #107 (a checkbox correctly unchecked
+  was, before #97's value-logging, indistinguishable from a broken commit — the write-up for #107 says
+  so explicitly) and a react-select DOM-id leak (`rejectedDespiteLanding`'s old value output once
+  exposed the model being handed an internal option id instead of its human label). Both are real,
+  named costs — but bugs.md #549's own filed rationale already accepts this trade explicitly ("the fix
+  should keep the diagnostic and drop the value... what a debugger needs is whether the same selector
+  keeps failing across attempts"), so this is a conscious, already-documented trade-off rather than an
+  unnoticed regression. Reviewer B also confirmed nothing downstream (manual-review routing or
+  storage) ever relied on the value being present, and that no fill/retry/submit behavior changed —
+  only string construction in the three sites above.
+
+### Tests
+
+Two existing tests pinned the old (leaking) shape and were rewritten to assert the opposite invariant,
+using canary `CA_TEST_SECRET_549_7f3a91`:
+
+* `TestUncommittableFieldNamesTheAttemptedValue` → `TestUncommittableFieldNamesTheSelectorNotTheValue`
+* `TestRejectedDespiteLanding_PairsFieldsWithWhatWasWritten` →
+  `TestRejectedDespiteLanding_NamesFieldsNotValues` (also covers the old 80-char truncation boundary
+  with a canary padded well past it, proving no partial leak survives)
+
+Two new tests cover the third site, added once Reviewer A's finding was confirmed:
+
+* `TestApplyValidationFix_DropdownFailureNeverIncludesTheProposedValue` — the synthetic underlying
+  Playwright error deliberately echoes the canary, to prove `security.BrowserFailureReason` (not raw
+  `%w`) is what keeps it out.
+* `TestApplyValidationFix_CheckboxGroupMismatchNeverIncludesTheProposedValue`
+
+Pre-fix reproduction was proven directly, not just argued: the two original producer functions were
+temporarily reverted to their old format strings, the new/rewritten tests were run and failed with the
+canary visible in the output, then the fix was restored and the same tests passed. Full verification
+loop (`gofmt -l`, `go build ./...`, `go vet ./...`, `go test ./...`) green throughout, including the
+existing `#546` regression tests (`TestComboboxCommitRecord_...`,
+`TestFillComboboxFromCandidates_...`), confirming no interaction with that fix.
+
+### Deliberately out of scope
+
+`browser.go`'s label-fill fallback and custom-question failure records log employer *question text*
+(e.g. `mapping.Labels[key]` at the same `:4201` line the third leak's error propagated through) — a
+real concern of the same family (ADR-007: "never a label, never a value") but a different
+confidentiality category, already triaged and left alone by #546's own closure. Not touched here.
+
 ## 548. Preparing an application stamps a fill outcome, so the card reports a fill that never ran
 
 **Found 2026-08-14** on the operator's own Greenhouse application (`job_funnel.id` 310026, APPLIED,
