@@ -4233,6 +4233,16 @@ func FillAssistedMappedPage(plan AssistedFillPlan) (FillReport, error) {
 	// form they are about to review and submit by hand.
 	target := resolveFillTarget(page)
 
+	// Past every guard above, on a real form surface, about to touch the
+	// employer's controls. This is the only honest place to call a fill
+	// "attempted": an expired posting, a bot check and a quarantined DOM all
+	// returned above without reading a single control, and reporting an
+	// attempt for those would claim Career Agent engaged with a form that was
+	// never there.
+	if plan.OnFormReached != nil {
+		plan.OnFormReached()
+	}
+
 	// Best effort: a page whose inventory cannot be read still gets filled by
 	// the handler exactly as before. Reporting is an improvement on top of the
 	// fill, never a precondition for it.

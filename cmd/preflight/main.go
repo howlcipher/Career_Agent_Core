@@ -172,8 +172,18 @@ func inspectAll(browser playwright.Browser, candidates []storage.PreflightCandid
 		}
 
 		questions := questionsFrom(candidate, inventory, vault, pii)
-		if err := storage.ReplaceApplicationQuestions(storage.GetDB(), candidate.JobID, questions,
-			storage.AssistedFillSummary{JobID: candidate.JobID}); err != nil {
+		// This run read the form; it did not fill it, and it must not be able
+		// to say otherwise. The function called here takes no fill summary, so
+		// the boundary is enforced by the signature rather than by remembering
+		// -- which is what bugs.md #548 cost. Preparation used to reach the
+		// fill writer in pkg/storage and hand it a zero value, which stamped
+		// "a fill ran" onto every application it prepared and blanked the
+		// outcome of any fill that had already run.
+		//
+		// cmd/dashboard's TestPreflightSourceHasNoFillOrSubmitPath asserts that
+		// the fill writer's name appears nowhere in this file, comments
+		// included, so do not name it here.
+		if err := storage.RecordPreparedQuestions(storage.GetDB(), candidate.JobID, questions); err != nil {
 			log.Printf("Preflight could not record one application's questions: %v", err)
 		}
 		record(storage.PreflightResult{

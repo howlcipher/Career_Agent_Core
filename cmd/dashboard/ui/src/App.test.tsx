@@ -754,7 +754,9 @@ describe('Exception-only Assisted Apply', () => {
     last_updated: '2026-08-12T12:00:00Z', resume_ready: true, cover_letter_ready: true,
     mapping_ready: true, completed_work: 'Job validated.', legacy: false, live_browser: true,
     assisted_attempt_count: 1, priority_reason: 'Quick completion',
-    completed: { job_id: '77', filled_count: 24, reused_answers: 6, documents: ['resume', 'cover_letter'], filled_labels: [], unresolved_count: questions.length, recorded_at: '2026-08-12T12:00:00Z' },
+    // fill_attempted_at is what makes this a fill rather than a preparation.
+    // Without it the card reports no counts at all, by design (bugs.md #548).
+    completed: { job_id: '77', filled_count: 24, reused_answers: 6, documents: ['resume', 'cover_letter'], filled_labels: [], unresolved_count: questions.length, recorded_at: '2026-08-12T12:00:00Z', fill_attempted_at: '2026-08-12T11:59:00Z' },
     effort: { band: 'LOW', low_minutes: 1, high_minutes: 2 },
     questions,
     next_action: { code: 'answer_questions', title: 'Answer 2 questions', instruction: 'Answer the questions below.', primary_button: 'Send Answers', requires_browser: true, documents_ready: true, requires_explicit_submit: false, can_continue: false },

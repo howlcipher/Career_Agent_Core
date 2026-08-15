@@ -27,6 +27,21 @@ type AssistedFillPlan struct {
 	PII         *config.PII
 	// ATSName is a display label for the report. Empty is fine.
 	ATSName string
+	// OnFormReached is called once, at the moment this plan has cleared its
+	// pre-flight guards and is about to touch the employer's own controls. It
+	// is how a caller records that a fill was genuinely attempted, and its
+	// placement is the whole of its meaning.
+	//
+	// The guards it sits behind are not bookkeeping: an expired posting, a
+	// bot-check page and a quarantined DOM all return before any control is
+	// read, and a caller that marked an attempt before calling this function
+	// would report "Career Agent tried to fill this form" about a page that
+	// has no form on it (found by the independent review of bugs.md #548 --
+	// which is that same defect with its sign flipped, so it is pinned here
+	// rather than left to a comment at the call site).
+	//
+	// Optional. Nil means the caller does not care.
+	OnFormReached func()
 }
 
 // PreparedDocuments names the documents this plan carries, for the report's
