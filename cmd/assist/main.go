@@ -41,6 +41,7 @@ var (
 	takePendingAnswers         = storage.TakePendingAnswers
 	recordAssistedRefill       = storage.RecordAssistedRefill
 	recordAssistedManualReview = storage.RecordAssistedManualReview
+	markFillAttempted          = storage.MarkFillAttempted
 )
 
 func main() {
@@ -668,6 +669,21 @@ func continueAssistedApplication(page playwright.Page, info storage.AssistedLaun
 		// application.
 		log.Printf("Approved Answer Vault unavailable; continuing without reusable answers: %v", vaultErr)
 	}
+	// The durable boundary: everything this application needs in order to be
+	// filled has loaded, and the next statement touches the employer's own
+	// controls. Recording the attempt here rather than after the call is what
+	// makes it true on the paths that produce no outcome at all -- a Playwright
+	// error, a posting that died between preparation and now, a browser the
+	// operator closes mid-fill. Each of those used to leave the database
+	// looking exactly like an application nobody had opened.
+	//
+	// A failure to record is logged and not fatal. Losing the marker degrades
+	// the card to "no fill result is recorded", which is a worse answer but
+	// still an honest one; refusing to fill the operator's application because
+	// a bookkeeping write failed would not be.
+	if err := markFillAttempted(storage.GetDB(), info.JobID, time.Now()); err != nil {
+		log.Printf("Could not record that a fill was attempted; the fill itself proceeds: %v", err)
+	}
 	report, err := fillAssistedPage(submitter.AssistedFillPlan{
 		Page:        page,
 		Filter:      security.NewQuarantineLayer(),
@@ -725,6 +741,14 @@ func applyOperatorAnswers(page playwright.Page, info storage.AssistedLaunchInfo,
 		}
 		log.Printf("No operator answers were waiting for this application; it remains open for manual completion: %v", err)
 		return true
+	}
+	// Typing the operator's answers into the employer's controls is filling,
+	// by the same definition as the refill above, and it is marked at the same
+	// boundary for the same reason. A card must not be able to say "no fill was
+	// attempted" about an application whose answers were being typed when the
+	// browser died.
+	if err := markFillAttempted(storage.GetDB(), info.JobID, time.Now()); err != nil {
+		log.Printf("Could not record that an answer fill was attempted; it proceeds anyway: %v", err)
 	}
 	report, err := applyAssistedAnswers(page, security.NewQuarantineLayer(), values)
 	if err != nil {

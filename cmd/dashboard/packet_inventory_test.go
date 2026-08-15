@@ -462,6 +462,14 @@ func TestPreflightSourceHasNoFillOrSubmitPath(t *testing.T) {
 		".Press(",
 		"TakePendingAnswers",
 		"SetPendingAnswers",
+		// bugs.md #548. Preparation must be unable to claim -- or erase -- a
+		// fill outcome. ReplaceApplicationQuestions is the fill writer and
+		// stamps fill_attempted_at; MarkFillAttempted is the marker itself.
+		// Preparation goes through RecordPreparedQuestions, which takes no
+		// summary at all, so neither name may appear in this file.
+		"ReplaceApplicationQuestions",
+		"MarkFillAttempted",
+		"AssistedFillSummary",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("cmd/preflight must not be able to reach %q: preparation reads a form and nothing else", forbidden)
@@ -474,6 +482,11 @@ func TestPreflightSourceHasNoFillOrSubmitPath(t *testing.T) {
 	// empty file.
 	if !strings.Contains(text, "InspectApplication") {
 		t.Fatal("cmd/preflight no longer inspects anything; this assertion is measuring the wrong file")
+	}
+	// It must also still be recording what it read, or #547's inventory would
+	// silently stop being written and this file would pass by doing nothing.
+	if !strings.Contains(text, "RecordPreparedQuestions") {
+		t.Fatal("cmd/preflight no longer records prepared questions; the form inventory would go empty")
 	}
 }
 

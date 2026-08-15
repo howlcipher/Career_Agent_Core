@@ -112,12 +112,21 @@ type FormInventory struct {
 //
 // It reads exactly one column of `assisted_fill_summary`, and the exclusion is
 // as deliberate as the inclusion. `recorded_at` is stamped by preparation as
-// well as by filling (bugs.md #548), so it already means two things and is
-// never consulted here. `filled_count` is written non-zero only by a fill that
-// actually ran -- preparation writes a zero-value summary -- so it is
-// admissible evidence that a form was read, and it is the only thing left
+// well as by filling, so it already means two things and is never consulted
+// here. `filled_count` is written non-zero only by a fill that actually ran, so
+// it is admissible evidence that a form was read, and it is the only thing left
 // standing when a refill resolved every control and therefore recorded no
 // questions at all.
+//
+// bugs.md #548 has since been fixed, and it strengthened this rule twice over.
+// Preparation now writes through RecordPreparedQuestions, which cannot reach
+// the fill columns at all -- so a preparation run can no longer silently reset
+// a real fill's `filled_count` to zero on its way past, which it could when
+// this comment was first written. And `fill_attempted_at` now records attempts
+// directly. That column is deliberately *not* consulted here either: an attempt
+// proves someone tried to fill the form, which is a claim about what Career
+// Agent did, whereas this function reports only what it knows about the form.
+// Keeping the two apart is the whole point of having both.
 func DeriveFormInventory(conn *sql.DB, jobID string) (FormInventory, error) {
 	if conn == nil {
 		return FormInventory{}, errors.New("database not initialized")
@@ -214,8 +223,10 @@ func DeriveFormInventory(conn *sql.DB, jobID string) (FormInventory, error) {
 	// filled_count is admissible where recorded_at is not, and the difference
 	// is the whole of bugs.md #548: recorded_at is stamped unconditionally by
 	// preparation and therefore means two things, while a non-zero filled_count
-	// is only ever written by a fill that actually ran. Preparation writes a
-	// zero-value summary, so this cannot mistake preparation for a reading.
+	// is only ever written by a fill that actually ran. Since #548's fix,
+	// preparation cannot write this column at all, so the inference is now
+	// structural rather than a property of what the current callers happen to
+	// pass.
 	if summary, err := GetFillSummary(conn, jobID); err == nil && summary.FilledCount > 0 {
 		inventory.State = FormInventoryReady
 		inventory.Source = FormInventorySourceSession

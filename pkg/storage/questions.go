@@ -75,7 +75,32 @@ type AssistedFillSummary struct {
 	Documents       []string `json:"documents"`
 	FilledLabels    []string `json:"filled_labels"`
 	UnresolvedCount int      `json:"unresolved_count"`
-	RecordedAt      string   `json:"recorded_at"`
+	// RecordedAt is when this row was last written, by preparation or by
+	// filling. It is deliberately NOT evidence that a fill ran -- that
+	// conflation is bugs.md #548, and FillAttemptedAt exists because of it.
+	RecordedAt string `json:"recorded_at"`
+	// FillAttemptedAt is when Career Agent last began actually filling this
+	// employer's form, and empty when no fill attempt has ever been recorded.
+	//
+	// The two-line invariant this whole field exists to hold:
+	//
+	//	FormInventory = what Career Agent knows about the form.
+	//	FillSummary   = what Career Agent actually did to the form.
+	//
+	// Three properties are load-bearing and each closes a way this could lie:
+	//
+	//  1. It is stamped when a fill *begins*, not when one succeeds. A fill
+	//     that types nothing, one that errors halfway, and one whose closing
+	//     snapshot fails are all attempts, and every one of them used to write
+	//     nothing at all.
+	//  2. Preparation cannot set it. Not "does not today" -- cannot:
+	//     RecordPreparedQuestions has no parameter through which it could, which
+	//     is the difference between an invariant and a convention that held
+	//     until someone edited a call site.
+	//  3. Empty means *unknown*, never "no fill ran". Every row written before
+	//     this column existed is unknown, and the migration deliberately does
+	//     not invent history for them.
+	FillAttemptedAt string `json:"fill_attempted_at,omitempty"`
 }
 
 // EnsureQuestionSchema creates the per-application question log.
@@ -115,6 +140,11 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 		answered_at DATETIME,
 		UNIQUE(job_id, question_key)
 	);
+	-- What Career Agent actually *did* to one employer's form, as opposed to
+	-- what it knows about that form (which is application_preflight, read
+	-- through DeriveFormInventory). The two are separate tables because they
+	-- are separate facts, and bugs.md #548 was filed for what happens when one
+	-- is read as the other.
 	CREATE TABLE IF NOT EXISTS assisted_fill_summary (
 		job_id INTEGER PRIMARY KEY,
 		filled_count INTEGER NOT NULL DEFAULT 0,
@@ -122,7 +152,15 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 		documents TEXT NOT NULL DEFAULT '',
 		filled_labels TEXT NOT NULL DEFAULT '',
 		unresolved_count INTEGER NOT NULL DEFAULT 0,
-		recorded_at DATETIME NOT NULL
+		-- When this row was last touched, by either operation. Preparation
+		-- writes it too, so it says nothing about filling.
+		recorded_at DATETIME NOT NULL,
+		-- When a fill last *began*. NULL means no fill attempt has ever been
+		-- recorded -- which for rows written before this column existed is
+		-- genuinely unknown, not a denial. Nullable on purpose: a NOT NULL
+		-- column with a zero default would turn "we never knew" into "it never
+		-- happened", which is the same class of lie as #548 itself.
+		fill_attempted_at DATETIME
 	);
 	-- Transient. A row here lives only from the moment the operator presses
 	-- Send to the moment the assisted browser reads it, and TakePendingAnswers
@@ -161,37 +199,25 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 // would not be missing a column -- it would silently report that the operator
 // has no repeated questions, which is indistinguishable from good news.
 func upgradeQuestionSchema(conn *sql.DB) error {
-	rows, err := conn.Query(`PRAGMA table_info(application_questions)`)
-	if err != nil {
-		return fmt.Errorf("inspect question schema: %w", err)
-	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, columnType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan question schema: %w", err)
-		}
-		existing[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-
-	for _, column := range []struct{ name, definition string }{
+	if err := addQuestionSchemaColumns(conn, "application_questions", []questionSchemaColumn{
 		{"canonical_key", "TEXT NOT NULL DEFAULT ''"},
 		{"auto_fillable", "INTEGER NOT NULL DEFAULT 0"},
-	} {
-		if existing[column.name] {
-			continue
-		}
-		if _, err := conn.Exec("ALTER TABLE application_questions ADD COLUMN " + column.name + " " + column.definition); err != nil {
-			return fmt.Errorf("add question schema column %s: %w", column.name, err)
-		}
+	}); err != nil {
+		return err
+	}
+	// fill_attempted_at is added here, in EnsureQuestionSchema's own upgrade,
+	// rather than in InitDBWithPath's migration chain. cmd/dashboard
+	// deliberately never runs that chain -- it calls the Ensure*Schema
+	// functions directly -- so a column added there would be missing on a
+	// dashboard-first startup, and the dashboard is the one process that reads
+	// this column to decide what to tell the operator.
+	//
+	// Nullable with no default, so existing rows become NULL rather than a
+	// timestamp nobody earned.
+	if err := addQuestionSchemaColumns(conn, "assisted_fill_summary", []questionSchemaColumn{
+		{"fill_attempted_at", "DATETIME"},
+	}); err != nil {
+		return err
 	}
 	// After the ALTERs, never alongside the CREATE TABLE: on a database that
 	// already had the table, the column this index covers does not exist until
@@ -201,6 +227,44 @@ func upgradeQuestionSchema(conn *sql.DB) error {
 		return fmt.Errorf("index questions by canonical key: %w", err)
 	}
 	return backfillCanonicalKeys(conn)
+}
+
+type questionSchemaColumn struct{ name, definition string }
+
+// addQuestionSchemaColumns adds whichever of the named columns the table does
+// not already have. Re-entrant by construction: every startup runs it, and a
+// database that already has the column takes no action.
+func addQuestionSchemaColumns(conn *sql.DB, table string, columns []questionSchemaColumn) error {
+	rows, err := conn.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan %s schema: %w", table, err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, column := range columns {
+		if existing[column.name] {
+			continue
+		}
+		if _, err := conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column.name + " " + column.definition); err != nil {
+			return fmt.Errorf("add %s schema column %s: %w", table, column.name, err)
+		}
+	}
+	return nil
 }
 
 // backfillCanonicalKeys fills in any row whose canonical key was never
@@ -260,7 +324,42 @@ func CanonicalQuestionKey(prompt string) string {
 // since answered is no longer pending, and carrying stale rows forward would
 // show them work they have already done. Rows the operator has already answered
 // are preserved so the count of what they did survives the refresh.
+//
+// This is the *fill* writer. It is the only path that may write the fill
+// columns, and it stamps fill_attempted_at because reaching it means a fill
+// ran. Preparation uses RecordPreparedQuestions, which cannot reach them --
+// see that function for why the split exists at all.
 func ReplaceApplicationQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestion, summary AssistedFillSummary) error {
+	return replaceQuestions(conn, jobID, questions, &summary)
+}
+
+// RecordPreparedQuestions records what an inspection found: the questions this
+// form asks and how many are outstanding. Nothing else.
+//
+// It takes no summary, and that absence is the entire point. Preparation and
+// filling used to share one function with a summary parameter, and preparation
+// passed a zero value through it -- which meant preparation both *stamped*
+// recorded_at (bugs.md #548: the card then reported a fill that never ran) and
+// *erased* any real fill's filled_count, documents and labels on its way past,
+// because the upsert set every column from the zero value it had been handed.
+//
+// The fix is not to remember not to do that. It is to remove the parameter, so
+// a preparation run has no argument through which it could say anything about
+// filling even if a future call site tried. What survives a preparation run
+// untouched: filled_count, reused_answers, documents, filled_labels and
+// fill_attempted_at.
+//
+// recorded_at is still written, and still means only "this row was last
+// touched". unresolved_count is still written because it is preparation's own
+// finding and pkg/storage/knowledge.go reads it as a field-count fallback.
+func RecordPreparedQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestion) error {
+	return replaceQuestions(conn, jobID, questions, nil)
+}
+
+// replaceQuestions is the shared body. A nil summary means preparation: write
+// the questions and the preparation-owned columns, and leave every fill column
+// exactly as it was.
+func replaceQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestion, summary *AssistedFillSummary) error {
 	if conn == nil {
 		return errors.New("database not initialized")
 	}
@@ -315,22 +414,89 @@ func ReplaceApplicationQuestions(conn *sql.DB, jobID string, questions []Applica
 		}
 	}
 
+	if summary == nil {
+		// Preparation. Touch only what an inspection actually learned. The
+		// fill columns are absent from the UPDATE clause rather than being
+		// written back with their current values, so there is no version of
+		// this statement that could carry a stale or zeroed fill outcome.
+		if _, err := tx.Exec(`INSERT INTO assisted_fill_summary
+			(job_id, unresolved_count, recorded_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(job_id) DO UPDATE SET
+				unresolved_count = excluded.unresolved_count,
+				recorded_at = excluded.recorded_at`,
+			jobID, len(questions), now); err != nil {
+			return fmt.Errorf("record prepared question summary: %w", err)
+		}
+		return tx.Commit()
+	}
+
 	documents := strings.Join(summary.Documents, ",")
 	labels := strings.Join(summary.FilledLabels, "\n")
 	if _, err := tx.Exec(`INSERT INTO assisted_fill_summary
-		(job_id, filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		(job_id, filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			filled_count = excluded.filled_count,
 			reused_answers = excluded.reused_answers,
 			documents = excluded.documents,
 			filled_labels = excluded.filled_labels,
 			unresolved_count = excluded.unresolved_count,
-			recorded_at = excluded.recorded_at`,
-		jobID, summary.FilledCount, summary.ReusedAnswers, documents, labels, len(questions), now); err != nil {
+			recorded_at = excluded.recorded_at,
+			-- COALESCE, not excluded: MarkFillAttempted already stamped the
+			-- moment this fill *began*, and that is the time the column is
+			-- defined to hold. Overwriting it here would quietly redefine it as
+			-- the moment the fill ended, and would erase the distinction on the
+			-- paths that matter most -- the ones where a fill started and never
+			-- reached this statement at all.
+			--
+			-- The excluded value is still supplied so that a fill which somehow
+			-- reaches this writer without a marker still records one. This
+			-- statement can only be reached by a fill.
+			fill_attempted_at = COALESCE(assisted_fill_summary.fill_attempted_at, excluded.fill_attempted_at)`,
+		jobID, summary.FilledCount, summary.ReusedAnswers, documents, labels, len(questions), now, now); err != nil {
 		return fmt.Errorf("record assisted fill summary: %w", err)
 	}
 	return tx.Commit()
+}
+
+// MarkFillAttempted records that Career Agent has begun filling this form.
+//
+// It is called before the fill runs, not after, which is what makes it honest
+// about the outcomes that produce no summary at all: a fill that errors, a
+// browser the operator closes mid-fill, a fill whose closing snapshot fails.
+// Every one of those used to leave no trace whatsoever, so the card had no way
+// to distinguish them from an application nobody had touched.
+//
+// An attempt is not a claim of success. A fill that runs and completes zero
+// fields is still an attempt, and the card is allowed to say so only because
+// this marker is set independently of what the fill achieved.
+//
+// It upserts rather than updates: RecordAssistedAnswersApplied's bare UPDATE
+// silently writes nothing when no row exists yet, and an attempt marker that
+// disappears on the one path where no preparation preceded it would be worse
+// than no marker.
+func MarkFillAttempted(conn *sql.DB, jobID string, now time.Time) error {
+	if conn == nil {
+		return errors.New("database not initialized")
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return errors.New("a fill attempt needs a job identifier")
+	}
+	stamp := now.UTC()
+	// recorded_at is NOT NULL, so the insert branch has to supply one. On the
+	// far more common conflict branch it is deliberately left alone: this
+	// function reports that a fill started, and must not move the timestamp
+	// cmd/dashboard's review clock reads.
+	if _, err := conn.Exec(`INSERT INTO assisted_fill_summary
+		(job_id, unresolved_count, recorded_at, fill_attempted_at)
+		VALUES (?, 0, ?, ?)
+		ON CONFLICT(job_id) DO UPDATE SET
+			fill_attempted_at = excluded.fill_attempted_at`,
+		jobID, stamp, stamp); err != nil {
+		return fmt.Errorf("mark fill attempted: %w", err)
+	}
+	return nil
 }
 
 // GetPendingQuestions returns what still needs the operator for one job.
@@ -382,17 +548,19 @@ func GetPendingQuestions(conn *sql.DB, jobID string) ([]ApplicationQuestion, err
 	return out, nil
 }
 
-// GetFillSummary returns what Career Agent completed for one job.
+// GetFillSummary returns what Career Agent completed for one job, and -- via
+// FillAttemptedAt -- whether it ever tried. Those are different questions, and
+// answering the second with the first is bugs.md #548.
 func GetFillSummary(conn *sql.DB, jobID string) (AssistedFillSummary, error) {
 	summary := AssistedFillSummary{JobID: jobID}
 	if conn == nil {
 		return summary, errors.New("database not initialized")
 	}
 	var documents, labels string
-	var recordedAt sql.NullString
-	err := conn.QueryRow(`SELECT filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at
+	var recordedAt, fillAttemptedAt sql.NullString
+	err := conn.QueryRow(`SELECT filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at
 		FROM assisted_fill_summary WHERE job_id = ?`, jobID).
-		Scan(&summary.FilledCount, &summary.ReusedAnswers, &documents, &labels, &summary.UnresolvedCount, &recordedAt)
+		Scan(&summary.FilledCount, &summary.ReusedAnswers, &documents, &labels, &summary.UnresolvedCount, &recordedAt, &fillAttemptedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return summary, nil
 	}
@@ -410,6 +578,12 @@ func GetFillSummary(conn *sql.DB, jobID string) (AssistedFillSummary, error) {
 	}
 	if parsed, ok := parseAssistedTime(recordedAt.String); ok {
 		summary.RecordedAt = parsed.Format(time.RFC3339)
+	}
+	// A NULL here stays empty, and empty means "no fill attempt is recorded",
+	// which for a row written before this column existed is the truth: nobody
+	// knows. It must never be rendered as "a fill ran and achieved nothing".
+	if parsed, ok := parseAssistedTime(fillAttemptedAt.String); ok {
+		summary.FillAttemptedAt = parsed.Format(time.RFC3339)
 	}
 	return summary, nil
 }
