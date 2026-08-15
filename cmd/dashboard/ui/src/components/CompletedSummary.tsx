@@ -8,27 +8,47 @@ interface CompletedSummaryProps {
  * The top half of an exception-only card: what Career Agent finished, stated as
  * a short list of ticks rather than a workflow the operator has to interpret.
  *
- * It reports only what actually happened. A job whose refill has not run yet
- * has no filled-field count, and says so, rather than showing a reassuring zero
- * that reads like "nothing needed doing".
+ * It reports only what actually happened, and the discriminator for that is
+ * `fill_attempted_at` — never `recorded_at`, which preparation stamps too.
+ * Reading a prepared application as a fill that found nothing is bugs.md #548,
+ * and it told the operator that Career Agent had tried and failed on a form it
+ * had never touched, while the vault held answers for 8 of its 10 questions.
+ *
+ * Four states, because there are four different facts:
+ *
+ *   - a fill ran and did work            → the ticks
+ *   - a fill ran and completed nothing   → say exactly that, and only here
+ *   - the form was read, no fill yet     → say that instead of claiming a fill
+ *   - nothing is recorded at all         → say nothing is recorded
+ *
+ * The third and fourth states are deliberately worded without form-inventory
+ * detail. What the form asks belongs to the Copy Application Packet (#547),
+ * which owns that surface; duplicating it here would give the operator two
+ * places to read the same thing and two places for them to disagree.
  */
 export function CompletedSummary({ job }: CompletedSummaryProps) {
   const summary = job.completed;
-  const hasRun = Boolean(summary?.recorded_at);
+  // A fill was attempted. Not "a row exists", not "some count is non-zero" —
+  // a fill that runs and types nothing is still a fill, and the only honest
+  // source for that is the marker the fill path writes before it starts.
+  const fillRan = Boolean(summary?.fill_attempted_at);
+  // Something has written this row, which after #548 means preparation. It is
+  // evidence the form was read, and evidence of nothing else.
+  const prepared = Boolean(summary?.recorded_at);
   const documents = summary?.documents ?? [];
 
   const items: string[] = [];
   if (job.resume_ready) items.push('Résumé ready');
   if (job.cover_letter_ready) items.push('Cover letter ready');
-  if (hasRun && summary.filled_count > 0) {
+  if (fillRan && summary.filled_count > 0) {
     items.push(`${summary.filled_count} form ${summary.filled_count === 1 ? 'field' : 'fields'} filled`);
   }
-  if (hasRun && summary.reused_answers > 0) {
+  if (fillRan && summary.reused_answers > 0) {
     items.push(
       `${summary.reused_answers} approved ${summary.reused_answers === 1 ? 'answer' : 'answers'} reused`
     );
   }
-  if (hasRun && documents.length > 0) {
+  if (fillRan && documents.length > 0) {
     items.push(`${documents.length} ${documents.length === 1 ? 'document' : 'documents'} attached`);
   }
 
@@ -36,11 +56,7 @@ export function CompletedSummary({ job }: CompletedSummaryProps) {
     <div className="completed-summary">
       <h4>Career Agent completed</h4>
       {items.length === 0 ? (
-        <p className="detail-meta">
-          {hasRun
-            ? 'Nothing could be filled automatically on this application.'
-            : 'Nothing filled yet — open the application to let Career Agent prepare it.'}
-        </p>
+        <p className="detail-meta">{emptyStateMessage(fillRan, prepared)}</p>
       ) : (
         <ul className="completed-list">
           {items.map((item) => (
@@ -52,4 +68,20 @@ export function CompletedSummary({ job }: CompletedSummaryProps) {
       )}
     </div>
   );
+}
+
+/**
+ * The sentence for an application with no ticks to show.
+ *
+ * Only the first branch is a past-tense claim about Career Agent's own work,
+ * and it is reachable only with positive evidence that a fill really ran.
+ */
+function emptyStateMessage(fillRan: boolean, prepared: boolean): string {
+  if (fillRan) {
+    return 'Career Agent attempted this form but could not fill any fields automatically.';
+  }
+  if (prepared) {
+    return 'Career Agent has read this form but has not filled it yet. Open the application to let it fill what it can.';
+  }
+  return 'Nothing filled yet — open the application to let Career Agent prepare it.';
 }

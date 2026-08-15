@@ -143,7 +143,20 @@ export interface AssistedFillSummary {
   documents: string[] | null;
   filled_labels: string[] | null;
   unresolved_count: number;
+  /**
+   * When this row was last written, by preparation or by filling. It is NOT
+   * evidence that a fill ran — preparation writes it too, and reading it as
+   * proof of a fill is bugs.md #548. Use `fill_attempted_at`.
+   */
   recorded_at: string;
+  /**
+   * When Career Agent last began actually filling this employer's form.
+   *
+   * Absent means *no fill attempt is recorded*, which is not the same as "a
+   * fill ran and achieved nothing". Rows written before this field existed are
+   * genuinely unknown and must never be described as either.
+   */
+  fill_attempted_at?: string;
 }
 
 export interface AssistedEffort {
