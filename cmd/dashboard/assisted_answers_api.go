@@ -365,6 +365,7 @@ func serveApplicationPacket(w http.ResponseWriter, r *http.Request) {
 type packetFormInventoryPayload struct {
 	State         string `json:"state"`
 	QuestionCount int    `json:"question_count"`
+	AnsweredCount int    `json:"answered_count"`
 	FieldCount    int    `json:"field_count"`
 	// Reason is a code from pkg/submitter's closed vocabulary, never a message.
 	// A driver's own error text quotes page content (ADR-006), so it stops at
@@ -393,6 +394,7 @@ func packetFormInventory(jobID string) packetFormInventoryPayload {
 	payload := packetFormInventoryPayload{
 		State:         inventory.State,
 		QuestionCount: inventory.QuestionCount,
+		AnsweredCount: inventory.AnsweredCount,
 		FieldCount:    inventory.FieldCount,
 		Reason:        inventory.Reason,
 		InspectedAt:   inventory.InspectedAt,
@@ -400,10 +402,13 @@ func packetFormInventory(jobID string) packetFormInventoryPayload {
 		Preparable:    inventory.Preparable,
 		Stale:         storage.FormInventoryIsStale(inventory, time.Now().UTC()),
 	}
-	// A run in flight is the freshest fact there is, and it outranks whatever
-	// an earlier attempt left in the database: a form being re-read right now
-	// is neither ready nor failed yet.
-	if currentPreflight.preparingJob(jobID) {
+	// A run in flight outranks whatever an earlier attempt left in the
+	// database -- but only until this run has actually produced a verdict for
+	// this application. A batch holds all 25 identifiers from the moment it
+	// starts, so without that check the first job inspected would keep
+	// reporting "reading the employer's form" for the remaining ten minutes,
+	// hiding a result already committed and readable.
+	if running, since := currentPreflight.preparingJob(jobID); running && !inspectedDuring(inventory, since) {
 		payload.State = storage.FormInventoryPreparing
 		payload.Reason = ""
 		payload.Stale = false
@@ -420,6 +425,24 @@ func packetFormInventory(jobID string) packetFormInventoryPayload {
 		}
 	}
 	return payload
+}
+
+// inspectedDuring reports whether this inventory's verdict was recorded by a
+// run that started at or after the given time -- that is, whether the run
+// currently in flight has already finished with this application.
+//
+// An unparseable or absent timestamp answers no, which keeps the in-flight
+// label rather than dropping it: "still being read" is the conservative claim
+// while a run genuinely is running.
+func inspectedDuring(inventory storage.FormInventory, since time.Time) bool {
+	if inventory.InspectedAt == "" {
+		return false
+	}
+	inspected, err := time.Parse(time.RFC3339, inventory.InspectedAt)
+	if err != nil {
+		return false
+	}
+	return !inspected.Before(since.UTC().Truncate(time.Second))
 }
 
 func contains(values []string, want string) bool {

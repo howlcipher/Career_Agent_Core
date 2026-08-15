@@ -205,10 +205,14 @@ var currentPreflight preflightRun
 // dashboard that spawned the run. A dashboard restarted mid-run reverts to
 // reporting whatever the database holds, which is the honest answer -- it no
 // longer knows the run exists, and claiming otherwise would be a guess.
-func (p *preflightRun) preparingJob(jobID string) bool {
+// It reports the run's start time alongside, because membership alone is not
+// enough: a batch holds every requested application for the whole run, so a job
+// the run has already finished would keep claiming to be in progress until the
+// last one completed. The caller compares against its recorded verdict.
+func (p *preflightRun) preparingJob(jobID string) (bool, time.Time) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	return p.running && p.jobIDs[jobID]
+	return p.running && p.jobIDs[jobID], p.started
 }
 
 // servePreflight starts a run, or reports the current one.

@@ -40,8 +40,10 @@ const (
 )
 
 // Where a recorded inventory came from. Both are real inspections of a live
-// form; they differ only in which program did the reading, and the packet says
-// which so "prepared in advance" is not confused with "seen during a session".
+// form; they differ only in which program did the reading. This is recorded for
+// callers that need to tell them apart -- the packet UI does not currently
+// render it, and deliberately does not, because to the operator holding the
+// form the useful question is whether it was read, not by which binary.
 const (
 	FormInventorySourcePreflight = "preflight"
 	FormInventorySourceSession   = "assisted_session"
@@ -63,15 +65,27 @@ type FormInventory struct {
 	// holds only what Career Agent *cannot* answer, so a form with 21 controls
 	// and 19 resolvable ones is a 21-field form with 2 questions.
 	FieldCount int `json:"field_count"`
+	// AnsweredCount is how many of this form's recorded questions the operator
+	// has already dealt with. Without it, a form whose questions were all
+	// answered in an earlier session is indistinguishable from a form that asks
+	// nothing -- and saying "no questions beyond the details above" about
+	// questions whose answers are not in the packet overstates completeness,
+	// which is the one direction this feature may never fail in.
+	AnsweredCount int `json:"answered_count"`
 	// Reason is a bounded code from pkg/submitter's closed vocabulary as
 	// recorded by the preparation run, empty unless State is failed.
 	Reason      string `json:"reason,omitempty"`
 	InspectedAt string `json:"inspected_at,omitempty"`
 	Source      string `json:"source,omitempty"`
-	// Preparable reports whether asking for an inspection right now would do
-	// anything. It is answered by PreflightCandidates -- the function the
-	// preparation run itself uses -- so the packet cannot offer an action that
-	// the run would then refuse.
+	// Preparable reports whether this application is one a preparation run
+	// would agree to inspect, answered by PreflightCandidates -- the function
+	// the run itself uses to pick its work.
+	//
+	// It is a property of the application, not a promise the request will
+	// succeed: the endpoint additionally refuses while an assisted browser is
+	// open, and one run at a time, neither of which is knowable from a row.
+	// Those refusals are reported to the operator as sent rather than
+	// pre-empted here.
 	Preparable bool `json:"preparable"`
 	// BlockedKind is storage's own vocabulary (PreflightSkipUnreadable /
 	// PreflightSkipAlreadyApplied), empty when Preparable. Callers map it onto
@@ -96,10 +110,14 @@ type FormInventory struct {
 //     very form, which is the original defect with its sign flipped.
 //  3. Only with neither is the honest answer that nothing has ever looked.
 //
-// It deliberately does not consult `assisted_fill_summary`. That table's
-// recorded_at is stamped by preparation as well as by filling (bugs.md #548),
-// so it cannot tell the two apart and must not be made load-bearing for a
-// third meaning.
+// It reads exactly one column of `assisted_fill_summary`, and the exclusion is
+// as deliberate as the inclusion. `recorded_at` is stamped by preparation as
+// well as by filling (bugs.md #548), so it already means two things and is
+// never consulted here. `filled_count` is written non-zero only by a fill that
+// actually ran -- preparation writes a zero-value summary -- so it is
+// admissible evidence that a form was read, and it is the only thing left
+// standing when a refill resolved every control and therefore recorded no
+// questions at all.
 func DeriveFormInventory(conn *sql.DB, jobID string) (FormInventory, error) {
 	if conn == nil {
 		return FormInventory{}, errors.New("database not initialized")
@@ -136,32 +154,69 @@ func DeriveFormInventory(conn *sql.DB, jobID string) (FormInventory, error) {
 		return FormInventory{}, err
 	}
 
+	if recorded > questions {
+		inventory.AnsweredCount = recorded - questions
+	}
+
 	verdicts, err := PreflightResults(conn, []string{jobID})
 	if err != nil {
 		return FormInventory{}, err
 	}
 	if len(verdicts) > 0 {
 		verdict := verdicts[0]
-		inventory.InspectedAt = verdict.InspectedAt
-		inventory.Source = FormInventorySourcePreflight
-		switch verdict.State {
-		case PreflightInspected:
+		switch {
+		case verdict.State == PreflightInspected:
 			inventory.State = FormInventoryReady
 			inventory.FieldCount = verdict.ControlCount
+			inventory.InspectedAt = verdict.InspectedAt
+			inventory.Source = FormInventorySourcePreflight
+
+		case verdict.Reason == PreflightSkipAlreadyApplied:
+			// Not a failure to read. cmd/preflight goes out of its way to keep
+			// this verdict out of its own "could not inspect" count -- there is
+			// simply nothing left to prepare -- and collapsing it into failed
+			// would produce the self-contradicting "Career Agent could not read
+			// this form, because this application is already complete".
+			//
+			// It resolves to exactly what the same fact resolves to when no
+			// verdict was ever recorded, so one fact has one rendering.
+			inventory.State = FormInventoryNotPrepared
+			inventory.Preparable = false
+			inventory.BlockedKind = PreflightSkipAlreadyApplied
+
 		default:
-			// The latest attempt to read this form did not succeed, and that is
-			// what the state reports even when an earlier attempt left rows
-			// behind. Any such rows are still shown -- they are real -- under a
-			// banner saying the last read failed, which is truthful in the safe
-			// direction: it can understate what Career Agent has, never
-			// overstate it.
+			// The latest attempt to read this form did not succeed. That is a
+			// real fact and the state reports it even when an earlier attempt
+			// left rows behind -- but the wording downstream distinguishes "was
+			// never read" from "was read, and the re-read just failed", because
+			// labelling a complete packet unreliable is #547's harm inverted
+			// rather than avoided.
 			inventory.State = FormInventoryFailed
 			inventory.Reason = verdict.Reason
+			inventory.InspectedAt = verdict.InspectedAt
+			inventory.Source = FormInventorySourcePreflight
 		}
 		return inventory, nil
 	}
 
 	if recorded > 0 {
+		inventory.State = FormInventoryReady
+		inventory.Source = FormInventorySourceSession
+		return inventory, nil
+	}
+
+	// A refill that resolved every control records *no* questions -- cmd/assist
+	// passes nil -- so the best-prepared application in the queue would
+	// otherwise fall through to "nobody has read this form" with a button
+	// inviting the operator to send a browser at a form already read
+	// control-by-control.
+	//
+	// filled_count is admissible where recorded_at is not, and the difference
+	// is the whole of bugs.md #548: recorded_at is stamped unconditionally by
+	// preparation and therefore means two things, while a non-zero filled_count
+	// is only ever written by a fill that actually ran. Preparation writes a
+	// zero-value summary, so this cannot mistake preparation for a reading.
+	if summary, err := GetFillSummary(conn, jobID); err == nil && summary.FilledCount > 0 {
 		inventory.State = FormInventoryReady
 		inventory.Source = FormInventorySourceSession
 		return inventory, nil

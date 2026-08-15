@@ -16,6 +16,7 @@ const askedEntries = [
 const inventory = (over: Partial<FormInventory>): FormInventory => ({
   state: 'not_prepared',
   question_count: 0,
+  answered_count: 0,
   field_count: 0,
   preparable: true,
   ...over,
@@ -221,6 +222,83 @@ describe('CopyPacket form inventory', () => {
     expect(screen.queryByText(/Nothing could be filled/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/could not be filled automatically/i)).not.toBeInTheDocument();
   });
+
+  // A form whose questions were all answered is not a form that asks nothing.
+  // The answers are not in this packet unless they were saved for reuse.
+  it('does not report an all-answered form as asking nothing', async () => {
+    servePacket({
+      entries: preparedEntries,
+      form_inventory: inventory({ state: 'ready', question_count: 0, answered_count: 4 }),
+    });
+    await renderPacket({});
+
+    expect(screen.getByText(/4 questions have already been answered/i)).toBeInTheDocument();
+    expect(screen.queryByText(/found no questions beyond the details above/i)).not.toBeInTheDocument();
+  });
+
+  // A re-read that failed must not relabel a real, current question list as a
+  // form that could not be read at all.
+  it('keeps an existing question list first when only the re-read failed', async () => {
+    servePacket({
+      entries: [...preparedEntries, ...askedEntries],
+      form_inventory: inventory({ state: 'failed', reason: 'navigation_failed', question_count: 2 }),
+    });
+    await renderPacket({});
+
+    expect(screen.getByText(/This form also asks \(2\)/i)).toBeInTheDocument();
+    expect(screen.getByText('What is your notice period?')).toBeInTheDocument();
+    expect(screen.getByText(/most recent attempt to re-read it did not succeed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not read this form, because/i)).not.toBeInTheDocument();
+  });
+
+  // An absent form_inventory is ignorance, not a finding.
+  it('admits it does not know rather than denying the form was read', async () => {
+    servePacket({ entries: preparedEntries });
+    await renderPacket({});
+
+    expect(screen.getByText(/could not tell whether this employer's form has been read/i)).toBeInTheDocument();
+    expect(screen.queryByText(/has not read this employer's form/i)).not.toBeInTheDocument();
+    // And it must not invent a cause for a refusal nothing explained.
+    expect(screen.queryByText(/the inspection did not complete/i)).not.toBeInTheDocument();
+  });
+
+  it('does not invent a reason when a job cannot be prepared and none was given', async () => {
+    servePacket({
+      entries: preparedEntries,
+      form_inventory: inventory({ state: 'not_prepared', preparable: false }),
+    });
+    await renderPacket({});
+
+    expect(screen.getByText(/It cannot be prepared from here/i)).toBeInTheDocument();
+    expect(screen.queryByText(/the inspection did not complete/i)).not.toBeInTheDocument();
+  });
+
+  // The panel re-reads itself every few seconds while preparing, so one
+  // dropped request must not permanently replace a prepared packet.
+  it('clears a transient load failure on the next successful read', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        if (call === 2) return { ok: false, json: async () => ({}) } as Response;
+        return {
+          ok: true,
+          json: async () => ({
+            entries: [...preparedEntries, ...askedEntries],
+            form_inventory: inventory({ state: 'preparing' }),
+          }),
+        } as Response;
+      })
+    );
+    await renderPacket({});
+    expect(screen.getByText(/Reading the employer's form/i)).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.queryByText(/Could not load your prepared details/i)).not.toBeInTheDocument(), {
+      timeout: 12000,
+    });
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+  }, 15000);
 
   it('notes a stale reading without demoting it to unprepared', async () => {
     servePacket({

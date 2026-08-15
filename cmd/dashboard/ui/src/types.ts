@@ -208,6 +208,8 @@ export type FormInventoryState = 'not_prepared' | 'preparing' | 'ready' | 'faile
 export interface FormInventory {
   state: FormInventoryState;
   question_count: number;
+  /** Questions this form asks that have already been dealt with. */
+  answered_count: number;
   /** The whole form's control count, which is larger than question_count. */
   field_count: number;
   /** A bounded code, never a driver message. */

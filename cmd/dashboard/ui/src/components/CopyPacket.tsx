@@ -76,6 +76,12 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
       if (!live.current) return;
       setEntries(data.entries ?? []);
       setInventory(data.form_inventory ?? null);
+      // Cleared on success, because this panel now re-reads itself every few
+      // seconds while an inspection runs. Without this a single dropped
+      // request during a long run would replace a fully prepared packet with
+      // "could not load" permanently — the component is not unmounted when the
+      // panel closes, so reopening would not clear it either.
+      setError(null);
     } catch {
       if (live.current) setError('Could not load your prepared details.');
     }
@@ -119,7 +125,12 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
     } catch {
       setPrepareError('Preparation could not be started.');
     } finally {
-      if (live.current) setStarting(false);
+      // Unconditionally: `live` tracks the panel being closed, not the
+      // component being destroyed, and the component outlives the panel.
+      // Guarding this left `starting` stuck true whenever the operator
+      // collapsed the panel mid-request, which silently removed the Prepare
+      // button on reopen with nothing to explain its absence.
+      setStarting(false);
     }
   };
 
@@ -195,12 +206,19 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
 
       case 'ready':
         if (asked.length === 0) {
+          const answered = inventory?.answered_count ?? 0;
           return (
             <>
               <h5 className="copy-packet-heading">Form inventory</h5>
               <p className="detail-meta">
-                Form read. Career Agent found no questions beyond the details above
-                {inventory?.field_count ? `, across ${inventory.field_count} fields` : ''}.
+                {answered > 0
+                  ? // Not the same claim as "asks nothing". The answers are not
+                    // in this packet unless they were saved for reuse, so
+                    // saying the form asks nothing would overstate it.
+                    `Form read. Its ${answered} ${answered === 1 ? 'question has' : 'questions have'} already been answered, so nothing is outstanding — but the wording you used is not stored here unless you saved it for reuse.`
+                  : `Form read. Career Agent found no questions beyond the details above${
+                      inventory?.field_count ? `, across ${inventory.field_count} fields` : ''
+                    }.`}
                 {inventory?.stale
                   ? ' That reading is more than two weeks old, so the posting may have changed since.'
                   : ''}
@@ -223,6 +241,23 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
         );
 
       case 'failed':
+        // Two different situations share this state, and flattening them was
+        // the fix's own inverted defect: labelling a packet that holds a real,
+        // current question list as one that could not be read at all.
+        if (asked.length > 0) {
+          return (
+            <>
+              <h5 className="copy-packet-heading">This form also asks ({asked.length})</h5>
+              <p className="detail-meta">
+                From an earlier reading of this form. Career Agent's most recent attempt to re-read it
+                did not succeed, because {reasonText(inventory?.reason)} — so this list may be out of
+                date, though it is the employer's own.
+              </p>
+              <ul className="copy-packet-list">{asked.map(row)}</ul>
+              {prepareButton('Try reading this form again')}
+            </>
+          );
+        }
         return (
           <>
             <h5 className="copy-packet-heading">Form inventory</h5>
@@ -230,19 +265,26 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
               Career Agent could not read this form, because {reasonText(inventory?.reason)}. Treat the
               details above as a starting point rather than a complete packet.
             </p>
-            {asked.length > 0 && (
-              <>
-                <p className="detail-meta">
-                  What an earlier reading found is still listed below, and may be out of date.
-                </p>
-                <ul className="copy-packet-list">{asked.map(row)}</ul>
-              </>
-            )}
             {prepareButton('Try preparing this application again')}
           </>
         );
 
       default:
+        // Reached by not_prepared and by anything unrecognised — an older
+        // packet payload with no form_inventory at all, or a state string from
+        // a newer backend. Those are ignorance, not knowledge, so they get a
+        // sentence that says so rather than the confident denial below.
+        if (!inventory) {
+          return (
+            <>
+              <h5 className="copy-packet-heading">Form inventory</h5>
+              <p className="detail-meta">
+                Career Agent could not tell whether this employer's form has been read, so treat this
+                packet as possibly incomplete.
+              </p>
+            </>
+          );
+        }
         return (
           <>
             <h5 className="copy-packet-heading">Form inventory</h5>
@@ -250,10 +292,18 @@ export function CopyPacket({ jobId, active }: CopyPacketProps) {
               Not prepared yet. Career Agent has not read this employer's form, so it cannot say what
               else the form asks — this packet may be incomplete.
             </p>
-            {!inventory?.preparable && (
+            {/*
+              Only when there is an actual reason code. The fallback wording
+              exists to keep an unknown code off the screen, not to invent a
+              cause for a refusal nothing explained.
+            */}
+            {!inventory.preparable && inventory.reason && (
               <p className="detail-meta">
-                It cannot be read now either, because {reasonText(inventory?.reason)}.
+                It cannot be read now either, because {reasonText(inventory.reason)}.
               </p>
+            )}
+            {!inventory.preparable && !inventory.reason && (
+              <p className="detail-meta">It cannot be prepared from here.</p>
             )}
             {prepareButton('Prepare this application')}
           </>

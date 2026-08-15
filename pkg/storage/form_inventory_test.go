@@ -218,21 +218,84 @@ func TestDeriveFormInventory_CompletedApplicationIsNotPreparable(t *testing.T) {
 	}
 }
 
-// Preparation state must never be read off assisted_fill_summary. That row's
+// Preparation state must never be read off assisted_fill_summary's timestamp.
 // recorded_at is stamped by preparation as well as by filling (bugs.md #548),
 // so a fix for #547 that leaned on it would deepen #548 rather than avoid it.
-func TestDeriveFormInventory_IgnoresTheFillSummaryEntirely(t *testing.T) {
+func TestDeriveFormInventory_AStampedFillSummaryIsNotEvidenceOfAnything(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 	seedLeverJob(t, 1, "stamped")
+	seedLeverJob(t, 2, "onlystamped")
 
-	// Exactly what cmd/preflight leaves behind for a job it could not inspect:
-	// a zero-value summary row with a timestamp, and no questions.
-	if err := ReplaceApplicationQuestions(db, "1", nil, AssistedFillSummary{JobID: "1"}); err != nil {
-		t.Fatal(err)
+	// Exactly what cmd/preflight leaves behind: a zero-value summary row with a
+	// timestamp, and no questions.
+	for _, id := range []string{"1", "2"} {
+		if err := ReplaceApplicationQuestions(db, id, nil, AssistedFillSummary{JobID: id}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := RecordPreflight(db, PreflightResult{
 		JobID: "1", State: PreflightUnavailable, Reason: "auth_required",
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	failed, err := DeriveFormInventory(db, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != FormInventoryFailed {
+		t.Fatalf("state = %q: a stamped fill summary must not make a failed inspection look ready", failed.State)
+	}
+	// And on its own, with no verdict at all, the stamp proves nothing.
+	bare, err := DeriveFormInventory(db, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.State != FormInventoryNotPrepared {
+		t.Fatalf("state = %q: recorded_at alone must never mean a form was read", bare.State)
+	}
+}
+
+// The inverse regression that reaches furthest: a refill which resolved every
+// control records NO questions -- cmd/assist passes nil -- so the
+// best-prepared application in the queue would report that nobody had read its
+// form, and offer to send a browser at a form already read control by control.
+//
+// filled_count is admissible where recorded_at is not: preparation writes a
+// zero-value summary, and only a fill that ran writes a non-zero one.
+func TestDeriveFormInventory_AFillThatResolvedEverythingStillCountsAsRead(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedLeverJob(t, 1, "fullyresolved")
+
+	if err := ReplaceApplicationQuestions(db, "1", nil, AssistedFillSummary{
+		JobID: "1", FilledCount: 21, ReusedAnswers: 8,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := DeriveFormInventory(db, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.State != FormInventoryReady {
+		t.Fatalf("state = %q, want ready -- 21 fields were filled, so the form was read", inventory.State)
+	}
+	if inventory.Source != FormInventorySourceSession {
+		t.Fatalf("source = %q, want %q", inventory.Source, FormInventorySourceSession)
+	}
+}
+
+// "Already applied" is not a failure to read: cmd/preflight records it with its
+// own reason and keeps it out of its "could not inspect" count. Collapsing it
+// into failed produced a sentence that contradicted itself.
+func TestDeriveFormInventory_AlreadyAppliedVerdictIsNotAFailedInspection(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedLeverJob(t, 1, "sent")
+	if err := RecordPreflight(db, PreflightResult{
+		JobID: "1", State: PreflightUnavailable, Reason: PreflightSkipAlreadyApplied,
 	}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -241,8 +304,52 @@ func TestDeriveFormInventory_IgnoresTheFillSummaryEntirely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inventory.State != FormInventoryFailed {
-		t.Fatalf("state = %q: a stamped fill summary must not make a failed inspection look ready", inventory.State)
+	if inventory.State == FormInventoryFailed {
+		t.Fatal("an application already sent did not fail to be read")
+	}
+	if inventory.State != FormInventoryNotPrepared {
+		t.Fatalf("state = %q, want not_prepared", inventory.State)
+	}
+	if inventory.Preparable {
+		t.Fatal("there is nothing left to prepare on an application already sent")
+	}
+	if inventory.BlockedKind != PreflightSkipAlreadyApplied {
+		t.Fatalf("blocked kind = %q", inventory.BlockedKind)
+	}
+}
+
+// A form whose questions were all answered still asks them. Reporting zero
+// pending as "asks nothing beyond the details above" overstates completeness,
+// which is the one direction this feature may never fail in -- the answers are
+// not in the packet unless the operator saved them for reuse.
+func TestDeriveFormInventory_AnsweredQuestionsAreCountedSeparately(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedLeverJob(t, 1, "allanswered")
+
+	if err := ReplaceApplicationQuestions(db, "1", []ApplicationQuestion{
+		{JobID: "1", Key: "notice", Prompt: "What is your notice period?", ControlType: "text"},
+		{JobID: "1", Key: "why", Prompt: "Why here?", ControlType: "textarea"},
+		{JobID: "1", Key: "travel", Prompt: "Travel?", ControlType: "text"},
+	}, AssistedFillSummary{JobID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE application_questions SET status = 'answered' WHERE job_id = 1 AND question_key IN ('notice','why')`); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := DeriveFormInventory(db, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.State != FormInventoryReady {
+		t.Fatalf("state = %q, want ready", inventory.State)
+	}
+	if inventory.QuestionCount != 1 {
+		t.Fatalf("pending = %d, want 1", inventory.QuestionCount)
+	}
+	if inventory.AnsweredCount != 2 {
+		t.Fatalf("answered = %d, want 2", inventory.AnsweredCount)
 	}
 }
 

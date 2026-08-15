@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 type packetInventory struct {
 	State         string `json:"state"`
 	QuestionCount int    `json:"question_count"`
+	AnsweredCount int    `json:"answered_count"`
 	FieldCount    int    `json:"field_count"`
 	Reason        string `json:"reason"`
 	InspectedAt   string `json:"inspected_at"`
@@ -206,20 +209,21 @@ func TestServeApplicationPacket_ReportsPreparingWhileARunHoldsThisJob(t *testing
 	}
 }
 
-// A run in flight outranks a stale verdict: a form being re-read right now is
-// neither ready nor failed yet.
+// A run in flight outranks a verdict from *before* it started: a form being
+// re-read right now is neither ready nor failed yet.
 func TestServeApplicationPacket_PreparingOutranksAnEarlierVerdict(t *testing.T) {
 	setupTestDB(t)
 	usePrivatePII(t, "first_name: Ada\n")
 	seedUnpreparedJob(t, 1, "retry")
 	if err := storage.RecordPreflight(db, storage.PreflightResult{
 		JobID: "1", State: storage.PreflightUnavailable, Reason: "navigation_failed",
-	}, time.Now().UTC()); err != nil {
+	}, time.Now().UTC().Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	currentPreflight.mutex.Lock()
 	currentPreflight.running = true
+	currentPreflight.started = time.Now().UTC()
 	currentPreflight.jobIDs = map[string]bool{"1": true}
 	currentPreflight.mutex.Unlock()
 	t.Cleanup(finishPreflight)
@@ -230,6 +234,99 @@ func TestServeApplicationPacket_PreparingOutranksAnEarlierVerdict(t *testing.T) 
 	}
 	if inventory.Reason != "" {
 		t.Fatalf("a run in flight carries no failure reason, got %q", inventory.Reason)
+	}
+}
+
+// The other half of the same rule, and the one a batch makes expensive. A run
+// holds every identifier it was given for its whole duration, so an
+// application it has already finished with must stop claiming to be in
+// progress -- otherwise the first job inspected hides a committed result for
+// the remaining ten minutes of a 25-application run.
+func TestServeApplicationPacket_StopsSayingPreparingOnceTheRunHasThisVerdict(t *testing.T) {
+	setupTestDB(t)
+	usePrivatePII(t, "first_name: Ada\n")
+	seedUnpreparedJob(t, 1, "finished")
+	seedUnpreparedJob(t, 2, "stillqueued")
+
+	started := time.Now().UTC().Add(-time.Minute)
+	currentPreflight.mutex.Lock()
+	currentPreflight.running = true
+	currentPreflight.started = started
+	currentPreflight.jobIDs = map[string]bool{"1": true, "2": true}
+	currentPreflight.mutex.Unlock()
+	t.Cleanup(finishPreflight)
+
+	// Job 1 has been inspected by this run; job 2 is still queued behind it.
+	if err := storage.RecordPreflight(db, storage.PreflightResult{
+		JobID: "1", State: storage.PreflightInspected, ATS: "Lever", ControlCount: 7,
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	done, _ := fetchPacket(t, "1")
+	if done.State != storage.FormInventoryReady {
+		t.Fatalf("a job this run already finished reported %q, want ready", done.State)
+	}
+	if done.FieldCount != 7 {
+		t.Fatalf("field count = %d, want the committed 7", done.FieldCount)
+	}
+	queued, _ := fetchPacket(t, "2")
+	if queued.State != storage.FormInventoryPreparing {
+		t.Fatalf("a job still in the run reported %q, want preparing", queued.State)
+	}
+}
+
+// "Already applied" is not a failure to read. Collapsing it into failed
+// produced "Career Agent could not read this form, because this application is
+// already complete", which contradicts itself -- and cmd/preflight
+// deliberately keeps that verdict out of its own "could not inspect" count.
+func TestServeApplicationPacket_AlreadyAppliedVerdictIsNotAFailure(t *testing.T) {
+	setupTestDB(t)
+	usePrivatePII(t, "first_name: Ada\n")
+	seedUnpreparedJob(t, 1, "sent")
+	if err := storage.RecordPreflight(db, storage.PreflightResult{
+		JobID: "1", State: storage.PreflightUnavailable, Reason: "already_applied",
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, _ := fetchPacket(t, "1")
+	if inventory.State == storage.FormInventoryFailed {
+		t.Fatal("an already-applied application did not fail to be read")
+	}
+	if inventory.State != storage.FormInventoryNotPrepared {
+		t.Fatalf("state = %q, want not_prepared", inventory.State)
+	}
+	if inventory.Preparable {
+		t.Fatal("an already-applied application must not be offered for preparation")
+	}
+	if inventory.Reason != "already_applied" {
+		t.Fatalf("reason = %q, want already_applied", inventory.Reason)
+	}
+}
+
+// A form whose questions were all answered in an earlier session asks
+// something; it must not be reported as a form that asks nothing.
+func TestServeApplicationPacket_AnsweredQuestionsAreCountedNotErased(t *testing.T) {
+	setupTestDB(t)
+	usePrivatePII(t, "first_name: Ada\n")
+	seedQueuedQuestion(t, 1, "Answered",
+		storage.ApplicationQuestion{Key: "a", Prompt: "What is your notice period?", ControlType: "text"},
+		storage.ApplicationQuestion{Key: "b", Prompt: "Pronouns", ControlType: "text"},
+	)
+	if _, err := db.Exec(`UPDATE application_questions SET status = 'answered' WHERE job_id = 1`); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, _ := fetchPacket(t, "1")
+	if inventory.State != storage.FormInventoryReady {
+		t.Fatalf("state = %q, want ready -- the form was read", inventory.State)
+	}
+	if inventory.QuestionCount != 0 {
+		t.Fatalf("pending question count = %d, want 0", inventory.QuestionCount)
+	}
+	if inventory.AnsweredCount != 2 {
+		t.Fatalf("answered count = %d, want 2 -- otherwise the packet claims the form asks nothing", inventory.AnsweredCount)
 	}
 }
 
@@ -350,18 +447,27 @@ func TestPreflightSourceHasNoFillOrSubmitPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
+	// Every name here must exist somewhere in the repository, or the assertion
+	// is unfalsifiable and only looks like protection. Two earlier entries
+	// (FillForm, fillField) named nothing at all and were removed rather than
+	// left as decoration.
 	for _, forbidden := range []string{
 		"AttemptSubmit",
-		"FillForm",
-		"fillField",
+		"findSubmitControl",
+		"submitControlSelectors",
+		"fillFormFields",
 		"SetInputFiles",
 		".Fill(",
 		".Click(",
 		".Press(",
 		"TakePendingAnswers",
+		"SetPendingAnswers",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("cmd/preflight must not be able to reach %q: preparation reads a form and nothing else", forbidden)
+		}
+		if !symbolExistsInRepo(t, forbidden) {
+			t.Errorf("forbidden name %q exists nowhere in the repository, so asserting its absence proves nothing", forbidden)
 		}
 	}
 	// And it must still be doing the reading, or this test would pass on an
@@ -369,6 +475,27 @@ func TestPreflightSourceHasNoFillOrSubmitPath(t *testing.T) {
 	if !strings.Contains(text, "InspectApplication") {
 		t.Fatal("cmd/preflight no longer inspects anything; this assertion is measuring the wrong file")
 	}
+}
+
+// symbolExistsInRepo reports whether a name appears anywhere under pkg/ or
+// cmd/, so the forbidden list above cannot quietly rot into names that no
+// longer exist and therefore can never be found.
+func symbolExistsInRepo(t *testing.T, name string) bool {
+	t.Helper()
+	found := false
+	for _, root := range []string{"../../pkg", "../../cmd"} {
+		filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || found || !strings.HasSuffix(path, ".go") {
+				return nil
+			}
+			body, readErr := os.ReadFile(path)
+			if readErr == nil && strings.Contains(string(body), name) {
+				found = true
+			}
+			return nil
+		})
+	}
+	return found
 }
 
 // The packet handler itself must not have grown a write path. It answers a GET
