@@ -3,15 +3,19 @@
 // Synthetic real-fill verification for bugs.md #548.
 //
 // The unit tests stub the fill. This does not: it drives a real Chromium page
-// through the real submitter.FillAssistedMappedPage, in the same order
-// cmd/assist does it -- MarkFillAttempted, then the fill, then the summary
-// write -- against a throwaway database, and reads the result back through
-// GetFillSummary.
+// through the real submitter.FillAssistedMappedPage, wired exactly as
+// cmd/assist wires it, against a throwaway database, and reads the result back
+// through GetFillSummary.
 //
-// Two cases, because #548 has two halves. A form Career Agent can fill must
-// record an attempt *and* work; a form with nothing fillable on it must record
-// an attempt and no work, which is the only state that entitles the card to
-// say the attempt completed nothing.
+// Three cases, because each is a different thing the card is allowed to say:
+//
+//   - a form Career Agent can fill      -> an attempt, and work to report;
+//   - a form with nothing fillable      -> an attempt, and no work, which is
+//     the only state that entitles the card to say the attempt completed
+//     nothing;
+//   - an expired posting with no form   -> no attempt at all. The fill returns
+//     before touching a control, and claiming otherwise would tell the operator
+//     Career Agent tried to fill a page that has no form on it.
 //
 // It touches nothing real: the forms are generated into a temporary directory,
 // the database is a throwaway, and no employer server is contacted.
@@ -64,6 +68,12 @@ func main() {
   <label for="phone">Phone</label><input type="tel" id="phone" name="phone">
   <button type="submit" id="submit_app">Submit Application</button>
 </form></body></html>`,
+		// An expired posting. There is no form here at all, and the fill must
+		// return before touching anything -- so no attempt may be recorded.
+		"dead.html": `<!doctype html><html><head><title>Synthetic Application</title></head><body>
+<h1>This job is no longer available</h1>
+<p>The position has been filled.</p>
+</body></html>`,
 		// A form with none of the controls a fill knows how to complete. This
 		// is the case that produces a genuine zero-result attempt.
 		"empty.html": `<!doctype html><html><head><title>Synthetic Application</title></head><body>
@@ -109,13 +119,18 @@ func main() {
 
 	failures := 0
 	for _, testCase := range []struct {
-		name      string
-		file      string
-		jobID     string
-		wantFills bool
+		name        string
+		file        string
+		jobID       string
+		wantFills   bool
+		wantAttempt bool
 	}{
-		{"a form Career Agent can fill", "fillable.html", "9001", true},
-		{"a form with nothing fillable on it", "empty.html", "9002", false},
+		{"a form Career Agent can fill", "fillable.html", "9001", true, true},
+		{"a form with nothing fillable on it", "empty.html", "9002", false, true},
+		// The defect the independent review found in the first cut of this
+		// fix: marking the attempt before the fill made the card claim Career
+		// Agent had tried to fill a posting that no longer exists.
+		{"an expired posting with no form on it", "dead.html", "9003", false, false},
 	} {
 		url := server.URL + "/" + testCase.file
 
@@ -137,13 +152,16 @@ func main() {
 			log.Fatalf("open %s: %v", url, err)
 		}
 
-		// Exactly cmd/assist's order. The marker goes down before the fill so
-		// that an outcome which never reports still leaves a true record.
-		if err := storage.MarkFillAttempted(db, testCase.jobID, time.Now()); err != nil {
-			log.Fatalf("mark fill attempted: %v", err)
-		}
-
+		// Exactly cmd/assist's wiring. The marker is handed to the fill rather
+		// than written before it, so it fires only once the fill is past its
+		// expired-posting and bot-check guards and has a real form in front of
+		// it -- while still covering everything that goes wrong after that.
 		report, fillErr := submitter.FillAssistedMappedPage(submitter.AssistedFillPlan{
+			OnFormReached: func() {
+				if err := storage.MarkFillAttempted(db, testCase.jobID, time.Now()); err != nil {
+					log.Fatalf("mark fill attempted: %v", err)
+				}
+			},
 			Page:        page,
 			Filter:      security.NewQuarantineLayer(),
 			CompanyName: "Synthetic Co",
@@ -174,7 +192,12 @@ func main() {
 		fmt.Printf("   fill_attempted_at: %q\n", stored.FillAttemptedAt)
 		fmt.Printf("   recorded_at      : %q\n", stored.RecordedAt)
 
-		if stored.FillAttemptedAt == "" {
+		if stored.FillAttemptedAt != "" && !testCase.wantAttempt {
+			fmt.Println("   FAIL: a page with no form on it was recorded as a fill attempt")
+			failures++
+			continue
+		}
+		if stored.FillAttemptedAt == "" && testCase.wantAttempt {
 			fmt.Println("   FAIL: a real fill ran and recorded no attempt")
 			failures++
 			continue
@@ -189,21 +212,24 @@ func main() {
 			failures++
 			continue
 		}
-		if testCase.wantFills {
+		switch {
+		case testCase.wantFills:
 			fmt.Println("   OK: attempt recorded, and the card reports the work it did")
-		} else {
+		case testCase.wantAttempt:
 			fmt.Println("   OK: attempt recorded with zero work -- the card may truthfully say the attempt completed nothing")
+		default:
+			fmt.Println("   OK: no attempt recorded -- the fill returned before reaching a form, and the card must not claim otherwise")
 		}
 	}
 
 	// And the control: preparation over the same table must not produce a
 	// marker, which is the defect itself.
-	if err := storage.RecordPreparedQuestions(db, "9003", []storage.ApplicationQuestion{
-		{JobID: "9003", Key: "notice", Prompt: "Notice period?", ControlType: "text"},
+	if err := storage.RecordPreparedQuestions(db, "9004", []storage.ApplicationQuestion{
+		{JobID: "9004", Key: "notice", Prompt: "Notice period?", ControlType: "text"},
 	}); err != nil {
 		log.Fatalf("record prepared questions: %v", err)
 	}
-	control, err := storage.GetFillSummary(db, "9003")
+	control, err := storage.GetFillSummary(db, "9004")
 	if err != nil {
 		log.Fatal(err)
 	}

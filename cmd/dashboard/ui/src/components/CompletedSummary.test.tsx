@@ -36,8 +36,8 @@ const job = (over: Partial<AssistedJob> = {}): AssistedJob =>
     ...over,
   }) as AssistedJob;
 
-const attempted = 'could not fill any fields automatically';
-const readNotFilled = 'has read this form but has not filled it yet';
+const attempted = 'attempted this form and recorded no completed fields';
+const readNotFilled = 'No fill has been recorded for this application';
 const nothingRecorded = 'Nothing filled yet';
 
 describe('CompletedSummary fill provenance', () => {
@@ -148,11 +148,16 @@ describe('CompletedSummary fill provenance', () => {
     expect(screen.getByText('1 document attached')).toBeInTheDocument();
   });
 
-  // Counts on a row with no attempt marker are not the card's to report. In
-  // practice this is a historical row: the counts are unknown provenance, and
-  // presenting them as this application's fill would invent the history the
-  // migration deliberately refused to invent.
-  it('does not report counts from a row with no recorded attempt', () => {
+  // Completed work is itself proof a fill ran. The first cut of this fix
+  // suppressed these counts whenever the marker was absent and then described
+  // the row as unfilled — turning known work into a denial, which is this bug
+  // with its sign flipped. Both independent reviewers found it, and both noted
+  // it contradicted DeriveFormInventory, which treats a non-zero filled_count
+  // as structural proof in the very same commit.
+  //
+  // The migration backfills a marker onto such rows, so this state should not
+  // survive an upgrade; the component refuses to depend on that.
+  it('reports work even when the row carries no marker', () => {
     render(
       <CompletedSummary
         job={job({
@@ -166,9 +171,24 @@ describe('CompletedSummary fill provenance', () => {
       />
     );
 
-    expect(screen.queryByText('8 form fields filled')).not.toBeInTheDocument();
-    expect(screen.queryByText('3 approved answers reused')).not.toBeInTheDocument();
+    expect(screen.getByText('8 form fields filled')).toBeInTheDocument();
+    expect(screen.getByText('3 approved answers reused')).toBeInTheDocument();
+    expect(screen.getByText('1 document attached')).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(readNotFilled, 'i'))).not.toBeInTheDocument();
+  });
+
+  // ...but a row with no marker and no work stays unknown, and is described
+  // without asserting that no fill ever happened.
+  it('does not deny a fill it cannot rule out', () => {
+    render(
+      <CompletedSummary
+        job={job({ completed: summary({ recorded_at: '2026-08-14T01:33:58Z' }) })}
+      />
+    );
+
     expect(screen.getByText(new RegExp(readNotFilled, 'i'))).toBeInTheDocument();
+    expect(screen.queryByText(/has not been filled/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/was not filled/i)).not.toBeInTheDocument();
   });
 
   // Document readiness is Career Agent's own work and is independent of the

@@ -30,7 +30,20 @@ type continuationProbe struct {
 	fillCalled bool
 }
 
-func stubContinuation(t *testing.T, docErr, fillErr error, report submitter.FillReport) *continuationProbe {
+// reachedForm says whether the stubbed fill got as far as a real form surface.
+// FillAssistedMappedPage returns before touching any control on an expired
+// posting, a bot-check page or a quarantined DOM, and it signals the
+// difference by calling plan.OnFormReached only once past those guards. A stub
+// that always invoked the callback would test a fill that cannot fail early,
+// which is the case that matters least.
+type reachedForm bool
+
+const (
+	formReached    reachedForm = true
+	formNotReached reachedForm = false
+)
+
+func stubContinuation(t *testing.T, docErr, fillErr error, report submitter.FillReport, reached reachedForm) *continuationProbe {
 	t.Helper()
 	probe := &continuationProbe{}
 
@@ -53,8 +66,11 @@ func stubContinuation(t *testing.T, docErr, fillErr error, report submitter.Fill
 		return storage.AssistedDocument{Path: "fixture"}, docErr
 	}
 	loadAssistedPII = func(string) (*config.PII, error) { return &config.PII{}, nil }
-	fillAssistedPage = func(submitter.AssistedFillPlan) (submitter.FillReport, error) {
+	fillAssistedPage = func(plan submitter.AssistedFillPlan) (submitter.FillReport, error) {
 		probe.fillCalled = true
+		if reached && plan.OnFormReached != nil {
+			plan.OnFormReached()
+		}
 		return report, fillErr
 	}
 	markFillAttempted = func(_ *sql.DB, jobID string, _ time.Time) error {
@@ -67,9 +83,13 @@ func stubContinuation(t *testing.T, docErr, fillErr error, report submitter.Fill
 	return probe
 }
 
-// 3. The ordinary case: a fill runs, and the attempt is recorded.
+// 3 + 5. The ordinary case: a fill reaches the form, types something, and the
+// attempt is recorded alongside the work.
 func TestContinueAssistedApplication_MarksAFillAsAttempted(t *testing.T) {
-	probe := stubContinuation(t, nil, nil, submitter.FillReport{})
+	probe := stubContinuation(t, nil, nil, submitter.FillReport{
+		Filled:        []submitter.FilledField{{Key: "first_name", Label: "First Name"}},
+		ReusedAnswers: 1,
+	}, formReached)
 
 	continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
 
@@ -84,11 +104,12 @@ func TestContinueAssistedApplication_MarksAFillAsAttempted(t *testing.T) {
 	}
 }
 
-// 9. The path that used to leave no trace whatsoever. The fill starts, the
-// browser or the page fails, cmd/assist preserves manual review and returns --
-// and before this fix nothing anywhere recorded that Career Agent had tried.
+// 9. The path that used to leave no trace whatsoever. The fill reaches the
+// form, then the page or the handler fails; cmd/assist preserves manual review
+// and returns, writing no summary at all. Before this fix nothing anywhere
+// recorded that Career Agent had tried.
 func TestContinueAssistedApplication_MarksAFailedFillAsAttempted(t *testing.T) {
-	probe := stubContinuation(t, nil, errors.New("mapping no longer usable"), submitter.FillReport{})
+	probe := stubContinuation(t, nil, errors.New("mapping no longer usable"), submitter.FillReport{}, formReached)
 
 	keepOpen := continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
 
@@ -100,16 +121,48 @@ func TestContinueAssistedApplication_MarksAFailedFillAsAttempted(t *testing.T) {
 	}
 }
 
-// 4. A fill that runs to completion having typed nothing. This is the only
-// state that entitles the card to say the attempt completed no work, so the
-// marker has to be there to license the sentence.
+// 4. A fill that reaches the form, runs to completion, and types nothing. This
+// is the only state that entitles the card to say the attempt completed no
+// work, so the marker has to be there to license the sentence -- and unlike the
+// failure case above it must reach the summary writer, not the error branch.
 func TestContinueAssistedApplication_MarksAZeroResultFillAsAttempted(t *testing.T) {
-	probe := stubContinuation(t, nil, nil, submitter.FillReport{})
+	probe := stubContinuation(t, nil, nil, submitter.FillReport{}, formReached)
 
-	continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
+	keepOpen := continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
 
+	if !keepOpen {
+		t.Fatal("a completed zero-result fill should still preserve the browser for review")
+	}
+	if !probe.fillCalled {
+		t.Fatal("precondition: the fill should have run")
+	}
 	if !probe.marked {
 		t.Fatal("a fill that completed nothing recorded no attempt")
+	}
+}
+
+// The defect the independent review found in the first cut of this fix, and the
+// one most worth a test: an expired posting and a bot-check page both return
+// from the fill before a single control is read.
+//
+// Marking an attempt in that state made the card say "Career Agent attempted
+// this form" about a page with no form on it, and sent the operator off to
+// hand-fill a posting that no longer exists -- bugs.md #548 with its sign
+// flipped. The marker now travels inside the fill and fires only past those
+// guards, so a fill that never reaches a form records nothing.
+func TestContinueAssistedApplication_DoesNotMarkWhenTheFormWasNeverReached(t *testing.T) {
+	probe := stubContinuation(t, nil, errors.New("job posting is expired"), submitter.FillReport{}, formNotReached)
+
+	keepOpen := continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
+
+	if !keepOpen {
+		t.Fatal("an expired posting must still preserve the open browser")
+	}
+	if !probe.fillCalled {
+		t.Fatal("precondition: the fill should have been invoked")
+	}
+	if probe.marked {
+		t.Fatal("a dead posting was recorded as a form Career Agent attempted to fill")
 	}
 }
 
@@ -118,7 +171,7 @@ func TestContinueAssistedApplication_MarksAZeroResultFillAsAttempted(t *testing.
 // that state has had nothing done to it -- claiming an attempt would be #548
 // rebuilt in a new column.
 func TestContinueAssistedApplication_DoesNotMarkWhenNoFillIsInvoked(t *testing.T) {
-	probe := stubContinuation(t, errors.New("missing document"), nil, submitter.FillReport{})
+	probe := stubContinuation(t, errors.New("missing document"), nil, submitter.FillReport{}, formNotReached)
 
 	continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "42"}, "owner")
 
@@ -134,7 +187,7 @@ func TestContinueAssistedApplication_DoesNotMarkWhenNoFillIsInvoked(t *testing.T
 // the marker degrades the card to "no fill result recorded", which is a worse
 // answer but an honest one; refusing to fill would not be.
 func TestContinueAssistedApplication_FillsEvenIfTheMarkerCannotBeWritten(t *testing.T) {
-	probe := stubContinuation(t, nil, nil, submitter.FillReport{})
+	probe := stubContinuation(t, nil, nil, submitter.FillReport{}, formReached)
 	markFillAttempted = func(*sql.DB, string, time.Time) error {
 		return errors.New("database is locked")
 	}
@@ -174,39 +227,82 @@ func TestDirectAssistedBrowser_NeverMarksAFillAttempt(t *testing.T) {
 	}
 }
 
-// The marker is written before the fill, not after. Every outcome that
-// produces no summary depends on that ordering, so it is asserted directly
-// rather than left to be inferred from the tests above.
-func TestFillProvenance_MarkerPrecedesTheFillItRecords(t *testing.T) {
+// The two marker call sites are placed differently on purpose, and each
+// placement is the only correct one for its path. This asserts both, because
+// getting either wrong reintroduces a defect this fix already made once.
+//
+//   - The refill hands the marker to the fill as OnFormReached, so it fires
+//     only once the fill is past its expired-posting, bot-check and quarantine
+//     guards. Calling it *before* fillAssistedPage is what made the card claim
+//     Career Agent had attempted a form on a page that had none.
+//   - The answers path marks before its call, which is right there: the
+//     operator is answering questions read off the form in front of them, and
+//     ApplyApprovedAnswers has no guards to clear -- it goes straight to the
+//     controls.
+func TestFillProvenance_MarkerIsPlacedCorrectlyOnBothPaths(t *testing.T) {
 	source, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, pair := range []struct{ marker, fill string }{
-		{"markFillAttempted", "fillAssistedPage("},
-		{"markFillAttempted", "applyAssistedAnswers("},
-	} {
-		body, ok := functionBody(text, "func continueAssistedApplication(")
-		if pair.fill == "applyAssistedAnswers(" {
-			body, ok = functionBody(text, "func applyOperatorAnswers(")
-		}
-		if !ok {
-			t.Fatalf("could not read the function containing %q", pair.fill)
-		}
-		markerAt := strings.Index(body, pair.marker)
-		fillAt := strings.Index(body, pair.fill)
-		if markerAt < 0 {
-			t.Errorf("%q is never recorded before %q", pair.marker, pair.fill)
-			continue
-		}
-		if fillAt < 0 {
-			t.Errorf("%q no longer appears; this assertion measures nothing", pair.fill)
-			continue
-		}
-		if markerAt > fillAt {
-			t.Errorf("%q is recorded after %q, so a fill that fails would leave no trace", pair.marker, pair.fill)
-		}
+
+	refill, ok := functionBody(text, "func continueAssistedApplication(")
+	if !ok {
+		t.Fatal("continueAssistedApplication no longer exists; this assertion measures nothing")
+	}
+	fillAt := strings.Index(refill, "fillAssistedPage(")
+	if fillAt < 0 {
+		t.Fatal("the refill no longer calls fillAssistedPage; this assertion measures nothing")
+	}
+	markerAt := strings.Index(refill, "markFillAttempted")
+	if markerAt < 0 {
+		t.Fatal("the refill records no fill attempt at all")
+	}
+	// Inside the plan literal, therefore after the call begins -- not before it.
+	if markerAt < fillAt {
+		t.Error("the refill marks an attempt before the fill runs, so a dead posting or a bot check would be reported as a form Career Agent tried to fill")
+	}
+	if !strings.Contains(refill, "OnFormReached") {
+		t.Error("the refill no longer defers its marker to OnFormReached, so the marker no longer means the form was reached")
+	}
+
+	answers, ok := functionBody(text, "func applyOperatorAnswers(")
+	if !ok {
+		t.Fatal("applyOperatorAnswers no longer exists; this assertion measures nothing")
+	}
+	applyAt := strings.Index(answers, "applyAssistedAnswers(")
+	answerMarkerAt := strings.Index(answers, "markFillAttempted")
+	if applyAt < 0 {
+		t.Fatal("the answers path no longer applies answers; this assertion measures nothing")
+	}
+	if answerMarkerAt < 0 {
+		t.Fatal("the answers path records no fill attempt at all")
+	}
+	if answerMarkerAt > applyAt {
+		t.Error("the answers path marks after typing, so answers typed into a browser that then died would leave no record")
+	}
+}
+
+// The marker must survive the writer that runs after the operator's answers
+// are applied. RecordAssistedAnswersApplied is a bare UPDATE that writes real
+// counts, and if it left fill_attempted_at alone, a marker write that had
+// failed earlier -- deliberately non-fatal -- would leave a row carrying counts
+// and no marker, which the card reads as "no fill has been recorded" about
+// answers the operator watched being typed.
+func TestFillProvenance_AnswersWriterRecordsAnAttemptOfItsOwn(t *testing.T) {
+	source, err := os.ReadFile("../../pkg/storage/assisted.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := functionBody(string(source), "func RecordAssistedAnswersApplied(")
+	if !ok {
+		t.Fatal("RecordAssistedAnswersApplied no longer exists; this assertion measures nothing")
+	}
+	if !strings.Contains(body, "fill_attempted_at") {
+		t.Fatal("the answers writer records counts without recording that a fill ran")
+	}
+	if !strings.Contains(body, "COALESCE(fill_attempted_at") {
+		t.Error("the answers writer overwrites the moment the fill began instead of preserving it")
 	}
 }
 

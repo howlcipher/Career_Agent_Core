@@ -501,8 +501,18 @@ func RecordAssistedAnswersApplied(conn *sql.DB, jobID, owner string, summary Ass
 	if n, _ := result.RowsAffected(); n != 1 {
 		return errors.New("assisted answer lease is no longer active")
 	}
-	if _, err := conn.Exec(`UPDATE assisted_fill_summary SET filled_count = ?, reused_answers = ?, unresolved_count = 0, recorded_at = ?
-		WHERE job_id = ?`, summary.FilledCount, summary.ReusedAnswers, now.UTC(), jobID); err != nil {
+	// fill_attempted_at is set here too, under a COALESCE, for the same reason
+	// the other fill writer does it: reaching this statement means the
+	// operator's answers were typed into the employer's controls, so a fill
+	// ran. MarkFillAttempted has normally already recorded it and the COALESCE
+	// keeps that earlier, truer moment -- but its failure is deliberately
+	// non-fatal, and without this fallback that failure would leave a row
+	// carrying real counts and no marker, which the card reads as "no fill has
+	// been recorded" about answers the operator watched being typed.
+	if _, err := conn.Exec(`UPDATE assisted_fill_summary
+		SET filled_count = ?, reused_answers = ?, unresolved_count = 0, recorded_at = ?,
+			fill_attempted_at = COALESCE(fill_attempted_at, ?)
+		WHERE job_id = ?`, summary.FilledCount, summary.ReusedAnswers, now.UTC(), now.UTC(), jobID); err != nil {
 		return fmt.Errorf("update assisted fill summary: %w", err)
 	}
 	return nil

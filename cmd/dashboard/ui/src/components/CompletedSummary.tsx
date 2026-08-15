@@ -28,14 +28,21 @@ interface CompletedSummaryProps {
  */
 export function CompletedSummary({ job }: CompletedSummaryProps) {
   const summary = job.completed;
-  // A fill was attempted. Not "a row exists", not "some count is non-zero" —
-  // a fill that runs and types nothing is still a fill, and the only honest
-  // source for that is the marker the fill path writes before it starts.
-  const fillRan = Boolean(summary?.fill_attempted_at);
-  // Something has written this row, which after #548 means preparation. It is
-  // evidence the form was read, and evidence of nothing else.
-  const prepared = Boolean(summary?.recorded_at);
   const documents = summary?.documents ?? [];
+  // Completed work is itself proof a fill ran: these counts are only ever
+  // written from a fill report, and preparation cannot write them at all. The
+  // migration backfills a marker onto such rows, so this is belt and braces —
+  // but without it, a row that somehow carried counts and no marker would have
+  // its work suppressed *and* be described as unfilled, which is this bug with
+  // its sign flipped.
+  const didWork =
+    (summary?.filled_count ?? 0) > 0 ||
+    (summary?.reused_answers ?? 0) > 0 ||
+    documents.length > 0;
+  // A fill was attempted. Not "a row exists" — that is the defect — and not
+  // "some count is non-zero" either, because a fill that runs and types
+  // nothing is still a fill.
+  const fillRan = Boolean(summary?.fill_attempted_at) || didWork;
 
   const items: string[] = [];
   if (job.resume_ready) items.push('Résumé ready');
@@ -56,7 +63,7 @@ export function CompletedSummary({ job }: CompletedSummaryProps) {
     <div className="completed-summary">
       <h4>Career Agent completed</h4>
       {items.length === 0 ? (
-        <p className="detail-meta">{emptyStateMessage(fillRan, prepared)}</p>
+        <p className="detail-meta">{emptyStateMessage(fillRan, Boolean(summary?.recorded_at))}</p>
       ) : (
         <ul className="completed-list">
           {items.map((item) => (
@@ -75,13 +82,23 @@ export function CompletedSummary({ job }: CompletedSummaryProps) {
  *
  * Only the first branch is a past-tense claim about Career Agent's own work,
  * and it is reachable only with positive evidence that a fill really ran.
+ *
+ * Note what none of these say. The first does not claim the form is *empty* —
+ * a fill can type several fields and then error, discarding its report, and
+ * the operator would be looking at those fields while reading this. It reports
+ * what was recorded, which is all this component can honestly know.
+ *
+ * The second does not claim a fill never happened, only that none is recorded.
+ * A row written before fill attempts were recorded at all cannot distinguish
+ * "never filled" from "filled, unrecorded", and asserting the first would
+ * invent the history the migration deliberately refused to invent.
  */
-function emptyStateMessage(fillRan: boolean, prepared: boolean): string {
+function emptyStateMessage(fillRan: boolean, hasRow: boolean): string {
   if (fillRan) {
-    return 'Career Agent attempted this form but could not fill any fields automatically.';
+    return 'Career Agent attempted this form and recorded no completed fields. Check the form before submitting.';
   }
-  if (prepared) {
-    return 'Career Agent has read this form but has not filled it yet. Open the application to let it fill what it can.';
+  if (hasRow) {
+    return 'No fill has been recorded for this application. Open it to let Career Agent fill what it can.';
   }
   return 'Nothing filled yet — open the application to let Career Agent prepare it.';
 }

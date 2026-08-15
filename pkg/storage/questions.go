@@ -219,6 +219,9 @@ func upgradeQuestionSchema(conn *sql.DB) error {
 	}); err != nil {
 		return err
 	}
+	if err := backfillFillAttempts(conn); err != nil {
+		return err
+	}
 	// After the ALTERs, never alongside the CREATE TABLE: on a database that
 	// already had the table, the column this index covers does not exist until
 	// the loop above has run, and SQLite rejects the whole batch.
@@ -227,6 +230,38 @@ func upgradeQuestionSchema(conn *sql.DB) error {
 		return fmt.Errorf("index questions by canonical key: %w", err)
 	}
 	return backfillCanonicalKeys(conn)
+}
+
+// backfillFillAttempts recovers the one class of historical row whose
+// provenance is not in doubt.
+//
+// The rule for bugs.md #548 is that an absent marker means *unknown* and must
+// never be manufactured into a yes or a no. That rule protects rows that carry
+// no evidence. It was never meant to discard evidence that does exist, and a
+// row with a non-zero filled_count, reused_answers or documents carries the
+// strongest kind there is: those columns are only ever written from a fill
+// report, preparation has never written them non-zero, and since #548's writer
+// split it cannot write them at all. DeriveFormInventory already relies on
+// exactly this inference to conclude a form was read.
+//
+// So refusing to backfill these would not have been caution, it would have
+// been converting known work into unknown work -- and the card renders unknown
+// as "no fill has been recorded", which about a row holding eight filled fields
+// is #548 with its sign flipped. Found by two of the three independent
+// reviewers, who each noticed the contradiction with form_inventory.go.
+//
+// recorded_at is the best available timestamp for when that fill happened; on
+// such a row it was written by the fill itself. Rows with no evidence are left
+// NULL, which is the whole point.
+func backfillFillAttempts(conn *sql.DB) error {
+	if _, err := conn.Exec(`UPDATE assisted_fill_summary
+		SET fill_attempted_at = recorded_at
+		WHERE fill_attempted_at IS NULL
+		  AND recorded_at != ''
+		  AND (filled_count > 0 OR reused_answers > 0 OR documents != '')`); err != nil {
+		return fmt.Errorf("backfill fill attempts: %w", err)
+	}
+	return nil
 }
 
 type questionSchemaColumn struct{ name, definition string }
@@ -240,6 +275,11 @@ func addQuestionSchemaColumns(conn *sql.DB, table string, columns []questionSche
 		return fmt.Errorf("inspect %s schema: %w", table, err)
 	}
 	existing := map[string]bool{}
+	// PRAGMA table_info on a table that does not exist returns zero rows and
+	// no error, so an absent table is indistinguishable here from a table with
+	// no columns -- and every ALTER below would then fail with "no such table".
+	// Callers create the table first, but this helper is generic now, so it
+	// says so rather than relying on that.
 	for rows.Next() {
 		var cid, notNull, pk int
 		var name, columnType string
@@ -255,12 +295,26 @@ func addQuestionSchemaColumns(conn *sql.DB, table string, columns []questionSche
 		return err
 	}
 	rows.Close()
+	if len(existing) == 0 {
+		return nil
+	}
 
 	for _, column := range columns {
 		if existing[column.name] {
 			continue
 		}
 		if _, err := conn.Exec("ALTER TABLE " + table + " ADD COLUMN " + column.name + " " + column.definition); err != nil {
+			// Every process runs this on startup, and the PRAGMA and the ALTER
+			// are two statements with no lock between them: cmd/dashboard,
+			// cmd/agent and cmd/assist starting together can all observe the
+			// column missing and all try to add it. The losers get "duplicate
+			// column name", which is the migration having already succeeded,
+			// not a failure -- and cmd/dashboard turns an error here into
+			// log.Fatalf, so treating it as one would take the dashboard down
+			// on exactly the one startup where an upgrade is happening.
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+				continue
+			}
 			return fmt.Errorf("add %s schema column %s: %w", table, column.name, err)
 		}
 	}
@@ -484,16 +538,27 @@ func MarkFillAttempted(conn *sql.DB, jobID string, now time.Time) error {
 		return errors.New("a fill attempt needs a job identifier")
 	}
 	stamp := now.UTC()
-	// recorded_at is NOT NULL, so the insert branch has to supply one. On the
-	// far more common conflict branch it is deliberately left alone: this
-	// function reports that a fill started, and must not move the timestamp
-	// cmd/dashboard's review clock reads.
+	// recorded_at is NOT NULL, so the insert branch must supply something, and
+	// it deliberately supplies the empty string rather than a timestamp.
+	//
+	// This is not squeamishness about a column default. cmd/dashboard's
+	// assistedReviewStartedAt reads recorded_at as "when this application
+	// became ready for the operator to review", and writing a real timestamp
+	// here would start that clock on a job that had never been prepared --
+	// turning a fill that failed at 10:00 and forty minutes of the operator's
+	// own typing into forty minutes of recorded "review time". This function
+	// exists to report that a fill began; it must not also decide when the
+	// operator's review began. An unparseable value round-trips through
+	// GetFillSummary as an absent RecordedAt, which is the honest answer:
+	// nothing has written a review-ready time for this application.
+	//
+	// The conflict branch leaves recorded_at alone for the same reason.
 	if _, err := conn.Exec(`INSERT INTO assisted_fill_summary
 		(job_id, unresolved_count, recorded_at, fill_attempted_at)
-		VALUES (?, 0, ?, ?)
+		VALUES (?, 0, '', ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			fill_attempted_at = excluded.fill_attempted_at`,
-		jobID, stamp, stamp); err != nil {
+		jobID, stamp); err != nil {
 		return fmt.Errorf("mark fill attempted: %w", err)
 	}
 	return nil

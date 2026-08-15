@@ -669,22 +669,28 @@ func continueAssistedApplication(page playwright.Page, info storage.AssistedLaun
 		// application.
 		log.Printf("Approved Answer Vault unavailable; continuing without reusable answers: %v", vaultErr)
 	}
-	// The durable boundary: everything this application needs in order to be
-	// filled has loaded, and the next statement touches the employer's own
-	// controls. Recording the attempt here rather than after the call is what
-	// makes it true on the paths that produce no outcome at all -- a Playwright
-	// error, a posting that died between preparation and now, a browser the
-	// operator closes mid-fill. Each of those used to leave the database
-	// looking exactly like an application nobody had opened.
+	// The attempt is recorded from inside the fill, at the moment it reaches a
+	// real form surface -- not here, before the call. The difference matters:
+	// an expired posting or a bot-check page returns from the fill before any
+	// control is read, and marking an attempt up here would tell the operator
+	// Career Agent tried to fill a form that was never on the page.
+	//
+	// What it still catches, which is the point, is everything that goes wrong
+	// *after* the form is reached: a Playwright error mid-fill, a browser the
+	// operator closes, a handler that dies before any summary is written. Each
+	// of those used to leave the database looking exactly like an application
+	// nobody had opened.
 	//
 	// A failure to record is logged and not fatal. Losing the marker degrades
 	// the card to "no fill result is recorded", which is a worse answer but
 	// still an honest one; refusing to fill the operator's application because
 	// a bookkeeping write failed would not be.
-	if err := markFillAttempted(storage.GetDB(), info.JobID, time.Now()); err != nil {
-		log.Printf("Could not record that a fill was attempted; the fill itself proceeds: %v", err)
-	}
 	report, err := fillAssistedPage(submitter.AssistedFillPlan{
+		OnFormReached: func() {
+			if err := markFillAttempted(storage.GetDB(), info.JobID, time.Now()); err != nil {
+				log.Printf("Could not record that a fill was attempted; the fill itself proceeds: %v", err)
+			}
+		},
 		Page:        page,
 		Filter:      security.NewQuarantineLayer(),
 		Vault:       vault,

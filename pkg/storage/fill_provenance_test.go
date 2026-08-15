@@ -286,6 +286,122 @@ func TestFillProvenance_HistoricalRowsStayUnknown(t *testing.T) {
 	}
 }
 
+// The historical case that actually costs something, and which the first cut
+// of this test avoided by seeding a zero row.
+//
+// A row carrying a real fill's counts is not ambiguous: filled_count,
+// reused_answers and documents are only ever written from a fill report, and
+// preparation cannot write them at all. Leaving such a row unmarked would have
+// suppressed its counts *and* described it as unfilled -- turning known work
+// into a denial, which is this bug with its sign flipped. Both independent
+// reviewers found it, and both noted it contradicted form_inventory.go's own
+// reasoning in the same commit.
+func TestFillProvenance_MigrationRecoversRowsWithPositiveEvidence(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedSessionJob(t, 1, "First")
+	seedSessionJob(t, 2, "Second")
+	seedSessionJob(t, 3, "Third")
+
+	dropFillAttemptedColumn(t)
+	recorded := time.Now().UTC().Add(-72 * time.Hour)
+	for _, row := range []struct {
+		jobID                        string
+		filled, reused               int
+		documents                    string
+		shouldBeRecoveredAsAnAttempt bool
+	}{
+		{"1", 8, 3, "resume", true}, // a real fill
+		{"2", 0, 0, "resume", true}, // documents alone are still a fill's work
+		{"3", 0, 0, "", false},      // no evidence: must stay unknown
+	} {
+		if _, err := db.Exec(`INSERT INTO assisted_fill_summary
+			(job_id, filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at)
+			VALUES (?, ?, ?, ?, '', 4, ?)`,
+			row.jobID, row.filled, row.reused, row.documents, recorded); err != nil {
+			t.Fatalf("seed pre-migration row %s: %v", row.jobID, err)
+		}
+	}
+
+	if err := EnsureQuestionSchema(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	for _, expected := range []struct {
+		jobID     string
+		recovered bool
+	}{{"1", true}, {"2", true}, {"3", false}} {
+		summary := summaryOf(t, expected.jobID)
+		got := summary.FillAttemptedAt != ""
+		if got != expected.recovered {
+			t.Fatalf("job %s: fill attempt recovered = %v, want %v (%+v)",
+				expected.jobID, got, expected.recovered, summary)
+		}
+		if expected.recovered && summary.FillAttemptedAt != summary.RecordedAt {
+			t.Errorf("job %s: recovered attempt should carry the fill's own timestamp, got %q vs %q",
+				expected.jobID, summary.FillAttemptedAt, summary.RecordedAt)
+		}
+	}
+
+	// And the counts a recovered row carries are untouched by the recovery.
+	if got := summaryOf(t, "1"); got.FilledCount != 8 || got.ReusedAnswers != 3 {
+		t.Fatalf("the backfill disturbed a recovered row's counts: %+v", got)
+	}
+}
+
+// The answers writer runs after MarkFillAttempted, whose failure is
+// deliberately non-fatal. Without a fallback of its own it would write real
+// counts onto a row with no marker.
+func TestRecordAssistedAnswersApplied_RecordsAnAttemptWhenTheMarkerIsMissing(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedSessionJob(t, 1, "First")
+
+	// A row exists from preparation, and the marker write failed.
+	prepared(t, "1", question("1", "notice", "Notice period?"))
+	if summaryOf(t, "1").FillAttemptedAt != "" {
+		t.Fatal("precondition: no marker should be present")
+	}
+
+	if _, err := db.Exec(`UPDATE assisted_fill_summary
+		SET filled_count = ?, reused_answers = 0, unresolved_count = 0, recorded_at = ?,
+			fill_attempted_at = COALESCE(fill_attempted_at, ?)
+		WHERE job_id = ?`, 6, time.Now().UTC(), time.Now().UTC(), "1"); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := summaryOf(t, "1")
+	if summary.FillAttemptedAt == "" {
+		t.Fatal("answers were typed and recorded with no fill attempt against them")
+	}
+	if summary.FilledCount != 6 {
+		t.Fatalf("answer counts did not survive: %+v", summary)
+	}
+}
+
+// MarkFillAttempted must not start the operator's review clock. It reports that
+// a fill began; cmd/dashboard's assistedReviewStartedAt reads recorded_at as
+// "when this became ready for the operator to review", and a fill that fails on
+// a never-prepared job would otherwise book the operator's own hand-filling as
+// review time.
+func TestMarkFillAttempted_DoesNotStartTheReviewClock(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+	seedSessionJob(t, 1, "First")
+
+	if err := MarkFillAttempted(db, "1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := summaryOf(t, "1")
+	if summary.FillAttemptedAt == "" {
+		t.Fatal("the marker was not recorded")
+	}
+	if summary.RecordedAt != "" {
+		t.Fatalf("marking an attempt started the review clock at %q", summary.RecordedAt)
+	}
+}
+
 // 10. The migration is additive and re-entrant: every process runs it on every
 // startup, so running it twice must be a no-op rather than an error.
 func TestFillProvenance_MigrationIsAdditiveAndIdempotent(t *testing.T) {
