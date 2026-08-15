@@ -41,10 +41,10 @@ Two traps found while designing:
 - [x] Backend tests (11 storage + 16 dashboard)
 - [x] Frontend tests (15)
 - [x] ADR-007 amendment, CHANGELOG
-- [ ] Live verification: unprepared Lever, prepared Lever, Greenhouse reference
-- [ ] Collateral-write check
+- [x] Live verification: unprepared Lever, prepared Lever, Greenhouse reference
+- [x] Collateral-write check
 - [ ] Independent reviews
-- [ ] Backlog rows, PR, merge, production restart
+- [x] Backlog rows and PR #26; [ ] merge, production restart
 
 ## Progress Log
 
@@ -52,6 +52,9 @@ Two traps found while designing:
 - 2026-08-14 20:35 — Agents A–D all failed on a plan session limit; analysis done on the main thread instead.
 - 2026-08-14 20:45 — Backend + frontend complete. `go build`/`vet`/`test` clean, `gofmt -l` empty, `npm run lint`/`test` (53)/`build` clean.
 
+- 2026-08-14 20:44 — Live verification complete. Case A (293710) not_prepared -> preparing -> ready with 5 real Veeva questions; second Prepare click 409'd; bystander 293749 unaffected. Case B (293593) and Case C (303990) ready immediately. Job 228 renders `failed`/`posting_dead`. Collateral diff was exactly one preparation's writes.
+- 2026-08-14 20:52 — Commits `a39492c` (fix) and `89c32a7` (docs/backlog) pushed; PR #26 opened. Three read-only reviewers running.
+
 ## Next Step
 
-Live verification: build the branch binaries, run a second dashboard on a non-production port against the real database, and exercise Case A (job 293710, veeva, Lever, unprepared), Case B (job 293593, thinkahead, Lever, 11 questions) and Case C (job 303990, affirm, Greenhouse, 11 questions).
+Read the three reviewer reports, fix or document every concrete finding, then merge PR #26 and restart the production dashboard on :8080 from merged main.
