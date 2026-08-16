@@ -2,6 +2,79 @@
 
 Full fix narratives for closed bug rows, moved out of `bugs.md`'s ranked-table rationale cells and `### N.` Details sections during the 2026-08-01 backlog-size restructure. `bugs.md` keeps only a one-line pointer for each closed item; this file has the full account for audit purposes.
 
+## 554. Geographic eligibility is not enforced end to end, so a Jordan posting reached the assisted-apply queue
+
+**Found 2026-08-16** when the operator reported that a `webook` / "Agentic AI Engineer" posting in
+Amman, Amman Governorate, Jordan (Req B73794CB19) had surfaced as actionable. The configured
+geography is United States + Canada.
+
+### What was wrong
+
+- #516 added country extraction and a `LocationAllowed` gate at ATS-feed discovery, but that gate
+  deliberately failed open for unknown geography and was not part of the canonical
+  `config.IsEligibleJob` rule.
+- Later work consolidated role and remote eligibility into `IsEligibleJob` /
+  `ReconcileAssistedQueueEligibility`, but country eligibility was never added.
+- `GetAssistedLaunchInfo` and `PromoteJobToAssisted` also checked only role + remote.
+- A missing or deleted `profile.yaml` silently disabled the country, remote and role gates at launch
+  (`if profile, perr := ...; perr == nil`).
+- Unknown geography was treated as permission, so "Remote" or "Anywhere" postings were admitted even
+  when the operator had asked for a restriction.
+
+### The fix
+
+`config.ScreenJob` is now the single canonical gate:
+
+```
+eligible = title eligible AND remote eligible AND geography eligible
+```
+
+`config.GeographyEligible` distinguishes three outcomes:
+
+- `GeographyAllowed` — names at least one allowed country, or no allowlist is configured.
+- `GeographyOutside` — positive evidence that every named country is outside the allowlist.
+- `GeographyUnknown` — no country evidence; held as non-actionable rather than admitted.
+
+The gate is applied at discovery intake (`cmd/agent/pipeline.go` `StateDiscovery`), in
+`ReconcileAssistedQueueEligibility`, `GetAssistedLaunchInfo`, `PromoteJobToAssisted`, and
+`EnsureAssistedPlanForURL` so an interrupted automatic pipeline cannot create an actionable assisted
+row without re-checking the current policy. A missing policy is now a refusal everywhere, not a pass.
+
+The dashboard exposes the allowlist through `/api/operator-settings` with a geography selector (United
+States only, United States + Canada, North America (US, Canada, Mexico), Worldwide, Custom). The
+authoritative persisted value remains a list of ISO-3166 alpha-2 codes in
+`applications/operator_settings.yaml`; "North America" is explicitly US+CA+MX in code, not silently
+US+CA. `ApplyOperatorSettings` layers the selector over `profile.yaml`, so every enforcement path
+reads the same effective allowlist.
+
+The country resolver matches whole normalized words, so "Indiana" is not read as "India" and "CA"
+in prose (e.g. "San Francisco, CA") is not read as Canada. An explicit country code from a board feed
+is treated as authority; free-text "CA" is not.
+
+### Live verification
+
+A dry-run of the current actionable queue, using the operator's effective US+CA allowlist, reported:
+
+- Examined: 211
+- US eligible: 76
+- Canada eligible: 9
+- Outside scope: 106
+- Unknown geography: 20
+- Remaining: 85
+
+The specific `webook` / "Agentic AI Engineer" / Amman / B73794CB19 row is now `SKIPPED` with
+`status_reason = "outside_allowed_countries"` and its `assisted_applications` row removed. No `APPLIED`
+row was touched. The cleanup was applied with `go run ./cmd/pruneassisted`.
+
+### Files changed
+
+`pkg/config/eligibility.go`, `pkg/config/location.go`, `pkg/config/operator.go`,
+`pkg/config/effective_settings.go`, `pkg/storage/eligibility_reconcile.go`,
+`pkg/storage/assisted.go`, `pkg/storage/promote.go`, `cmd/pruneassisted/main.go`,
+`cmd/dashboard/main.go`, `cmd/dashboard/ui/src/App.tsx`, `cmd/dashboard/ui/src/types.ts`,
+`cmd/dashboard/ui/src/App.css`, plus tests in `pkg/config/geography_test.go`,
+`pkg/storage/geography_reconcile_test.go` and `pkg/storage/assisted_test.go`.
+
 ## 549. The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that
 
 **Found 2026-08-14** by the independent post-fix review of #546, which set out to falsify that fix's

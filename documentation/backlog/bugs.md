@@ -58,7 +58,7 @@ Pending bugs carry the same diminishing-returns score defined in `improvements.m
 | 548 | [Preparing an application stamps a fill outcome, so the card reports a fill that never ran](#548-preparing-an-application-stamps-a-fill-outcome-so-the-card-reports-a-fill-that-never-ran) | Major | Done (2026-08-15) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #548 for the full account. Fixed on `fix/548-fill-attempt-provenance`. The independent review round found six further defects in the fix itself, five of them this bug with its sign flipped, and filed three more it deliberately did not fold in. |
 | 549 | [The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that](#549-the-validation-retry-log-records-the-value-the-model-proposed-directly-under-a-comment-forbidding-exactly-that) | Minor | Fixed (2026-08-15) | — | standard | Found by the post-fix review of #546, which falsified that fix's scope claim. Two sites built the value into a nested `fmt.Sprintf` so a `%q` grep missed them. A third site, `applyValidationFix`, was found by this fix's own independent reviewer and folded in: it embedded the value into returned errors logged verbatim in the same loop. All three now name the field/selector/reason, never the value. |
 | 551 | [Automatic Apply fills real employer forms and records nothing, so the card cannot describe its own agent's work](#551-automatic-apply-fills-real-employer-forms-and-records-nothing-so-the-card-cannot-describe-its-own-agents-work) | Major | Pending | 1.2 = 6×1.0÷5 | deep-reasoning | Filed 2026-08-15 by two of #548's three independent reviewers, independently. `cmd/agent` reaches `AWAITING_REVIEW` through `ErrAwaitingHumanReview` — its own log line reads "form filled — awaiting human review" and `completedWork` says "application form reached and filled for review" — and writes nothing to `assisted_fill_summary`. All 24 queued `AWAITING_REVIEW` jobs arrived that way. Not a #548 regression (the card was equally uninformative before), and not a mechanical fix: the copilot browser closes, so the typed values are gone by the time the operator opens the application, and whether that counts as work to report is a product question. |
-| 554 | [Geographic eligibility is not enforced end to end, so a Jordan posting reached the assisted-apply queue](#554-geographic-eligibility-is-not-enforced-end-to-end-so-a-jordan-posting-reached-the-assisted-apply-queue) | Major | Fixed (2026-08-16) | 2.0 = 6×1.0÷3 | standard | A `webook` / "Agentic AI Engineer" posting advertised in Amman, Jordan (Req B73794CB19) surfaced as actionable while the operator's configured scope is US+Canada. #516 added country gating at discovery, but the canonical `config.IsEligibleJob` gate did not include geography, queue reconciliation checked only role+remote, and unknown geography was treated as permission. Fixed by adding `config.GeographyEligible`/`ScreenJob`, wiring it into discovery, reconciliation, launch, and manual promotion, and exposing the allowlist through the dashboard geography selector. Live reconciliation: 211 actionable rows examined, 106 outside scope removed, 20 unknown held, 85 remaining. The Jordan row is now `SKIPPED`/`outside_allowed_countries` with its assisted row removed. |
+| 554 | [Geographic eligibility is not enforced end to end, so a Jordan posting reached the assisted-apply queue](#554-geographic-eligibility-is-not-enforced-end-to-end-so-a-jordan-posting-reached-the-assisted-apply-queue) | Major | Done (2026-08-16) | — | standard | See `documentation/backlog_history/bugs_done_details.md` item #554 for the full account. Merged via PR #29. |
 | 552 | [The review clock starts when an application was prepared, so every measurement exceeds the credibility cap and is silently discarded](#552-the-review-clock-starts-when-an-application-was-prepared-so-every-measurement-exceeds-the-credibility-cap-and-is-silently-discarded) | Minor | Pending | 1.5 = 3×1.0÷2 | standard | Filed 2026-08-15, carried out of #548 with its evidence rather than folded in. `assistedReviewStartedAt` reads `assisted_fill_summary.recorded_at`, which preparation writes. On job 310026 that is 2026-08-14 01:33:58 against a confirmation at 18:57:20 — 17h23m, against `maxCredibleInteraction` of 30 minutes, so `RecordHumanInteraction` returns nil and drops it. `human_interactions` is empty across the whole database, which is also why improvements.md #544 cannot be fitted. #548 was careful not to feed this clock, so the defect is unchanged in scope. |
 | 553 | [The Assisted card and the Copy Application Packet can describe the same form differently](#553-the-assisted-card-and-the-copy-application-packet-can-describe-the-same-form-differently) | Minor | Pending | 0.7 = 2×1.0÷3 | standard | Filed 2026-08-15 by #548's inverse-regression reviewer. In one narrow state — a fill that reached a form which was never preflighted and recorded no questions — `CompletedSummary` says Career Agent attempted the form while `CopyPacket`, one panel below on the same card, says "Career Agent has not read this employer's form". `DeriveFormInventory` deliberately does not consult `fill_attempted_at` (ADR-007 decision 8), which is right for its own question and is what leaves the two panels able to disagree. Rarer since #548's marker moved behind the fill's guards, but not closed. |
 | 546 | [The fill path logs the operator's own address values, and nothing downstream strips them](#546-the-fill-path-logs-the-operators-own-address-values-and-nothing-downstream-strips-them) | Major | Fixed (2026-08-14) | — | mechanical | Found by the adversarial pass of the same audit. `fillComboboxFromCandidates` logged `%q` of the value it typed; Location and Country are required react-select fields on every Greenhouse form, so `career_agent.log` holds the operator's home city, state and country. `SanitizeChildLogLine` strips markup and truncates and passes clean prose through, so `cmd/assist`'s first fill would put them in `dashboard.log` too. |
@@ -334,77 +334,6 @@ not simply wired up is that a `ready` inventory with zero questions and zero fie
 
 Narrower since #548's marker moved behind the fill's own guards — a dead posting no longer produces
 it — but reachable whenever a fill reaches a form and then fails.
-
-### 554. Geographic eligibility is not enforced end to end, so a Jordan posting reached the assisted-apply queue
-
-**Found 2026-08-16** when the operator reported that a `webook` / "Agentic AI Engineer" posting in
-Amman, Amman Governorate, Jordan (Req B73794CB19) had surfaced as actionable. The configured
-geography is United States + Canada.
-
-**Root cause.** #516 added country extraction and a `LocationAllowed` gate at ATS-feed discovery, but
-that gate deliberately failed open for unknown geography and was not part of the canonical
-`config.IsEligibleJob` rule. Later work consolidated role and remote eligibility into
-`IsEligibleJob`/`ReconcileAssistedQueueEligibility`, but country eligibility was never added. The
-result:
-
-- A foreign posting discovered before #516, or with a location backfilled later, could reach the
-  actionable assisted-apply queue.
-- Queue reconciliation (`ReconcileAssistedQueueEligibility`) only checked role + remote.
-- `GetAssistedLaunchInfo` and `PromoteJobToAssisted` also checked only role + remote.
-- A missing or deleted `profile.yaml` silently disabled the country, remote and role gates at launch
-  (`if profile, perr := ...; perr == nil`).
-- Unknown geography was treated as permission, so "Remote" or "Anywhere" postings were admitted
-  even when the operator had asked for a restriction.
-
-**Fix.** `config.ScreenJob` is now the single canonical gate:
-
-```
-eligible = title eligible AND remote eligible AND geography eligible
-```
-
-`config.GeographyEligible` distinguishes three outcomes:
-- `GeographyAllowed` — names at least one allowed country, or no allowlist is configured.
-- `GeographyOutside` — positive evidence that every named country is outside the allowlist.
-- `GeographyUnknown` — no country evidence; held as non-actionable rather than admitted.
-
-The gate is applied at discovery intake (`cmd/agent/pipeline.go` `StateDiscovery`), in
-`ReconcileAssistedQueueEligibility`, `GetAssistedLaunchInfo`, `PromoteJobToAssisted`, and now also in
-`EnsureAssistedPlanForURL` so an interrupted automatic pipeline cannot create an actionable assisted
-row without re-checking the current policy. A missing policy is now a refusal everywhere, not a pass.
-
-The dashboard exposes the allowlist through `/api/operator-settings` with a geography selector
-("United States only", "United States + Canada", "North America (US, Canada, Mexico)", "Worldwide",
-"Custom"). The authoritative persisted value remains a list of ISO-3166 alpha-2 codes in
-`applications/operator_settings.yaml`; "North America" is explicitly US+CA+MX in code, not silently
-US+CA. `ApplyOperatorSettings` layers the selector over `profile.yaml`, so every enforcement path
-reads the same effective allowlist.
-
-**Country resolver protections.** The resolver matches whole normalized words, so "Indiana" is not
-read as "India" and "CA" in prose (e.g. "San Francisco, CA") is not read as Canada. An explicit country
-code from a board feed is treated as authority; free-text "CA" is not. Tested cases include US/USA,
-United States, Canada, Jordan, Amman, India, UK, Mexico, Indiana, California, Remote - US, Remote -
-Canada, Remote - EMEA, Worldwide and Anywhere.
-
-**Live verification against `applications.db`.** A dry-run of the current actionable queue, using the
-operator's effective US+CA allowlist, reported:
-
-- Examined: 211
-- US eligible: 76
-- Canada eligible: 9
-- Outside scope: 106
-- Unknown geography: 20
-- Remaining: 85
-
-The specific `webook` / "Agentic AI Engineer" / Amman / B73794CB19 row is now `SKIPPED` with
-`status_reason = "outside_allowed_countries"` and its `assisted_applications` row removed. No
-`APPLIED` row was touched. The cleanup was applied with `go run ./cmd/pruneassisted`.
-
-**Files changed.** `pkg/config/eligibility.go`, `pkg/config/location.go`, `pkg/config/operator.go`,
-`pkg/config/effective_settings.go`, `pkg/storage/eligibility_reconcile.go`,
-`pkg/storage/assisted.go`, `pkg/storage/promote.go`, `cmd/pruneassisted/main.go`,
-`cmd/dashboard/main.go`, `cmd/dashboard/ui/src/App.tsx`, `cmd/dashboard/ui/src/types.ts`,
-`cmd/dashboard/ui/src/App.css`, plus tests in `pkg/config/geography_test.go`,
-`pkg/storage/geography_reconcile_test.go` and `pkg/storage/assisted_test.go`.
 
 ### 549. The validation-retry log records the value the model proposed, directly under a comment forbidding exactly that
 
