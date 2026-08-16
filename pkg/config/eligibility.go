@@ -17,6 +17,40 @@ type JobEligibilityInput struct {
 	Location      string
 	Description   string
 	RemoteClaimed bool
+	// CountryCodes carries ISO-3166 alpha-2 codes a feed stated explicitly,
+	// kept separate from Location on purpose: an explicit field is authority,
+	// free-text prose is not. "CA" published as a country code means Canada;
+	// "CA" appearing in a location string may well mean California, and must
+	// never be read as a country. Optional -- callers that reload a row from
+	// job_funnel have only the stored location text, which is fine.
+	CountryCodes []string
+}
+
+// Eligibility reason codes. These are the stable identifiers callers switch
+// on and persist as job_funnel.status_reason; the human sentence that
+// accompanies them is for logs only and is not load-bearing. Before bugs.md
+// #554 the reconciler recovered the reason by running strings.Contains over
+// that sentence, which silently mapped anything unrecognised to "role".
+const (
+	// ReasonIneligibleRemote -- the posting is not fully remote.
+	ReasonIneligibleRemote = "pruned_ineligible_remote"
+	// ReasonIneligibleRole -- the title does not match the configured roles.
+	ReasonIneligibleRole = "pruned_ineligible_role"
+	// ReasonOutsideAllowedCountries -- positive evidence that every country
+	// the posting names sits outside the operator's allowlist.
+	ReasonOutsideAllowedCountries = "outside_allowed_countries"
+	// ReasonLocationUnknown -- an allowlist is configured but the posting
+	// yielded no country evidence, so it is held rather than admitted.
+	ReasonLocationUnknown = "location_unknown"
+)
+
+// EligibilityResult is the structured verdict of the canonical gate: whether
+// the posting may proceed, a stable Code identifying which half rejected it,
+// and a log-safe sentence explaining it.
+type EligibilityResult struct {
+	Eligible bool
+	Code     string
+	Reason   string
 }
 
 // IsEligibleJob is the single hard eligibility gate every stage of the
@@ -26,18 +60,39 @@ type JobEligibilityInput struct {
 // and a high-scoring posting is never even considered here, because scoring
 // happens strictly after this gate, not instead of it.
 func IsEligibleJob(job JobEligibilityInput, profile *Profile) (bool, string) {
+	result := ScreenJob(job, profile)
+	return result.Eligible, result.Reason
+}
+
+// ScreenJob is IsEligibleJob with the reason code preserved. New call sites
+// should prefer it; IsEligibleJob remains for the ones that only need a bool.
+//
+// Order is deliberate. Positive out-of-scope geographic evidence is checked
+// first and can be overridden by nothing -- not a perfect title, not a
+// "Remote" label, not the provider. Unresolvable geography is checked last,
+// so a posting that fails the role or remote gate is recorded under that
+// concrete reason rather than being filed as merely unlocatable; only a
+// posting that would otherwise be actionable gets held for location.
+func ScreenJob(job JobEligibilityInput, profile *Profile) EligibilityResult {
 	if profile == nil {
-		return true, ""
+		return EligibilityResult{Eligible: true}
+	}
+	geography, geoReason := GeographyEligible(job.Location, job.CountryCodes, profile.AllowedCountries)
+	if geography == GeographyOutside {
+		return EligibilityResult{Code: ReasonOutsideAllowedCountries, Reason: geoReason}
 	}
 	if profile.RemoteOnly {
 		if ok, reason := RemoteEligible(job.RemoteClaimed, job.Location, job.Description); !ok {
-			return false, reason
+			return EligibilityResult{Code: ReasonIneligibleRemote, Reason: reason}
 		}
 	}
 	if !TitleEligible(job.Title, profile.Roles) {
-		return false, "title does not match the configured role list"
+		return EligibilityResult{Code: ReasonIneligibleRole, Reason: "title does not match the configured role list"}
 	}
-	return true, ""
+	if geography == GeographyUnknown {
+		return EligibilityResult{Code: ReasonLocationUnknown, Reason: geoReason}
+	}
+	return EligibilityResult{Eligible: true}
 }
 
 // nonRemoteSignalPhrases are wording that contradicts a "fully remote" claim,

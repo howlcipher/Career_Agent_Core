@@ -2,7 +2,7 @@ import { useState } from 'react';
 import './index.css';
 import './App.css';
 import { useDashboard } from './hooks/useDashboard';
-import type { AssistedJob, QualifiedJob } from './types';
+import type { AssistedJob, OperatorSettings, QualifiedJob } from './types';
 import { CommandHeader } from './components/CommandHeader';
 import { CommandSection } from './components/CommandSection';
 import { MetricDisplay } from './components/MetricDisplay';
@@ -19,6 +19,21 @@ import { PreparePanel } from './components/PreparePanel';
 import { AnswerVaultTable } from './components/AnswerVaultTable';
 import { ProfileEditor } from './components/ProfileEditor';
 import { useKnowledge } from './hooks/useKnowledge';
+
+// presetIdFor reports which named preset the current allowlist matches, or
+// "custom" when it matches none. Comparison is on membership, not on a stored
+// label, so a hand-edited list can never keep claiming to be a preset it no
+// longer equals (bugs.md #554).
+function presetIdFor(settings: OperatorSettings): string {
+  const current = [...(settings.allowed_countries ?? [])].sort();
+  for (const preset of settings.geography_presets ?? []) {
+    const candidate = [...preset.countries].sort();
+    if (candidate.length === current.length && candidate.every((c, i) => c === current[i])) {
+      return preset.id;
+    }
+  }
+  return 'custom';
+}
 
 function App() {
   const {
@@ -217,6 +232,59 @@ function App() {
                     }}
                   />
                 </label>
+
+                <fieldset className="geography-selector">
+                  <legend>Job geography</legend>
+                  <label>
+                    Preset
+                    <select
+                      value={presetIdFor(draftSettings)}
+                      onChange={(e) => {
+                        const preset = (draftSettings.geography_presets ?? []).find((p) => p.id === e.target.value);
+                        if (preset) {
+                          setDraftSettings({ ...draftSettings, allowed_countries: [...preset.countries] });
+                        }
+                      }}
+                    >
+                      {(draftSettings.geography_presets ?? []).map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                      <option value="custom">Custom countries</option>
+                    </select>
+                  </label>
+
+                  {/* The country list is the authoritative representation; the
+                      presets above just write into it. */}
+                  <div className="country-multiselect" role="group" aria-label="Allowed countries">
+                    {(draftSettings.available_countries ?? []).map((code) => {
+                      const selected = (draftSettings.allowed_countries ?? []).includes(code);
+                      return (
+                        <label key={code} className={selected ? 'country-chip selected' : 'country-chip'}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => {
+                              const current = draftSettings.allowed_countries ?? [];
+                              const next = selected
+                                ? current.filter((c) => c !== code)
+                                : [...current, code].sort();
+                              setDraftSettings({ ...draftSettings, allowed_countries: next });
+                            }}
+                          />
+                          {code}
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <p className="status-message info">
+                    {(draftSettings.allowed_countries ?? []).length === 0
+                      ? 'No restriction: postings from any country may enter the queue.'
+                      : `Only postings in ${(draftSettings.allowed_countries ?? []).join(', ')} may enter the queue. A posting whose country cannot be determined is held for review rather than queued.`}
+                  </p>
+                </fieldset>
 
                 {!draftSettings.scoring_active && (
                   <p className="warning">Scoring is disabled in your profile.yaml; fit score will be ignored.</p>

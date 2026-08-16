@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,10 @@ func TestPreflightRefusalReason_IsSeparateFromTheSubmitRejection(t *testing.T) {
 func TestGetAssistedLaunchInfo_RefusesATSThatRejectsTheAssistedBrowser(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	// This test is about the ATS gate, not geography or remoteness: give it
+	// a policy that loads and that these fixture rows satisfy, so the
+	// fail-closed profile check (bugs.md #554) is not what answers.
+	withEligibilityProfile(t, &config.Profile{Roles: []string{"Platform Engineer"}})
 	if _, err := AddToFunnel("Veeva", "Platform Engineer", "https://jobs.lever.co/veeva/abc-123", "AWAITING_REVIEW"); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +115,10 @@ func TestGetAssistedLaunchInfo_RefusesATSThatRejectsTheAssistedBrowser(t *testin
 func TestGetAssistedLaunchInfo_StillLaunchesUnaffectedATS(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	// This test is about the ATS gate, not geography or remoteness: give it
+	// a policy that loads and that these fixture rows satisfy, so the
+	// fail-closed profile check (bugs.md #554) is not what answers.
+	withEligibilityProfile(t, &config.Profile{Roles: []string{"Platform Engineer"}})
 	if _, err := AddToFunnel("Grafana Labs", "Platform Engineer", "https://boards.greenhouse.io/grafanalabs/jobs/1", "AWAITING_REVIEW"); err != nil {
 		t.Fatal(err)
 	}

@@ -1818,3 +1818,40 @@ summary:hover {
   text-transform: uppercase;
   color: var(--brass);
 }
+
+/* Geography selector (bugs.md #554). The country list is the authoritative
+   representation; the preset dropdown above it just writes into it. */
+.geography-selector {
+  border: 1px solid var(--line, #3a3a3a);
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.geography-selector legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+
+.country-multiselect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  margin: 0.5rem 0;
+}
+
+.country-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line, #3a3a3a);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.country-chip.selected {
+  border-color: currentColor;
+  font-weight: 600;
+}

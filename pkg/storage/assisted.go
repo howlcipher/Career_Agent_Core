@@ -204,14 +204,21 @@ func GetAssistedLaunchInfo(conn *sql.DB, jobID string) (AssistedLaunchInfo, erro
 	// render and a click during which a policy change (or a directly-issued
 	// launch, e.g. from cmd/assist) could otherwise open a browser against a
 	// job that no longer qualifies.
-	if profile, perr := resolveEligibilityProfile(); perr == nil {
-		if ok, reason := config.IsEligibleJob(config.JobEligibilityInput{
-			Title:         info.Role,
-			Location:      location,
-			RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
-		}, profile); !ok {
-			return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch ineligible job: %s", reason)
-		}
+	// A profile that will not load is a refusal, not a pass. Before bugs.md
+	// #554 this read `if profile, perr := ...; perr == nil`, so deleting
+	// profile.yaml silently disabled the country, remote and role gates at
+	// this exact spot -- the last one standing between the operator and a
+	// browser opened on an out-of-scope posting.
+	profile, perr := resolveEligibilityProfile()
+	if perr != nil {
+		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch without an eligibility policy: %w", perr)
+	}
+	if verdict := config.ScreenJob(config.JobEligibilityInput{
+		Title:         info.Role,
+		Location:      location,
+		RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
+	}, profile); !verdict.Eligible {
+		return AssistedLaunchInfo{}, fmt.Errorf("refusing to launch ineligible job (%s): %s", verdict.Code, verdict.Reason)
 	}
 	if revalidationVersion != assistedRevalidationVersion ||
 		(revalidationState != "captcha_confirmed" && revalidationState != "application_ready") {
@@ -848,6 +855,12 @@ func MigrateLegacyAssisted(opts AssistedMigrationOptions) (AssistedMigrationRepo
 // interrupted pipeline job that the migration creates for historical work.
 // Callers pass only a normalized funnel status; raw submitter errors and page
 // text must never enter the plan.
+//
+// The canonical eligibility gate is re-applied here even though the automatic
+// pipeline checked it before scoring: a policy may change between discovery and
+// the moment the job is handed off to the assisted queue, and the queue must
+// never receive a row that does not satisfy the current role, remote and
+// geography rules (bugs.md #554).
 func EnsureAssistedPlanForURL(rawURL, status string) error {
 	if db == nil {
 		return errors.New("database not initialized")
@@ -856,8 +869,21 @@ func EnsureAssistedPlanForURL(rawURL, status string) error {
 		return fmt.Errorf("status %q cannot create an assisted plan", status)
 	}
 	var id int
-	if err := db.QueryRow(`SELECT id FROM job_funnel WHERE url = ? AND status = ?`, NormalizeURL(rawURL), status).Scan(&id); err != nil {
+	var title, location string
+	var isRemote sql.NullInt64
+	if err := db.QueryRow(`SELECT id, COALESCE(job_title, ''), COALESCE(job_location, ''), is_remote FROM job_funnel WHERE url = ? AND status = ?`, NormalizeURL(rawURL), status).Scan(&id, &title, &location, &isRemote); err != nil {
 		return fmt.Errorf("find interrupted job: %w", err)
+	}
+	profile, perr := resolveEligibilityProfile()
+	if perr != nil {
+		return fmt.Errorf("refusing to create assisted plan without an eligibility policy: %w", perr)
+	}
+	if verdict := config.ScreenJob(config.JobEligibilityInput{
+		Title:         title,
+		Location:      location,
+		RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
+	}, profile); !verdict.Eligible {
+		return fmt.Errorf("refusing to create assisted plan for ineligible job (%s): %s", verdict.Code, verdict.Reason)
 	}
 	action := actionForLegacy(status, "")
 	now := time.Now().UTC()
@@ -876,10 +902,16 @@ func GetAssistedQueue(conn *sql.DB) ([]AssistedJob, error) {
 	// treated as "nothing to reconcile against right now" rather than a hard
 	// error -- the query below still runs with whatever was already true of
 	// the queue.
-	if profile, err := resolveEligibilityProfile(); err == nil {
-		if _, err := ReconcileAssistedQueueEligibility(conn, profile); err != nil {
-			log.Printf("[Storage] Assisted queue eligibility reconciliation failed: %v", err)
-		}
+	profile, profileErr := resolveEligibilityProfile()
+	if profileErr != nil {
+		// Say so loudly rather than serving an unscreened queue in silence.
+		// GetAssistedLaunchInfo refuses every launch while this is true, so
+		// the cards below cannot be acted on -- but an operator looking at
+		// them deserves to know the policy is missing rather than to assume
+		// the queue in front of them has been screened (bugs.md #554).
+		log.Printf("[Storage] Assisted queue NOT screened: %v -- no job can be launched until the eligibility policy loads", profileErr)
+	} else if _, err := ReconcileAssistedQueueEligibility(conn, profile); err != nil {
+		log.Printf("[Storage] Assisted queue eligibility reconciliation failed: %v", err)
 	}
 	masterCoverLetter := resolveMasterCoverLetter()
 	// One grouped count for the whole queue rather than one query per card:

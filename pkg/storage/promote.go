@@ -60,14 +60,20 @@ func PromoteJobToAssisted(conn *sql.DB, jobID int64, minScore int) error {
 	// "prevent assisted-apply from bypassing the remote filter"). An
 	// attractive fit score is deliberately checked above this, not instead
 	// of it: neither can substitute for the other.
-	if profile, perr := resolveEligibilityProfile(); perr == nil {
-		if ok, _ := config.IsEligibleJob(config.JobEligibilityInput{
-			Title:         title,
-			Location:      location,
-			RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
-		}, profile); !ok {
-			return ErrJobIneligible
-		}
+	//
+	// A profile that will not load is a refusal here too (bugs.md #554): a
+	// manual promotion with no policy loaded was previously waved straight
+	// through into the actionable queue.
+	profile, perr := resolveEligibilityProfile()
+	if perr != nil {
+		return fmt.Errorf("refusing to promote without an eligibility policy: %w", perr)
+	}
+	if ok, _ := config.IsEligibleJob(config.JobEligibilityInput{
+		Title:         title,
+		Location:      location,
+		RemoteClaimed: isRemote.Valid && isRemote.Int64 != 0,
+	}, profile); !ok {
+		return ErrJobIneligible
 	}
 
 	// Posting freshness (e.g. older than 30 days is stale)

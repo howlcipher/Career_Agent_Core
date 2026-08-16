@@ -10,25 +10,59 @@ import (
 	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 )
 
-// resolveEligibilityProfile loads the profile GetAssistedQueue and
-// PromoteJobToAssisted re-check every active row against. It is a variable,
-// like resolveMasterCoverLetter above, so tests can supply a profile without
-// writing one to disk. A load failure is treated as "no profile to enforce"
-// rather than a hard error: a queue read must not fail outright just because
-// profile.yaml is momentarily unreadable, and this matches the fail-safe
-// GetAssistedQueue already had before this eligibility check existed.
+// resolveEligibilityProfile loads the profile GetAssistedQueue,
+// GetAssistedLaunchInfo and PromoteJobToAssisted re-check every active row
+// against. It is a variable, like resolveMasterCoverLetter above, so tests can
+// supply a profile without writing one to disk.
+//
+// It resolves the *effective* profile -- profile.yaml with
+// applications/operator_settings.yaml applied over it -- so the operator's
+// dashboard geography selector is authoritative on every one of those paths
+// and cannot disagree with what discovery enforces (bugs.md #554).
+//
+// A load failure used to be treated as "no profile to enforce", and every
+// caller quietly proceeded. That is how #554 stayed invisible: commit ebe0863
+// deleted profile.yaml on 2026-08-12 and the country allowlist, the
+// remote-only gate and the role gate all switched off at once, silently, with
+// a Jordan posting left one click from an Assisted Apply browser. A missing
+// policy is now a reason to refuse, never a reason to allow.
 var resolveEligibilityProfile = func() (*config.Profile, error) {
-	return config.LoadProfile("profile.yaml")
+	profile, err := config.LoadProfile(profileConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("eligibility policy unavailable: %w", err)
+	}
+	// Deliberately not config.GetEffectiveSettings: that helper substitutes an
+	// empty Profile when profile.yaml is missing, which is precisely the
+	// fail-open this fix exists to remove. Load it strictly, then layer the
+	// operator's settings over it by hand.
+	op, err := config.LoadOperatorSettings(operatorSettingsPath)
+	if err != nil {
+		return nil, fmt.Errorf("eligibility policy unavailable: %w", err)
+	}
+	if err := config.ApplyOperatorSettings(profile, op); err != nil {
+		return nil, fmt.Errorf("eligibility policy unavailable: %w", err)
+	}
+	return profile, nil
 }
+
+// profileConfigPath and operatorSettingsPath are where the operator's policy
+// lives. Relative for the same reason every other path in this process is:
+// every binary runs from the repo root.
+const (
+	profileConfigPath    = "profile.yaml"
+	operatorSettingsPath = "applications/operator_settings.yaml"
+)
 
 // AssistedQueueReconciliationReport is a privacy-safe summary of one
 // reconciliation pass: counts only, never a company name, title, or URL.
 type AssistedQueueReconciliationReport struct {
-	Examined         int
-	RemovedRemote    int // failed the fully-remote hard gate
-	RemovedRole      int // failed the title/role hard gate
-	RemovedDuplicate int // same posting (scheme-normalized URL) as another active row
-	Remaining        int
+	Examined            int
+	RemovedRemote       int // failed the fully-remote hard gate
+	RemovedRole         int // failed the title/role hard gate
+	RemovedGeography    int // named only countries outside the configured allowlist
+	HeldUnknownLocation int // otherwise eligible, but no country evidence to screen
+	RemovedDuplicate    int // same posting (scheme-normalized URL) as another active row
+	Remaining           int
 }
 
 // ReconcileAssistedQueueEligibility re-evaluates every active assisted-apply
@@ -121,33 +155,35 @@ func ReconcileAssistedQueueEligibility(conn *sql.DB, profile *config.Profile) (A
 
 	var survivors []activeRow
 	for _, r := range active {
-		ok, reason := config.IsEligibleJob(config.JobEligibilityInput{
+		verdict := config.ScreenJob(config.JobEligibilityInput{
 			Title:         r.title,
 			Location:      r.location,
 			RemoteClaimed: r.isRemote,
 		}, profile)
-		if ok {
+		if verdict.Eligible {
 			survivors = append(survivors, r)
 			continue
 		}
-		statusReason := "pruned_ineligible_role"
-		if strings.Contains(reason, "remote") {
-			report.RemovedRemote++
-			statusReason = "pruned_ineligible_remote"
-		} else {
-			report.RemovedRole++
+		// The reason code comes back structured rather than being recovered
+		// from the prose with strings.Contains, which silently filed every
+		// unrecognised reason as a role mismatch (bugs.md #554).
+		counter := &report.RemovedRole
+		switch verdict.Code {
+		case config.ReasonIneligibleRemote:
+			counter = &report.RemovedRemote
+		case config.ReasonOutsideAllowedCountries:
+			counter = &report.RemovedGeography
+		case config.ReasonLocationUnknown:
+			counter = &report.HeldUnknownLocation
 		}
-		if err := removeRow(r.jobID, statusReason); err != nil {
+		*counter++
+		if err := removeRow(r.jobID, verdict.Code); err != nil {
 			log.Printf("[Storage] Failed to prune ineligible assisted queue row: %v", err)
 			// The write failed, so the row is still actually active; undo
 			// the counter increment and keep it in survivors to be
 			// re-evaluated on the next pass rather than silently dropping it
 			// from both the queue and the accounting.
-			if statusReason == "pruned_ineligible_remote" {
-				report.RemovedRemote--
-			} else {
-				report.RemovedRole--
-			}
+			*counter--
 			survivors = append(survivors, r)
 			continue
 		}
@@ -178,6 +214,6 @@ func ReconcileAssistedQueueEligibility(conn *sql.DB, profile *config.Profile) (A
 		report.RemovedDuplicate++
 	}
 
-	report.Remaining = report.Examined - report.RemovedRemote - report.RemovedRole - report.RemovedDuplicate
+	report.Remaining = report.Examined - report.RemovedRemote - report.RemovedRole - report.RemovedGeography - report.HeldUnknownLocation - report.RemovedDuplicate
 	return report, nil
 }

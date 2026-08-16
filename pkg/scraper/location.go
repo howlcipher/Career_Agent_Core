@@ -1,219 +1,29 @@
 package scraper
 
-import "strings"
+import "github.com/howlcipher/Career_Agent_Core/pkg/config"
 
-// Career Agent had no geographic filter of any kind until bug #516: every one
-// of the 12,902 rows in job_funnel carried an empty job_location, profile.yaml
-// offered only remote_only (which says nothing about *where* remote work is
-// permitted from), and an India-scoped Lever posting consequently reached a
-// live Assisted Apply attempt with a fit score of 100. The board feeds we
-// already poll publish the answer — Lever returns an ISO-3166 country code per
-// posting — so the gate below costs one map lookup per posting and no network.
+// The country resolver itself now lives in pkg/config, beside the
+// Profile.AllowedCountries it reads and the config.IsEligibleJob gate that
+// must consult it (bugs.md #554). It had to move down rather than be imported
+// up: pkg/scraper already imports pkg/config, so a country check inside
+// IsEligibleJob would have closed an import cycle.
+//
+// These two wrappers exist so the discovery-time call sites that predate that
+// move -- pollBoard in atsfeeds.go and the cmd/backfill-location screening
+// report -- keep reading the same names they always did. Discovery keeps the
+// fail-open contract #516 shipped with; the fail-closed decision is made in
+// pkg/config by GeographyEligible, on the eligibility path only.
 
-// countryNamesToCodes maps location wording that appears in real board feeds to
-// its ISO-3166 alpha-2 code. It is deliberately partial: it covers the markets
-// that actually show up in this funnel, and anything unrecognised is treated as
-// "no evidence" rather than guessed at.
-var countryNamesToCodes = map[string]string{
-	"united states":            "US",
-	"united states of america": "US",
-	"usa":                      "US",
-	"u s a":                    "US",
-	"u s":                      "US",
-	"america":                  "US",
-	"canada":                   "CA",
-	"mexico":                   "MX",
-	"india":                    "IN",
-	"united kingdom":           "GB",
-	"uk":                       "GB",
-	"england":                  "GB",
-	"scotland":                 "GB",
-	"wales":                    "GB",
-	"northern ireland":         "GB",
-	"ireland":                  "IE",
-	"germany":                  "DE",
-	"france":                   "FR",
-	"spain":                    "ES",
-	"portugal":                 "PT",
-	"poland":                   "PL",
-	"netherlands":              "NL",
-	"belgium":                  "BE",
-	"switzerland":              "CH",
-	"austria":                  "AT",
-	"italy":                    "IT",
-	"sweden":                   "SE",
-	"norway":                   "NO",
-	"denmark":                  "DK",
-	"finland":                  "FI",
-	"romania":                  "RO",
-	"ukraine":                  "UA",
-	"czechia":                  "CZ",
-	"czech republic":           "CZ",
-	"turkey":                   "TR",
-	"israel":                   "IL",
-	"united arab emirates":     "AE",
-	"egypt":                    "EG",
-	"nigeria":                  "NG",
-	"kenya":                    "KE",
-	"south africa":             "ZA",
-	"brazil":                   "BR",
-	"argentina":                "AR",
-	"colombia":                 "CO",
-	"chile":                    "CL",
-	"peru":                     "PE",
-	"australia":                "AU",
-	"new zealand":              "NZ",
-	"singapore":                "SG",
-	"japan":                    "JP",
-	"china":                    "CN",
-	"hong kong":                "HK",
-	"taiwan":                   "TW",
-	"south korea":              "KR",
-	"korea":                    "KR",
-	"philippines":              "PH",
-	"pakistan":                 "PK",
-	"bangladesh":               "BD",
-	"indonesia":                "ID",
-	"vietnam":                  "VN",
-	"thailand":                 "TH",
-	"malaysia":                 "MY",
-	"estonia":                  "EE",
-	"latvia":                   "LV",
-	"lithuania":                "LT",
-	"hungary":                  "HU",
-	"bulgaria":                 "BG",
-	"croatia":                  "HR",
-	"slovenia":                 "SI",
-	"slovakia":                 "SK",
-	"serbia":                   "RS",
-	"greece":                   "GR",
-	"cyprus":                   "CY",
-	"malta":                    "MT",
-	"iceland":                  "IS",
-	"luxembourg":               "LU",
-	"montenegro":               "ME",
-	"north macedonia":          "MK",
-	"bosnia and herzegovina":   "BA",
-	"albania":                  "AL",
-	"moldova":                  "MD",
-	// Note: bare "georgia" is omitted deliberately (bug #524) because it collides
-	// with the US state of Georgia. The normalizer matches on whole words, so
-	// "Atlanta, Georgia" would otherwise be read as the country GE.
-	"armenia":            "AM",
-	"morocco":            "MA",
-	"tunisia":            "TN",
-	"ghana":              "GH",
-	"uganda":             "UG",
-	"tanzania":           "TZ",
-	"ethiopia":           "ET",
-	"saudi arabia":       "SA",
-	"qatar":              "QA",
-	"kuwait":             "KW",
-	"jordan":             "JO",
-	"lebanon":            "LB",
-	"sri lanka":          "LK",
-	"nepal":              "NP",
-	"cambodia":           "KH",
-	"uruguay":            "UY",
-	"ecuador":            "EC",
-	"bolivia":            "BO",
-	"paraguay":           "PY",
-	"venezuela":          "VE",
-	"costa rica":         "CR",
-	"panama":             "PA",
-	"guatemala":          "GT",
-	"dominican republic": "DO",
-	"puerto rico":        "PR",
-	"jamaica":            "JM",
-}
-
-// normalizeLocationText lowercases value and reduces every run of non
-// alphanumeric characters to a single space, so phrase matching can be done on
-// whole words. Word boundaries are the point: a naive strings.Contains would
-// read "Indiana" as "India" and silently discard every posting in that state.
-func normalizeLocationText(value string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(value) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte(' ')
-		}
-	}
-	return strings.Join(strings.Fields(b.String()), " ")
-}
-
-// CountryCodesFor resolves the country evidence for one posting. Explicit codes
-// from the feed win outright; otherwise the free-text location is matched
-// against countryNamesToCodes on whole-word boundaries. An empty result means
-// "no evidence", which callers must not treat as a rejection.
+// CountryCodesFor resolves the country evidence for one posting. See
+// config.CountryCodesFor for the matching rules.
 func CountryCodesFor(location string, explicitCodes []string) []string {
-	var out []string
-	seen := map[string]struct{}{}
-	add := func(code string) {
-		code = strings.ToUpper(strings.TrimSpace(code))
-		if len(code) != 2 {
-			return
-		}
-		if _, dup := seen[code]; dup {
-			return
-		}
-		seen[code] = struct{}{}
-		out = append(out, code)
-	}
-
-	for _, code := range explicitCodes {
-		add(code)
-	}
-	if len(out) > 0 {
-		return out
-	}
-
-	padded := " " + normalizeLocationText(location) + " "
-	for name, code := range countryNamesToCodes {
-		if strings.Contains(padded, " "+name+" ") {
-			add(code)
-		}
-	}
-	return out
+	return config.CountryCodesFor(location, explicitCodes)
 }
 
-// LocationAllowed reports whether a posting may proceed, given an ISO-3166
-// alpha-2 allowlist. It rejects only on positive evidence that every country
-// the posting names is outside the allowlist.
-//
-// Unknown location is deliberately allowed. bugs.md records the governing
-// lesson from the CAPTCHA pre-skip decision — "skipping a job that would have
-// submitted is strictly worse than wasting inference, because the goal is
-// applications, not throughput" — and a fail-closed gate would additionally
-// discard all 12,902 existing rows, none of which carry a location.
-//
-// The second return value is a short reason suitable for logging; it never
-// contains the posting URL or any personal data.
+// LocationAllowed reports whether a posting may proceed at discovery time,
+// given an ISO-3166 alpha-2 allowlist. Unknown location is allowed here, which
+// is the deliberate #516 intake policy; see config.GeographyEligible for the
+// stricter rule the actionable queue applies.
 func LocationAllowed(location string, explicitCodes []string, allowed []string) (bool, string) {
-	if len(allowed) == 0 {
-		return true, "no country allowlist configured"
-	}
-
-	permitted := map[string]struct{}{}
-	for _, code := range allowed {
-		code = strings.ToUpper(strings.TrimSpace(code))
-		if code != "" {
-			permitted[code] = struct{}{}
-		}
-	}
-	if len(permitted) == 0 {
-		return true, "no country allowlist configured"
-	}
-
-	codes := CountryCodesFor(location, explicitCodes)
-	if len(codes) == 0 {
-		return true, "no location evidence"
-	}
-	for _, code := range codes {
-		if _, ok := permitted[code]; ok {
-			return true, "allowed country " + code
-		}
-	}
-	return false, "country " + strings.Join(codes, "/") + " is outside the configured allowlist"
+	return config.LocationAllowed(location, explicitCodes, allowed)
 }

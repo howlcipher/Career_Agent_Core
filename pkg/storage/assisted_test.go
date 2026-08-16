@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 	"os"
 	"strings"
 	"testing"
@@ -92,6 +93,9 @@ func TestGetAssistedQueue_UsesHumanInstructionAndHidesURLs(t *testing.T) {
 func TestAssistedRevalidationGuidesBrowserLaunchAndPersistsSafeOutcome(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	// This test asserts the revalidation gate, so the fail-closed eligibility
+	// policy (bugs.md #554) must not be what refuses the launch.
+	withEligibilityProfile(t, &config.Profile{Roles: []string{"Engineer"}})
 	if _, err := AddToFunnel("Captcha Co", "Engineer", "https://captcha.example/jobs/1", "BLOCKED_CAPTCHA"); err != nil {
 		t.Fatal(err)
 	}
@@ -422,9 +426,18 @@ func TestAssistedLease_HeartbeatRenewsAndStaleOwnerCanBeReclaimed(t *testing.T) 
 	}
 }
 
+// permissiveAssistedProfile is used by tests whose subject is the assisted
+// plan mechanics, not the eligibility gate. It accepts the generic "Engineer"
+// title used by those fixtures and disables geography/remote restrictions.
+func permissiveAssistedProfile(t *testing.T) {
+	t.Helper()
+	withEligibilityProfile(t, &config.Profile{RemoteOnly: false, Roles: []string{"Engineer"}})
+}
+
 func TestEnsureAssistedPlanForURL_CreatesNewInterruptionPlanOnce(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 	url := "https://new.example/jobs/1"
 	if _, err := AddToFunnel("New Co", "Engineer", url, "DISCOVERED"); err != nil {
 		t.Fatal(err)
@@ -459,6 +472,7 @@ func TestGetAssistedDocument_ResumeIsMasterResumeNotSavedArtifact(t *testing.T) 
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const postingURL = "https://captcha.example/jobs/1"
 	if _, err := AddToFunnel("Captcha Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
@@ -503,6 +517,7 @@ func TestGetAssistedDocument_CoverLetterStaysPerJobArtifact(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const postingURL = "https://captcha.example/jobs/2"
 	if _, err := AddToFunnel("Captcha Co", "Engineer", postingURL, "BLOCKED_CAPTCHA"); err != nil {
@@ -545,6 +560,7 @@ func TestGetAssistedDocument_MasterCoverLetterServedWhenEnabled(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const masterPath = "Omni_CoverLetter.pdf"
 	const masterContent = "%PDF-1.7 master cover letter content"
@@ -610,6 +626,7 @@ func TestGetAssistedDocument_InvalidMasterCoverLetterReturnsError(t *testing.T) 
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const nonExistentPath = "missing_master_cover_letter.pdf"
 
@@ -662,6 +679,7 @@ func TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter(t *te
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const masterPath = "Omni_CoverLetter.pdf"
 	const postingURL = "https://captcha.example/jobs/queue-master-cl"
@@ -1063,6 +1081,7 @@ func TestGetAssistedQueue_ReadinessFieldsFollowTheDocumentsOnDisk(t *testing.T) 
 	t.Chdir(t.TempDir())
 	setupTestDB(t)
 	defer teardownTestDB()
+	permissiveAssistedProfile(t)
 
 	const masterCoverLetter = "Omni_CoverLetter.pdf"
 	const postingURL = "https://captcha.example/jobs/queue-readiness"

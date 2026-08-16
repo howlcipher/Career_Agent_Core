@@ -267,6 +267,10 @@ func statusReasonWithDetail(status, detail string) string {
 			return "Excluded ATS source — not eligible for automated submission"
 		case storage.SkippedReasonDuplicateCooldown:
 			return "Equivalent recent application is within your configured cooldown"
+		case config.ReasonOutsideAllowedCountries:
+			return "Advertised outside your configured job geography"
+		case config.ReasonLocationUnknown:
+			return "Held: the advertised location names no country, so it cannot be screened against your job geography"
 		}
 	}
 	return statusReason(status)
