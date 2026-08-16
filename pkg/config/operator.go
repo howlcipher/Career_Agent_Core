@@ -6,6 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type ApplicationMode string
@@ -16,10 +17,49 @@ const (
 	ApplicationModeAutomatic ApplicationMode = "automatic"
 )
 
+// OperatorSettings carries explicit JSON tags as well as YAML ones. Without
+// them the dashboard's own POST /api/operator-settings was rejected outright:
+// the UI sends snake_case (cmd/dashboard/ui/src/types.ts) while Go's decoder
+// matched only "ApplicationMode"/"MinimumFitScore", and the handler runs with
+// DisallowUnknownFields, so every save failed with `unknown field
+// "application_mode"`. Found while routing the geography selector through this
+// endpoint (bugs.md #554); the selector cannot work until saving does.
 type OperatorSettings struct {
-	ApplicationMode ApplicationMode `yaml:"application_mode"`
-	MinimumFitScore int             `yaml:"minimum_fit_score"`
+	ApplicationMode ApplicationMode `yaml:"application_mode" json:"application_mode"`
+	MinimumFitScore int             `yaml:"minimum_fit_score" json:"minimum_fit_score"`
+	// AllowedCountries is the operator's geography selector, as ISO-3166
+	// alpha-2 codes. It lives here rather than only in profile.yaml because
+	// the dashboard already owns this file, and a second writer to
+	// profile.yaml would be a second source of truth for the same policy.
+	//
+	// Unset and empty mean different things and must stay distinguishable:
+	// unset means the selector has never been touched, so profile.yaml's own
+	// allowed_countries stands; an explicit empty list is the "Worldwide"
+	// choice, which switches the gate off. That is why this is a pointer --
+	// with a plain slice, omitempty would drop the explicit Worldwide choice
+	// on save and it would silently read back as "never configured"
+	// (bugs.md #554).
+	AllowedCountries *[]string `yaml:"allowed_countries,omitempty" json:"allowed_countries,omitempty"`
 }
+
+// Geography presets. Each preset enumerates its countries explicitly, in
+// code, because "North America" is not a term with one obvious membership --
+// leaving it to be inferred is how an operator ends up with a scope they did
+// not choose. The UI shows exactly these lists.
+var (
+	// GeographyPresetUS is the United States only.
+	GeographyPresetUS = []string{"US"}
+	// GeographyPresetUSCA is the United States and Canada. This is the
+	// operator's configured default.
+	GeographyPresetUSCA = []string{"US", "CA"}
+	// GeographyPresetNorthAmerica is the United States, Canada and Mexico.
+	// Spelled out on purpose: it is deliberately NOT a synonym for US + CA.
+	GeographyPresetNorthAmerica = []string{"US", "CA", "MX"}
+	// GeographyPresetWorldwide is the empty allowlist, which disables the
+	// gate. Represented as a non-nil empty slice so it is distinguishable
+	// from "never configured".
+	GeographyPresetWorldwide = []string{}
+)
 
 // DefaultOperatorSettings is the sole fail-closed fallback used whenever an
 // operator_settings.yaml cannot be resolved (missing file, unreadable path).
@@ -43,6 +83,20 @@ func (s *OperatorSettings) Validate() error {
 	}
 	if s.MinimumFitScore < 0 || s.MinimumFitScore > 100 {
 		return fmt.Errorf("minimum_fit_score must be between 0 and 100")
+	}
+	if s.AllowedCountries != nil {
+		for _, code := range *s.AllowedCountries {
+			if len(code) != 2 || strings.ToUpper(code) != code {
+				return fmt.Errorf("allowed_countries entries must be uppercase ISO-3166 alpha-2 codes, got %q", code)
+			}
+			// Reject a code the resolver cannot detect. Accepting one would
+			// store an allowlist entry that silently never matches any
+			// posting, which reads as a configured scope but enforces
+			// nothing.
+			if !IsKnownCountryCode(code) {
+				return fmt.Errorf("allowed_countries entry %q is not a country this resolver can detect", code)
+			}
+		}
 	}
 	return nil
 }
@@ -142,6 +196,16 @@ func ApplyOperatorSettings(p *Profile, op *OperatorSettings) error {
 	// Minimum fit score is now authoritative, though the threshold was hardcoded before.
 	// We will inject it dynamically in the pipeline instead of hardcoding 50.
 	p.MinimumFitScore = op.MinimumFitScore
+
+	// The operator's geography selector wins over profile.yaml when it has
+	// been set, so the dashboard is authoritative for this policy everywhere
+	// it is enforced -- discovery, queue reconciliation and launch alike --
+	// and no path can be screening against a different allowlist than the one
+	// the operator is looking at (bugs.md #554). Untouched, profile.yaml
+	// stands.
+	if op.AllowedCountries != nil {
+		p.AllowedCountries = append([]string(nil), *op.AllowedCountries...)
+	}
 
 	return nil
 }

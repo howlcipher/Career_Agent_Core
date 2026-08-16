@@ -67,7 +67,34 @@ func TestServeAssistedLaunch_RejectsUnavailablePlanBeforeStartingProcess(t *test
 // not spawn an assisted browser, because that ATS refuses the resulting
 // submission. The operator needs to be told what actually works, not that the
 // application has gone missing.
+// withLoadableEligibilityProfile puts a profile.yaml where pkg/storage's
+// fail-closed eligibility check (bugs.md #554) can find it. Go runs a test
+// binary with its cwd set to the package directory, not the repo root, so the
+// relative "profile.yaml" every binary resolves in production is absent here
+// and every launch would be refused for a missing policy rather than for the
+// thing the test is actually about.
+//
+// The profile is deliberately permissive: these tests assert the ATS and
+// revalidation gates, so role/remote/geography must not be what answers.
+func withLoadableEligibilityProfile(t *testing.T) {
+	t.Helper()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "profile.yaml"),
+		[]byte("remote_only: false\nroles:\n  - \"Platform Engineer\"\n"), 0600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+}
+
 func TestServeAssistedLaunch_RefusesATSThatRejectsTheAssistedBrowser(t *testing.T) {
+	withLoadableEligibilityProfile(t)
 	setupTestDB(t)
 	previous := launchAssistedApplication
 	t.Cleanup(func() { launchAssistedApplication = previous })

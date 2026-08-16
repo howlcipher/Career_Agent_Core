@@ -83,11 +83,25 @@ export interface Metrics {
   human_effort?: HumanEffortMetrics;
 }
 
+export interface GeographyPreset {
+  id: string;
+  label: string;
+  countries: string[];
+}
+
 export interface OperatorSettings {
   application_mode: 'find_only' | 'assisted' | 'automatic';
   minimum_fit_score: number;
   scoring_active?: boolean;
   daemon_active?: boolean;
+  // The geography allowlist, as ISO-3166 alpha-2 codes. An empty array is the
+  // explicit "Worldwide" choice and disables the gate; undefined means the
+  // selector has never been set and profile.yaml's own value stands.
+  allowed_countries?: string[];
+  // Read-only, supplied by the server: every code the resolver can detect,
+  // and the preset scopes with their membership spelled out.
+  available_countries?: string[];
+  geography_presets?: GeographyPreset[];
 }
 
 export interface QualifiedJob {

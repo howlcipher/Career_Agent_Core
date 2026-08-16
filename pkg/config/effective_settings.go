@@ -20,6 +20,36 @@ type EffectiveSettings struct {
 	// single-instance lock, independent of whether its acknowledged settings
 	// match the current effective settings.
 	DaemonRunning bool `json:"daemon_running"`
+	// AllowedCountries is the geography allowlist actually being enforced,
+	// after the operator's selector has been layered over profile.yaml. It is
+	// the resolved value rather than the raw setting on purpose: the point of
+	// showing it is to let the operator confirm what the queue is really
+	// screened against (bugs.md #554). An empty list means no restriction.
+	AllowedCountries []string `json:"allowed_countries"`
+	// AvailableCountries is every country code the resolver can actually
+	// detect, so the selector can only ever offer choices the gate can act on.
+	AvailableCountries []string `json:"available_countries"`
+	// GeographyPresets are the named scopes, each with its membership spelled
+	// out, so "North America" is never left to the reader to interpret.
+	GeographyPresets []GeographyPreset `json:"geography_presets"`
+}
+
+// GeographyPreset is one named scope offered by the dashboard selector.
+type GeographyPreset struct {
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	Countries []string `json:"countries"`
+}
+
+// GeographyPresets is the authoritative preset list shared by the API and UI.
+// Membership lives here, in code, not in a label a human has to interpret.
+func GeographyPresets() []GeographyPreset {
+	return []GeographyPreset{
+		{ID: "us", Label: "United States only", Countries: GeographyPresetUS},
+		{ID: "us_ca", Label: "United States + Canada", Countries: GeographyPresetUSCA},
+		{ID: "north_america", Label: "North America (US, Canada, Mexico)", Countries: GeographyPresetNorthAmerica},
+		{ID: "worldwide", Label: "Worldwide (no restriction)", Countries: GeographyPresetWorldwide},
+	}
 }
 
 func GetEffectiveSettings(profilePath string, operatorPath string) (*EffectiveSettings, error) {
@@ -58,7 +88,16 @@ func GetEffectiveSettings(profilePath string, operatorPath string) (*EffectiveSe
 		MinimumFitScore:            op.MinimumFitScore,
 		ScoringActive:              !p.SkipScoring,
 		AutomaticSubmitClickActive: p.AutoSubmitClick,
+		// Read back off the profile, after ApplyOperatorSettings has layered
+		// the selector over it, so this reports what is enforced rather than
+		// what was requested.
+		AllowedCountries: p.AllowedCountries,
 	}
+	if effective.AllowedCountries == nil {
+		effective.AllowedCountries = []string{}
+	}
+	effective.AvailableCountries = KnownCountryCodes()
+	effective.GeographyPresets = GeographyPresets()
 
 	acknowledged := false
 	active, err := LoadActiveSettings(ActiveSettingsPath)
