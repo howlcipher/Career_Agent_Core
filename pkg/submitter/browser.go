@@ -2242,11 +2242,20 @@ func fillPreMappedATSSelectors(target fillTarget, pii *config.PII, ats string) {
 	}
 
 	for _, m := range mappings {
-		if m.value != "" {
-			loc := target.Loc(m.selector)
-			if count, _ := loc.Count(); count > 0 {
-				_ = loc.First().Fill(m.value)
-			}
+		if m.value == "" {
+			continue
+		}
+		loc := target.Loc(m.selector)
+		count, err := loc.Count()
+		if err != nil || count == 0 {
+			continue
+		}
+		if err := loc.First().Fill(m.value); err != nil {
+			// A matched selector that refuses the value is not a silent miss:
+			// the field may be disabled, hidden, or fail validation. Log the
+			// selector only (never the value) so the report stays honest and the
+			// operator can see that a known value did not commit.
+			log.Printf("[Assisted] Pre-mapped selector %q matched but the control did not accept the value: reason=%q", m.selector, security.BrowserFailureReason(err))
 		}
 	}
 }

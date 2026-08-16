@@ -5305,3 +5305,47 @@ Four error shapes were captured — retry timeout, strict-mode violation, pointe
 **Files changed.** `pkg/security/logsafe.go` (new), `pkg/security/logsafe_test.go` (new), `cmd/dashboard/assist_log.go` (new), `cmd/dashboard/assist_log_test.go` (new), `pkg/submitter/assisted_log_privacy_test.go` (new), `cmd/dashboard/main.go`, `cmd/assist/main.go`, `pkg/submitter/assisted_fill.go`, `pkg/submitter/browser.go`, `docs/adrs/ADR-006-Log-Confidentiality-Boundary.md` (new).
 
 ---
+
+## 555. Known profile values do not reliably prefill employer forms in Assisted Fill
+
+**Found 2026-08-16** when the operator reported retyping first name, last name, email, phone,
+location, country, LinkedIn and GitHub/portfolio on employer forms even though Career Agent's profile
+editor showed those same values saved.
+
+### What was wrong
+
+- `cmd/assist/main.go` loaded `pii.yaml` from the literal relative path `"pii.yaml"`, and `storage.DefaultDatabasePath` is `"./applications.db"`. Both resolve against the child process's current working directory.
+- `cmd/dashboard/main.go` only set `cmd.Dir` for the `go run ./cmd/assist` fallback. For the built binary cases (`$CAREER_ASSIST_BIN`, binary beside the dashboard, or `career_assist_bin` in the repository root) it left `cmd.Dir` unset, so the child inherited whatever directory the dashboard happened to be launched from. Any launch from a subdirectory, a symlink, or a service-manager working directory silently pointed the assisted browser at the wrong `pii.yaml` — often none at all.
+- The failure mode was non-fatal and looked like success: `continueAssistedApplication` logs `"Continuation inputs are unavailable. The verified application remains open for manual completion and review."` and returns `true`. The operator saw an empty form and typed the data themselves.
+- `pkg/submitter/browser.go` `fillPreMappedATSSelectors` discarded Playwright `Fill` errors with `_`, so a matched LinkedIn/GitHub/portfolio selector that could not accept the value gave the operator no feedback.
+
+### The fix
+
+- `cmd/dashboard/main.go` now computes the repository root once with `findGoModuleRoot()` and sets `cmd.Dir = root` for every command returned by both `assistedApplicationCommand` and `agentCommand`. The lookup ordering is unchanged, but the early-error path now reports failure to find the module root before attempting to launch a child with an ambiguous cwd.
+- `cmd/assist/main.go` adds defensive workspace resolution: `findWorkspaceRoot()` walks upward from the current directory looking for `go.mod` and falls back to the cwd. The PII profile and database paths default to `<workspace>/pii.yaml` and `<workspace>/applications.db`, so a binary launched from a subdirectory still reads the same files as the dashboard. Explicit `-pii` and `-db` flags override this for tests or unusual deployments.
+- `pkg/submitter/browser.go` `fillPreMappedATSSelectors` now distinguishes "selector did not match" (expected, many forms omit some fields) from "selector matched but the control refused the value". The latter is logged with the selector and a sanitized failure reason; the value is never logged.
+
+### Synthetic verification
+
+The existing `pkg/submitter` mock-form tests already assert that Greenhouse and Lever handlers prefill name, email, phone, location and resume without a cached mapping. New tests added:
+- `cmd/dashboard/main_test.go`: asserts `cmd.Dir` is set when a built binary is resolved.
+- `cmd/assist/main_test.go`: asserts `findWorkspaceRoot` walks up to `go.mod`, and that `continueAssistedApplication` passes the resolved PII path to the loader.
+
+### Real-form verification
+
+A live Greenhouse posting (job 303986, Affirm) was revalidated through the dashboard API, opened with the fixed `career_assist_bin`, and continued through `/api/assisted/continue`. The assisted browser stopped before Submit by design. After the fill completed:
+- `assisted_fill_summary` recorded `fill_attempted_at` and `filled_count = 19`, `reused_answers = 14`.
+- `job_funnel.status` remained `AWAITING_REVIEW`; no submission occurred.
+- The assisted log contained no PII values (confirmed by searching for first name, last name, email, phone, city and other profile tokens; zero matches).
+- The filled labels included the expected profile-derived fields (First Name, Last Name, Email, Phone, LinkedIn Profile, Country, Current Company, etc.). Some sensitive EEO questions were also filled; they were sourced from approved reusable answers in the vault, which is the existing authorized-reuse policy.
+
+### Files changed
+
+- `cmd/dashboard/main.go`
+- `cmd/assist/main.go`
+- `cmd/assist/main_test.go`
+- `cmd/dashboard/main_test.go`
+- `pkg/submitter/browser.go`
+- `documentation/backlog/bugs.md`
+- `documentation/backlog_history/bugs_done_details.md`
+

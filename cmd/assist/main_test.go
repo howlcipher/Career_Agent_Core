@@ -90,6 +90,74 @@ func TestContinueAssistedApplicationKeepsBrowserOpenForManualReview(t *testing.T
 	}
 }
 
+// TestContinueAssistedApplicationUsesResolvedPIIPath verifies that the PII
+// file path computed from the workspace root is the one passed to the loader,
+// so a launch from a subdirectory still reads the repository's pii.yaml
+// (bugs.md #555).
+func TestContinueAssistedApplicationUsesResolvedPIIPath(t *testing.T) {
+	oldLoadDocument := loadAssistedDocument
+	oldLoadPII := loadAssistedPII
+	oldFillPage := fillAssistedPage
+	oldRecordManualReview := recordAssistedManualReview
+	t.Cleanup(func() {
+		loadAssistedDocument = oldLoadDocument
+		loadAssistedPII = oldLoadPII
+		fillAssistedPage = oldFillPage
+		recordAssistedManualReview = oldRecordManualReview
+	})
+
+	loadAssistedDocument = func(_ *sql.DB, _, _ string) (storage.AssistedDocument, error) {
+		return storage.AssistedDocument{Path: "fixture"}, nil
+	}
+	// A refill error keeps the test on the manual-review path, avoiding the
+	// success-path storage calls while still exercising the PII load.
+	fillAssistedPage = func(submitter.AssistedFillPlan) (submitter.FillReport, error) {
+		return submitter.FillReport{}, errors.New("unclassified")
+	}
+	recordAssistedManualReview = func(*sql.DB, string, string, time.Time) error { return nil }
+
+	wantPath := filepath.Join(t.TempDir(), "pii.yaml")
+	assistedPIIPath = wantPath
+	var gotPath string
+	loadAssistedPII = func(path string) (*config.PII, error) {
+		gotPath = path
+		return &config.PII{}, nil
+	}
+
+	continueAssistedApplication(nil, storage.AssistedLaunchInfo{JobID: "1"}, "owner")
+	if gotPath != wantPath {
+		t.Fatalf("loadAssistedPII called with %q, want %q", gotPath, wantPath)
+	}
+}
+
+// TestFindWorkspaceRootWalksUpToGoMod verifies that cmd/assist resolves the
+// repository root even when it is launched from a subdirectory, so relative
+// paths like pii.yaml and applications.db point at the same files the
+// dashboard sees (bugs.md #555).
+func TestFindWorkspaceRootWalksUpToGoMod(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "cmd", "assist")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	got := findWorkspaceRoot()
+	if got != root {
+		t.Fatalf("findWorkspaceRoot from %q = %q, want %q", sub, got, root)
+	}
+}
+
 func TestAssistedBrowserProfileDirRejectsEmptyCacheDirectory(t *testing.T) {
 	if _, err := assistedBrowserProfileDir(""); err == nil {
 		t.Fatal("expected empty cache directory to be rejected")

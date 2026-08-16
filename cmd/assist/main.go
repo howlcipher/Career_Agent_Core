@@ -42,19 +42,61 @@ var (
 	recordAssistedRefill       = storage.RecordAssistedRefill
 	recordAssistedManualReview = storage.RecordAssistedManualReview
 	markFillAttempted          = storage.MarkFillAttempted
+	// getWorkspaceRoot is replaceable in tests. It returns the directory that
+	// should contain pii.yaml and applications.db. The default walks upward
+	// from the current working directory looking for go.mod, falling back to
+	// the current directory, so a relative-path launch still resolves the same
+	// files the dashboard sees (bugs.md #555).
+	getWorkspaceRoot = findWorkspaceRoot
 )
+
+// findWorkspaceRoot locates the repository root by searching upward for go.mod.
+// If none is found, it returns the current working directory so the caller can
+// still try a relative path.
+func findWorkspaceRoot() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	wd, err = filepath.Abs(wd)
+	if err != nil {
+		return "."
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
+			return wd
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return wd
+		}
+		wd = parent
+	}
+}
+
+var assistedPIIPath string
 
 func main() {
 	jobID := flag.String("job", "", "stable assisted job identifier")
-	databasePath := flag.String("db", storage.DefaultDatabasePath, "SQLite database path")
+	databasePath := flag.String("db", "", "SQLite database path (defaults to <workspace>/applications.db)")
+	piiPath := flag.String("pii", "", "PII profile path (defaults to <workspace>/pii.yaml)")
 	flag.Parse()
 	if *jobID == "" {
 		log.Fatal("-job is required")
 	}
-	if err := security.PreparePrivateWorkspace(".", os.Stderr); err != nil {
+	workspace := getWorkspaceRoot()
+	db := *databasePath
+	if db == "" {
+		db = filepath.Join(workspace, "applications.db")
+	}
+	assistedPIIPath = *piiPath
+	if assistedPIIPath == "" {
+		assistedPIIPath = filepath.Join(workspace, "pii.yaml")
+	}
+	if err := security.PreparePrivateWorkspace(workspace, os.Stderr); err != nil {
 		log.Fatalf("secure workspace: %v", err)
 	}
-	if err := storage.InitDBWithPath(*databasePath); err != nil {
+	if err := storage.InitDBWithPath(db); err != nil {
 		log.Fatalf("open database: %v", err)
 	}
 	defer storage.CloseDB()
@@ -653,7 +695,7 @@ func installAssistedContextGuard(browserContext playwright.BrowserContext, guard
 func continueAssistedApplication(page playwright.Page, info storage.AssistedLaunchInfo, owner string) bool {
 	resume, resumeErr := loadAssistedDocument(storage.GetDB(), info.JobID, "resume")
 	cover, coverErr := loadAssistedDocument(storage.GetDB(), info.JobID, "cover_letter")
-	pii, piiErr := loadAssistedPII("pii.yaml")
+	pii, piiErr := loadAssistedPII(assistedPIIPath)
 	if resumeErr != nil || coverErr != nil || piiErr != nil {
 		if err := recordAssistedManualReview(storage.GetDB(), info.JobID, owner, time.Now()); err != nil {
 			log.Printf("Continuation inputs were unavailable and manual review could not be preserved: %v", err)

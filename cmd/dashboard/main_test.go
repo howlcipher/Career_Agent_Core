@@ -199,6 +199,9 @@ func TestAssistedApplicationCommandPrefersBuiltBinaryInCheckoutRoot(t *testing.T
 	if cmd.Args[1] != "-job" || cmd.Args[2] != "41" {
 		t.Fatalf("assisted command args = %#v, want binary -job 41", cmd.Args)
 	}
+	if cmd.Dir != dir {
+		t.Errorf("assisted command directory = %q, want %q", cmd.Dir, dir)
+	}
 }
 
 func TestAssistedApplicationCommandFallsBackToGoRunWhenNoBinaryExists(t *testing.T) {
