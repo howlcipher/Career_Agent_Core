@@ -44,6 +44,8 @@ Claude Code had an in-flight branch `fix/554-geographic-eligibility` based on `m
 - Frontend lint, test and build pass.
 - `internal/backlog` validates the new bugs.md row.
 
-## Remaining before merge
+## Merge
 
-- Open PR, self-review, merge, then return to `main` for Task 2 (known values not prefilling).
+- PR #29 opened and merged at `cd549d1b9d6cc6df2dcd531ca7d5092c6c517a30`.
+- `main` fast-forwarded to the merge commit.
+- bugs.md #554 moved to Done; full account archived in `bugs_done_details.md`.
