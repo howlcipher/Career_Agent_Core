@@ -1343,35 +1343,51 @@ var launchAssistedApplication = func(jobID string) error {
 //  2. A binary named career_assist_bin or assist beside the dashboard executable.
 //  3. A built career_assist_bin in the repository root.
 //  4. `go run ./cmd/assist` from the repository root (development fallback).
+//
+// Every returned command has its working directory fixed to the repository root
+// so the child process resolves relative paths like pii.yaml and
+// applications.db against the same cwd the dashboard was started from, not
+// against whatever directory the binary happens to live in (bugs.md #555).
 func assistedApplicationCommand(jobID string) (*exec.Cmd, error) {
+	root := findGoModuleRoot()
+	if root == "" {
+		return nil, errors.New("cannot locate assisted browser command: start the dashboard from the repository checkout or place career_assist_bin beside the dashboard binary")
+	}
+
+	var cmd *exec.Cmd
 	if envBin := os.Getenv("CAREER_ASSIST_BIN"); envBin != "" {
 		if info, err := os.Stat(envBin); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(envBin, "-job", jobID), nil
+			cmd = exec.Command(envBin, "-job", jobID)
 		}
 	}
 
-	executable, err := os.Executable()
-	if err == nil {
-		directory := filepath.Dir(executable)
-		for _, name := range []string{"career_assist_bin", "assist"} {
-			candidate := filepath.Join(directory, name)
-			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-				return exec.Command(candidate, "-job", jobID), nil
+	if cmd == nil {
+		executable, err := os.Executable()
+		if err == nil {
+			directory := filepath.Dir(executable)
+			for _, name := range []string{"career_assist_bin", "assist"} {
+				candidate := filepath.Join(directory, name)
+				if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+					cmd = exec.Command(candidate, "-job", jobID)
+					break
+				}
 			}
 		}
 	}
 
-	if root := findGoModuleRoot(); root != "" {
+	if cmd == nil {
 		candidate := filepath.Join(root, "career_assist_bin")
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(candidate, "-job", jobID), nil
+			cmd = exec.Command(candidate, "-job", jobID)
 		}
-		cmd := exec.Command("go", "run", "./cmd/assist", "-job", jobID)
-		cmd.Dir = root
-		return cmd, nil
 	}
 
-	return nil, errors.New("cannot locate assisted browser command: start the dashboard from the repository checkout or place career_assist_bin beside the dashboard binary")
+	if cmd == nil {
+		cmd = exec.Command("go", "run", "./cmd/assist", "-job", jobID)
+	}
+
+	cmd.Dir = root
+	return cmd, nil
 }
 
 // agentCommand resolves the binary used for the daemon agent. Resolution order
@@ -1380,35 +1396,49 @@ func assistedApplicationCommand(jobID string) (*exec.Cmd, error) {
 //  2. A binary named career_agent_bin beside the dashboard executable.
 //  3. A built career_agent_bin in the repository root.
 //  4. `go run ./cmd/agent` from the repository root (development fallback).
+//
+// Like assistedApplicationCommand, every returned command has its working
+// directory fixed to the repository root so relative file paths resolve
+// consistently (bugs.md #555).
 func agentCommand() (*exec.Cmd, error) {
+	root := findGoModuleRoot()
+	if root == "" {
+		return nil, errors.New("cannot locate agent binary: start the dashboard from the repository checkout or place career_agent_bin beside the dashboard binary")
+	}
+
 	args := []string{"-daemon", "-cycle-limit", "15", "-cycle-interval", "1m"}
 
+	var cmd *exec.Cmd
 	if envBin := os.Getenv("CAREER_AGENT_BIN"); envBin != "" {
 		if info, err := os.Stat(envBin); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(envBin, args...), nil
+			cmd = exec.Command(envBin, args...)
 		}
 	}
 
-	executable, err := os.Executable()
-	if err == nil {
-		directory := filepath.Dir(executable)
-		candidate := filepath.Join(directory, "career_agent_bin")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(candidate, args...), nil
+	if cmd == nil {
+		executable, err := os.Executable()
+		if err == nil {
+			directory := filepath.Dir(executable)
+			candidate := filepath.Join(directory, "career_agent_bin")
+			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+				cmd = exec.Command(candidate, args...)
+			}
 		}
 	}
 
-	if root := findGoModuleRoot(); root != "" {
+	if cmd == nil {
 		candidate := filepath.Join(root, "career_agent_bin")
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			return exec.Command(candidate, args...), nil
+			cmd = exec.Command(candidate, args...)
 		}
-		cmd := exec.Command("go", append([]string{"run", "./cmd/agent"}, args...)...)
-		cmd.Dir = root
-		return cmd, nil
 	}
 
-	return nil, errors.New("cannot locate agent binary: start the dashboard from the repository checkout or place career_agent_bin beside the dashboard binary")
+	if cmd == nil {
+		cmd = exec.Command("go", append([]string{"run", "./cmd/agent"}, args...)...)
+	}
+
+	cmd.Dir = root
+	return cmd, nil
 }
 
 func findGoModuleRoot() string {
