@@ -207,13 +207,30 @@ func RemoteEligible(remoteClaimed bool, location, description string) (bool, str
 // title does not contain a full configured role phrase. Words like "senior",
 // "engineer" or "developer" appear in nearly every technical title and would
 // let almost anything through, defeating the point of the filter.
+//
+// bugs.md #557: this list used to also include generic tokens --
+// "systems", "operations", "support", "network", "security", "api",
+// "production", "cloud" -- that appear routinely in ordinary
+// non-engineering titles too ("Senior Business Systems Analyst", "GTM
+// Operations Lead", "Cloud Support Administrator", ...). They were removed
+// entirely rather than narrowed: every configured role in profile.yaml that
+// legitimately needs one of them ("Cloud Platform Engineer", "Production
+// Support Engineer", "Network Automation Engineer", "Cloud Systems
+// Administrator") is itself a full phrase, so it already matches via the
+// phrase check in matchesConfiguredRole -- this single-word fallback was
+// never actually load-bearing for those words, only for the *other*
+// distinctive word in the same phrase (reliability, automation,
+// infrastructure, systems->dropped, ...). "platform" is kept, but
+// matchesConfiguredRole gives it an extra structural requirement (see
+// platformFollowedByOccupationNoun) because it is generic enough to also
+// appear as a trailing product/business-unit tag ("Product Specialist:
+// Platform") rather than the role's actual track word.
 var distinctiveRoleWords = map[string]bool{
 	"backend": true, "devops": true, "devsecops": true, "platform": true,
 	"infrastructure": true, "reliability": true, "sre": true, "automation": true,
-	"python": true, "golang": true, "go": true, "cloud": true, "security": true,
+	"python": true, "golang": true, "go": true,
 	"observability": true, "kubernetes": true, "ci": true, "cd": true, "sdet": true,
-	"integration": true, "network": true, "systems": true, "api": true,
-	"production": true, "release": true, "support": true, "operations": true,
+	"integration": true, "release": true,
 	"agent": true, "agentic": true, "llm": true, "rag": true,
 }
 

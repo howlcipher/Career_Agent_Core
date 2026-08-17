@@ -211,6 +211,85 @@ func TestScreenJob_ManagementRolesAllowedOptIn(t *testing.T) {
 	}
 }
 
+// realProfileRoles mirrors profile.yaml's actual (2026-08-17 re-targeted)
+// role list closely enough to reproduce bugs.md #557 against the roles that
+// actually caused it in production, rather than only the smaller
+// targetTrackRoles fixture above.
+var realProfileRoles = []string{
+	"DevOps Engineer", "Senior DevOps Engineer", "Azure DevOps Engineer",
+	"AWS DevOps Engineer", "Cloud DevOps Engineer", "DevSecOps Engineer",
+	"Senior DevSecOps Engineer", "DevOps Automation Engineer", "DevOps Specialist",
+	"AI DevOps Engineer", "Staff DevOps Engineer", "Principal DevOps Engineer",
+	"Platform Engineer", "Senior Platform Engineer", "Cloud Platform Engineer",
+	"Developer Platform Engineer", "Platform Automation Engineer",
+	"Platform Reliability Engineer", "Staff Platform Engineer", "Principal Platform Engineer",
+	"Site Reliability Engineer", "Senior Site Reliability Engineer", "SRE", "Senior SRE",
+	"SRE Engineer", "Staff Site Reliability Engineer", "Principal Site Reliability Engineer",
+	"Production Engineer", "Production Support Engineer", "Infrastructure Automation Engineer",
+	"Infrastructure Engineer", "Senior Infrastructure Engineer", "Cloud Infrastructure Engineer",
+	"Cloud Engineer", "Senior Cloud Engineer", "Cloud Operations Engineer",
+	"Cloud Systems Administrator", "Network Automation Engineer", "Observability Engineer",
+	"AI Infrastructure Engineer", "AI Platform Engineer", "AIOps Engineer", "MLOps Engineer",
+	"AI Automation Engineer",
+}
+
+// TestClassifyTitle_GenericSharedWordFalsePositives pins down bugs.md #557:
+// these are real off-track titles pulled from a live discovery run that were
+// wrongly admitted before the fix, purely because they share one generic
+// word (systems/operations/support/network/production/cloud/platform) with
+// a configured role and distinctiveRoleWords treated any single shared word
+// as sufficient. None of them name a genuine DevOps/Platform/SRE/
+// Infrastructure/Cloud engineering track.
+func TestClassifyTitle_GenericSharedWordFalsePositives(t *testing.T) {
+	titles := []string{
+		"Senior Business Systems Analyst, Merchandising Systems",
+		"Sr. Strategy & Operations Analyst, Deal Desk",
+		"Senior Technical Customer Support Engineer",
+		"Senior Operations Specialist",
+		"GTM Operations Lead",
+		"Product Specialist: Platform",
+		"Technical Recruiter — Production Engineering",
+		"GTM Business Operations Analyst",
+		"Cloud Support Administrator",
+	}
+	for _, title := range titles {
+		cls := ClassifyTitle(title, realProfileRoles, false, true)
+		if cls.Fit != FitReject {
+			t.Errorf("ClassifyTitle(%q) = %+v, want FitReject (off-track title admitted via a single generic shared word)", title, cls)
+		}
+	}
+}
+
+// TestClassifyTitle_GenericSharedWordFix_PreservesRealMatches confirms the
+// #557 fix does not turn any of profile.yaml's actual must-accept titles
+// into false negatives. Most of these are already literal role phrases
+// (unaffected by the fallback change); a few genuinely rely on the
+// single-distinctive-word fallback (e.g. "Platform Architect",
+// "DevOps Consultant", "Network Reliability Engineer" via "reliability")
+// and must keep working.
+func TestClassifyTitle_GenericSharedWordFix_PreservesRealMatches(t *testing.T) {
+	titles := []string{
+		"Senior DevOps Engineer", "DevOps Engineer", "Azure DevOps Engineer",
+		"DevSecOps Engineer", "Platform Engineer", "Senior Platform Engineer",
+		"Cloud Platform Engineer", "Platform Reliability Engineer",
+		"Site Reliability Engineer", "Senior Site Reliability Engineer", "SRE",
+		"Infrastructure Engineer", "Senior Infrastructure Engineer",
+		"Cloud Infrastructure Engineer", "Infrastructure Automation Engineer",
+		"Production Engineer", "Production Support Engineer", "Observability Engineer",
+		"Cloud Operations Engineer",
+		// Fallback-dependent, must still be admitted:
+		"Platform Architect",
+		"DevOps Consultant",
+		"Network Reliability Engineer",
+	}
+	for _, title := range titles {
+		cls := ClassifyTitle(title, realProfileRoles, false, true)
+		if cls.Fit == FitReject {
+			t.Errorf("ClassifyTitle(%q) = reject (%s), want primary/adjacent/stretch acceptance", title, cls.Reason)
+		}
+	}
+}
+
 func TestScreenJob_RejectStretchSeniority(t *testing.T) {
 	profile := &Profile{Roles: targetTrackRoles, RemoteOnly: true, RejectStretchSeniority: true}
 	result := ScreenJob(JobEligibilityInput{

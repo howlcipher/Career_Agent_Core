@@ -152,6 +152,35 @@ func ClassifyTitle(title string, roles []string, allowManagement, allowStretch b
 	return TitleClassification{Fit: FitAdjacent}
 }
 
+// platformOccupationNouns are the IC-occupation words that must immediately
+// follow "platform" for the bare word "platform" to count as a distinctive-
+// word match on its own (bugs.md #557). "platform" alone is too generic --
+// it also shows up in titles that merely tag a product/business unit named
+// Platform ("Product Specialist: Platform", "Platform Product Manager")
+// rather than naming an engineering track. Titles that build a role noun on
+// top of it ("Platform Engineer", "Platform Architect") are exactly the
+// shape this fallback exists to catch, and checking only the *following*
+// word (not the preceding one) is what tells them apart: in "Platform
+// Architect", platform modifies the role noun that comes after it; in
+// "Product Specialist: Platform", platform is an appended qualifier after
+// the role noun, not a modifier of one.
+var platformOccupationNouns = map[string]bool{
+	"engineer": true, "architect": true, "specialist": true,
+	"developer": true, "administrator": true, "consultant": true,
+}
+
+// platformFollowedByOccupationNoun reports whether "platform" is
+// immediately followed by one of platformOccupationNouns anywhere in
+// titleFields.
+func platformFollowedByOccupationNoun(titleFields []string) bool {
+	for i, w := range titleFields {
+		if w == "platform" && i+1 < len(titleFields) && platformOccupationNouns[titleFields[i+1]] {
+			return true
+		}
+	}
+	return false
+}
+
 // matchesConfiguredRole is TitleEligible's original matching logic, factored
 // out so ClassifyTitle can distinguish a full role-phrase match (Primary)
 // from a shared-distinctive-word match (Adjacent) instead of collapsing both
@@ -170,10 +199,12 @@ func matchesConfiguredRole(title string, roles []string) (phraseMatch, wordMatch
 		return false, false
 	}
 
+	titleFields := strings.Fields(t)
 	titleWords := map[string]bool{}
-	for _, w := range strings.Fields(t) {
+	for _, w := range titleFields {
 		titleWords[w] = true
 	}
+	platformEligible := platformFollowedByOccupationNoun(titleFields)
 
 	for _, role := range roles {
 		r := normalizeForRemoteCheck(role)
@@ -185,9 +216,13 @@ func matchesConfiguredRole(title string, roles []string) (phraseMatch, wordMatch
 			continue
 		}
 		for _, word := range strings.Fields(r) {
-			if distinctiveRoleWords[word] && titleWords[word] {
-				wordMatch = true
+			if !distinctiveRoleWords[word] || !titleWords[word] {
+				continue
 			}
+			if word == "platform" && !platformEligible {
+				continue
+			}
+			wordMatch = true
 		}
 	}
 	return phraseMatch, wordMatch

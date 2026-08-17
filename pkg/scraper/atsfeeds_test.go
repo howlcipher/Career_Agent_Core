@@ -267,7 +267,7 @@ func TestTitleLooksRelevant(t *testing.T) {
 		"Staff Backend Engineer, Payments",
 		"Senior DevOps Engineer (Remote)",
 		"Principal Infrastructure Engineer",
-		"Cloud Security Engineer",
+		"Cloud Platform Engineer",
 	}
 	for _, title := range keep {
 		if !f.titleLooksRelevant(title) {
@@ -281,6 +281,14 @@ func TestTitleLooksRelevant(t *testing.T) {
 		"Account Executive DACH",
 		"Office Manager",
 		"Senior Recruiter",
+		// bugs.md #557: "cloud" and "security" were dropped from
+		// distinctiveRoleWords for being too generic (they appear
+		// routinely in non-engineering titles too), so a title that only
+		// shares one of those with a configured role -- and names no
+		// other configured track word -- must no longer pass this gate
+		// either. "Cloud Engineer" is configured; "Cloud Security
+		// Engineer" used to pass on "cloud" alone.
+		"Cloud Security Engineer",
 	}
 	for _, title := range drop {
 		if f.titleLooksRelevant(title) {
