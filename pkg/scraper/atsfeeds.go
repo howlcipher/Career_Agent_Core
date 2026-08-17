@@ -348,5 +348,5 @@ func parseLeverBoard(body []byte) ([]feedJob, error) {
 // here on a keyword technicality. Scoring remains the authority on fit; this
 // only prevents obviously-unrelated roles from consuming a scoring slot.
 func (f *FunnelEngine) titleLooksRelevant(title string) bool {
-	return config.TitleEligible(title, f.Roles)
+	return config.TitleEligibleForRoles(title, f.Roles, f.AllowManagementRoles, !f.RejectStretchSeniority)
 }

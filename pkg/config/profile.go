@@ -92,6 +92,27 @@ type Profile struct {
 	// a posting that publishes no location is always allowed through.
 	AllowedCountries []string `yaml:"allowed_countries"`
 
+	// AllowManagementRoles opts into admitting management/leadership-track
+	// titles (Director, VP, Vice President, Head of, Chief, Manager) that
+	// TitleEligible/ScreenJob otherwise reject outright regardless of any
+	// engineering keyword they also contain -- "Director of DevOps" is
+	// management track despite naming DevOps. Defaults to false (rejected):
+	// a profile written before this field existed gets the corrected,
+	// stricter behavior by default, which is the point of this setting
+	// existing at all (William's queue was dominated by Director/Principal
+	// leadership roles that a keyword-only gate waved through).
+	AllowManagementRoles bool `yaml:"allow_management_roles"`
+
+	// RejectStretchSeniority turns off the Staff/Principal "stretch" tier
+	// that is otherwise allowed by default: a Staff/Principal
+	// individual-contributor title (e.g. "Principal DevOps Engineer") still
+	// matches a configured role and is ranked as a bounded stretch match
+	// rather than a primary one (see pkg/storage/ranking.go). Set this to
+	// true to reject those titles outright instead. Defaults to false
+	// (stretch allowed), preserving the pre-existing behavior of admitting
+	// any title matching a configured role regardless of seniority.
+	RejectStretchSeniority bool `yaml:"reject_stretch_seniority"`
+
 	// MinimumFitScore is set dynamically via OperatorSettings
 	MinimumFitScore int `yaml:"-"`
 }

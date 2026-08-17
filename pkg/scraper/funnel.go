@@ -114,6 +114,18 @@ type FunnelEngine struct {
 	// a cheap early exit, not a replacement for it.
 	RemoteOnly bool
 
+	// AllowManagementRoles and RejectStretchSeniority mirror
+	// config.Profile's fields of the same name and drive the cheap
+	// titleLooksRelevant gate applied to feed-sourced postings at intake
+	// (pkg/scraper/atsfeeds.go), so a Director/VP/Head-of/Manager title
+	// never reaches fit-scoring just because it also names a configured
+	// role's keyword. Both default to false (management excluded, stretch
+	// allowed), matching config.TitleEligible's own defaults, so an engine
+	// built without setting them behaves exactly as before this field
+	// existed.
+	AllowManagementRoles   bool
+	RejectStretchSeniority bool
+
 	// yahooClient is shared across every discoverWithYahooHTML call made by
 	// this engine instance (one per DiscoverJobs run, see NewFunnelEngine's
 	// call site) so its cookie jar accumulates across queries instead of

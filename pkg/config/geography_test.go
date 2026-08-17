@@ -233,8 +233,8 @@ func TestGeography_LeavesRoleAndRemoteGatesIntact(t *testing.T) {
 	wrongRole := ScreenJob(JobEligibilityInput{
 		Title: "Dental Hygienist", Location: inScope, RemoteClaimed: true,
 	}, profile)
-	if wrongRole.Eligible || wrongRole.Code != ReasonIneligibleRole {
-		t.Fatalf("off-role in-scope job = %+v, want ineligible/%s", wrongRole, ReasonIneligibleRole)
+	if wrongRole.Eligible || wrongRole.Code != ReasonRoleTrackMismatch {
+		t.Fatalf("off-role in-scope job = %+v, want ineligible/%s", wrongRole, ReasonRoleTrackMismatch)
 	}
 
 	good := ScreenJob(JobEligibilityInput{
@@ -253,8 +253,8 @@ func TestGeography_ConcreteFailuresOutrankUnknownLocation(t *testing.T) {
 	result := ScreenJob(JobEligibilityInput{
 		Title: "Dental Hygienist", Location: "Remote", RemoteClaimed: true,
 	}, profile)
-	if result.Code != ReasonIneligibleRole {
-		t.Fatalf("off-role, unlocatable job = %s, want %s", result.Code, ReasonIneligibleRole)
+	if result.Code != ReasonRoleTrackMismatch {
+		t.Fatalf("off-role, unlocatable job = %s, want %s", result.Code, ReasonRoleTrackMismatch)
 	}
 }
 

@@ -42,6 +42,24 @@ const (
 	// ReasonLocationUnknown -- an allowlist is configured but the posting
 	// yielded no country evidence, so it is held rather than admitted.
 	ReasonLocationUnknown = "location_unknown"
+	// ReasonManagementTrackExcluded -- the title's primary track is
+	// organizational/people management (Director, VP, Head of, Chief,
+	// Manager), which is excluded by default regardless of any engineering
+	// keyword it also contains. Opt in via Profile.AllowManagementRoles.
+	ReasonManagementTrackExcluded = "management_track_excluded"
+	// ReasonSeniorityOutsideTarget -- the title is a Staff/Principal
+	// individual-contributor role, which would otherwise be an allowed
+	// stretch match, but Profile.RejectStretchSeniority has turned that
+	// stretch tier off.
+	ReasonSeniorityOutsideTarget = "seniority_outside_target"
+	// ReasonRoleTrackMismatch -- the title names neither a configured role
+	// phrase nor a distinctive word shared with one. Functionally the same
+	// rejection ReasonIneligibleRole has always described; ScreenJob returns
+	// this more specific code so callers auditing *why* a title was
+	// rejected (task-targeting work, dashboards) can tell a plain role
+	// mismatch apart from a management-track or seniority exclusion instead
+	// of folding all three into one generic code.
+	ReasonRoleTrackMismatch = "role_track_mismatch"
 )
 
 // EligibilityResult is the structured verdict of the canonical gate: whether
@@ -86,8 +104,16 @@ func ScreenJob(job JobEligibilityInput, profile *Profile) EligibilityResult {
 			return EligibilityResult{Code: ReasonIneligibleRemote, Reason: reason}
 		}
 	}
-	if !TitleEligible(job.Title, profile.Roles) {
-		return EligibilityResult{Code: ReasonIneligibleRole, Reason: "title does not match the configured role list"}
+	cls := ClassifyTitle(job.Title, profile.Roles, profile.AllowManagementRoles, !profile.RejectStretchSeniority)
+	if cls.Fit == FitReject {
+		reason := "title does not match the configured role list"
+		switch cls.Reason {
+		case ReasonManagementTrackExcluded:
+			reason = "title's primary track is organizational/people management, not individual-contributor engineering"
+		case ReasonSeniorityOutsideTarget:
+			reason = "title is a Staff/Principal stretch match, but stretch seniority is disabled"
+		}
+		return EligibilityResult{Code: cls.Reason, Reason: reason}
 	}
 	if geography == GeographyUnknown {
 		return EligibilityResult{Code: ReasonLocationUnknown, Reason: geoReason}
@@ -192,46 +218,22 @@ var distinctiveRoleWords = map[string]bool{
 }
 
 // TitleEligible reports whether title plausibly matches one of the
-// configured roles. It matches a full configured role as a phrase, or any
-// distinctive single word shared between the title and a configured role, so
-// a genuinely plausible title survives to real fit-scoring rather than being
-// discarded here on a keyword technicality -- scoring remains the authority
-// on fit; this only prevents obviously-unrelated roles from consuming a
-// scoring slot or occupying the assisted-apply queue.
+// configured roles AND is not a management/leadership-track title. It
+// matches a full configured role as a phrase, or any distinctive single word
+// shared between the title and a configured role, so a genuinely plausible
+// title survives to real fit-scoring rather than being discarded here on a
+// keyword technicality -- scoring remains the authority on fit; this only
+// prevents obviously-unrelated roles, and management-track roles regardless
+// of keyword overlap, from consuming a scoring slot or occupying the
+// assisted-apply queue.
 //
 // This is the single canonical title-matching implementation: it backs both
 // fresh discovery (pkg/scraper's ATS feed intake) and re-evaluation of
 // already-persisted assisted-apply rows, so the two paths cannot drift onto
-// different definitions of "matches the role list".
+// different definitions of "matches the role list". It always applies the
+// product default (management excluded, Staff/Principal allowed as
+// stretch); callers that need the operator's configured opt-ins should use
+// TitleEligibleForRoles or ScreenJob/IsEligibleJob directly.
 func TitleEligible(title string, roles []string) bool {
-	if len(roles) == 0 {
-		return true // no configured roles: do not silently filter everything out
-	}
-	t := normalizeForRemoteCheck(title)
-	if t == "" {
-		return false
-	}
-
-	titleWords := map[string]bool{}
-	for _, w := range strings.Fields(t) {
-		titleWords[w] = true
-	}
-
-	for _, role := range roles {
-		r := normalizeForRemoteCheck(role)
-		if r == "" {
-			continue
-		}
-		// Full configured role as a phrase is safe to substring-match: it is
-		// long and specific enough not to collide accidentally.
-		if strings.Contains(" "+t+" ", " "+r+" ") || t == r {
-			return true
-		}
-		for _, word := range strings.Fields(r) {
-			if distinctiveRoleWords[word] && titleWords[word] {
-				return true
-			}
-		}
-	}
-	return false
+	return TitleEligibleForRoles(title, roles, false, true)
 }

@@ -6,7 +6,28 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/howlcipher/Career_Agent_Core/pkg/config"
 )
+
+// stretchSeniorityPenalty is applied to a Staff/Principal individual-
+// contributor title's rank score. Such titles already passed the hard
+// role/title gate (config.ScreenJob) -- this is a ranking preference, not an
+// eligibility decision -- so they can still surface when nothing better is
+// available, but a bounded stretch tier does not dominate the primary
+// DevOps/Platform/SRE matches ordinary seniority produces (task
+// instructions, "Desired queue mix": Staff/Principal is a "small stretch
+// bucket", never the majority).
+const stretchSeniorityPenalty = 0.5
+
+// titledJob is implemented by RankableJob types that can report the job
+// title they were built from (currently *FunnelJob only). It is optional --
+// checked with a type assertion below -- so RankableJob implementers that
+// have no title available (e.g. QueuePlanCandidate) are unaffected and keep
+// ranking exactly as before this existed.
+type titledJob interface {
+	GetJobTitle() string
+}
 
 // urgentAgeDays is the point at which a DISCOVERED job is treated as at risk
 // of expiring before it is ever attempted. With no aging
@@ -155,11 +176,19 @@ func RankJobs[T RankableJob](jobs []T, summaries []SourceHealthSummary, explorat
 		combinedFit := 0.2 + (0.8 * fit)
 		rawScore := scoreObj.SmoothedSuccessRate * combinedFit * freshnessMultiplier * scoreObj.PenaltyFactor
 
+		isStretch := false
+		if tj, ok := any(j).(titledJob); ok && config.IsStretchSeniorityTitle(tj.GetJobTitle()) {
+			isStretch = true
+			rawScore *= stretchSeniorityPenalty
+		}
+
 		isExploration := scoreObj.Confidence == "Sparse"
 		reason := "Ranked by outcome"
 		switch {
 		case isUrgent:
 			reason = fmt.Sprintf("Urgent: %d days old, prioritized ahead of scoring to avoid expiring unattempted (bugs.md #481)", ageDays)
+		case isStretch:
+			reason = "Staff/Principal stretch match, ranked below ordinary-seniority matches"
 		case isExploration:
 			reason = "Exploration candidate (sparse data)"
 		}
