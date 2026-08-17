@@ -1,5 +1,24 @@
 # Career Agent Core - Changelog
 
+## 2026-08-17 — The role gate no longer admits management-track titles just because they also name an engineering keyword (bugs.md #556)
+
+The Assisted Apply queue was mostly `Director`/`Principal`/leadership roles
+with only ~2 ordinary DevOps postings among them, because the role gate
+(`config.TitleEligible`) only ever checked whether a title shared a keyword
+with a configured role — "Director of DevOps" passed the same check
+"DevOps Engineer" did. `pkg/config/title_policy.go` (new) separates career
+track from seniority: management-track titles (Director, VP, Head of,
+Chief, Manager) are rejected by default regardless of keyword overlap
+(`Profile.AllowManagementRoles` opts back in), and Staff/Principal
+individual-contributor titles are kept as a bounded "stretch" tier — ranked
+below ordinary-seniority matches (`pkg/storage/ranking.go`) rather than
+rejected or allowed to dominate. `profile.yaml`'s role list was re-targeted
+from 121 mostly off-track entries down to 40, weighted toward
+DevOps/Platform/SRE/Infrastructure/Cloud. A live reconciliation
+(`cmd/pruneassisted`) against the real queue removed 3 management-track rows
+and 43 off-track role matches, leaving a queue actually made of the target
+engineering tracks. Full account: `documentation/backlog_history/bugs_done_details.md` item #556.
+
 ## 2026-08-15 — Closed the two logging leaks `bugs.md` #549 named, and a third an independent reviewer found
 
 Yesterday's audit (below) fixed one confirmed leak — your address values reaching

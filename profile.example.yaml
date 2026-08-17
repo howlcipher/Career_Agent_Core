@@ -11,6 +11,19 @@ roles:
   - "Site Reliability Engineer"
   - "AI Automation Engineer"
 
+# allow_management_roles and reject_stretch_seniority are the two title-policy
+# opt-ins (see pkg/config/title_policy.go). Both default to false when
+# omitted, which is the product default: Director/VP/Head-of/Manager titles
+# are rejected outright regardless of any engineering keyword they also
+# contain (e.g. "Director of DevOps"), and Staff/Principal individual-
+# contributor titles are accepted as a bounded "stretch" tier rather than
+# rejected. Set allow_management_roles: true only if you actually want
+# leadership-track postings in the queue; set reject_stretch_seniority: true
+# to exclude Staff/Principal roles entirely instead of just ranking them
+# below ordinary-seniority matches.
+allow_management_roles: false
+reject_stretch_seniority: false
+
 experience_years: 7
 
 skills:

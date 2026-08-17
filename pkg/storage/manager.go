@@ -1975,6 +1975,12 @@ type FunnelJob struct {
 func (j *FunnelJob) GetURL() string             { return j.URL }
 func (j *FunnelJob) GetFitSimilarity() float64  { return j.FitSimilarity }
 func (j *FunnelJob) GetDiscoveredAt() time.Time { return j.DiscoveredAt }
+
+// GetJobTitle implements ranking.go's optional titledJob interface so
+// RankJobs can bias a Staff/Principal stretch-seniority title's rank down
+// without re-running the full role/title gate it already passed to reach
+// job_funnel as DISCOVERED.
+func (j *FunnelJob) GetJobTitle() string { return j.JobTitle }
 func (j *FunnelJob) SetRankData(score float64, reason string, isExploration bool) {
 	j.RankingScore = score
 	j.RankingReason = reason

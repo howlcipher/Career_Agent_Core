@@ -58,7 +58,9 @@ const (
 type AssistedQueueReconciliationReport struct {
 	Examined            int
 	RemovedRemote       int // failed the fully-remote hard gate
-	RemovedRole         int // failed the title/role hard gate
+	RemovedRole         int // failed the title/role hard gate on a plain role mismatch
+	RemovedManagement   int // title's primary track is management/leadership, not IC engineering
+	RemovedSeniority    int // Staff/Principal stretch match rejected because stretch is disabled
 	RemovedGeography    int // named only countries outside the configured allowlist
 	HeldUnknownLocation int // otherwise eligible, but no country evidence to screen
 	RemovedDuplicate    int // same posting (scheme-normalized URL) as another active row
@@ -175,6 +177,10 @@ func ReconcileAssistedQueueEligibility(conn *sql.DB, profile *config.Profile) (A
 			counter = &report.RemovedGeography
 		case config.ReasonLocationUnknown:
 			counter = &report.HeldUnknownLocation
+		case config.ReasonManagementTrackExcluded:
+			counter = &report.RemovedManagement
+		case config.ReasonSeniorityOutsideTarget:
+			counter = &report.RemovedSeniority
 		}
 		*counter++
 		if err := removeRow(r.jobID, verdict.Code); err != nil {
@@ -214,6 +220,6 @@ func ReconcileAssistedQueueEligibility(conn *sql.DB, profile *config.Profile) (A
 		report.RemovedDuplicate++
 	}
 
-	report.Remaining = report.Examined - report.RemovedRemote - report.RemovedRole - report.RemovedGeography - report.HeldUnknownLocation - report.RemovedDuplicate
+	report.Remaining = report.Examined - report.RemovedRemote - report.RemovedRole - report.RemovedManagement - report.RemovedSeniority - report.RemovedGeography - report.HeldUnknownLocation - report.RemovedDuplicate
 	return report, nil
 }

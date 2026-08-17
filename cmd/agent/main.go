@@ -584,6 +584,8 @@ func newDiscoveryEngine(prof *config.Profile) *scraper.FunnelEngine {
 	engine := scraper.NewFunnelEngine(prof.Roles)
 	engine.AllowedCountries = prof.AllowedCountries
 	engine.RemoteOnly = prof.RemoteOnly
+	engine.AllowManagementRoles = prof.AllowManagementRoles
+	engine.RejectStretchSeniority = prof.RejectStretchSeniority
 	return engine
 }
 

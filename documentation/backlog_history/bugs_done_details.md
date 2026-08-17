@@ -5349,3 +5349,59 @@ A live Greenhouse posting (job 303986, Affirm) was revalidated through the dashb
 - `documentation/backlog/bugs.md`
 - `documentation/backlog_history/bugs_done_details.md`
 
+## 556. The role gate admits management-track titles ("Director of DevOps") because it only ever checks keyword overlap, never career track vs. seniority
+
+**Found and closed 2026-08-17**, from a product-targeting task after the operator reported the live Assisted Apply queue was mostly `Director`/`Principal`/leadership roles with only ~2 ordinary DevOps postings among them.
+
+### Root cause
+
+`config.TitleEligible(title, roles)` — the single canonical role gate backing both fresh discovery (`pkg/scraper/atsfeeds.go`'s `titleLooksRelevant`) and `config.ScreenJob` (the hard eligibility gate `IsEligibleJob`, `ReconcileAssistedQueueEligibility`, and `PromoteJobToAssisted` all call) — only ever asked one question: does the title contain a configured role phrase, or a single "distinctive" word shared with one (`devops`, `platform`, `infrastructure`, `cloud`, ...)? It never asked whether the title's *primary noun* was individual-contributor engineering at all. "Director of DevOps" contains "devops" exactly like "DevOps Engineer" does, so it passed the same gate a real DevOps posting did — the keyword match could not tell career track (DevOps vs. management) apart from seniority (ordinary vs. Director) because it never modeled either dimension, only raw word overlap.
+
+A live database audit (84-row actionable queue, `assisted_applications` joined to `job_funnel`, title-only classification) confirmed the mechanism rather than assuming it: 3 rows were unambiguous management titles ("Director of Product Management, Security", "Head of Fund Analytics & Automation — Credit Fund", "AI Digital Product Sr Manager – Agentic Platform") that had reached the queue purely because they also named a configured keyword ("Platform", "Automation", "Product" via a shared distinctive word). Separately, `profile.yaml`'s 121-entry `roles` list had only ~38 entries naming a DevOps/Platform/SRE/Infrastructure/Cloud track at all — the other ~59 were generic software/QA/data/integration titles ("Software Engineer", "ETL Developer", "SDET", "Python Developer", ...) that both diluted every discovery query cycle toward off-track roles (each configured role becomes one search query per ATS target in `FunnelEngine.DiscoverJobs`) and admitted whatever those broad searches turned up.
+
+### Fix
+
+`pkg/config/title_policy.go` (new) is a deterministic classifier, `ClassifyTitle`, that separates two independent questions the old keyword gate collapsed into one:
+
+1. **Career track vs. management.** `ManagementTrackTitle` checks for `director`, `vp`, `chief`, `manager` (as whole words) and the phrases `vice president`/`head of`. A management-track title is rejected (`ReasonManagementTrackExcluded`) regardless of any engineering keyword it also contains — a perfect "DevOps" hit never rescues "Director of DevOps". Documented policy decision: `manager` is treated as management track even when it modifies an engineering word ("DevOps Manager"), the same as "Manager of DevOps" — the primary noun is the management role.
+2. **Seniority stretch.** Staff/Principal individual-contributor titles (`principal`, `staff`) are not management and are not rejected; they are `FitStretch`, a bounded tier ranked below ordinary-seniority matches (see below) rather than allowed to dominate the queue. `Profile.RejectStretchSeniority` (default false) can turn this into an outright rejection (`ReasonSeniorityOutsideTarget`) if an operator wants it.
+3. Otherwise, the existing phrase/distinctive-word role match applies unchanged (`FitPrimary` for a full role-phrase match, `FitAdjacent` for a shared distinctive word), preserving every previously-admitted non-management title.
+
+`Profile.AllowManagementRoles` (default false) opts a profile into admitting management-track titles anyway. `TitleEligible` now delegates to `ClassifyTitle` with the product defaults (management excluded, stretch allowed) baked in, so every existing call site is fixed by one change; `ScreenJob` uses the profile's own opt-ins via the new `TitleEligibleForRoles`/`ClassifyTitle` directly so it can report the specific rejection reason. `FunnelEngine` gained matching `AllowManagementRoles`/`RejectStretchSeniority` fields (defaulting to the same false/false, so every existing `NewFunnelEngine` call site and test is unaffected) so the cheap discovery-time gate applies the identical policy before a management-track posting ever reaches fit-scoring.
+
+`pkg/storage/ranking.go`'s `RankJobs` (already wired into `GetDiscoveredJobs`'s live queue ordering, not a dead code path) now applies a 0.5x score penalty to a Staff/Principal stretch title via the new optional `titledJob`/`GetJobTitle` interface (`FunnelJob` implements it; `QueuePlanCandidate` does not and is unaffected), so a bounded stretch match can still surface when nothing better is queued but does not crowd out ordinary-seniority DevOps/Platform/SRE matches.
+
+`pkg/storage/eligibility_reconcile.go`'s `AssistedQueueReconciliationReport` gained `RemovedManagement`/`RemovedSeniority` counters (alongside the pre-existing `RemovedRole`/`RemovedRemote`/`RemovedGeography`), so `cmd/pruneassisted`'s before/after report can show exactly how many rows were removed for which reason rather than folding every non-remote/non-geography rejection into one generic bucket.
+
+`profile.yaml`'s `roles` list (gitignored, local-only) was re-targeted from 121 entries down to 40, weighted toward DevOps (largest bucket) > Platform > SRE/production/infra-automation ≈ Infrastructure/Cloud > AI-infrastructure/AIOps/MLOps (small, selective), with Staff/Principal variants of the top three tracks included as the intentional stretch bucket. `profile.example.yaml` documents the two new opt-in fields.
+
+### Verification
+
+- New `pkg/config/title_policy_test.go`: the full accept/reject matrix from the task spec (primary, adjacent, stretch, stretch-disabled, 9 management-track rejections, opt-in acceptance, role-track-mismatch rejection) plus a dedicated "ambiguous, documented" test pinning down this policy's explicit decisions for the task's ambiguous cases (`DevOps Manager` -> management/reject, `Platform Architect` -> accepted/adjacent, `Solutions Architect` -> reject/no track keyword, `DevOps Consultant` -> accepted/adjacent, `Production Support Engineer` -> accepted, `Technical Director` -> reject/management).
+- Two pre-existing `pkg/config/geography_test.go` assertions were updated from the old generic `ReasonIneligibleRole` to the new, more specific `ReasonRoleTrackMismatch` — the same underlying rejection, a more precise code.
+- `go build ./...`, `go vet ./...`, `go test ./...` (whole suite) and `gofmt -l ./cmd ./pkg ./internal` all pass.
+- **Live reconciliation against the real database** (`go run ./cmd/pruneassisted`, after backing up `applications.db`): of the 84-row actionable queue, 3 were removed for `management_track_excluded` (the exact three rows the pre-fix audit had flagged by hand) and 43 for plain role mismatch against the re-targeted `roles` list (mostly generic "Software Engineer"/"Backend Software Engineer"/"API Developer"/"Prompt Engineer" rows the old 121-entry list had admitted), leaving 38 rows — now a DevOps/Platform/SRE/Infrastructure-track queue rather than one dominated by generic software titles and containing three unrelated leadership postings. No `APPLIED` row was touched (reconciliation only ever acts on `AWAITING_REVIEW`/`MANUAL_REQUIRED`/`BLOCKED_CAPTCHA` rows).
+
+### Known residual limitation (not introduced by this fix, not closed by it)
+
+The distinctive-word fallback (`distinctiveRoleWords`, unchanged) includes generic tokens like `systems`, `operations`, `support`, `network` that can still admit an unrelated title sharing exactly one such word with a configured role (e.g. a "Business Systems Analyst" title matching a configured "Cloud Systems Administrator" role via the shared word `systems`). Observed live in the post-fix reconciliation's surviving 38 rows. Tightening or removing the broadest of these tokens is a follow-on, not attempted in this task per its explicit scope (role-track vs. seniority, not the pre-existing word list).
+
+### Files changed
+
+- `pkg/config/title_policy.go` (new)
+- `pkg/config/title_policy_test.go` (new)
+- `pkg/config/eligibility.go`
+- `pkg/config/geography_test.go`
+- `pkg/config/profile.go`
+- `pkg/scraper/funnel.go`
+- `pkg/scraper/atsfeeds.go`
+- `pkg/storage/ranking.go`
+- `pkg/storage/manager.go`
+- `pkg/storage/eligibility_reconcile.go`
+- `cmd/agent/main.go`
+- `cmd/pruneassisted/main.go`
+- `profile.example.yaml`
+- `profile.yaml` (gitignored, local operator config)
+- `documentation/backlog/bugs.md`
+- `documentation/backlog_history/bugs_done_details.md`
+

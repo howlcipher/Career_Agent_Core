@@ -45,6 +45,8 @@ func main() {
 	fmt.Printf("Examined:                     %d\n", report.Examined)
 	fmt.Printf("Removed (remote):             %d\n", report.RemovedRemote)
 	fmt.Printf("Removed (role):               %d\n", report.RemovedRole)
+	fmt.Printf("Removed (management track):   %d\n", report.RemovedManagement)
+	fmt.Printf("Removed (seniority stretch):  %d\n", report.RemovedSeniority)
 	fmt.Printf("Removed (geography):          %d\n", report.RemovedGeography)
 	fmt.Printf("Held (unknown geography):     %d\n", report.HeldUnknownLocation)
 	fmt.Printf("Removed (dup):                %d\n", report.RemovedDuplicate)

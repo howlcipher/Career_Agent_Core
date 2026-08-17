@@ -48,6 +48,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 541 | [Prepare applications: read what a form asks without filling or submitting it](#541-prepare-applications-read-what-a-form-asks-without-filling-or-submitting-it) | Done (2026-08-13) | — | deep-reasoning | Without it the inbox has no input on a real installation: questions were only ever recorded during a live assisted session. Reuses `AttemptSubmit`'s prologue; the no-submit boundary is asserted by parsing the source, since a behavioural test cannot prove a negative over every employer form. Live-verified against real Greenhouse and Lever postings; the run found four defects that all passed `go test`. |
 | 542 | [Editable application profile, answer management, and the companion field query](#542-editable-application-profile-answer-management-and-the-companion-field-query) | Done (2026-08-13) | — | standard | `pii.yaml` edited in place rather than copied, with atomic replace, a backup and no value ever logged; vault edit/revoke with derived policies and recognised phrasings; `GET /api/knowledge/field` implements ADR-005's companion query. |
 | 550 | [Preparation runs log under an `[Auto-Submit]` prefix, so a read-only inspection reads like a submission](#550-preparation-runs-log-under-an-auto-submit-prefix-so-a-read-only-inspection-reads-like-a-submission) | Pending | 1.5 = 3×1.0÷2 | mechanical | Filed 2026-08-14 by bugs.md #547's independent safety review. `clickApplyIfPresent` (`browser.go:1068`) carries the prefix with the function rather than the caller, so a preparation run — which cannot fill or submit — writes `[Auto-Submit] Navigating to …` and `[Auto-Submit] Clicked an Apply-labeled element` into `dashboard.log`. Confirmed on a real run. ADR-007 already notes it. Cosmetic, but it makes the one log an operator would check to reassure themselves say the opposite of the truth. |
+| 557 | [`distinctiveRoleWords`'s broadest single-word entries admit clearly off-track titles that happen to share one generic word with a configured role](#557-distinctiverolewordss-broadest-single-word-entries-admit-clearly-off-track-titles-that-happen-to-share-one-generic-word-with-a-configured-role) | Pending | 1.0 = 3×1.0÷3 | standard | Filed 2026-08-17 by bugs.md #556's fix. `pkg/config/eligibility.go`'s `distinctiveRoleWords` includes generic tokens (`systems`, `operations`, `support`, `network`, `security`, `api`, ...) that can match a completely unrelated title against a configured role via one shared word alone — e.g. a "Senior Business Systems Analyst, Merchandising Systems" title passed the post-#556 role gate purely via the shared word `systems` against a configured "Cloud Systems Administrator" role. #556 deliberately left this word list untouched (its scope was career-track-vs-management and seniority, not this list). Needs either narrowing the broadest tokens or requiring 2+ shared distinctive words for a non-phrase match. |
 | 545 | ["I don't have this" is a real answer the vault cannot represent](#545-i-dont-have-this-is-a-real-answer-the-vault-cannot-represent) | Pending | 2.0 = 4×1.0÷2 | standard | Found 2026-08-13 on the real queue: 5 optional Twitter fields the operator has no account for. `Store.Save` refuses an empty answer by design, so the only options are typing "N/A" into four employers' optional fields or letting the question sit in the inbox forever. Recurs for every optional field the operator does not have. |
 | 543 | [Gated semantic suggestions for equivalent questions](#543-gated-semantic-suggestions-for-equivalent-questions) | Pending | 0.4 = 2×1.0÷5 | deep-reasoning | ⚠️ below floor — needs explicit user confirmation. Deduplication deliberately stops at curated determinism (ADR-007 decision 2). A model could propose that two differently-worded questions match, but the failure mode is a wrong answer on a real application, so it would need confirmation below a very high threshold and must never touch declarations. No evidence yet that the curated layers leave enough on the table to justify it. |
 | 544 | [Predict application effort from this installation's own history](#544-predict-application-effort-from-this-installations-own-history) | Pending | 0.5 = 2×1.0÷4 | standard | `EstimateAssistedEffort` is a hand-tuned additive model. `human_interactions` now records real durations per application, and preflight records real field counts, so the inputs for a measured estimate exist. Worth doing only once enough sessions have accumulated to fit against; today there are too few. |
@@ -276,6 +277,30 @@ read.
 **Not a safety defect.** The click is the employer's own Apply affordance and is how the form is
 reached at all (ADR-007 decision 5); the locator matches `Apply` / `I'm interested` only, and
 Playwright's substring matching cannot reach "Submit Application". Only the wording is wrong.
+
+### 557. `distinctiveRoleWords`'s broadest single-word entries admit clearly off-track titles that happen to share one generic word with a configured role
+
+**Filed 2026-08-17** by bugs.md #556's fix (management-track/seniority title policy), which
+deliberately left this word list untouched because it was out of that task's scope.
+
+`pkg/config/eligibility.go`'s `distinctiveRoleWords` is the fallback `TitleEligible`/`ClassifyTitle`
+use when a title does not match a configured role as a full phrase: any single word from that list
+shared between the title and a configured role is enough to admit it. Several entries are generic
+enough that they defeat the point of a distinctive-word list — `systems`, `operations`, `support`,
+`network`, `security`, `api` all appear in ordinary non-engineering job titles too.
+
+Observed live in the post-#556 reconciliation of the real actionable queue: "Senior Business Systems
+Analyst, Merchandising Systems" survived because `profile.yaml` configures "Cloud Systems
+Administrator", and both titles share the single word `systems`. A systems *analyst* role is not an
+engineering track match by any reasonable reading; it passed purely on that one shared token.
+
+**Fix shape (not yet built):** either drop the broadest tokens from `distinctiveRoleWords` (starting
+with `systems`, `operations`, `support`, `network`, `security`, `api`) or change the fallback rule to
+require two or more shared distinctive words rather than one, so a single generic token can no longer
+carry a match on its own. Needs a matrix of real off-track titles (pulled from the live queue, not
+invented) to confirm neither change also starts rejecting genuinely on-track titles that legitimately
+use only one distinctive word (e.g. "Site Reliability Engineer" against a configured "Reliability
+Engineer" role, which relies on exactly one shared word today).
 
 ### 545. "I don't have this" is a real answer the vault cannot represent
 
