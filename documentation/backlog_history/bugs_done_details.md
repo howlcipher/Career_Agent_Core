@@ -5415,3 +5415,62 @@ The distinctive-word fallback (`distinctiveRoleWords`, unchanged) includes gener
 - `documentation/backlog/bugs.md`
 - `documentation/backlog_history/bugs_done_details.md`
 
+## 551. Automatic Apply fills real employer forms and records nothing, so the card cannot describe its own agent's work
+
+**Found 2026-08-15** by two of the three independent reviewers of bugs.md #548, independently of each other, while checking whether that fix's invariant held across the whole product. Fixed 2026-08-17.
+
+### Root cause
+
+`FillSummary = what Career Agent actually did to the form` was true of the assisted path after #548 and true of nothing else. `cmd/agent/pipeline.go` handles `submitter.ErrAwaitingHumanReview` (and `ErrSubmitClickDisabled`) by logging `"%s form filled — awaiting human review"`, setting `AWAITING_REVIEW`, and calling `EnsureAssistedPlanForURL` — putting the job straight into the assisted queue. `completedWork` renders *"Job validated; tailored documents prepared; application form reached and filled for review."* on the same card. Nothing anywhere wrote `assisted_fill_summary`: `pkg/submitter/browser.go`'s `AttemptSubmit` fills real ATS forms through the same handlers (`handleGreenhouse`, `handleLever`, `handleAshby`, `handleDynamic`, `handleLinkedIn`) and the same `submitGate` copilot-mode gate `FillAssistedMappedPage` uses, but never called into `pkg/storage` to say so.
+
+Measured at filing: all 24 queued `AWAITING_REVIEW` rows had arrived through that path, and `execution_logs` carried an `INITIATED → AWAITING_REVIEW` pair for each of the 11 jobs that also had a summary row — including one filled 2026-08-12 20:01–20:03 EDT whose summary row was a preflight record from 2026-08-14 01:33, i.e. unrelated to the fill. `application_attempts` recorded automatic attempts, but keyed by URL and never read by `GetFillSummary`, `DeriveFormInventory` or `CompletedSummary`.
+
+### Product decision
+
+An automatic fill's browser always closes before the operator opens the Assisted queue — `cmd/agent` moves on to the next job in its worker loop, and the browser session that held the typed values is gone. Reporting "8 fields filled" about that would describe values that are no longer anywhere for the operator to check, which is a different — and in one direction worse — way of the card lying about its own work than #548 fixed. The fix therefore records the *attempt* (timestamp, and which machinery ran it) without inventing or instrumenting field counts for it, and changes the card to say so explicitly rather than implying the values are present.
+
+### Fix
+
+**`pkg/storage/questions.go`** — `assisted_fill_summary` gains one column, `fill_source` (`FillSourceAutomatic` | `FillSourceAssisted`, empty = unknown, same convention as `fill_attempted_at`). `MarkFillAttempted`'s body is split into an internal `markFillAttempted(conn, jobID, source, now)`; `MarkFillAttempted` itself is unchanged externally (always assisted) so `cmd/assist` and its tests needed no changes. A new `RecordAutomaticFillAttempt(applyURL string, now time.Time) error` resolves the posting's `job_funnel.id` from its URL — the same lookup `EnsureAssistedPlanForURL` already does, for the same reason `AttemptSubmit` never sees the primary key — and calls the shared body with `FillSourceAutomatic`. `ReplaceApplicationQuestions`' and `RecordAssistedAnswersApplied`'s completion writers now also stamp `fill_source = FillSourceAssisted` unconditionally (not COALESCE, unlike `fill_attempted_at`): reaching either of them means a live assisted browser just did real work, so any stale `automatic` source on the row must not survive. A migration (`backfillFillSource`, run after the existing `backfillFillAttempts`) recovers `assisted` for every pre-existing row that already carries a non-NULL `fill_attempted_at` — the only value any process could have written before this fix — and leaves every other row's source unknown.
+
+**`pkg/submitter/browser.go`** — `markAutomaticFillAttempted(applyURL)` (wrapping the indirected `recordAutomaticFillAttempt` var, so tests can stub it) is called from `AttemptSubmit` at exactly the points that dispatch to a real ATS fill handler, each only after every guard on that branch that can end `AttemptSubmit` before a control is touched has already run: the cached-mapping fast path (after `quarantineFillTargetDOM` succeeds, before `handleDynamic`), the dedicated-handler path (after the post-reveal captcha recheck and `quarantineFillTargetDOM`, before `handler(...)`), the LinkedIn path (before `handleLinkedIn`), and the Learner Module path (after the post-reveal captcha recheck, auth-wall recheck, DOM quarantine and the too-large-for-model guard, before `mapper.ExtractFormMapping`, which covers all three of its downstream branches — successful mapping, a fill that fails and falls back to Vision, and an extraction failure that falls back to Vision). This mirrors `FillAssistedMappedPage`'s `OnFormReached` discipline (#548) applied to a function with several dispatch points instead of one. The "unsupported ATS" fallback (`mapper == nil`, unreachable in production since `cmd/agent` always passes a real mapper) touches no control and is correctly never marked.
+
+**`cmd/dashboard/ui`** — `CompletedSummary.tsx` treats `fill_source === 'automatic'` as its own state: `isStaleAutomaticFill`, computed once `fillRan` is true, suppresses the ordinary filled/reused/documents ticks (even if such a row somehow carried counts in the future) and renders instead *"Career Agent previously attempted this form during Automatic Apply. That browser session has ended, so those values are not present here — run Assisted Fill to populate the current form."* `types.ts`'s `AssistedFillSummary` gains `fill_source?: string`.
+
+**`docs/adrs/ADR-007-Application-Knowledge.md`** — decision 9 records the extension, supersedes decision 8's "what this decision deliberately does not cover" paragraph, and documents why `fill_source` moves with `fill_attempted_at` (latest-attempt-wins for both) rather than opposite it, and why no field-level counts were added for automatic fills.
+
+### Tests
+
+- `pkg/storage/automatic_fill_test.go` (new): `RecordAutomaticFillAttempt` marks the attempt and source and leaves `recorded_at` untouched; an unknown posting URL is a hard error; an automatic attempt followed by a real assisted refill (`MarkFillAttempted` + `ReplaceApplicationQuestions`) overwrites both `fill_attempted_at` and `fill_source` to the assisted attempt's own values, not the automatic one's; `MarkFillAttempted` still records `FillSourceAssisted`; `backfillFillSource` leaves a preparation-only row unknown and recovers `assisted` for a pre-existing `fill_attempted_at` row; the schema upgrade adds the column to a database created before it.
+- `pkg/submitter/browser_test.go` (new, full `AttemptSubmit` end-to-end via `MockBrowser`/`MockPage`): a dedicated-handler (Greenhouse) dispatch and a cached-mapping dispatch each record exactly one automatic fill attempt against the posting's own URL before returning `ErrAwaitingHumanReview`; a dead posting, a bot-protection interstitial, and a known account-gated ATS (Workday, `ErrAuthWall`) each record none.
+- `cmd/dashboard/ui/src/components/CompletedSummary.test.tsx` (extended): an automatic-source row with no counts renders the stale-automatic sentence, not "recorded no completed fields"; an automatic-source row that somehow carries counts still renders the stale-automatic sentence and not the counts as ticks; an assisted-source row with counts renders normally and does not show the stale-automatic sentence.
+- Full suite: `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` (clean), `npx vitest run` (72 tests, all packages), `npx tsc -b` (clean).
+
+### Independent review pass
+
+A read-only self-review pass, run before closing this row, specifically checked for:
+
+- **False-positive fill records** — traced every `markAutomaticFillAttempted` call site against the guard it follows; confirmed by the new dead-posting, captcha and auth-wall tests, each asserting zero calls.
+- **False-negative fill records** — traced every place `AttemptSubmit` dispatches to an ATS handler (cached mapping, dedicated handler, LinkedIn, Learner Module success/fallback×2) and confirmed each is preceded by a marker call; confirmed the post-dispatch `isSubmitGated` check at the end of the attempt loop means a copilot-mode gate is always hit on the first attempt, so the validation-retry loop's own `submitGate` calls (reached only in genuine full-auto-submit mode, where gating is a no-op) never need a marker of their own.
+- **Preparation/fill provenance confusion** — `RecordPreparedQuestions` and its call sites are untouched; it still has no parameter through which a summary could travel.
+- **UI wording implying ephemeral values still exist** — the original `CompletedSummary` copy for a fill that "recorded no completed fields" says "Check the form before submitting", which would have been wrong for an automatic-source row (implying values to check); the new branch is checked first and never falls through to it.
+- **PII/logging** — `RecordAutomaticFillAttempt` and `markAutomaticFillAttempted` pass only a URL (already logged elsewhere on this path) and a timestamp; no field label, value, or page content crosses into storage or logs on this change.
+- **Timestamp misuse** — `recorded_at` (the #552 review clock) is untouched by the new marker on both the insert and conflict branches, verified by a dedicated test.
+- **Regression to #548** — `pkg/storage/fill_provenance_test.go` (unmodified) passes unchanged; `RecordPreparedQuestions`'s no-summary signature is untouched.
+
+No findings required a further code change beyond what is described above.
+
+### Files changed
+
+- `pkg/storage/questions.go`
+- `pkg/storage/assisted.go`
+- `pkg/storage/automatic_fill_test.go` (new)
+- `pkg/submitter/browser.go`
+- `pkg/submitter/browser_test.go`
+- `cmd/dashboard/ui/src/types.ts`
+- `cmd/dashboard/ui/src/components/CompletedSummary.tsx`
+- `cmd/dashboard/ui/src/components/CompletedSummary.test.tsx`
+- `docs/adrs/ADR-007-Application-Knowledge.md`
+- `documentation/backlog/bugs.md`
+- `documentation/backlog_history/bugs_done_details.md`
+

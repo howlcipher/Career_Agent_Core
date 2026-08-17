@@ -39,6 +39,7 @@ const job = (over: Partial<AssistedJob> = {}): AssistedJob =>
 const attempted = 'attempted this form and recorded no completed fields';
 const readNotFilled = 'No fill has been recorded for this application';
 const nothingRecorded = 'Nothing filled yet';
+const staleAutomatic = 'previously attempted this form during Automatic Apply';
 
 describe('CompletedSummary fill provenance', () => {
   // State 1: nothing has ever touched this application.
@@ -228,5 +229,68 @@ describe('CompletedSummary fill provenance', () => {
     expect(screen.queryByText(/This form also asks/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Form read/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Not prepared yet/i)).not.toBeInTheDocument();
+  });
+
+  // bugs.md #551. An automatic fill's browser is always closed by the time
+  // this card is read, so the card must say that instead of the ordinary
+  // "recorded no completed fields" sentence -- which would be read as "check
+  // the form", implying the values are sitting there to check.
+  it('says an automatic fill is stale rather than claiming zero work', () => {
+    render(
+      <CompletedSummary
+        job={job({
+          completed: summary({
+            fill_attempted_at: '2026-08-17T09:00:00Z',
+            fill_source: 'automatic',
+          }),
+        })}
+      />
+    );
+
+    expect(screen.getByText(new RegExp(staleAutomatic, 'i'))).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(attempted, 'i'))).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(readNotFilled, 'i'))).not.toBeInTheDocument();
+  });
+
+  // Even if an automatic row somehow carried counts, they describe a browser
+  // that no longer exists and must not be rendered as present-tense ticks.
+  it('does not render automatic-source counts as ticks', () => {
+    render(
+      <CompletedSummary
+        job={job({
+          completed: summary({
+            fill_attempted_at: '2026-08-17T09:00:00Z',
+            fill_source: 'automatic',
+            filled_count: 5,
+            reused_answers: 2,
+            documents: ['resume'],
+          }),
+        })}
+      />
+    );
+
+    expect(screen.getByText(new RegExp(staleAutomatic, 'i'))).toBeInTheDocument();
+    expect(screen.queryByText('5 form fields filled')).not.toBeInTheDocument();
+    expect(screen.queryByText('2 approved answers reused')).not.toBeInTheDocument();
+  });
+
+  // Once cmd/assist actually refills the form in a fresh, live browser, the
+  // row's source flips to 'assisted' and ordinary present-tense reporting
+  // resumes -- the stale sentence must not survive a real refill.
+  it('reports normally once an assisted fill supersedes an automatic one', () => {
+    render(
+      <CompletedSummary
+        job={job({
+          completed: summary({
+            fill_attempted_at: '2026-08-17T09:05:00Z',
+            fill_source: 'assisted',
+            filled_count: 5,
+          }),
+        })}
+      />
+    );
+
+    expect(screen.getByText('5 form fields filled')).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(staleAutomatic, 'i'))).not.toBeInTheDocument();
   });
 });

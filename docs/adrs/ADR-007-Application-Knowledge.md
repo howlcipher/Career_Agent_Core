@@ -12,6 +12,10 @@
 (`bugs.md` #548) in `pkg/storage/questions.go`, `cmd/preflight`, `cmd/assist` and
 `CompletedSummary.tsx`.
 
+**Amended 2026-08-17** with decision 9, which extends decision 8's fill provenance to
+Automatic Apply and adds `fill_source` (`bugs.md` #551) in `pkg/storage/questions.go`,
+`pkg/submitter/browser.go` and `CompletedSummary.tsx`.
+
 ## Context
 
 The Approved Answer Vault (ADR-adjacent; `pkg/answers`, `improvements.md` #497) already solved the
@@ -353,6 +357,67 @@ something equally uninformative about those jobs before — but it does mean the
 of this decision describes the assisted path only. Whether a copilot-mode fill whose browser has since
 closed, and whose typed values are therefore gone, should be reported to the operator as work Career
 Agent did is a genuine product question rather than an oversight, and it is filed separately.
+
+*The paragraph above is now historical. Decision 9 answers the question it deliberately left open.*
+
+### 9. `FillSummary` gains a source, because two processes can now write it and only one's browser is ever still open
+
+*Added 2026-08-17, closing bugs.md #551.*
+
+Decision 8's invariant held for the assisted path and, by its own admission, described nothing about
+Automatic Apply: `cmd/agent`'s `AttemptSubmit` reaches `AWAITING_REVIEW` through the same submit gate
+`FillAssistedMappedPage` does, fills the same employer form through the same ATS handlers, and wrote
+nothing to `assisted_fill_summary` either before or after decision 8. Two of decision 8's own
+independent reviewers filed this as a defect in its own right rather than folding it in: it is not a
+mechanical extension of the marker, because an automatic fill's browser closes before the operator
+ever opens the Assisted queue, so reporting "8 fields filled" about it would describe values that are
+no longer anywhere for the operator to check — a different, and in one direction worse, way of the
+card lying about its own work than decision 8 fixed.
+
+The fix is deliberately not a parallel table. `RecordAutomaticFillAttempt` (`pkg/storage`) is a second
+caller of the same `markFillAttempted` body `MarkFillAttempted` already used, differing only in the
+one fact that was missing: which machinery ran the attempt. `assisted_fill_summary` gains one column,
+`fill_source` (`FillSourceAutomatic` | `FillSourceAssisted`), rather than a second row shape for the
+same job — the alternative decision 7 already rejected for a different column, for the same reason:
+two places for the same application's fill history to live is two places for them to disagree.
+
+Three properties, each closing a way this could still lie:
+
+* **The marker fires only past every guard `AttemptSubmit` has that can end it before a control is
+  touched** — dead posting, bot protection, DOM quarantine, the account-gated-ATS early return — at
+  each of the handful of points in `AttemptSubmit` that actually dispatch to an ATS handler (the
+  cached-mapping fast path, the dedicated-handler path, the LinkedIn path, and the Learner Module
+  path). This is decision 8's own hard-won lesson (`FillAssistedMappedPage`'s `OnFormReached`,
+  documented above) applied to a function with several dispatch points instead of one: a dead posting
+  or a bot check must still record nothing, and a fill that reaches a handler and then fails is still
+  a fill.
+* **`fill_source` moves with `fill_attempted_at`, not against it.** Both describe the most recent fill
+  attempt, whichever process ran it; a later attempt's marker call overwrites both unconditionally,
+  because a second, later attempt by different machinery genuinely means the earlier one's history no
+  longer describes what a browser might currently hold. The one COALESCE in this design
+  (`ReplaceApplicationQuestions`' and `RecordAssistedAnswersApplied`'s fill-completion writers keeping
+  an existing `fill_attempted_at` rather than advancing it to their own completion timestamp) protects
+  a single attempt's begin-time from its own completion writer, not one attempt's history from a later
+  one — the completion writers always set `fill_source` to `FillSourceAssisted` unconditionally,
+  because reaching either of them means a live assisted browser just did real work.
+* **No field values are added anywhere.** `RecordAutomaticFillAttempt` records a timestamp and a
+  three-letter source tag against a job id resolved from the posting URL, the same lookup
+  `EnsureAssistedPlanForURL` already does for the same reason (`AttemptSubmit` never sees `job_funnel`'s
+  primary key). It does not attempt to count automatic fields filled: unlike the assisted path, which
+  already resolves questions through the vault and can diff a before/after control snapshot, the
+  automatic ATS handlers fill by direct field-by-field `Playwright` calls, and instrumenting six of them
+  to count successes was judged a larger and riskier change than the truthfulness fix itself needed —
+  `fill_source` alone is enough to keep the card honest, and a future task can add counts without
+  touching this decision.
+
+The UI consequence is the point of the whole fix: `CompletedSummary` (`cmd/dashboard/ui`) treats
+`fill_source === 'automatic'` as its own state, distinct from "a fill ran and completed nothing" —
+*"Career Agent previously attempted this form during Automatic Apply. That browser session has ended,
+so those values are not present here — run Assisted Fill to populate the current form."* — rather than
+implying the operator should "check the form" for values that cannot be there. Once `cmd/assist`'s
+refill actually reaches the form in a fresh browser, `fill_source` flips to `FillSourceAssisted` with
+real counts, and ordinary present-tense reporting resumes, because at that point the values may
+genuinely still be on screen.
 
 ## Consequences
 

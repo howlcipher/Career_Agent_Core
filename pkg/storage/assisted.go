@@ -516,10 +516,15 @@ func RecordAssistedAnswersApplied(conn *sql.DB, jobID, owner string, summary Ass
 	// non-fatal, and without this fallback that failure would leave a row
 	// carrying real counts and no marker, which the card reads as "no fill has
 	// been recorded" about answers the operator watched being typed.
+	// fill_source is excluded (latest-wins), not COALESCE, for the same reason
+	// ReplaceApplicationQuestions' fill writer sets it the same way: this
+	// statement runs only from a live assisted browser that just typed real
+	// answers, so any stale 'automatic' source this row carried is exactly
+	// wrong now -- these values are on screen in front of the operator.
 	if _, err := conn.Exec(`UPDATE assisted_fill_summary
 		SET filled_count = ?, reused_answers = ?, unresolved_count = 0, recorded_at = ?,
-			fill_attempted_at = COALESCE(fill_attempted_at, ?)
-		WHERE job_id = ?`, summary.FilledCount, summary.ReusedAnswers, now.UTC(), now.UTC(), jobID); err != nil {
+			fill_attempted_at = COALESCE(fill_attempted_at, ?), fill_source = ?
+		WHERE job_id = ?`, summary.FilledCount, summary.ReusedAnswers, now.UTC(), now.UTC(), FillSourceAssisted, jobID); err != nil {
 		return fmt.Errorf("update assisted fill summary: %w", err)
 	}
 	return nil

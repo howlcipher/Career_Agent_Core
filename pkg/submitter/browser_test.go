@@ -2050,6 +2050,209 @@ func TestAttemptSubmit_VisionFallback_EndToEndSuccess(t *testing.T) {
 	}
 }
 
+// --- bugs.md #551: the automatic pipeline must record its own fill attempts ---
+//
+// Before this fix, AttemptSubmit reached AWAITING_REVIEW through
+// ErrAwaitingHumanReview without ever writing anything to storage, so every
+// queued application arrived through a path that reported nothing about its
+// own work. markAutomaticFillAttempted is the one honest place to say a fill
+// happened; these tests pin both that it fires on the paths that really do
+// touch a form, and that it does not fire on the guards that end AttemptSubmit
+// before one is ever reached.
+
+// stubAutomaticFillRecorder replaces the package-level indirection with a
+// probe and restores it on cleanup, the same pattern cmd/assist's own
+// markFillAttempted var uses for the assisted side of this invariant.
+func stubAutomaticFillRecorder(t *testing.T) *struct {
+	calls int
+	urls  []string
+} {
+	t.Helper()
+	probe := &struct {
+		calls int
+		urls  []string
+	}{}
+	old := recordAutomaticFillAttempt
+	recordAutomaticFillAttempt = func(applyURL string, _ time.Time) error {
+		probe.calls++
+		probe.urls = append(probe.urls, applyURL)
+		return nil
+	}
+	t.Cleanup(func() { recordAutomaticFillAttempt = old })
+	return probe
+}
+
+// A dedicated-handler dispatch (Greenhouse) that reaches the copilot-mode
+// submit gate must have recorded exactly one automatic fill attempt, against
+// the posting's own URL, before returning.
+func TestAttemptSubmit_DedicatedHandlerRecordsAutomaticFillAttempt(t *testing.T) {
+	const applyURL = "https://job-boards.greenhouse.io/acme/jobs/123"
+	probe := stubAutomaticFillRecorder(t)
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Apply for this role at Acme.</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{}
+		},
+	}
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+	resumePath := t.TempDir() + "/resume.pdf"
+	generateDocs := func() (string, string, error) { return resumePath, "", nil }
+
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "Acme", applyURL, generateDocs, nil, "", true, true, true)
+
+	if !errors.Is(err, ErrAwaitingHumanReview) {
+		t.Fatalf("expected ErrAwaitingHumanReview, got %v", err)
+	}
+	if probe.calls != 1 {
+		t.Fatalf("expected exactly one automatic fill attempt recorded, got %d", probe.calls)
+	}
+	if probe.urls[0] != applyURL {
+		t.Fatalf("recorded the wrong URL: %q", probe.urls[0])
+	}
+}
+
+// The cached-mapping dispatch path is a completely separate branch from the
+// dedicated-handler one above and shares no code with it before reaching
+// handleDynamic -- it needs its own coverage.
+func TestAttemptSubmit_CachedMappingRecordsAutomaticFillAttempt(t *testing.T) {
+	const applyURL = "https://jobs.example-ats.com/acme/staff-engineer"
+	probe := stubAutomaticFillRecorder(t)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if err := storage.InitDBWithPath(dbPath); err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer storage.CloseDB()
+	domain := ExtractDomain(applyURL)
+	if err := storage.SaveFormMapping(domain, `{"fields": {"submit_button": "button#submit"}, "labels": {}}`); err != nil {
+		t.Fatal(err)
+	}
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Staff Engineer role. Apply below.</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{}
+		},
+	}
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+	resumePath := t.TempDir() + "/resume.pdf"
+	generateDocs := func() (string, string, error) { return resumePath, "", nil }
+
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "Acme", applyURL, generateDocs, nil, "", true, true, true)
+
+	if !errors.Is(err, ErrAwaitingHumanReview) {
+		t.Fatalf("expected ErrAwaitingHumanReview, got %v", err)
+	}
+	if probe.calls != 1 {
+		t.Fatalf("expected exactly one automatic fill attempt recorded via the cached-mapping branch, got %d", probe.calls)
+	}
+}
+
+// The guard that matters most: an expired posting must end AttemptSubmit
+// before any handler runs, and must therefore record nothing. Marking here
+// would claim Career Agent engaged a form that this guard proved was never
+// reachable -- precisely the defect #548's independent review found in its
+// own first cut, with cmd/agent as the new place it could recur.
+func TestAttemptSubmit_DeadPostingRecordsNoAutomaticFillAttempt(t *testing.T) {
+	const applyURL = "https://job-boards.greenhouse.io/acme/jobs/999"
+	probe := stubAutomaticFillRecorder(t)
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>This job is no longer accepting applications.</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{}
+		},
+	}
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "Acme", applyURL, func() (string, string, error) {
+		t.Fatal("document generation should never run for a dead posting")
+		return "", "", nil
+	}, nil, "", true, true, true)
+
+	if err == nil {
+		t.Fatal("expected an error for a dead posting")
+	}
+	if probe.calls != 0 {
+		t.Fatalf("a dead posting was recorded as an automatic fill attempt (%d calls)", probe.calls)
+	}
+}
+
+// The other guard #548's review found missing in its first cut: a
+// bot-protection interstitial must also end AttemptSubmit unmarked.
+func TestAttemptSubmit_CaptchaBlockedRecordsNoAutomaticFillAttempt(t *testing.T) {
+	const applyURL = "https://job-boards.greenhouse.io/acme/jobs/998"
+	probe := stubAutomaticFillRecorder(t)
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "Please verify you are human before continuing.",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{}
+		},
+	}
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "Acme", applyURL, func() (string, string, error) {
+		t.Fatal("document generation should never run behind a bot-protection challenge")
+		return "", "", nil
+	}, nil, "", true, true, true)
+
+	if !errors.Is(err, ErrCaptchaBlocked) {
+		t.Fatalf("expected ErrCaptchaBlocked, got %v", err)
+	}
+	if probe.calls != 0 {
+		t.Fatalf("a bot-protection challenge was recorded as an automatic fill attempt (%d calls)", probe.calls)
+	}
+}
+
+// A known account-gated ATS (Workday) has no pre-auth form at all -- the
+// documents are generated for the manual queue, but no control is ever
+// touched, and no attempt may be recorded.
+func TestAttemptSubmit_AuthGatedATSRecordsNoAutomaticFillAttempt(t *testing.T) {
+	const applyURL = "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/123"
+	probe := stubAutomaticFillRecorder(t)
+
+	mockPage := &MockPage{
+		urlValue:     applyURL,
+		contentValue: "<html><body>Staff Engineer at Acme.</body></html>",
+		locatorFunc: func(selector string, options ...playwright.PageLocatorOptions) playwright.Locator {
+			return &MockLocator{}
+		},
+	}
+	mockCtx := &MockContext{newPageFunc: func() (playwright.Page, error) { return mockPage, nil }}
+	mockBrowser := &MockBrowser{newContextFunc: func(options ...playwright.BrowserNewContextOptions) (playwright.BrowserContext, error) {
+		return mockCtx, nil
+	}}
+	resumePath := t.TempDir() + "/resume.pdf"
+	generateDocs := func() (string, string, error) { return resumePath, "", nil }
+
+	err := AttemptSubmit(mockBrowser, nil, nil, nil, "Acme", applyURL, generateDocs, nil, "", true, true, true)
+
+	if !errors.Is(err, ErrAuthWall) {
+		t.Fatalf("expected ErrAuthWall, got %v", err)
+	}
+	if probe.calls != 0 {
+		t.Fatalf("an account-gated ATS with no pre-auth form was recorded as an automatic fill attempt (%d calls)", probe.calls)
+	}
+}
+
 // --- bugs.md #61: the cover letter must actually reach the form ---
 //
 // Before this fix, handleDynamic/handleGreenhouse/handleLever filled name,

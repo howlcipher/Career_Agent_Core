@@ -101,7 +101,40 @@ type AssistedFillSummary struct {
 	//     this column existed is unknown, and the migration deliberately does
 	//     not invent history for them.
 	FillAttemptedAt string `json:"fill_attempted_at,omitempty"`
+	// FillSource is which machinery ran the fill attempt FillAttemptedAt
+	// describes: FillSourceAutomatic or FillSourceAssisted. Empty means
+	// unknown, for the same reason FillAttemptedAt can be empty -- a row
+	// written before this column existed carries no evidence either way.
+	//
+	// Both fields move together: each records the *most recent* fill
+	// attempt's own moment and machinery, and a marker call always
+	// overwrites both with that attempt's fresh values -- there is no
+	// "earliest wins" here, only "the last fill to begin wins" for the pair.
+	// The one place a completion writer's COALESCE keeps an existing
+	// fill_attempted_at is within a single attempt, so the writer's own
+	// fallback timestamp (supplied for a fill that somehow reaches it
+	// without a marker) cannot advance an attempt's begin-time to its
+	// end-time; it says nothing about attempts started by something else.
+	//
+	// FillSource is what an unadorned FillAttemptedAt cannot say (bugs.md
+	// #551): an automatic attempt's browser is always closed by the time
+	// this row is read -- cmd/agent moves on before the operator ever opens
+	// the Assisted queue -- while an assisted attempt's browser may still be
+	// open in front of them. cmd/assist's refill, when it runs, opens a
+	// fresh browser and overwrites this row with its own real counts and
+	// FillSourceAssisted -- at that point the values genuinely may still be
+	// on screen, and the card is entitled to say so again.
+	FillSource string `json:"fill_source,omitempty"`
 }
+
+// The two values FillSource ever holds. A closed, tiny vocabulary rather than
+// a free-form string, for the same reason the ADR-006 unavailability reasons
+// are closed: this travels to the UI, and a typo here would silently render
+// as neither known state instead of failing loudly.
+const (
+	FillSourceAutomatic = "automatic"
+	FillSourceAssisted  = "assisted"
+)
 
 // EnsureQuestionSchema creates the per-application question log.
 func EnsureQuestionSchema(conn *sql.DB) error {
@@ -160,7 +193,11 @@ func EnsureQuestionSchema(conn *sql.DB) error {
 		-- genuinely unknown, not a denial. Nullable on purpose: a NOT NULL
 		-- column with a zero default would turn "we never knew" into "it never
 		-- happened", which is the same class of lie as #548 itself.
-		fill_attempted_at DATETIME
+		fill_attempted_at DATETIME,
+		-- Which machinery ran the fill attempt fill_attempted_at describes:
+		-- 'automatic' or 'assisted' (see the FillSource doc comment). Empty
+		-- means unknown, same convention as every other unknown here.
+		fill_source TEXT NOT NULL DEFAULT ''
 	);
 	-- Transient. A row here lives only from the moment the operator presses
 	-- Send to the moment the assisted browser reads it, and TakePendingAnswers
@@ -216,10 +253,14 @@ func upgradeQuestionSchema(conn *sql.DB) error {
 	// timestamp nobody earned.
 	if err := addQuestionSchemaColumns(conn, "assisted_fill_summary", []questionSchemaColumn{
 		{"fill_attempted_at", "DATETIME"},
+		{"fill_source", "TEXT NOT NULL DEFAULT ''"},
 	}); err != nil {
 		return err
 	}
 	if err := backfillFillAttempts(conn); err != nil {
+		return err
+	}
+	if err := backfillFillSource(conn); err != nil {
 		return err
 	}
 	// After the ALTERs, never alongside the CREATE TABLE: on a database that
@@ -260,6 +301,27 @@ func backfillFillAttempts(conn *sql.DB) error {
 		  AND recorded_at != ''
 		  AND (filled_count > 0 OR reused_answers > 0 OR documents != '')`); err != nil {
 		return fmt.Errorf("backfill fill attempts: %w", err)
+	}
+	return nil
+}
+
+// backfillFillSource dates every row this database could hold before
+// FillSource existed. bugs.md #551, the automatic pipeline recording a fill
+// attempt at all, is what introduces the *other* value this column can carry
+// -- until that fix shipped, cmd/assist's refill was the only process that
+// ever wrote fill_attempted_at, so any row already carrying it is evidence of
+// an assisted fill and nothing else. Must run after backfillFillAttempts:
+// that call backfills fill_attempted_at itself for a class of pre-#548 rows,
+// and this one needs to see the result, not just what a fill wrote directly.
+//
+// Rows with no fill_attempted_at stay ” -- unknown, same as the column's
+// zero value for a brand new row nobody has touched.
+func backfillFillSource(conn *sql.DB) error {
+	if _, err := conn.Exec(`UPDATE assisted_fill_summary
+		SET fill_source = ?
+		WHERE fill_source = ''
+		  AND fill_attempted_at IS NOT NULL`, FillSourceAssisted); err != nil {
+		return fmt.Errorf("backfill fill source: %w", err)
 	}
 	return nil
 }
@@ -488,8 +550,8 @@ func replaceQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestio
 	documents := strings.Join(summary.Documents, ",")
 	labels := strings.Join(summary.FilledLabels, "\n")
 	if _, err := tx.Exec(`INSERT INTO assisted_fill_summary
-		(job_id, filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(job_id, filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at, fill_source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
 			filled_count = excluded.filled_count,
 			reused_answers = excluded.reused_answers,
@@ -507,8 +569,18 @@ func replaceQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestio
 			-- The excluded value is still supplied so that a fill which somehow
 			-- reaches this writer without a marker still records one. This
 			-- statement can only be reached by a fill.
-			fill_attempted_at = COALESCE(assisted_fill_summary.fill_attempted_at, excluded.fill_attempted_at)`,
-		jobID, summary.FilledCount, summary.ReusedAnswers, documents, labels, len(questions), now, now); err != nil {
+			fill_attempted_at = COALESCE(assisted_fill_summary.fill_attempted_at, excluded.fill_attempted_at),
+			-- fill_source is always excluded here, never COALESCE -- unlike
+			-- fill_attempted_at just above, this column has no within-attempt
+			-- begin-vs-completion race to protect against. This writer only
+			-- ever runs from an assisted refill (bugs.md #551's automatic
+			-- marker never reaches this function -- see
+			-- RecordAutomaticFillAttempt), and a row a live assisted browser
+			-- just refilled with real counts is exactly the case where a
+			-- stale 'automatic' source must not survive: those values are on
+			-- screen again, in front of the operator.
+			fill_source = excluded.fill_source`,
+		jobID, summary.FilledCount, summary.ReusedAnswers, documents, labels, len(questions), now, now, FillSourceAssisted); err != nil {
 		return fmt.Errorf("record assisted fill summary: %w", err)
 	}
 	return tx.Commit()
@@ -530,7 +602,43 @@ func replaceQuestions(conn *sql.DB, jobID string, questions []ApplicationQuestio
 // silently writes nothing when no row exists yet, and an attempt marker that
 // disappears on the one path where no preparation preceded it would be worse
 // than no marker.
+//
+// This is the assisted-source half of markFillAttempted. It exists as its own
+// exported name, unchanged from before FillSource, so cmd/assist and its
+// tests do not have to learn a new argument for a fact that, on this path, is
+// always the same value.
 func MarkFillAttempted(conn *sql.DB, jobID string, now time.Time) error {
+	return markFillAttempted(conn, jobID, FillSourceAssisted, now)
+}
+
+// RecordAutomaticFillAttempt is MarkFillAttempted's counterpart for
+// cmd/agent's automatic pipeline (bugs.md #551).
+//
+// AttemptSubmit, unlike cmd/assist's refill, only ever knows the posting's
+// URL -- it runs long before any assisted queue row exists for the job, so
+// there is no jobID to be handed. The lookup below is the same one
+// EnsureAssistedPlanForURL already does for the same reason.
+//
+// Call this only from the point past every guard that can end AttemptSubmit
+// before a single control is touched (dead posting, bot protection, DOM
+// quarantine, account-gated ATS) -- exactly the discipline
+// FillAssistedMappedPage's OnFormReached already enforces for the assisted
+// side, and for the same reason: marking any earlier would claim Career
+// Agent engaged a form that a guard proved was never reachable.
+func RecordAutomaticFillAttempt(applyURL string, now time.Time) error {
+	if db == nil {
+		return errors.New("database not initialized")
+	}
+	var id int
+	if err := db.QueryRow(`SELECT id FROM job_funnel WHERE url = ?`, NormalizeURL(applyURL)).Scan(&id); err != nil {
+		return fmt.Errorf("find job for automatic fill attempt: %w", err)
+	}
+	return markFillAttempted(db, fmt.Sprintf("%d", id), FillSourceAutomatic, now)
+}
+
+// markFillAttempted is the shared body: record that a fill began, and which
+// machinery began it.
+func markFillAttempted(conn *sql.DB, jobID, source string, now time.Time) error {
 	if conn == nil {
 		return errors.New("database not initialized")
 	}
@@ -553,12 +661,21 @@ func MarkFillAttempted(conn *sql.DB, jobID string, now time.Time) error {
 	// nothing has written a review-ready time for this application.
 	//
 	// The conflict branch leaves recorded_at alone for the same reason.
+	//
+	// fill_attempted_at and fill_source both move to this call's own values
+	// unconditionally on conflict -- this function is *the* marker, called
+	// once at the start of whichever attempt is happening now, so a second
+	// call overwriting the first is correct: it means a second, later
+	// attempt genuinely just began, possibly by different machinery. See the
+	// FillSource doc comment for the one place downstream (a completion
+	// writer's own COALESCE) that instead preserves what this call wrote.
 	if _, err := conn.Exec(`INSERT INTO assisted_fill_summary
-		(job_id, unresolved_count, recorded_at, fill_attempted_at)
-		VALUES (?, 0, '', ?)
+		(job_id, unresolved_count, recorded_at, fill_attempted_at, fill_source)
+		VALUES (?, 0, '', ?, ?)
 		ON CONFLICT(job_id) DO UPDATE SET
-			fill_attempted_at = excluded.fill_attempted_at`,
-		jobID, stamp); err != nil {
+			fill_attempted_at = excluded.fill_attempted_at,
+			fill_source = excluded.fill_source`,
+		jobID, stamp, source); err != nil {
 		return fmt.Errorf("mark fill attempted: %w", err)
 	}
 	return nil
@@ -622,10 +739,10 @@ func GetFillSummary(conn *sql.DB, jobID string) (AssistedFillSummary, error) {
 		return summary, errors.New("database not initialized")
 	}
 	var documents, labels string
-	var recordedAt, fillAttemptedAt sql.NullString
-	err := conn.QueryRow(`SELECT filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at
+	var recordedAt, fillAttemptedAt, fillSource sql.NullString
+	err := conn.QueryRow(`SELECT filled_count, reused_answers, documents, filled_labels, unresolved_count, recorded_at, fill_attempted_at, fill_source
 		FROM assisted_fill_summary WHERE job_id = ?`, jobID).
-		Scan(&summary.FilledCount, &summary.ReusedAnswers, &documents, &labels, &summary.UnresolvedCount, &recordedAt, &fillAttemptedAt)
+		Scan(&summary.FilledCount, &summary.ReusedAnswers, &documents, &labels, &summary.UnresolvedCount, &recordedAt, &fillAttemptedAt, &fillSource)
 	if errors.Is(err, sql.ErrNoRows) {
 		return summary, nil
 	}
@@ -650,6 +767,7 @@ func GetFillSummary(conn *sql.DB, jobID string) (AssistedFillSummary, error) {
 	if parsed, ok := parseAssistedTime(fillAttemptedAt.String); ok {
 		summary.FillAttemptedAt = parsed.Format(time.RFC3339)
 	}
+	summary.FillSource = fillSource.String
 	return summary, nil
 }
 

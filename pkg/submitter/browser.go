@@ -1430,6 +1430,32 @@ func newSubmitPageWithRecovery(browser playwright.Browser, applyURL string) (*se
 	return newSubmitPage(browser, applyURL)
 }
 
+// recordAutomaticFillAttempt is storage.RecordAutomaticFillAttempt, indirected
+// so tests can substitute it without a real database. A write failure here is
+// deliberately non-fatal and only logged: bugs.md #551 exists because the
+// automatic pipeline recorded nothing about its own fills, and refusing to
+// fill an employer's form because the record *of* filling it failed to write
+// would be a strictly worse trade.
+var recordAutomaticFillAttempt = storage.RecordAutomaticFillAttempt
+
+// markAutomaticFillAttempted is AttemptSubmit's only honest place to say a
+// fill happened, mirroring FillAssistedMappedPage's OnFormReached (bugs.md
+// #548) on the automatic side. Call it only once every guard capable of
+// ending AttemptSubmit before a control is touched -- dead posting, bot
+// protection, DOM quarantine, account-gated ATS, and (on the branches that
+// re-check after a reveal click) the post-click captcha and auth-wall
+// checks -- has already run for the branch about to dispatch to a fill
+// handler. Calling it any earlier would claim Career Agent engaged a form
+// that a guard proved was never reachable; calling it later, inside a
+// per-ATS handler, would need six call sites instead of one per branch and
+// would still miss the cached-mapping and Learner Module dispatch points,
+// which share no handler code at all.
+func markAutomaticFillAttempted(applyURL string) {
+	if err := recordAutomaticFillAttempt(applyURL, time.Now()); err != nil {
+		log.Printf("[Auto-Submit] Could not record that an automatic fill was attempted; the fill itself proceeds: %v", err)
+	}
+}
+
 // AttemptSubmit scaffolds the architecture for headless browser auto-submission.
 // Because job boards use heavily varied Application Tracking Systems (ATS) (like Workday, Greenhouse, Lever),
 // an automated submitter requires custom DOM-parsing logic per platform.
@@ -1518,6 +1544,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 			return fmt.Errorf("cached form rejected before model use: %w", err)
 		}
 		urlBeforeClick := page.URL()
+		markAutomaticFillAttempted(applyURL)
 		dynErr := handleDynamic(cachedTarget, resumePath, coverPath, pii, mappingJSON, copilotMode, autoSubmitClick)
 
 		// improvements.md #471: a crashed browser target here would otherwise
@@ -1616,6 +1643,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 		if !initialAttemptComplete {
 			if strings.Contains(urlLower, "linkedin.com/jobs") {
 				urlBeforeSubmitClick = page.URL()
+				markAutomaticFillAttempted(applyURL)
 				execErr = handleLinkedIn(page, resumePath, pii, copilotMode, autoSubmitClick)
 			} else if handler, atsName := dedicatedATSHandler(applyURL); handler != nil {
 				// Bug #47: the dedicated handlers were never wired to
@@ -1640,6 +1668,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				); err != nil {
 					return fmt.Errorf("%s form rejected before use: %w", atsName, err)
 				}
+				markAutomaticFillAttempted(applyURL)
 				execErr = handler(target, resumePath, coverPath, pii, copilotMode, autoSubmitClick)
 			} else if mapper != nil {
 				log.Printf("[Auto-Submit] Unknown ATS %s. Triggering Learner Module...", domain)
@@ -1696,6 +1725,7 @@ func AttemptSubmit(browser playwright.Browser, filter *security.QuarantineLayer,
 				if likelyExceedsModelContext(prunedHTML, fullProfileContext) {
 					return fmt.Errorf("%w: %s", ErrFormTooLargeForModel, domain)
 				}
+				markAutomaticFillAttempted(applyURL)
 				newMappingJSON, err := mapper.ExtractFormMapping(prunedHTML, fullProfileContext)
 				if err == nil && newMappingJSON != "" {
 					log.Printf("[Learner Module] Successfully mapped %s. Saving and re-attempting...", domain)

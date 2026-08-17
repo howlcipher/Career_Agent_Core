@@ -171,6 +171,17 @@ export interface AssistedFillSummary {
    * genuinely unknown and must never be described as either.
    */
   fill_attempted_at?: string;
+  /**
+   * Which machinery ran the *most recent* fill attempt: 'automatic' or
+   * 'assisted'. Absent means unknown, same convention as `fill_attempted_at`.
+   *
+   * This is what `fill_attempted_at` alone cannot say (bugs.md #551): an
+   * automatic fill's browser is always closed by the time this card is read,
+   * so its counts describe work that has evaporated, while an assisted fill's
+   * counts describe a browser the operator may still have open in front of
+   * them. Never render `filled_count` etc. without checking this first.
+   */
+  fill_source?: string;
 }
 
 export interface AssistedEffort {
