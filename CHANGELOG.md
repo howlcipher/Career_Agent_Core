@@ -17,7 +17,15 @@ from 121 mostly off-track entries down to 40, weighted toward
 DevOps/Platform/SRE/Infrastructure/Cloud. A live reconciliation
 (`cmd/pruneassisted`) against the real queue removed 3 management-track rows
 and 43 off-track role matches, leaving a queue actually made of the target
-engineering tracks. Full account: `documentation/backlog_history/bugs_done_details.md` item #556.
+engineering tracks. An independent 5-reviewer round then found and fixed two
+more gaps on the same branch: "Senior SRE"/"SRE Engineer" were rejected
+because no configured role spelled out the bare acronym (added), and the
+DevOps/AI query-mix ratio was rebalanced after a live measurement showed
+DevOps still under-produced relative to target. Two lower-priority findings
+(a `Lead`-word ambiguity in management detection, a comma-normalization edge
+case) were deliberately left open as improvements.md #558, since the
+evidence available didn't support a confident fix either way. Full account:
+`documentation/backlog_history/bugs_done_details.md` item #556.
 
 ## 2026-08-15 — Closed the two logging leaks `bugs.md` #549 named, and a third an independent reviewer found
 

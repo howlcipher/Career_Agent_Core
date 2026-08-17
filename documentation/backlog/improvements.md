@@ -49,6 +49,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 542 | [Editable application profile, answer management, and the companion field query](#542-editable-application-profile-answer-management-and-the-companion-field-query) | Done (2026-08-13) | — | standard | `pii.yaml` edited in place rather than copied, with atomic replace, a backup and no value ever logged; vault edit/revoke with derived policies and recognised phrasings; `GET /api/knowledge/field` implements ADR-005's companion query. |
 | 550 | [Preparation runs log under an `[Auto-Submit]` prefix, so a read-only inspection reads like a submission](#550-preparation-runs-log-under-an-auto-submit-prefix-so-a-read-only-inspection-reads-like-a-submission) | Pending | 1.5 = 3×1.0÷2 | mechanical | Filed 2026-08-14 by bugs.md #547's independent safety review. `clickApplyIfPresent` (`browser.go:1068`) carries the prefix with the function rather than the caller, so a preparation run — which cannot fill or submit — writes `[Auto-Submit] Navigating to …` and `[Auto-Submit] Clicked an Apply-labeled element` into `dashboard.log`. Confirmed on a real run. ADR-007 already notes it. Cosmetic, but it makes the one log an operator would check to reassure themselves say the opposite of the truth. |
 | 557 | [`distinctiveRoleWords`'s broadest single-word entries admit clearly off-track titles that happen to share one generic word with a configured role](#557-distinctiverolewordss-broadest-single-word-entries-admit-clearly-off-track-titles-that-happen-to-share-one-generic-word-with-a-configured-role) | Pending | 1.0 = 3×1.0÷3 | standard | Filed 2026-08-17 by bugs.md #556's fix. `pkg/config/eligibility.go`'s `distinctiveRoleWords` includes generic tokens (`systems`, `operations`, `support`, `network`, `security`, `api`, ...) that can match a completely unrelated title against a configured role via one shared word alone — e.g. a "Senior Business Systems Analyst, Merchandising Systems" title passed the post-#556 role gate purely via the shared word `systems` against a configured "Cloud Systems Administrator" role. #556 deliberately left this word list untouched (its scope was career-track-vs-management and seniority, not this list). Needs either narrowing the broadest tokens or requiring 2+ shared distinctive words for a non-phrase match. |
+| 558 | [`ClassifyTitle`'s management-word detection has no representation for "Lead", and normalizes commas away, letting reporting-line text leak into the check](#558-classifytitles-management-word-detection-has-no-representation-for-lead-and-normalizes-commas-away-letting-reporting-line-text-leak-into-the-check) | Pending | 0.7 = 2×1.0÷3 | deep-reasoning | Filed 2026-08-17 by bugs.md #556's independent review (Reviewers A and B). `managementTitleWords` (`pkg/config/title_policy.go`) has no entry for `lead`, `supervisor`, `president`, `founder`, `owner`, C-suite acronyms, or `product owner`/`scrum master` — genuine false positives for e.g. "Founder & DevOps Lead". Not a quick add: Reviewer B independently found `lead` is also a common senior-IC (not people-manager) title at many companies ("DevOps Lead", "Platform Lead"), so blanket-adding it trades one error class for another rather than removing it — needs real-market evidence (a sample of actual `Lead`-titled postings and their seniority pages) before deciding, which is why this is `deep-reasoning`. Separately, `normalizeForRemoteCheck` turns commas into spaces, so a title carrying trailing reporting-line text ("DevOps Engineer, reporting to the VP of Engineering") is rejected as management-track by the `vp` it picks up from that suffix — no evidence yet that a real feed publishes such titles, but worth a targeted fix (stop normalizing at the first comma) if one ever is. |
 | 545 | ["I don't have this" is a real answer the vault cannot represent](#545-i-dont-have-this-is-a-real-answer-the-vault-cannot-represent) | Pending | 2.0 = 4×1.0÷2 | standard | Found 2026-08-13 on the real queue: 5 optional Twitter fields the operator has no account for. `Store.Save` refuses an empty answer by design, so the only options are typing "N/A" into four employers' optional fields or letting the question sit in the inbox forever. Recurs for every optional field the operator does not have. |
 | 543 | [Gated semantic suggestions for equivalent questions](#543-gated-semantic-suggestions-for-equivalent-questions) | Pending | 0.4 = 2×1.0÷5 | deep-reasoning | ⚠️ below floor — needs explicit user confirmation. Deduplication deliberately stops at curated determinism (ADR-007 decision 2). A model could propose that two differently-worded questions match, but the failure mode is a wrong answer on a real application, so it would need confirmation below a very high threshold and must never touch declarations. No evidence yet that the curated layers leave enough on the table to justify it. |
 | 544 | [Predict application effort from this installation's own history](#544-predict-application-effort-from-this-installations-own-history) | Pending | 0.5 = 2×1.0÷4 | standard | `EstimateAssistedEffort` is a hand-tuned additive model. `human_interactions` now records real durations per application, and preflight records real field counts, so the inputs for a measured estimate exist. Worth doing only once enough sessions have accumulated to fit against; today there are too few. |
@@ -301,6 +302,42 @@ carry a match on its own. Needs a matrix of real off-track titles (pulled from t
 invented) to confirm neither change also starts rejecting genuinely on-track titles that legitimately
 use only one distinctive word (e.g. "Site Reliability Engineer" against a configured "Reliability
 Engineer" role, which relies on exactly one shared word today).
+
+### 558. `ClassifyTitle`'s management-word detection has no representation for "Lead", and normalizes commas away, letting reporting-line text leak into the check
+
+**Filed 2026-08-17** by bugs.md #556's independent review round (Reviewers A and B, working
+independently and reaching complementary conclusions).
+
+**Missing management words.** `managementTitleWords`/`managementTitlePhrases`
+(`pkg/config/title_policy.go`) currently cover `director`, `vp`, `chief`, `manager`, `vice
+president`, `head of`. Reviewer A found realistic titles that read as management/leadership but
+match none of these: "Founder & DevOps Lead", "President of Cloud Operations", "CTO - Cloud
+Architecture", "Product Owner - Platform", "Scrum Master - DevOps Team", "Supervisor of DevOps".
+
+**Why `lead` specifically was not just added.** Reviewer B, working independently on false
+negatives, found the same word cuts the other way in real postings: "DevOps Lead" and "Platform
+Lead" are common titles for senior individual contributors (not people managers) at many
+companies — the word is genuinely overloaded in the market, not a clean management signal the way
+"Director" or "Manager" are. Adding it to `managementTitleWords` would fix Reviewer A's false
+positives at the cost of introducing an unknown number of Reviewer-B-style false negatives, and
+nothing in this task's evidence says which effect is larger. This needs a real sample of `Lead`-titled
+postings (pulled from live discovery, not invented) checked against their actual job descriptions for
+people-management language, before deciding whether to treat `Lead` as management, IC, or something
+in between (e.g. only management when paired with "Team"/"Engineering"/"Technical" as a prefix).
+`Supervisor`, `President`, `Founder`, `Owner`, and the C-suite acronyms are much lower-ambiguity and
+could likely be added directly in a follow-up, once someone re-checks each against a same-sized
+sample of real postings the way this note asks for `Lead`.
+
+**Comma-normalization edge case.** `normalizeForRemoteCheck` collapses every non-alphanumeric
+character (including commas) to a space before either the management check or the role match runs.
+A title carrying trailing reporting-line or team metadata — e.g. "DevOps Engineer, reporting to the
+VP of Engineering" — normalizes to `devops engineer reporting to the vp of engineering`, and the `vp`
+in that suffix trips `ManagementTrackTitle` even though the actual title is "DevOps Engineer". No
+evidence yet that any real feed or ATS publishes titles with this kind of embedded suffix (`job_title`
+columns observed so far in `applications.db` are short and clean), so this is not fixed speculatively;
+if a future discovery source is found to do this, the fix is narrow — stop normalizing at the first
+comma/dash when extracting the title, before this check ever runs, rather than changing the check
+itself.
 
 ### 545. "I don't have this" is a real answer the vault cannot represent
 

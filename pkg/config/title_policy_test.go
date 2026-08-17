@@ -18,6 +18,9 @@ var targetTrackRoles = []string{
 	"Cloud Platform Engineer",
 	"Site Reliability Engineer",
 	"Senior Site Reliability Engineer",
+	"SRE",
+	"Senior SRE",
+	"SRE Engineer",
 	"Infrastructure Engineer",
 	"Infrastructure Automation Engineer",
 	"Cloud Infrastructure Engineer",
@@ -36,6 +39,13 @@ func TestClassifyTitle_PrimaryAccepted(t *testing.T) {
 		"Platform Engineer",
 		"Senior Site Reliability Engineer",
 		"Cloud Platform Engineer",
+		// Bare-acronym SRE titles (independent review Reviewer B, task
+		// instructions #556): "sre" is a distinctive word but no phrase in
+		// targetTrackRoles spells out the acronym on its own, only "Site
+		// Reliability Engineer" (sharing "reliability"), so these need
+		// their own explicit role phrase to match at all.
+		"Senior SRE",
+		"SRE Engineer",
 	}
 	for _, title := range titles {
 		cls := ClassifyTitle(title, targetTrackRoles, false, true)
