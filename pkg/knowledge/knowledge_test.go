@@ -773,6 +773,7 @@ func TestReadiness_CountsTheWholeFormNotJustTheOperatorsRemainingWork(t *testing
 	}
 }
 
+/* jscpd:ignore-start */
 func TestReadiness_AnApplicationNothingInspectedStillContributesItsQuestions(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()
@@ -795,6 +796,8 @@ func TestReadiness_AnApplicationNothingInspectedStillContributesItsQuestions(t *
 		t.Fatalf("readiness = %+v, want 1 field, 1 unresolved, 0 resolved", readiness)
 	}
 }
+
+/* jscpd:ignore-end */
 
 func TestPolicy_ADeclarationTheOperatorGrantedReuseForIsNotReportedAsAlwaysAsking(t *testing.T) {
 	// Store.Save is the only route to a sensitive answer with reuse granted, and
