@@ -135,9 +135,14 @@ export function AssistedJobCard({
               </ConsoleButton>
             ))}
           {job.next_action.can_continue && !needsAnswers && !applyingAnswers && (
-            <ConsoleButton variant="ghost" onClick={() => onContinue(job)} disabled={!job.live_browser}>
-              I completed this step — Continue
-            </ConsoleButton>
+            <>
+              <p>
+                Once the employer form is open, fill known information from Your Details and approved answers.
+              </p>
+              <ConsoleButton variant="ghost" onClick={() => onContinue(job)} disabled={!job.live_browser}>
+                Fill Known Fields &amp; Continue
+              </ConsoleButton>
+            </>
           )}
           {job.next_action.requires_explicit_submit && (
             <ConsoleButton variant="ghost" onClick={() => onConfirm(job)}>
