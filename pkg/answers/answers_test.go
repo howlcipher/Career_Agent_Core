@@ -321,6 +321,18 @@ func TestResolveFromPattern_UnconfiguredFactStaysUnresolvedRatherThanGuessed(t *
 
 // --- Education ------------------------------------------------------------
 
+// runPromptCases runs a table of prompts through the resolver and applies a
+// per-case check. Shared by the education phrasing tests.
+func runPromptCases(t *testing.T, store *Store, pii *config.PII, cases []string, check func(t *testing.T, prompt string, res Resolution)) {
+	t.Helper()
+	for _, prompt := range cases {
+		t.Run(prompt, func(t *testing.T) {
+			res := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			check(t, prompt, res)
+		})
+	}
+}
+
 func educationPII() *config.PII {
 	pii := &config.PII{}
 	pii.Education = []config.Education{
@@ -343,17 +355,14 @@ func TestResolveFromPattern_EducationFamilyMatchesCommonPhrasings(t *testing.T) 
 		"Degree earned",
 		"College/University attended",
 	}
-	for _, prompt := range cases {
-		t.Run(prompt, func(t *testing.T) {
-			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
-			if !resolution.Resolved || resolution.PatternID != "education" {
-				t.Fatalf("%q did not reach the education pattern: %+v", prompt, resolution)
-			}
-			if !strings.Contains(resolution.Answer, "B.S.") {
-				t.Errorf("expected configured education in answer, got %q", resolution.Answer)
-			}
-		})
-	}
+	runPromptCases(t, store, pii, cases, func(t *testing.T, prompt string, resolution Resolution) {
+		if !resolution.Resolved || resolution.PatternID != "education" {
+			t.Fatalf("%q did not reach the education pattern: %+v", prompt, resolution)
+		}
+		if !strings.Contains(resolution.Answer, "B.S.") {
+			t.Errorf("expected configured education in answer, got %q", resolution.Answer)
+		}
+	})
 }
 
 func TestResolveFromPattern_EducationVariantsCanonicalizeTogether(t *testing.T) {
@@ -423,17 +432,14 @@ func TestResolveFromPattern_EducationDoesNotClaimRoleSpecificOrEssayQuestions(t 
 		"Why did you choose your field of study?",
 		"Do you have a CS degree?",
 	}
-	for _, prompt := range cases {
-		t.Run(prompt, func(t *testing.T) {
-			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
-			if resolution.PatternID == "education" {
-				t.Fatalf("%q must not be treated as generic education summary: %+v", prompt, resolution)
-			}
-			if resolution.AutoFill {
-				t.Fatalf("%q must not auto-fill: %+v", prompt, resolution)
-			}
-		})
-	}
+	runPromptCases(t, store, pii, cases, func(t *testing.T, prompt string, resolution Resolution) {
+		if resolution.PatternID == "education" {
+			t.Fatalf("%q must not be treated as generic education summary: %+v", prompt, resolution)
+		}
+		if resolution.AutoFill {
+			t.Fatalf("%q must not auto-fill: %+v", prompt, resolution)
+		}
+	})
 }
 
 func TestEducation_ApprovalAndReuseLifecycle(t *testing.T) {
@@ -718,6 +724,10 @@ func TestWorkAuthorizationAndSponsorship_StaySensitiveUntilApproved(t *testing.T
 	}
 }
 
+/* jscpd:ignore-start */
+// Work-authorization and sponsorship lifecycle tests mirror each other by
+// design: the safety property is that two similarly-shaped sensitive answers
+// are handled identically by the approval/reuse/revoke path.
 func TestWorkAuthorization_ApprovalAndReuseLifecycle(t *testing.T) {
 	store := newTestStore(t)
 	pii := &config.PII{Work: config.WorkFacts{AuthorizedToWorkUS: "Yes"}}
@@ -814,6 +824,8 @@ func TestSponsorship_ApprovalAndReuseLifecycle(t *testing.T) {
 		}
 	}
 }
+
+/* jscpd:ignore-end */
 
 // --- Skill-scoped experience (bugs.md #544) -------------------------------
 
@@ -975,6 +987,9 @@ func approvedRoutine(t *testing.T, store *Store, prompt, answer string, reuse bo
 	return saved
 }
 
+/* jscpd:ignore-start */
+// These declaration-alias tests repeat the same felony-declaration setup to
+// keep each test a self-contained safety scenario.
 func TestAddAliases_RefusesToGuessForADeclaration(t *testing.T) {
 	store := newTestStore(t)
 	declaration, err := store.Save(SaveRequest{
@@ -1061,6 +1076,8 @@ func TestUpdateAnswer_CannotRestoreADeclarationsReuseGrant(t *testing.T) {
 		t.Fatalf("expected ErrSensitiveNeedsApproval, got %v", err)
 	}
 }
+
+/* jscpd:ignore-end */
 
 func TestUpdateAnswer_ChangesTheTextAndRecordsThatTheOperatorEditedIt(t *testing.T) {
 	store := newTestStore(t)
@@ -1237,7 +1254,7 @@ func TestResolve_AnswersTheConfiguredSocialLink(t *testing.T) {
 
 // --- Intentional Absence (#545) -------------------------------------------
 
-// jscpd:ignore-start
+/* jscpd:ignore-start */
 // These scenario tests intentionally repeat a small setup pattern so each
 // failure maps to a single concrete safety property. Excluding them from the
 // duplication ratchet keeps the production-code ceiling meaningful without
@@ -1805,4 +1822,4 @@ func TestSaveAbsence_StoresKindAbsenceNotEmptyString(t *testing.T) {
 	}
 }
 
-// jscpd:ignore-end
+/* jscpd:ignore-end */

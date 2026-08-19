@@ -828,7 +828,7 @@ func TestPolicy_ADeclarationTheOperatorGrantedReuseForIsNotReportedAsAlwaysAskin
 
 // --- Intentional Absence (#545) -------------------------------------------
 
-// jscpd:ignore-start
+/* jscpd:ignore-start */
 // These scenario tests intentionally repeat a small setup pattern so each
 // failure maps to a single concrete safety property. Excluding them from the
 // duplication ratchet keeps the production-code ceiling meaningful without
@@ -1119,4 +1119,4 @@ func TestApproveAbsence_DoesNotRequireErrorImport(t *testing.T) {
 	_ = errors.New("compile-time check")
 }
 
-// jscpd:ignore-end
+/* jscpd:ignore-end */
