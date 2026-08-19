@@ -132,8 +132,14 @@ func TestConfirmAssistedSubmission_AdvancesTheSessionInTheSameTransaction(t *tes
 	if _, err := StartApplySession(db, []string{"1", "2"}, true); err != nil {
 		t.Fatal(err)
 	}
+	if started := GetApplySessionItemStartedAt(db, "1"); !started.IsZero() {
+		t.Fatalf("job 1 should have zero review start before open, got %v", started)
+	}
 	if err := MarkApplySessionItemOpen(db, "1"); err != nil {
 		t.Fatal(err)
+	}
+	if started := GetApplySessionItemStartedAt(db, "1"); started.IsZero() {
+		t.Fatal("job 1 should report review start time when opened")
 	}
 	if err := ConfirmAssistedSubmission(db, "1"); err != nil {
 		t.Fatalf("confirm: %v", err)

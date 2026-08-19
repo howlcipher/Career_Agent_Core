@@ -162,7 +162,7 @@ func InspectApplication(browser playwright.Browser, filter *security.QuarantineL
 	// Greenhouse, Lever and several others render the form only after their own
 	// Apply control is pressed. This is the one interaction preflight performs,
 	// and it is the employer's own affordance for reaching their form.
-	clickApplyIfPresent(page)
+	clickApplyIfPresent(page, "[Preflight]")
 
 	target := resolveFillTarget(page)
 	controls, err := SnapshotControls(target)

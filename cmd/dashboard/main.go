@@ -1052,17 +1052,9 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 // assistedReviewStartedAt reports when this application became ready for the
-// operator to review, or the zero time when that is unknown.
+// operator to review in a session, or the zero time when that is unknown.
 func assistedReviewStartedAt(jobID string) time.Time {
-	summary, err := storage.GetFillSummary(db, jobID)
-	if err != nil || summary.RecordedAt == "" {
-		return time.Time{}
-	}
-	parsed, err := time.Parse(time.RFC3339, summary.RecordedAt)
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed
+	return storage.GetApplySessionItemStartedAt(db, jobID)
 }
 
 func serveAssistedNotFound(w http.ResponseWriter, r *http.Request) {

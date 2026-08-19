@@ -999,7 +999,11 @@ func dismissCookieBanner(page playwright.Page) {
 // disclosure the applicant is shown stays honest, falling back to the first
 // non-placeholder option if no match is found. No-ops if the page already
 // has real fields, so single-page ATS forms are never affected.
-func resolveConsentGateIfPresent(page playwright.Page, pii *config.PII) {
+func resolveConsentGateIfPresent(page playwright.Page, pii *config.PII, prefix ...string) {
+	logPrefix := "[Auto-Submit]"
+	if len(prefix) > 0 && prefix[0] != "" {
+		logPrefix = prefix[0]
+	}
 	inputCount, err := page.Locator("input").Count()
 	if err != nil || inputCount > 0 {
 		return
@@ -1038,10 +1042,10 @@ func resolveConsentGateIfPresent(page playwright.Page, pii *config.PII) {
 	}
 
 	if _, err := selectLocator.SelectOption(playwright.SelectOptionValues{Indexes: &[]int{selectedIndex}}); err != nil {
-		log.Printf("[Auto-Submit] Found a likely consent-gate <select> but failed to choose an option: %v", err)
+		log.Printf("%s Found a likely consent-gate <select> but failed to choose an option: %v", logPrefix, err)
 		return
 	}
-	log.Printf("[Auto-Submit] Selected an option on a location/consent gate to reveal the application form")
+	log.Printf("%s Selected an option on a location/consent gate to reveal the application form", logPrefix)
 	page.WaitForTimeout(2000)
 }
 
@@ -1051,7 +1055,11 @@ func resolveConsentGateIfPresent(page playwright.Page, pii *config.PII) {
 // before the Learner Module inspects the DOM or the fill logic looks for form
 // fields. No-ops silently if no such element is found, since most ATS platforms
 // already show the form directly without requiring a click.
-func clickApplyIfPresent(page playwright.Page) {
+func clickApplyIfPresent(page playwright.Page, prefix ...string) {
+	logPrefix := "[Auto-Submit]"
+	if len(prefix) > 0 && prefix[0] != "" {
+		logPrefix = prefix[0]
+	}
 	// SmartRecruiters uses "I'm interested" instead of any "Apply" wording
 	// (confirmed live 2026-07-22, Oteemo posting) — the original selector
 	// silently found nothing on that platform, so the fill logic always
@@ -1062,10 +1070,10 @@ func clickApplyIfPresent(page playwright.Page) {
 		return
 	}
 	if err := locator.Click(playwright.LocatorClickOptions{Timeout: playwright.Float(5000)}); err != nil {
-		log.Printf("[Auto-Submit] Found an Apply-labeled element but failed to click it: %v", err)
+		log.Printf("%s Found an Apply-labeled element but failed to click it: %v", logPrefix, err)
 		return
 	}
-	log.Printf("[Auto-Submit] Clicked an Apply-labeled element to reveal the application form")
+	log.Printf("%s Clicked an Apply-labeled element to reveal the application form", logPrefix)
 	page.WaitForTimeout(2000)
 }
 
