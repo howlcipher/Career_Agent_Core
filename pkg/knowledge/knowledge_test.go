@@ -828,6 +828,46 @@ func TestPolicy_ADeclarationTheOperatorGrantedReuseForIsNotReportedAsAlwaysAskin
 
 // --- Intentional Absence (#545) -------------------------------------------
 
+// jscpd:ignore-start
+// These scenario tests intentionally repeat a small setup pattern so each
+// failure maps to a single concrete safety property. Excluding them from the
+// duplication ratchet keeps the production-code ceiling meaningful without
+// forcing contrived abstraction into the regression suite.
+
+// seedSingleJobQuestion creates one job with one application question.
+func seedSingleJobQuestion(t *testing.T, conn *sql.DB, q storage.ApplicationQuestion) {
+	seedJob(t, conn, 1, "Acme")
+	ask(t, conn, "1", q)
+}
+
+// firstGroup returns the first group from the inbox, failing the test if there
+// is none. It avoids repeating the Inbox/error/length dance in every absence test.
+func firstGroup(t *testing.T, service *Service, now time.Time) *Group {
+	t.Helper()
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox) == 0 {
+		t.Fatal("expected at least one inbox group")
+	}
+	return &inbox[0]
+}
+
+// approveAbsenceOnFirstGroup is a convenience for the common single-group
+// absence-approval path.
+func approveAbsenceOnFirstGroup(t *testing.T, service *Service, reason string, now time.Time) {
+	t.Helper()
+	group := firstGroup(t, service, now)
+	if _, err := service.ApproveAbsence(ApproveAbsenceRequest{
+		GroupKey:     group.Key,
+		Reason:       reason,
+		SaveForReuse: true,
+	}, now); err != nil {
+		t.Fatalf("ApproveAbsence failed: %v", err)
+	}
+}
+
 func TestApproveAbsence_ResolvesOptionalTwitterQuestions(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()
@@ -898,19 +938,11 @@ func TestApproveAbsence_PerJobEssayRefusesAbsence(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()
 
-	seedJob(t, conn, 1, "Acme")
-	ask(t, conn, "1", storage.ApplicationQuestion{Key: "why", Prompt: "Why are you interested in this role?", ControlType: "textarea"})
+	seedSingleJobQuestion(t, conn, storage.ApplicationQuestion{Key: "why", Prompt: "Why are you interested in this role?", ControlType: "textarea"})
 
-	inbox, err := service.Inbox(now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inbox) == 0 {
-		t.Fatal("expected at least 1 inbox item")
-	}
-
-	_, err = service.ApproveAbsence(ApproveAbsenceRequest{
-		GroupKey:     inbox[0].Key,
+	group := firstGroup(t, service, now)
+	_, err := service.ApproveAbsence(ApproveAbsenceRequest{
+		GroupKey:     group.Key,
 		Reason:       "I have no reason",
 		SaveForReuse: true,
 	}, now)
@@ -978,24 +1010,8 @@ func TestField_AbsenceReturnsIntentionalAbsenceFlag(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()
 
-	seedJob(t, conn, 1, "Acme")
-	ask(t, conn, "1", storage.ApplicationQuestion{Key: "twitter", Prompt: "Twitter profile URL", ControlType: "text"})
-
-	inbox, err := service.Inbox(now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inbox) == 0 {
-		t.Fatal("no inbox items")
-	}
-	_, err = service.ApproveAbsence(ApproveAbsenceRequest{
-		GroupKey:     inbox[0].Key,
-		Reason:       "No Twitter/X account",
-		SaveForReuse: true,
-	}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	seedSingleJobQuestion(t, conn, storage.ApplicationQuestion{Key: "twitter", Prompt: "Twitter profile URL", ControlType: "text"})
+	approveAbsenceOnFirstGroup(t, service, "No Twitter/X account", now)
 
 	reply, err := service.Field(FieldQuery{Prompt: "Twitter profile URL", ControlType: "text"})
 	if err != nil {
@@ -1067,47 +1083,33 @@ func TestApproveAbsence_AbsenceDoesNotInflateFilledMetrics(t *testing.T) {
 	}
 }
 
-func TestApproveAbsence_RefusesEmptyReason(t *testing.T) {
+func TestApproveAbsence_RefusesInvalidRequests(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()
 
-	seedJob(t, conn, 1, "Acme")
-	ask(t, conn, "1", storage.ApplicationQuestion{Key: "twitter", Prompt: "Twitter profile URL", ControlType: "text"})
+	seedSingleJobQuestion(t, conn, storage.ApplicationQuestion{Key: "twitter", Prompt: "Twitter profile URL", ControlType: "text"})
+	group := firstGroup(t, service, now)
 
-	inbox, _ := service.Inbox(now)
-	if len(inbox) == 0 {
-		t.Skip("no inbox items")
+	cases := []struct {
+		name       string
+		reason     string
+		saveForUse bool
+		wantErr    string
+	}{
+		{"empty reason", "", true, "empty reason"},
+		{"reuse withheld", "No account", false, "SaveForReuse=false"},
 	}
-
-	_, err := service.ApproveAbsence(ApproveAbsenceRequest{
-		GroupKey:     inbox[0].Key,
-		Reason:       "",
-		SaveForReuse: true,
-	}, now)
-	if err == nil {
-		t.Fatal("expected error for empty reason")
-	}
-}
-
-func TestApproveAbsence_RefusesWithoutReuse(t *testing.T) {
-	service, conn := newTestService(t)
-	now := time.Now().UTC()
-
-	seedJob(t, conn, 1, "Acme")
-	ask(t, conn, "1", storage.ApplicationQuestion{Key: "twitter", Prompt: "Twitter profile URL", ControlType: "text"})
-
-	inbox, _ := service.Inbox(now)
-	if len(inbox) == 0 {
-		t.Skip("no inbox items")
-	}
-
-	_, err := service.ApproveAbsence(ApproveAbsenceRequest{
-		GroupKey:     inbox[0].Key,
-		Reason:       "No account",
-		SaveForReuse: false,
-	}, now)
-	if err == nil {
-		t.Fatal("expected error when SaveForReuse=false")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := service.ApproveAbsence(ApproveAbsenceRequest{
+				GroupKey:     group.Key,
+				Reason:       c.reason,
+				SaveForReuse: c.saveForUse,
+			}, now)
+			if err == nil {
+				t.Fatalf("expected error for %s", c.wantErr)
+			}
+		})
 	}
 }
 
@@ -1116,3 +1118,5 @@ func TestApproveAbsence_DoesNotRequireErrorImport(t *testing.T) {
 	// It's a compile-time check; if this file compiles, the import is used.
 	_ = errors.New("compile-time check")
 }
+
+// jscpd:ignore-end
