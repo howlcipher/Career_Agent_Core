@@ -155,6 +155,54 @@ func (p PII) MissingAttestations(categories []string) []string {
 	return out
 }
 
+// joinRange builds "start to end" while tolerating either side being blank.
+// Deliberately not strings.Trim with a "to"/"-" cutset: that treats the
+// argument as a *character set*, so Trim("Feb 2023 to Present", "to")
+// silently produced "Feb 2023 to Presen".
+func joinRange(start, end, sep string) string {
+	start, end = strings.TrimSpace(start), strings.TrimSpace(end)
+	switch {
+	case start != "" && end != "":
+		return start + sep + end
+	case start != "":
+		return start
+	default:
+		return end
+	}
+}
+
+func nonEmpty(in ...string) []string {
+	var out []string
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// EducationSummary renders the configured education entries as a single stable
+// factual answer suitable for employer questions that ask for an education
+// summary. It returns "" when no education data is configured, so the answer
+// vault stays unresolved rather than inventing a value.
+func (p PII) EducationSummary() string {
+	if len(p.Education) == 0 {
+		return ""
+	}
+	var entries []string
+	for _, e := range p.Education {
+		parts := nonEmpty(e.Degree, e.FieldOfStudy, e.School, e.Status, joinRange(e.StartYear, e.EndYear, "-"))
+		if len(parts) == 0 {
+			continue
+		}
+		entries = append(entries, strings.Join(parts, ", "))
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	return strings.Join(entries, "; ")
+}
+
 // ApplicationFacts renders every configured fact as prompt context.
 //
 // The point is to convert questions the model would otherwise reason about
@@ -212,31 +260,6 @@ func (p PII) ApplicationFacts() string {
 	add("Languages", w.Languages)
 	add("Driver's license", w.DriversLicense)
 	add("Certifications", w.Certifications)
-
-	// joinRange builds "start to end" while tolerating either side being blank.
-	// Deliberately not strings.Trim with a "to"/"-" cutset: that treats the
-	// argument as a *character set*, so Trim("Feb 2023 to Present", "to")
-	// silently produced "Feb 2023 to Presen".
-	joinRange := func(start, end, sep string) string {
-		start, end = strings.TrimSpace(start), strings.TrimSpace(end)
-		switch {
-		case start != "" && end != "":
-			return start + sep + end
-		case start != "":
-			return start
-		default:
-			return end
-		}
-	}
-	nonEmpty := func(in ...string) []string {
-		var out []string
-		for _, s := range in {
-			if s = strings.TrimSpace(s); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
 
 	for i, e := range p.Education {
 		parts := nonEmpty(e.Degree, e.FieldOfStudy, e.School, e.Status, joinRange(e.StartYear, e.EndYear, "-"))

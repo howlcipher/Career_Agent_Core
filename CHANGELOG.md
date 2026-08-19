@@ -1,5 +1,33 @@
 # Career Agent Core - Changelog
 
+## 2026-08-19 — Education-summary questions now resolve from the configured profile after operator approval
+
+The production dogfood audit found that factual education-summary questions were
+falling into `generate_per_job` and being retyped on every application. Added a
+deterministic `education` pattern to `pkg/answers/patterns.go` that recognizes
+common phrasings ("Education background", "Highest level of education",
+"post-secondary education", "Degree earned", etc.) while rejecting per-job
+essays ("Why did you choose your field of study?") and role-specific possession
+questions ("Do you have a degree in computer science?").
+
+The answer is built deterministically from the existing `pii.yaml` `education`
+entries by `config.PII.EducationSummary()`; no second education store was added,
+and an empty profile returns no answer rather than a guess. The pattern is
+classified `Sensitive`, so it suggests the configured summary but never
+auto-fills until the operator explicitly approves it and allows reuse — the
+same two-decision path already enforced for work authorization and sponsorship.
+The canonical seed question "What is your education background?" lets
+`SeedFromPII` pre-fill a suggestion, and bulk approval through the Application
+Knowledge view immediately re-resolves equivalent queued questions.
+
+Live verification against a copy of `applications.db` showed the education
+question that had been grouped as `generate_per_job` now groups as
+`pattern:education` and disappears from the inbox after approval, reducing
+unresolved queue items from 18 to 15 (3 education occurrences resolved).
+Work-authorization and sponsorship reuse paths were left unchanged; the current
+cohort does not contain configured values for them, so no live approval was
+observed, and the existing unit/lifecycle tests continue to pin the behavior.
+
 ## 2026-08-17 — The role gate no longer admits management-track titles just because they also name an engineering keyword (bugs.md #556)
 
 The Assisted Apply queue was mostly `Director`/`Principal`/leadership roles

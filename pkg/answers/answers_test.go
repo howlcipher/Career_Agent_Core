@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,6 +287,7 @@ func TestResolveFromPattern_NoSensitivePatternEverAutoFills(t *testing.T) {
 	pii.Work.CriminalHistory = "No"
 	pii.Work.DesiredSalary = "$160,000"
 	pii.Work.Over18 = "Yes"
+	pii.Education = []config.Education{{Degree: "B.S.", School: "Example University"}}
 	store := newTestStore(t)
 
 	for _, id := range SensitivePatternIDs() {
@@ -314,6 +316,181 @@ func TestResolveFromPattern_UnconfiguredFactStaysUnresolvedRatherThanGuessed(t *
 	}
 	if resolution.Sensitivity != Sensitive {
 		t.Errorf("an unresolved attestation is still sensitive, got %q", resolution.Sensitivity)
+	}
+}
+
+// --- Education ------------------------------------------------------------
+
+func educationPII() *config.PII {
+	pii := &config.PII{}
+	pii.Education = []config.Education{
+		{Degree: "B.S.", FieldOfStudy: "Computer Science", School: "Example University", StartYear: "2018", EndYear: "2022", Status: "Graduated"},
+	}
+	return pii
+}
+
+func TestResolveFromPattern_EducationFamilyMatchesCommonPhrasings(t *testing.T) {
+	store := newTestStore(t)
+	pii := educationPII()
+
+	cases := []string{
+		"Education background",
+		"Please provide your post-secondary education",
+		"Highest level of education",
+		"Educational background",
+		"Education summary",
+		"Academic background",
+		"Degree earned",
+		"College/University attended",
+	}
+	for _, prompt := range cases {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if !resolution.Resolved || resolution.PatternID != "education" {
+				t.Fatalf("%q did not reach the education pattern: %+v", prompt, resolution)
+			}
+			if !strings.Contains(resolution.Answer, "B.S.") {
+				t.Errorf("expected configured education in answer, got %q", resolution.Answer)
+			}
+		})
+	}
+}
+
+func TestResolveFromPattern_EducationVariantsCanonicalizeTogether(t *testing.T) {
+	store := newTestStore(t)
+	pii := educationPII()
+
+	variants := []string{
+		"Education Background",
+		"EDUCATION BACKGROUND (required)",
+		"education background?",
+	}
+	want := store.Resolve(routineQuestion(variants[0]), Context{}, pii).Answer
+	for _, prompt := range variants[1:] {
+		got := store.Resolve(routineQuestion(prompt), Context{}, pii).Answer
+		if got != want {
+			t.Errorf("%q resolved to %q, want %q", prompt, got, want)
+		}
+	}
+}
+
+func TestResolveFromPattern_EducationRequiresExplicitApproval(t *testing.T) {
+	store := newTestStore(t)
+	pii := educationPII()
+
+	resolution := store.Resolve(routineQuestion("Education background"), Context{}, pii)
+	if !resolution.Resolved || resolution.AutoFill {
+		t.Fatalf("education must be a suggestion, not an auto-fill: %+v", resolution)
+	}
+	if resolution.Sensitivity != Sensitive {
+		t.Errorf("education should be sensitive until approved, got %q", resolution.Sensitivity)
+	}
+
+	// With reuse withheld the vault refuses to store it as a reusable answer,
+	// even when the caller passes the sensitive classification.
+	if _, err := store.Save(SaveRequest{
+		Question: routineQuestion("Education background"), Answer: resolution.Answer,
+		Sensitivity: Sensitive, Provenance: OperatorApproved, ReuseAllowed: false, ReuseDecisionMade: true,
+	}); !errors.Is(err, ErrSensitiveNeedsApproval) {
+		t.Fatalf("expected ErrSensitiveNeedsApproval, got %v", err)
+	}
+
+	// Only an explicit approval *and* an explicit reuse decision can store it.
+	if _, err := store.Save(SaveRequest{
+		Question: routineQuestion("Education background"), Answer: resolution.Answer,
+		Sensitivity: Sensitive, Provenance: OperatorApproved, ReuseAllowed: true, ReuseDecisionMade: true,
+	}); err != nil {
+		t.Fatalf("approved reusable education answer should store: %v", err)
+	}
+}
+
+func TestResolveFromPattern_EducationIsNotFabricated(t *testing.T) {
+	store := newTestStore(t)
+	resolution := store.Resolve(routineQuestion("Education background"), Context{}, &config.PII{})
+	if resolution.Resolved {
+		t.Fatalf("unconfigured education must stay unresolved, got %+v", resolution)
+	}
+}
+
+func TestResolveFromPattern_EducationDoesNotClaimRoleSpecificOrEssayQuestions(t *testing.T) {
+	store := newTestStore(t)
+	pii := educationPII()
+
+	cases := []string{
+		"Do you have a degree in computer science?",
+		"How many years since graduation?",
+		"Describe how your education prepared you for this role.",
+		"Why did you choose your field of study?",
+		"Do you have a CS degree?",
+	}
+	for _, prompt := range cases {
+		t.Run(prompt, func(t *testing.T) {
+			resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+			if resolution.PatternID == "education" {
+				t.Fatalf("%q must not be treated as generic education summary: %+v", prompt, resolution)
+			}
+			if resolution.AutoFill {
+				t.Fatalf("%q must not auto-fill: %+v", prompt, resolution)
+			}
+		})
+	}
+}
+
+func TestEducation_ApprovalAndReuseLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	pii := educationPII()
+
+	prompts := []string{
+		"Education background",
+		"Please provide your post-secondary education",
+		"Highest level of education",
+	}
+
+	// Before approval: suggestions only.
+	for _, prompt := range prompts {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if !resolution.Resolved || resolution.AutoFill {
+			t.Fatalf("before approval %q should suggest but not fill: %+v", prompt, resolution)
+		}
+	}
+
+	// Approve the canonical education question with reuse and bind the variants
+	// as aliases, mirroring the knowledge-service approval flow.
+	canonical := "What is your education background?"
+	saved, err := store.Save(SaveRequest{
+		Question:          routineQuestion(canonical),
+		Answer:            pii.EducationSummary(),
+		Kind:              KindText,
+		Sensitivity:       Sensitive,
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatalf("approved education answer should store: %v", err)
+	}
+	if _, err := store.AddAliases(saved.ID, prompts, true); err != nil {
+		t.Fatalf("bind education aliases: %v", err)
+	}
+
+	// After approval, equivalent prompts auto-fill.
+	for _, prompt := range prompts {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if !resolution.Resolved || !resolution.AutoFill {
+			t.Fatalf("after approval %q should auto-fill: %+v", prompt, resolution)
+		}
+	}
+
+	// Revoke should stop automatic reuse; the pattern may still suggest, but
+	// Career Agent must not type the answer without a fresh approval.
+	if err := store.Revoke(saved.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	for _, prompt := range prompts {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if resolution.AutoFill {
+			t.Fatalf("after revoke %q must not auto-fill: %+v", prompt, resolution)
+		}
 	}
 }
 
@@ -518,6 +695,123 @@ func TestResolve_EscalationDoesNotRevokeAnExplicitReuseGrant(t *testing.T) {
 	}
 	if !resolution.AutoFill {
 		t.Fatal("an explicitly granted reuse must survive escalation")
+	}
+}
+
+func TestWorkAuthorizationAndSponsorship_StaySensitiveUntilApproved(t *testing.T) {
+	store := newTestStore(t)
+	pii := &config.PII{}
+	pii.Work.AuthorizedToWorkUS = "Yes"
+	pii.Work.RequiresSponsorship = "No"
+
+	for _, prompt := range []string{
+		"Are you legally authorized to work in the United States?",
+		"Will you now or in the future require visa sponsorship for employment?",
+	} {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if !resolution.Resolved || resolution.AutoFill {
+			t.Fatalf("%q must be a suggestion before approval: %+v", prompt, resolution)
+		}
+		if resolution.Sensitivity != Sensitive {
+			t.Errorf("%q should be sensitive, got %q", prompt, resolution.Sensitivity)
+		}
+	}
+}
+
+func TestWorkAuthorization_ApprovalAndReuseLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	pii := &config.PII{Work: config.WorkFacts{AuthorizedToWorkUS: "Yes"}}
+
+	variants := []string{
+		"Are you legally authorized to work in the United States?",
+		"Are you authorized to work in the US?",
+		"Do you currently have authorization to work in the United States?",
+	}
+
+	for _, prompt := range variants {
+		if store.Resolve(routineQuestion(prompt), Context{}, pii).AutoFill {
+			t.Fatalf("%q must not auto-fill before approval", prompt)
+		}
+	}
+
+	saved, err := store.Save(SaveRequest{
+		Question:          routineQuestion(variants[0]),
+		Answer:            "Yes",
+		Kind:              KindBoolean,
+		Sensitivity:       Sensitive,
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatalf("save work authorization approval: %v", err)
+	}
+	if _, err := store.AddAliases(saved.ID, variants[1:], true); err != nil {
+		t.Fatalf("bind work-authorization aliases: %v", err)
+	}
+
+	for _, prompt := range variants[1:] {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if !resolution.Resolved || !resolution.AutoFill || resolution.Answer != "Yes" {
+			t.Fatalf("%q should auto-fill after approval: %+v", prompt, resolution)
+		}
+	}
+
+	if err := store.Revoke(saved.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	for _, prompt := range variants {
+		if store.Resolve(routineQuestion(prompt), Context{}, pii).AutoFill {
+			t.Fatalf("%q must not auto-fill after revoke", prompt)
+		}
+	}
+}
+
+func TestSponsorship_ApprovalAndReuseLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	pii := &config.PII{Work: config.WorkFacts{RequiresSponsorship: "No"}}
+
+	variants := []string{
+		"Will you now or in the future require visa sponsorship for employment?",
+		"Do you need sponsorship to work in the US?",
+	}
+
+	for _, prompt := range variants {
+		if store.Resolve(routineQuestion(prompt), Context{}, pii).AutoFill {
+			t.Fatalf("%q must not auto-fill before approval", prompt)
+		}
+	}
+
+	saved, err := store.Save(SaveRequest{
+		Question:          routineQuestion(variants[0]),
+		Answer:            "No",
+		Kind:              KindBoolean,
+		Sensitivity:       Sensitive,
+		Provenance:        OperatorApproved,
+		ReuseAllowed:      true,
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		t.Fatalf("save sponsorship approval: %v", err)
+	}
+	if _, err := store.AddAliases(saved.ID, variants[1:], true); err != nil {
+		t.Fatalf("bind sponsorship aliases: %v", err)
+	}
+
+	for _, prompt := range variants[1:] {
+		resolution := store.Resolve(routineQuestion(prompt), Context{}, pii)
+		if !resolution.Resolved || !resolution.AutoFill || resolution.Answer != "No" {
+			t.Fatalf("%q should auto-fill after approval: %+v", prompt, resolution)
+		}
+	}
+
+	if err := store.Revoke(saved.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	for _, prompt := range variants {
+		if store.Resolve(routineQuestion(prompt), Context{}, pii).AutoFill {
+			t.Fatalf("%q must not auto-fill after revoke", prompt)
+		}
 	}
 }
 

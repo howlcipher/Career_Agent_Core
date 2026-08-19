@@ -16,6 +16,10 @@
 Automatic Apply and adds `fill_source` (`bugs.md` #551) in `pkg/storage/questions.go`,
 `pkg/submitter/browser.go` and `CompletedSummary.tsx`.
 
+**Amended 2026-08-19** with decision 10, which adds the `education` curated pattern and
+`config.PII.EducationSummary()` (`pkg/answers/patterns.go`, `pkg/config/pii.go`,
+`pkg/answers/resolve.go`).
+
 ## Context
 
 The Approved Answer Vault (ADR-adjacent; `pkg/answers`, `improvements.md` #497) already solved the
@@ -75,7 +79,7 @@ Grouping itself is layered, most specific first:
 | Layer | Group key | Collapses |
 |---|---|---|
 | 1 | (inside the vault) | an operator-approved alias for that exact phrasing |
-| 2 | `pattern:<id>` | every phrasing of one of the 19 curated families |
+| 2 | `pattern:<id>` | every phrasing of one of the 20 curated families |
 | 3a | `experience:<skill>` | every phrasing of one skill's duration question |
 | 3b | `q:<QuestionKey>` | presentational differences only |
 | 4 | **not built** | semantic similarity |
@@ -446,3 +450,21 @@ genuinely still be on screen.
   The employer's Submit is still pressed by the human, and `cmd/assist` is untouched by this work.
 * The direct-browser (Workable) path has no fill, no vault and no questions today. Knowledge features
   report it as not applicable rather than silently doing nothing there.
+
+### 10. Education summaries are a curated pattern over the configured profile, not a per-job generation
+
+*Added 2026-08-19.*
+
+Factual education-summary questions ("Education background", "Highest level of education",
+"post-secondary education") appeared repeatedly on the live queue but had no deterministic family,
+so they fell into `generate_per_job` and were retyped. They are now the 20th curated pattern in
+`pkg/answers/patterns.go`.
+
+The answer is derived deterministically from the existing `pii.yaml` `education` list via
+`config.PII.EducationSummary()`; no second education store was added, and nothing is invented when
+the list is empty. The pattern is classified `Sensitive`, so it suggests the configured summary but
+never auto-fills it until the operator explicitly approves it and allows reuse — the same two-
+decision path used for work authorization and sponsorship. Free-text essay prompts about education
+("Describe how your education prepared you...", "Why did you choose your field of study?") and
+skill-scoped or possession questions ("Do you have a degree in computer science?") are rejected or
+miss the pattern's `RequireAll` groups, so they do not inherit the generic summary.

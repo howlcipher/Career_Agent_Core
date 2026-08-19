@@ -430,6 +430,111 @@ func TestApprove_ResolvesTheOtherQueuedApplicationsImmediately(t *testing.T) {
 	}
 }
 
+func TestApprove_EducationResolvesQueuedApplicationsImmediately(t *testing.T) {
+	service, conn := newTestService(t)
+	service.pii = &config.PII{Education: []config.Education{
+		{Degree: "B.S.", FieldOfStudy: "Computer Science", School: "Example University", StartYear: "2018", EndYear: "2022", Status: "Graduated"},
+	}}
+	now := time.Now().UTC()
+
+	for id, company := range map[int]string{1: "Acme", 2: "Globex", 3: "Initech"} {
+		seedJob(t, conn, id, company)
+	}
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Education background", ControlType: "text"})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Please provide your post-secondary education", ControlType: "text"})
+	ask(t, conn, "3", storage.ApplicationQuestion{Key: "c", Prompt: "What is your T-shirt size?", ControlType: "text"})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	education := findGroup(inbox, "pattern:education")
+	if education == nil || education.Applications != 2 {
+		t.Fatalf("expected one education group over 2 applications, got %+v", inbox)
+	}
+
+	result, err := service.Approve(ApproveRequest{
+		GroupKey: education.Key, Answer: service.pii.EducationSummary(), SaveForReuse: true,
+		AllowSensitiveReuse: true, ConfirmedEquivalent: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("approve education: %v", err)
+	}
+	if result.QuestionsResolved != 2 {
+		t.Fatalf("questions resolved = %d, want 2", result.QuestionsResolved)
+	}
+	if result.ApplicationsHelped != 2 {
+		t.Fatalf("applications helped = %d, want 2", result.ApplicationsHelped)
+	}
+	if result.StillUnresolved != 1 {
+		t.Fatalf("still unresolved = %d, want 1", result.StillUnresolved)
+	}
+}
+
+func TestApprove_WorkAuthorizationResolvesQueuedApplicationsImmediately(t *testing.T) {
+	service, conn := newTestService(t)
+	service.pii = &config.PII{Work: config.WorkFacts{AuthorizedToWorkUS: "Yes"}}
+	now := time.Now().UTC()
+
+	for id, company := range map[int]string{1: "Acme", 2: "Globex"} {
+		seedJob(t, conn, id, company)
+	}
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Are you legally authorized to work in the United States?", ControlType: "radio", Options: []string{"Yes", "No"}})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Do you currently have authorization to work in the United States?", ControlType: "radio", Options: []string{"Yes", "No"}})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := findGroup(inbox, "pattern:work_authorization")
+	if auth == nil || auth.Applications != 2 {
+		t.Fatalf("expected one work-authorization group over 2 applications, got %+v", inbox)
+	}
+
+	result, err := service.Approve(ApproveRequest{
+		GroupKey: auth.Key, Answer: "Yes", SaveForReuse: true,
+		AllowSensitiveReuse: true, ConfirmedEquivalent: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("approve work authorization: %v", err)
+	}
+	if result.QuestionsResolved != 2 || result.ApplicationsHelped != 2 {
+		t.Fatalf("expected 2 questions/applications resolved, got %+v", result)
+	}
+}
+
+func TestApprove_SponsorshipResolvesQueuedApplicationsImmediately(t *testing.T) {
+	service, conn := newTestService(t)
+	service.pii = &config.PII{Work: config.WorkFacts{RequiresSponsorship: "No"}}
+	now := time.Now().UTC()
+
+	for id, company := range map[int]string{1: "Acme", 2: "Globex"} {
+		seedJob(t, conn, id, company)
+	}
+	ask(t, conn, "1", storage.ApplicationQuestion{Key: "a", Prompt: "Will you now or in the future require visa sponsorship for employment?", ControlType: "radio", Options: []string{"Yes", "No"}})
+	ask(t, conn, "2", storage.ApplicationQuestion{Key: "b", Prompt: "Do you need sponsorship to work in the US?", ControlType: "radio", Options: []string{"Yes", "No"}})
+
+	inbox, err := service.Inbox(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sponsorship := findGroup(inbox, "pattern:sponsorship")
+	if sponsorship == nil || sponsorship.Applications != 2 {
+		t.Fatalf("expected one sponsorship group over 2 applications, got %+v", inbox)
+	}
+
+	result, err := service.Approve(ApproveRequest{
+		GroupKey: sponsorship.Key, Answer: "No", SaveForReuse: true,
+		AllowSensitiveReuse: true, ConfirmedEquivalent: true,
+	}, now)
+	if err != nil {
+		t.Fatalf("approve sponsorship: %v", err)
+	}
+	if result.QuestionsResolved != 2 || result.ApplicationsHelped != 2 {
+		t.Fatalf("expected 2 questions/applications resolved, got %+v", result)
+	}
+}
+
 func TestReEvaluate_AnnotatesWithoutClosingAnything(t *testing.T) {
 	service, conn := newTestService(t)
 	now := time.Now().UTC()

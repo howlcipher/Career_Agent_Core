@@ -284,6 +284,7 @@ var seedQuestions = map[string]string{
 	"notice_period":       "What is your notice period?",
 	"earliest_start":      "What is your earliest available start date?",
 	"certifications":      "What professional certifications do you hold?",
+	"education":           "What is your education background?",
 	"how_did_you_hear":    "How did you hear about this role?",
 	"previously_employed": "Have you previously been employed by this company?",
 	"over_18":             "Are you at least 18 years of age?",
