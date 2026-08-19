@@ -1,63 +1,120 @@
-name: CI
+name: CI and Repository Hygiene
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
+    name: Go Build and Test Suite
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.26.x'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
 
-    - name: Check Formatting
-      run: |
-        unformatted=$(gofmt -l ./cmd ./pkg ./internal)
-        if [ -n "$unformatted" ]; then
-          echo "The following files are not formatted:"
-          echo "$unformatted"
-          exit 1
-        fi
+      - name: Check Formatting
+        run: |
+          unformatted=$(gofmt -l ./cmd ./pkg ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
 
-    - name: Go Build
-      run: go build ./...
+      - name: Verify Go Module
+        run: go mod verify
 
-    - name: Go Vet
-      run: go vet ./...
+      - name: Run Go Vet
+        run: go vet ./...
 
-    - name: Go Test
-      run: go test ./...
+      - name: Run Unit Tests
+        run: go test -v -race ./...
+
+      - name: Run Build
+        run: go build ./...
 
   frontend-ci:
+    name: Frontend UI CI
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: cmd/dashboard/ui
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v5
-      with:
-        node-version: '22'
-        cache: 'npm'
-        cache-dependency-path: cmd/dashboard/ui/package-lock.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: cmd/dashboard/ui/package-lock.json
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Run Linter
-      run: npm run lint
+      - name: Run Linter
+        run: npm run lint
 
-    - name: Run Tests
-      run: npm test -- --run
+      - name: Run Tests
+        run: npm test -- --run
 
-    - name: Build
-      run: npm run build
+      - name: Build
+        run: npm run build
+
+  hygiene:
+    name: SlopsLint Duplication & Ceiling Ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Pinned SlopsLint
+        env:
+          SLOPSLINT_VERSION: "0.1.0"
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          if [ -f "scripts/install_slopslint.sh" ]; then
+            bash scripts/install_slopslint.sh
+          fi
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Verify Pinned SlopsLint Provenance
+        run: |
+          if ! command -v slopslint >/dev/null 2>&1; then
+            echo "::error::SlopsLint binary missing from PATH"
+            exit 1
+          fi
+          SLOP_VER=$(slopslint --version | awk '{print $2}')
+          if [ "$SLOP_VER" != "0.1.0" ]; then
+            echo "::error::SlopsLint version mismatch: got '$SLOP_VER', expected '0.1.0'"
+            exit 1
+          fi
+          echo "Verified slopslint version: $SLOP_VER"
+
+      - name: Execute Hygiene Gate (Classify & Enforce)
+        run: |
+          slopslint check --classify --enforce
+
+      - name: Enforce Ceiling Ratchet against Base Branch
+        if: github.event_name == 'pull_request'
+        run: |
+          BASE_BRANCH="${{ github.base_ref }}"
+          echo "Resolving base branch: origin/${BASE_BRANCH}"
+          git fetch origin "${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" || true
+          slopslint ratchet "origin/${BASE_BRANCH}"

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 )
+
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -48,31 +49,31 @@ func main() {
 	var _ = strconv.Atoi
 	var _ = fmt.Println
 //line source_health.zero:2
-		fmt.Println("Fetching source health statistics from local requeue tool...")
+	fmt.Println("Fetching source health statistics from local requeue tool...")
 //line source_health.zero:3
-		{
-			out, err := //line source_health.zero:3
-func() ([]byte, error) { return exec.Command("go", "run", "./cmd/requeue", "-stats").CombinedOutput() }()
-			if err != nil {
+	{
+		out, err := //line source_health.zero:3
+			func() ([]byte, error) { return exec.Command("go", "run", "./cmd/requeue", "-stats").CombinedOutput() }()
+		if err != nil {
 //line source_health.zero:5
-		fmt.Println("Failed to fetch source health:", err)
-			} else {
-				_ = out
+			fmt.Println("Failed to fetch source health:", err)
+		} else {
+			_ = out
 //line source_health.zero:6
-		{
+			{
 //line source_health.zero:7
-		{
-			lines := strings.Split(string(out), "\n")
-			_ = lines
+				{
+					lines := strings.Split(string(out), "\n")
+					_ = lines
 //line source_health.zero:8
-		for _, line := range lines {
-			_ = line
+					for _, line := range lines {
+						_ = line
 //line source_health.zero:9
-		fmt.Println(line)
-		}
-		}
+						fmt.Println(line)
+					}
+				}
 
-		}
 			}
 		}
+	}
 }

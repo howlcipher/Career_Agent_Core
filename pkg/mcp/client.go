@@ -149,7 +149,50 @@ func trimForScoring(desc string) string {
 	return desc[:scoringDescHeadChars] + scoringElision + desc[len(desc)-scoringDescTailChars:]
 }
 
+// isForeignLocationRestricted checks for unambiguous title patterns indicating remote roles outside candidate country.
+func isForeignLocationRestricted(title string) bool {
+	titleLower := strings.ToLower(title)
+	foreignPatterns := []string{
+		"remote from romania",
+		"remote from hungary",
+		"remote from poland",
+		"remote from germany",
+		"remote from india",
+		"remote from uk",
+		"remote from canada",
+		"remote (emea)",
+		"remote (latam)",
+		"remote (apac)",
+		"remote - emea",
+		"remote - latam",
+		"remote - apac",
+		"remote in romania",
+		"remote in hungary",
+		"remote in poland",
+		"remote in germany",
+		"remote in uk",
+	}
+	for _, p := range foreignPatterns {
+		if strings.Contains(titleLower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) ScoreJob(scrapedData map[string]string, profileConstraints map[string]interface{}, parsedDocument string) (int, error) {
+	// Fast pre-LLM filter: if title explicitly specifies a foreign country restriction, immediately disqualify
+	if isForeignLocationRestricted(strings.ToLower(scrapedData["title"])) {
+		return 0, nil
+	}
+
+	candidateLocation := "United States"
+	if loc, ok := profileConstraints["candidate_location"].(string); ok && loc != "" {
+		candidateLocation = loc
+	} else if loc, ok := profileConstraints["location"].(string); ok && loc != "" {
+		candidateLocation = loc
+	}
+
 	prompt := fmt.Sprintf(`Analyze the following job description against my background and constraints.
 Return ONLY a single integer from 0 to 100 representing how good of a fit I am. Do not include any other text.
 
@@ -157,22 +200,22 @@ SCORING RUBRIC:
 1. Start at a baseline of 80.
 2. If "Remote Only" is true and the job requires on-site/hybrid, deduct 80 points.
 3. If the job explicitly states a salary below my salary floor, deduct 30 points. If no salary is listed, do NOT deduct points.
-4. Be tech-stack agnostic. Do NOT deduct points if I am missing a specific language/framework (e.g. JS, AWS) but have strong experience in adjacent technologies (e.g. Python/Go, GCP). Assume a senior engineer can easily learn equivalent tools.
-5. Deduct 15 points ONLY if I am entirely missing a core domain (e.g., job requires deep Machine Learning or Mobile App Dev, and I have zero background in that domain).
-6. Add 10-20 points if my background perfectly aligns with the core domain.
-7. If the job explicitly restricts remote candidates to a specific country or region, and my location does not match, deduct 80 points.
+4. If the job requires residing/working in a specific geographic location/country (e.g. "Remote from Romania or Hungary", "Must be located in UK", "EMEA only", "Canada only") and does NOT permit candidates in %s, deduct 80 points.
+5. Be tech-stack agnostic. Do NOT deduct points if I am missing a specific language/framework (e.g. JS, AWS) but have strong experience in adjacent technologies (e.g. Python/Go, GCP). Assume a senior engineer can easily learn equivalent tools.
+6. Deduct 15 points ONLY if I am entirely missing a core domain (e.g., job requires deep Machine Learning or Mobile App Dev, and I have zero background in that domain).
+7. Add 10-20 points if my background perfectly aligns with the core domain.
 
 MY CONSTRAINTS:
 - Remote Only: %v
 - Salary Floor: %v
-- My Location: %v
+- My Location / Residency: %s
 
 Job Title: %s
 Job Description: %s
 
 My Background:
 %s`,
-		profileConstraints["remote_only"], profileConstraints["salary_floor"], profileConstraints["location"], scrapedData["title"], trimForScoring(scrapedData["desc"]), parsedDocument)
+		candidateLocation, profileConstraints["remote_only"], profileConstraints["salary_floor"], candidateLocation, scrapedData["title"], trimForScoring(scrapedData["desc"]), parsedDocument)
 
 	if err := incrementAndLogAPICall("ScoreJob", len(prompt)); err != nil {
 		return 0, err

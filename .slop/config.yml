@@ -1,0 +1,21 @@
+schema: 1
+detector:
+  name: jscpd
+  version: "4.2.5"
+defaults:
+  format: go
+  mode: mild
+  min_lines: 5
+  min_tokens: 40
+global_ignore:
+  - "**/vendor/**"
+scopes:
+  go_production:
+    scan_path: .
+    pattern: "**/*.go"
+    ignore:
+      - "**/*_test.go"
+  go_tests:
+    scan_path: .
+    pattern: "**/*_test.go"
+    ignore: []

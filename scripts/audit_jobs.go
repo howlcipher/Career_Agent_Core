@@ -55,7 +55,7 @@ func main() {
 		if strings.TrimSpace(j.JobTitle) == "" {
 			isBad = true
 		}
-		
+
 		u, err := url.Parse(j.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			isBad = true

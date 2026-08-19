@@ -60,7 +60,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to query failed jobs: %v", err)
 	}
-	
+
 	var toRequeue []int
 	var trueFailures []int
 
@@ -70,7 +70,7 @@ func main() {
 		if err := rows.Scan(&id, &url, &status); err != nil {
 			log.Fatalf("error scanning row: %v", err)
 		}
-		
+
 		if unsupportedURLs[url] {
 			trueFailures = append(trueFailures, id)
 		} else {
@@ -88,7 +88,7 @@ func main() {
 			placeholders[i] = "?"
 			args[i] = id
 		}
-		
+
 		query := fmt.Sprintf("UPDATE job_funnel SET status = 'DISCOVERED' WHERE id IN (%s)", strings.Join(placeholders, ","))
 		res, err = db.Exec(query, args...)
 		if err != nil {

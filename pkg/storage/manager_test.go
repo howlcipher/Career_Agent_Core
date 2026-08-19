@@ -2658,3 +2658,42 @@ func chdir(t *testing.T, dir string) {
 	}
 	t.Cleanup(func() { os.Chdir(previous) })
 }
+
+func TestAddToFunnelConflictStatusRetention(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	statuses := []string{"FAILED_SUBMIT", "MANUAL_REQUIRED", "APPLIED", "INTERVIEW", "REJECTED"}
+
+	for _, initialStatus := range statuses {
+		rawURL := "http://example.com/job-" + strings.ToLower(initialStatus)
+		isNew, err := AddToFunnel("Corp", "Role", rawURL, "DISCOVERED")
+		if err != nil || !isNew {
+			t.Fatalf("Failed initial insert for %s: %v", rawURL, err)
+		}
+
+		err = UpdateFunnelStatus(rawURL, initialStatus)
+		if err != nil {
+			t.Fatalf("Failed updating status to %s: %v", initialStatus, err)
+		}
+
+		// Re-adding with DISCOVERED must DO NOTHING and preserve status
+		isNewSecond, err := AddToFunnel("Corp", "Role", rawURL, "DISCOVERED")
+		if err != nil {
+			t.Fatalf("Error re-adding %s: %v", rawURL, err)
+		}
+		if isNewSecond {
+			t.Errorf("Expected isNew=false on conflict for %s", rawURL)
+		}
+
+		normURL := NormalizeURL(rawURL)
+		var curStatus string
+		err = db.QueryRow("SELECT status FROM job_funnel WHERE url = ?", normURL).Scan(&curStatus)
+		if err != nil {
+			t.Fatalf("Query failed for %s: %v", normURL, err)
+		}
+		if curStatus != initialStatus {
+			t.Errorf("Status was overwritten! Got %q, want %q", curStatus, initialStatus)
+		}
+	}
+}

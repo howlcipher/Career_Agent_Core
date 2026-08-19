@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	var badJobIDs []int
 	for rows.Next() {
 		var id int

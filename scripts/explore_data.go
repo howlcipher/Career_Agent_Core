@@ -31,7 +31,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		
+
 		isBad := false
 		if !companyName.Valid || companyName.String == "" || companyName.String == "null" || companyName.String == "None" {
 			isBad = true

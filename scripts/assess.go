@@ -23,13 +23,13 @@ func main() {
 	var networkDrops int
 	var playWrightErrors int
 	var applicationsSaved int
-	
+
 	currentRoleSearch := ""
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		if strings.Contains(line, "Searching Google for:") || strings.Contains(line, "Fallback searching DuckDuckGo for:") {
 			totalSearches++
 			// Extract the role from the query
