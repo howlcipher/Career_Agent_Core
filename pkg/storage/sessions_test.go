@@ -331,4 +331,3 @@ func TestAssistedWorkFinished_ReportsATerminalSessionItem(t *testing.T) {
 		t.Fatalf("a job outside the session must not be reported finished: done=%v err=%v", done, err)
 	}
 }
-
