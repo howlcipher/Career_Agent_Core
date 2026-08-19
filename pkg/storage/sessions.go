@@ -345,6 +345,22 @@ func MarkApplySessionItemOpen(conn *sql.DB, jobID string) error {
 	return nil
 }
 
+// GetApplySessionItemStartedAt reports when this application began review/interaction
+// in a session, or the zero time when unknown or not part of a session.
+func GetApplySessionItemStartedAt(conn *sql.DB, jobID string) time.Time {
+	if conn == nil || strings.TrimSpace(jobID) == "" {
+		return time.Time{}
+	}
+	var startedAt sql.NullTime
+	err := conn.QueryRow(`SELECT started_at FROM application_session_items
+		WHERE job_id = ? AND started_at IS NOT NULL
+		ORDER BY id DESC LIMIT 1`, jobID).Scan(&startedAt)
+	if err != nil || !startedAt.Valid {
+		return time.Time{}
+	}
+	return startedAt.Time
+}
+
 // advanceApplySessionItemTx records a terminal outcome for one item inside a
 // caller's transaction, and finishes the session when nothing is left.
 //
