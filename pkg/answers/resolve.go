@@ -39,13 +39,13 @@ func (s *Store) Resolve(question Question, ctx Context, pii *config.PII) Resolut
 	if s != nil && s.conn != nil {
 		for _, scope := range scopeChain(ctx) {
 			if resolution, ok := s.resolveFromAlias(question, scope); ok {
-				return escalateSensitivity(resolution, question)
+				return applyAbsenceSafety(escalateSensitivity(resolution, question), question)
 			}
 			if resolution, ok := s.resolveFromVault(question, scope); ok {
-				return escalateSensitivity(resolution, question)
+				return applyAbsenceSafety(escalateSensitivity(resolution, question), question)
 			}
 			if resolution, ok := s.resolveFromSkillExperience(question, scope); ok {
-				return escalateSensitivity(resolution, question)
+				return applyAbsenceSafety(escalateSensitivity(resolution, question), question)
 			}
 		}
 	}
@@ -53,6 +53,25 @@ func (s *Store) Resolve(question Question, ctx Context, pii *config.PII) Resolut
 		return escalateSensitivity(resolution, question)
 	}
 	return Resolution{Sensitivity: Classify(question), Source: SourceUnknown}
+}
+
+// applyAbsenceSafety enforces the most important invariant in the intentional-
+// absence feature: an absence answer may only resolve a field the live form
+// marks as optional. A required field left blank fails employer validation, and
+// reporting it as handled would make readiness lie in the direction that costs
+// an application.
+//
+// When the stored answer is an absence and the question is required, the
+// resolution is demoted: Resolved stays true (the vault does know what the
+// operator decided), but AutoFill is forced false so the field surfaces as
+// needing operator attention. The fill path therefore never leaves a required
+// control untouched on the strength of an absence approval.
+func applyAbsenceSafety(resolution Resolution, question Question) Resolution {
+	if !resolution.IntentionalAbsence || !question.Required {
+		return resolution
+	}
+	resolution.AutoFill = false
+	return resolution
 }
 
 // escalateSensitivity takes the stricter of what produced the answer and what
@@ -151,14 +170,15 @@ func (s *Store) resolutionFrom(answer Answer, source Source) Resolution {
 		s.recordUse(answer.ID)
 	}
 	return Resolution{
-		Resolved:          true,
-		AutoFill:          answer.ReuseAllowed,
-		Answer:            answer.AnswerText,
-		Source:            source,
-		Sensitivity:       answer.Sensitivity,
-		Kind:              answer.Kind,
-		AnswerID:          answer.ID,
-		CanonicalQuestion: answer.CanonicalQuestion,
+		Resolved:           true,
+		AutoFill:           answer.ReuseAllowed,
+		Answer:             answer.AnswerText,
+		Source:             source,
+		Sensitivity:        answer.Sensitivity,
+		Kind:               answer.Kind,
+		AnswerID:           answer.ID,
+		CanonicalQuestion:  answer.CanonicalQuestion,
+		IntentionalAbsence: answer.Kind == KindAbsence,
 	}
 }
 

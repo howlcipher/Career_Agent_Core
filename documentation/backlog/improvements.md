@@ -49,7 +49,7 @@ Scores apply to Pending rows only; Done and Closed rows show `—`.
 | 550 | [Preparation runs log under an `[Auto-Submit]` prefix, so a read-only inspection reads like a submission](#550-preparation-runs-log-under-an-auto-submit-prefix-so-a-read-only-inspection-reads-like-a-submission) | Done (2026-08-18) | — | mechanical | Fixed: `clickApplyIfPresent` and `resolveConsentGateIfPresent` accept optional contextual log prefixes; preflight logs under `[Preflight]`. |
 | 557 | [`distinctiveRoleWords`'s broadest single-word entries admit clearly off-track titles that happen to share one generic word with a configured role](#557-distinctiverolewordss-broadest-single-word-entries-admit-clearly-off-track-titles-that-happen-to-share-one-generic-word-with-a-configured-role) | Done (2026-08-17) | 1.0 = 3×1.0÷3 | standard | Done — see `documentation/backlog_history/improvements_done_details.md#557`. |
 | 558 | [`ClassifyTitle`'s management-word detection has no representation for "Lead", and normalizes commas away, letting reporting-line text leak into the check](#558-classifytitles-management-word-detection-has-no-representation-for-lead-and-normalizes-commas-away-letting-reporting-line-text-leak-into-the-check) | Pending | 0.7 = 2×1.0÷3 | deep-reasoning | Filed 2026-08-17 by bugs.md #556's independent review (Reviewers A and B). `managementTitleWords` (`pkg/config/title_policy.go`) has no entry for `lead`, `supervisor`, `president`, `founder`, `owner`, C-suite acronyms, or `product owner`/`scrum master` — genuine false positives for e.g. "Founder & DevOps Lead". Not a quick add: Reviewer B independently found `lead` is also a common senior-IC (not people-manager) title at many companies ("DevOps Lead", "Platform Lead"), so blanket-adding it trades one error class for another rather than removing it — needs real-market evidence (a sample of actual `Lead`-titled postings and their seniority pages) before deciding, which is why this is `deep-reasoning`. Separately, `normalizeForRemoteCheck` turns commas into spaces, so a title carrying trailing reporting-line text ("DevOps Engineer, reporting to the VP of Engineering") is rejected as management-track by the `vp` it picks up from that suffix — no evidence yet that a real feed publishes such titles, but worth a targeted fix (stop normalizing at the first comma) if one ever is. |
-| 545 | ["I don't have this" is a real answer the vault cannot represent](#545-i-dont-have-this-is-a-real-answer-the-vault-cannot-represent) | Pending | 2.0 = 4×1.0÷2 | standard | Found 2026-08-13 on the real queue: 5 optional Twitter fields the operator has no account for. `Store.Save` refuses an empty answer by design, so the only options are typing "N/A" into four employers' optional fields or letting the question sit in the inbox forever. Recurs for every optional field the operator does not have. |
+| 545 | ["I don't have this" is a real answer the vault cannot represent](#545-i-dont-have-this-is-a-real-answer-the-vault-cannot-represent) | Done (2026-08-19) | — | standard | See `documentation/backlog_history/improvements_done_details.md` item #545 for the full account. |
 | 543 | [Gated semantic suggestions for equivalent questions](#543-gated-semantic-suggestions-for-equivalent-questions) | Pending | 0.4 = 2×1.0÷5 | deep-reasoning | ⚠️ below floor — needs explicit user confirmation. Deduplication deliberately stops at curated determinism (ADR-007 decision 2). A model could propose that two differently-worded questions match, but the failure mode is a wrong answer on a real application, so it would need confirmation below a very high threshold and must never touch declarations. No evidence yet that the curated layers leave enough on the table to justify it. |
 | 544 | [Predict application effort from this installation's own history](#544-predict-application-effort-from-this-installations-own-history) | Pending | 0.5 = 2×1.0÷4 | standard | `EstimateAssistedEffort` is a hand-tuned additive model. `human_interactions` now records real durations per application, and preflight records real field counts, so the inputs for a measured estimate exist. Worth doing only once enough sessions have accumulated to fit against; today there are too few. |
 | 536 | [Normal-browser Career Agent companion](#536-normal-browser-career-agent-companion) | Pending | 0.6 = 3×1.0÷5 | deep-reasoning | Designed in `docs/adrs/ADR-005-Browser-Companion.md`, deliberately not built. The Copy Application Packet already recovers most of the operator time in the handoff case at none of the complexity, so the remaining benefit does not yet justify shipping a browser extension that handles PII. |
@@ -306,31 +306,7 @@ itself.
 
 ### 545. "I don't have this" is a real answer the vault cannot represent
 
-**Found 2026-08-13**, on the real queue rather than in the abstract. Six inspected applications ask for a Twitter URL five times. The operator has no Twitter account. Every one of those fields is `required = 0`.
-
-The honest answer is "leave it blank", and there is no way to say it.
-
-* `answers.Store.Save` refuses an empty answer (`an approved answer needs an answer`), deliberately — an empty approved answer would be indistinguishable from a mistake.
-* So the operator's only choices today are to type something like `N/A` into four employers' optional fields, or to leave the question in the Application Knowledge inbox permanently, where it competes for attention with questions that actually need deciding.
-* Neither is right, and it is not specific to Twitter: it recurs for **every optional field the operator does not have** — a portfolio they have not built, a second phone number, a referral code.
-
-**What is missing conceptually.** The vault currently distinguishes *unresolved* (nobody has decided) from *resolved* (there is a value). There is a third state: **the operator has decided, and the decision is that this field gets nothing.** That is reusable knowledge in exactly the way an approved answer is, and it is what stops the inbox nagging.
-
-**Fix direction.**
-
-* A declined answer is a first-class row, not an empty `answer_text`. Store the decision explicitly (a kind, a flag, or a sentinel the store understands) so `Save`'s existing refusal stays intact for genuine mistakes.
-* It resolves to *auto-fill nothing*: `Resolved` true, `AutoFill` true, value empty — Career Agent types nothing, reports the field as handled, and stops asking. `applyAnswerToControl` must be checked: it should skip the control entirely, not write an empty string into it.
-* `knowledge.Policy` gains a name for it. It is not `suggest_ask` and not `unknown`.
-* The inbox offers it as an explicit control on an answerable question, worded as a decision ("I don't have this — leave it blank") rather than a dismissal.
-
-**Constraints, all of which have already caused a bug in this area once.**
-
-* **Never offer it for a required field.** A required field left blank does not submit, and reporting it as handled would make readiness lie in the direction that costs an application.
-* **Never offer it for a declaration.** "Decline to answer" on an attestation is a legal choice with consequences and is not the same act as "I have no Twitter"; it must not be reachable through the same control. Sensitivity is decided by `Classify`, so gate on that, not on the operator's word.
-* **Never offer it for `generate_per_job`.** Those are not reusable at all.
-* A declined answer must be visible and revocable in the vault management view like any other, showing as a decision rather than as a blank row.
-
-**Verification.** Beyond unit coverage: on the real queue the five Twitter fields should move from *needs you* to handled, the inbox should lose that group, and a live assisted run should show Career Agent leaving the control untouched rather than writing an empty value into it.
+**Done (2026-08-19).** See `documentation/backlog_history/improvements_done_details.md` item #545 for the full account.
 
 ### 543. Gated semantic suggestions for equivalent questions
 

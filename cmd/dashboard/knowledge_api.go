@@ -81,30 +81,63 @@ func serveKnowledge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snapshot)
 }
 
+// openKnowledgeServiceOrRespond loads the knowledge service; on failure it
+// writes a 500 and returns false.
+func openKnowledgeServiceOrRespond(w http.ResponseWriter, label string) (*knowledge.Service, bool) {
+	service, err := openKnowledgeService()
+	if err != nil {
+		log.Printf("%s: %v", label, err)
+		http.Error(w, "application knowledge is unavailable", http.StatusInternalServerError)
+		return nil, false
+	}
+	return service, true
+}
+
+// knowledgeApproveRequest is the POST body for approving a value answer.
+type knowledgeApproveRequest struct {
+	GroupKey            string `json:"group_key"`
+	Answer              string `json:"answer"`
+	SaveForReuse        bool   `json:"save_for_reuse"`
+	AllowSensitiveReuse bool   `json:"allow_sensitive_reuse"`
+	ConfirmedEquivalent bool   `json:"confirmed_equivalent"`
+	Scope               string `json:"scope"`
+}
+
+// knowledgeAbsenceRequest is the POST body for declaring an intentional absence.
+type knowledgeAbsenceRequest struct {
+	GroupKey            string `json:"group_key"`
+	Reason              string `json:"reason"`
+	ConfirmedEquivalent bool   `json:"confirmed_equivalent"`
+	Scope               string `json:"scope"`
+}
+
+// decodeKnowledgeRequest decodes a bounded JSON body into dst, writing a 400 on failure.
+func decodeKnowledgeRequest(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxKnowledgeRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		http.Error(w, "request could not be decoded", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 // serveKnowledgeApprove stores one answer for every application waiting on it.
 func serveKnowledgeApprove(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var request struct {
-		GroupKey            string `json:"group_key"`
-		Answer              string `json:"answer"`
-		SaveForReuse        bool   `json:"save_for_reuse"`
-		AllowSensitiveReuse bool   `json:"allow_sensitive_reuse"`
-		ConfirmedEquivalent bool   `json:"confirmed_equivalent"`
-		Scope               string `json:"scope"`
+	var request knowledgeApproveRequest
+	if !decodeKnowledgeRequest(w, r, &request) {
+		return
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxKnowledgeRequestBytes))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.GroupKey) == "" {
+	if strings.TrimSpace(request.GroupKey) == "" {
 		http.Error(w, "a question and an answer are required", http.StatusBadRequest)
 		return
 	}
-	service, err := openKnowledgeService()
-	if err != nil {
-		log.Printf("serveKnowledgeApprove: %v", err)
-		http.Error(w, "application knowledge is unavailable", http.StatusInternalServerError)
+	service, ok := openKnowledgeServiceOrRespond(w, "serveKnowledgeApprove")
+	if !ok {
 		return
 	}
 	result, err := service.Approve(knowledge.ApproveRequest{
@@ -123,6 +156,43 @@ func serveKnowledgeApprove(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "this is a declaration. Confirm separately that Career Agent may reuse it automatically before it can be remembered.", http.StatusConflict)
 		case errors.Is(err, answers.ErrNotReusable):
 			http.Error(w, "this answer is written for one employer and is never reused, so it cannot be saved here. Answer it on each application.", http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	writeJSON(w, result)
+}
+
+// serveKnowledgeAbsence stores an intentional-absence decision for a group.
+func serveKnowledgeAbsence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request knowledgeAbsenceRequest
+	if !decodeKnowledgeRequest(w, r, &request) {
+		return
+	}
+	if strings.TrimSpace(request.GroupKey) == "" {
+		http.Error(w, "a question group and a reason are required", http.StatusBadRequest)
+		return
+	}
+	service, ok := openKnowledgeServiceOrRespond(w, "serveKnowledgeAbsence")
+	if !ok {
+		return
+	}
+	result, err := service.ApproveAbsence(knowledge.ApproveAbsenceRequest{
+		GroupKey:            request.GroupKey,
+		Reason:              request.Reason,
+		SaveForReuse:        true,
+		ConfirmedEquivalent: request.ConfirmedEquivalent,
+		Scope:               normalizeRequestedScope(request.Scope),
+	}, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, answers.ErrNotReusable):
+			http.Error(w, "this answer is written for one employer and cannot be marked absent", http.StatusConflict)
 		default:
 			http.Error(w, err.Error(), http.StatusConflict)
 		}
