@@ -251,6 +251,8 @@ func TestClassifyTitle_GenericSharedWordFalsePositives(t *testing.T) {
 		"Technical Recruiter — Production Engineering",
 		"GTM Business Operations Analyst",
 		"Cloud Support Administrator",
+		"Cloud Support Administrator (Remote US)",
+		"Senior Technical Consultant - Microsoft Power Platform",
 	}
 	for _, title := range titles {
 		cls := ClassifyTitle(title, realProfileRoles, false, true)

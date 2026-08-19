@@ -149,6 +149,41 @@ func TestReconcileAssistedQueueEligibility_PrunesRemovedRoleTitle(t *testing.T) 
 	}
 }
 
+// Dogfood stale rows from bugs.md #556/#557 must be pruned when the current
+// canonical policy rejects them, and the underlying funnel history must survive
+// as a SKIPPED row rather than being deleted.
+func TestReconcileAssistedQueueEligibility_PrunesDogfoodStaleRows(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	queueRow(t, "Atmosera", "Cloud Support Administrator (Remote US)", "https://boards.greenhouse.io/atmosera/jobs/315616", "Remote - US", true)
+	queueRow(t, "ThinkAhead", "Senior Technical Consultant - Microsoft Power Platform", "https://boards.greenhouse.io/thinkahead/jobs/304767", "United States", true)
+
+	report, err := ReconcileAssistedQueueEligibility(GetDB(), testEligibilityProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.RemovedRole != 2 || report.Remaining != 0 {
+		t.Fatalf("report = %+v, want both dogfood rows removed for role mismatch", report)
+	}
+
+	jobs, err := GetAssistedQueue(GetDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("expected no actionable rows after reconciliation, got %+v", jobs)
+	}
+
+	var status, reason string
+	if err := GetDB().QueryRow("SELECT status, status_reason FROM job_funnel WHERE url = ?", "https://boards.greenhouse.io/atmosera/jobs/315616").Scan(&status, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SKIPPED" || reason != config.ReasonRoleTrackMismatch {
+		t.Fatalf("funnel row = %q/%q, want SKIPPED/%s", status, reason, config.ReasonRoleTrackMismatch)
+	}
+}
+
 func TestReconcileAssistedQueueEligibility_PreservesAlreadyAppliedHistory(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
