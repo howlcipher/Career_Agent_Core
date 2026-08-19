@@ -319,17 +319,7 @@ func (s *Service) collect(now time.Time) (map[string]*Group, Readiness, error) {
 		applications[queuedQuestion.JobID] = true
 		questionsPerJob[queuedQuestion.JobID]++
 
-		question := answers.Question{
-			Key:         queuedQuestion.Key,
-			Prompt:      queuedQuestion.Prompt,
-			ControlType: queuedQuestion.ControlType,
-			Options:     queuedQuestion.Options,
-			Required:    queuedQuestion.Required,
-			Company:     queuedQuestion.Company,
-		}
-		resolution := s.vault.Resolve(question, answers.Context{
-			ATS: queuedQuestion.ATS, Company: queuedQuestion.Company,
-		}, s.pii)
+		question, resolution := s.resolveQueuedQuestion(queuedQuestion)
 
 		if resolution.AutoFill {
 			// Career Agent can handle this one already; it is not something to
@@ -607,6 +597,100 @@ type ApproveResult struct {
 	StillUnresolved    int    `json:"still_unresolved"`
 }
 
+// questionFromGroup builds an answers.Question from a grouped inbox item,
+// using Career Agent's canonical wording and, when there is exactly one
+// company involved, scoping the question to that company.
+// answerFromQueued converts a stored question row into the resolver's question
+// shape. It is used by both Inbox and ReEvaluate, which both walk the queue.
+func answerFromQueued(q storage.QueuedQuestion) answers.Question {
+	return answers.Question{
+		Key:         q.Key,
+		Prompt:      q.Prompt,
+		ControlType: q.ControlType,
+		Options:     q.Options,
+		Required:    q.Required,
+		Company:     q.Company,
+	}
+}
+
+// resolveQueuedQuestion returns both the resolver question and its resolution
+// for a queued question. Shared by Inbox and ReEvaluate.
+func (s *Service) resolveQueuedQuestion(q storage.QueuedQuestion) (answers.Question, answers.Resolution) {
+	question := answerFromQueued(q)
+	return question, s.vault.Resolve(question, answers.Context{
+		ATS: q.ATS, Company: q.Company,
+	}, s.pii)
+}
+
+// questionFromGroup builds an answers.Question from a grouped inbox item,
+// using Career Agent's canonical wording and, when there is exactly one
+// company involved, scoping the question to that company.
+func questionFromGroup(group *Group, prompt string) answers.Question {
+	question := answers.Question{
+		Key:         group.Key,
+		Prompt:      prompt,
+		ControlType: group.ControlType,
+		Options:     group.Options,
+		Required:    group.Required,
+	}
+	if len(group.Companies) == 1 {
+		question.Company = group.Companies[0]
+	}
+	return question
+}
+
+// finalizeGroupApproval stores an answer for a group, binds aliases, and
+// re-evaluates the queue. It is shared between Approve and ApproveAbsence.
+func (s *Service) finalizeGroupApproval(group *Group, prompt string, save func() (answers.Answer, error), reuseAllowed bool, confirmedEquivalent bool, now time.Time) (ApproveResult, error) {
+	result := ApproveResult{}
+	saved, err := save()
+	if err != nil {
+		return result, err
+	}
+	result.Saved = true
+	result.AnswerID = saved.ID
+	result.CanonicalQuestion = saved.CanonicalQuestion
+
+	if reuseAllowed {
+		extra := make([]string, 0, len(group.Phrasings))
+		for _, phrasing := range group.Phrasings {
+			if answers.Normalize(phrasing) != answers.Normalize(prompt) {
+				extra = append(extra, phrasing)
+			}
+		}
+		if len(extra) > 0 {
+			added, aliasErr := s.vault.AddAliases(saved.ID, extra, confirmedEquivalent)
+			if aliasErr != nil && !errors.Is(aliasErr, answers.ErrSensitiveAliasNeedsConfirmation) {
+				return result, fmt.Errorf("bind the other phrasings of this question: %w", aliasErr)
+			}
+			result.AliasesAdded = added
+		}
+	}
+
+	report, err := s.ReEvaluate(now)
+	if err != nil {
+		return result, err
+	}
+	result.QuestionsResolved = report.Resolved
+	result.ApplicationsHelped = report.Applications
+	result.StillUnresolved = report.StillUnresolved
+	return result, nil
+}
+
+// loadGroupForApproval resolves the inbox for a group key and validates that it
+// still exists. It is shared by Approve and ApproveAbsence.
+func (s *Service) loadGroupForApproval(groupKey string, now time.Time) (*Group, error) {
+	groups, _, err := s.collect(now)
+	if err != nil {
+		return nil, err
+	}
+	group := groups[groupKey]
+	if group == nil {
+		return nil, errors.New("that question is no longer in the queue")
+	}
+	return group, nil
+}
+
 // Approve stores one answer and immediately re-evaluates the queue.
 //
 // The re-evaluation is not a nicety. Without it the operator approves an answer
@@ -623,13 +707,9 @@ func (s *Service) Approve(request ApproveRequest, now time.Time) (ApproveResult,
 		return result, errors.New("an approved answer needs an answer")
 	}
 
-	groups, _, err := s.collect(now)
+	group, err := s.loadGroupForApproval(request.GroupKey, now)
 	if err != nil {
 		return result, err
-	}
-	group := groups[request.GroupKey]
-	if group == nil {
-		return result, errors.New("that question is no longer in the queue")
 	}
 	if group.OptionsVary {
 		return result, errors.New("these employers offer different choices for this question, so it has to be answered per application")
@@ -647,16 +727,7 @@ func (s *Service) Approve(request ApproveRequest, now time.Time) (ApproveResult,
 	// labelled with one company's name (observed live: a sponsorship answer
 	// filed as "...to work for Affirm in the United States?*").
 	prompt := canonicalPromptFor(group)
-	question := answers.Question{
-		Key:         group.Key,
-		Prompt:      prompt,
-		ControlType: group.ControlType,
-		Options:     group.Options,
-		Required:    group.Required,
-	}
-	if len(group.Companies) == 1 {
-		question.Company = group.Companies[0]
-	}
+	question := questionFromGroup(group, prompt)
 
 	sensitive := answers.Sensitivity(group.Sensitivity) == answers.Sensitive ||
 		answers.Classify(question) == answers.Sensitive
@@ -669,51 +740,17 @@ func (s *Service) Approve(request ApproveRequest, now time.Time) (ApproveResult,
 		provenance = answers.OperatorEdited
 	}
 
-	saved, err := s.vault.Save(answers.SaveRequest{
-		Question:          question,
-		Answer:            answerText,
-		Scope:             request.Scope,
-		Provenance:        provenance,
-		ReuseAllowed:      reuseAllowed,
-		ReuseDecisionMade: true,
-		Sensitivity:       answers.Sensitivity(group.Sensitivity),
-	})
-	if err != nil {
-		return result, err
-	}
-	result.Saved = true
-	result.AnswerID = saved.ID
-	result.CanonicalQuestion = saved.CanonicalQuestion
-
-	// Bind the other phrasings this group collapsed, so the next occurrence is
-	// a lookup rather than another interruption. A declaration needs the
-	// operator to have confirmed the phrasings are equivalent; a routine
-	// question does not, because the cost of being wrong is a retyped answer
-	// rather than a false statement.
-	if reuseAllowed {
-		extra := make([]string, 0, len(group.Phrasings))
-		for _, phrasing := range group.Phrasings {
-			if answers.Normalize(phrasing) != answers.Normalize(prompt) {
-				extra = append(extra, phrasing)
-			}
-		}
-		if len(extra) > 0 {
-			added, aliasErr := s.vault.AddAliases(saved.ID, extra, request.ConfirmedEquivalent)
-			if aliasErr != nil && !errors.Is(aliasErr, answers.ErrSensitiveAliasNeedsConfirmation) {
-				return result, fmt.Errorf("bind the other phrasings of this question: %w", aliasErr)
-			}
-			result.AliasesAdded = added
-		}
-	}
-
-	report, err := s.ReEvaluate(now)
-	if err != nil {
-		return result, err
-	}
-	result.QuestionsResolved = report.Resolved
-	result.ApplicationsHelped = report.Applications
-	result.StillUnresolved = report.StillUnresolved
-	return result, nil
+	return s.finalizeGroupApproval(group, prompt, func() (answers.Answer, error) {
+		return s.vault.Save(answers.SaveRequest{
+			Question:          question,
+			Answer:            answerText,
+			Scope:             request.Scope,
+			Provenance:        provenance,
+			ReuseAllowed:      reuseAllowed,
+			ReuseDecisionMade: true,
+			Sensitivity:       answers.Sensitivity(group.Sensitivity),
+		})
+	}, reuseAllowed, request.ConfirmedEquivalent, now)
 }
 
 // ApproveAbsenceRequest is the operator declaring they do not have the thing
@@ -747,13 +784,9 @@ func (s *Service) ApproveAbsence(request ApproveAbsenceRequest, now time.Time) (
 		return result, errors.New("an absence that is not saved for reuse resolves nothing — use it only when the operator wants to permanently skip this question")
 	}
 
-	groups, _, err := s.collect(now)
+	group, err := s.loadGroupForApproval(request.GroupKey, now)
 	if err != nil {
 		return result, err
-	}
-	group := groups[request.GroupKey]
-	if group == nil {
-		return result, errors.New("that question is no longer in the queue")
 	}
 	// Absence cannot apply to per-job questions (they need a per-employer answer).
 	if group.Policy == PolicyGeneratePerJob {
@@ -761,54 +794,17 @@ func (s *Service) ApproveAbsence(request ApproveAbsenceRequest, now time.Time) (
 	}
 
 	prompt := canonicalPromptFor(group)
-	question := answers.Question{
-		Key:         group.Key,
-		Prompt:      prompt,
-		ControlType: group.ControlType,
-		Options:     group.Options,
-		Required:    group.Required,
-	}
-	if len(group.Companies) == 1 {
-		question.Company = group.Companies[0]
-	}
+	question := questionFromGroup(group, prompt)
 
-	saved, err := s.vault.SaveAbsence(answers.SaveAbsenceRequest{
-		Question:          question,
-		Reason:            reason,
-		Scope:             request.Scope,
-		ReuseAllowed:      true, // absence always grants reuse
-		ReuseDecisionMade: true,
-	})
-	if err != nil {
-		return result, err
-	}
-	result.Saved = true
-	result.AnswerID = saved.ID
-	result.CanonicalQuestion = saved.CanonicalQuestion
-
-	// Bind the other phrasings as aliases so they inherit the absence.
-	extra := make([]string, 0, len(group.Phrasings))
-	for _, phrasing := range group.Phrasings {
-		if answers.Normalize(phrasing) != answers.Normalize(prompt) {
-			extra = append(extra, phrasing)
-		}
-	}
-	if len(extra) > 0 {
-		added, aliasErr := s.vault.AddAliases(saved.ID, extra, request.ConfirmedEquivalent)
-		if aliasErr != nil && !errors.Is(aliasErr, answers.ErrSensitiveAliasNeedsConfirmation) {
-			return result, fmt.Errorf("bind the other phrasings of this question: %w", aliasErr)
-		}
-		result.AliasesAdded = added
-	}
-
-	report, err := s.ReEvaluate(now)
-	if err != nil {
-		return result, err
-	}
-	result.QuestionsResolved = report.Resolved
-	result.ApplicationsHelped = report.Applications
-	result.StillUnresolved = report.StillUnresolved
-	return result, nil
+	return s.finalizeGroupApproval(group, prompt, func() (answers.Answer, error) {
+		return s.vault.SaveAbsence(answers.SaveAbsenceRequest{
+			Question:          question,
+			Reason:            reason,
+			Scope:             request.Scope,
+			ReuseAllowed:      true, // absence always grants reuse
+			ReuseDecisionMade: true,
+		})
+	}, true, request.ConfirmedEquivalent, now)
 }
 
 // Report is what a re-evaluation pass found.
@@ -837,17 +833,7 @@ func (s *Service) ReEvaluate(now time.Time) (Report, error) {
 	helped := map[string]bool{}
 	for _, queuedQuestion := range queued {
 		report.Examined++
-		question := answers.Question{
-			Key:         queuedQuestion.Key,
-			Prompt:      queuedQuestion.Prompt,
-			ControlType: queuedQuestion.ControlType,
-			Options:     queuedQuestion.Options,
-			Required:    queuedQuestion.Required,
-			Company:     queuedQuestion.Company,
-		}
-		resolution := s.vault.Resolve(question, answers.Context{
-			ATS: queuedQuestion.ATS, Company: queuedQuestion.Company,
-		}, s.pii)
+		_, resolution := s.resolveQueuedQuestion(queuedQuestion)
 
 		if resolution.AutoFill {
 			report.Resolved++
