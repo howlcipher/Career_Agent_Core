@@ -109,6 +109,7 @@ jobs:
 
       - name: Execute Hygiene Gate (Classify & Enforce)
         run: |
+          mkdir -p .slop/tombstones
           slopslint check --classify --enforce
 
       - name: Enforce Ceiling Ratchet against Base Branch
