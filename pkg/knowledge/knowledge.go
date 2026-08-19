@@ -68,11 +68,18 @@ const (
 	PolicyGeneratePerJob = "generate_per_job"
 	// PolicyUnknown: nothing in the vault or the pattern table answers this.
 	PolicyUnknown = "unknown"
+	// PolicyIntentionalAbsence: the operator explicitly decided they do not
+	// have this information. The field is intentionally left blank on optional
+	// forms and surfaces as a required-field conflict when an employer demands
+	// a response.
+	PolicyIntentionalAbsence = "intentional_absence"
 )
 
 // Policy names what Career Agent is allowed to do with a resolution.
 func Policy(resolution answers.Resolution) string {
 	switch {
+	case resolution.IntentionalAbsence:
+		return PolicyIntentionalAbsence
 	case resolution.Sensitivity == answers.GeneratePerJob:
 		return PolicyGeneratePerJob
 	case resolution.AutoFill && resolution.Sensitivity == answers.Sensitive:
@@ -149,6 +156,13 @@ type Group struct {
 	// is being asked about and the approval can be filed under the canonical
 	// skill question rather than one employer's wording.
 	SkillSubject string `json:"skill_subject,omitempty"`
+	// AbsenceApproved is true when the vault holds an intentional-absence
+	// answer for this group's key. This reaches the inbox only when the
+	// absence cannot resolve the group (e.g., one employer marks the field
+	// required). The UI uses it to explain why the operator is being asked
+	// again: "Your saved answer is 'I don't have this', but this employer
+	// requires a response."
+	AbsenceApproved bool `json:"absence_approved,omitempty"`
 }
 
 // Readiness is the demand-driven summary: how ready the operator's knowledge is
@@ -165,6 +179,13 @@ type Readiness struct {
 	FieldsUnlockable    int `json:"fields_unlockable"`
 	AnswersNeeded       int `json:"answers_needed"`
 	ApplicationsBlocked int `json:"applications_blocked"`
+	// AbsenceResolved counts fields resolved by an intentional-absence
+	// decision (the operator said "I don't have this"). These are part of
+	// Resolved but not part of what was "filled" -- the distinction keeps
+	// metrics semantically accurate. If the UI says "18/20 fields resolved",
+	// AbsenceResolved tells it how many of those 18 were left blank by
+	// operator decision vs. filled with a value.
+	AbsenceResolved int `json:"absence_resolved"`
 }
 
 // KnownPercent is the share of discovered fields Career Agent can already
@@ -314,6 +335,9 @@ func (s *Service) collect(now time.Time) (map[string]*Group, Readiness, error) {
 			// Career Agent can handle this one already; it is not something to
 			// put in front of the operator. It reaches this loop at all only
 			// when it became answerable after the inventory was taken.
+			if resolution.IntentionalAbsence {
+				readiness.AbsenceResolved++
+			}
 			continue
 		}
 		readiness.Unresolved++
@@ -402,6 +426,11 @@ func mergeIntoGroup(group *Group, queuedQuestion storage.QueuedQuestion, resolut
 		group.Suggested = resolution.Answer
 		group.Source = string(resolution.Source)
 		group.Resolved = true
+	}
+	// An intentional-absence answer that landed in the inbox (because the
+	// field is required) should be flagged so the UI can explain the conflict.
+	if resolution.IntentionalAbsence {
+		group.AbsenceApproved = true
 	}
 	// Free-text beats a choice control when they disagree: a text box accepts
 	// what a dropdown offers, and the reverse is not true.
@@ -687,6 +716,101 @@ func (s *Service) Approve(request ApproveRequest, now time.Time) (ApproveResult,
 	return result, nil
 }
 
+// ApproveAbsenceRequest is the operator declaring they do not have the thing
+// a group's question asks for. It is an explicit decision, not a dismissal.
+type ApproveAbsenceRequest struct {
+	// GroupKey identifies which group is being declared absent.
+	GroupKey string
+	// Reason is shown in the vault management view, e.g. "No Twitter/X account".
+	Reason string
+	// SaveForReuse must be true (absence without reuse is pointless: it would
+	// resolve nothing and the group stays in the inbox).
+	SaveForReuse bool
+	// ConfirmedEquivalent is the operator agreeing that the group's phrasings
+	// all ask for the same thing and should all inherit the absence.
+	ConfirmedEquivalent bool
+	Scope               string
+}
+
+// ApproveAbsence stores an intentional-absence decision for a group and
+// immediately re-evaluates the queue, just like Approve does for value answers.
+func (s *Service) ApproveAbsence(request ApproveAbsenceRequest, now time.Time) (ApproveResult, error) {
+	result := ApproveResult{}
+	if s == nil || s.conn == nil {
+		return result, errNotReady
+	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		return result, errors.New("an intentional absence needs a reason")
+	}
+	if !request.SaveForReuse {
+		return result, errors.New("an absence that is not saved for reuse resolves nothing — use it only when the operator wants to permanently skip this question")
+	}
+
+	groups, _, err := s.collect(now)
+	if err != nil {
+		return result, err
+	}
+	group := groups[request.GroupKey]
+	if group == nil {
+		return result, errors.New("that question is no longer in the queue")
+	}
+	// Absence cannot apply to per-job questions (they need a per-employer answer).
+	if group.Policy == PolicyGeneratePerJob {
+		return result, errors.New("a per-job question needs a per-employer answer and cannot be marked absent")
+	}
+
+	prompt := canonicalPromptFor(group)
+	question := answers.Question{
+		Key:         group.Key,
+		Prompt:      prompt,
+		ControlType: group.ControlType,
+		Options:     group.Options,
+		Required:    group.Required,
+	}
+	if len(group.Companies) == 1 {
+		question.Company = group.Companies[0]
+	}
+
+	saved, err := s.vault.SaveAbsence(answers.SaveAbsenceRequest{
+		Question:          question,
+		Reason:            reason,
+		Scope:             request.Scope,
+		ReuseAllowed:      true, // absence always grants reuse
+		ReuseDecisionMade: true,
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Saved = true
+	result.AnswerID = saved.ID
+	result.CanonicalQuestion = saved.CanonicalQuestion
+
+	// Bind the other phrasings as aliases so they inherit the absence.
+	extra := make([]string, 0, len(group.Phrasings))
+	for _, phrasing := range group.Phrasings {
+		if answers.Normalize(phrasing) != answers.Normalize(prompt) {
+			extra = append(extra, phrasing)
+		}
+	}
+	if len(extra) > 0 {
+		added, aliasErr := s.vault.AddAliases(saved.ID, extra, request.ConfirmedEquivalent)
+		if aliasErr != nil && !errors.Is(aliasErr, answers.ErrSensitiveAliasNeedsConfirmation) {
+			return result, fmt.Errorf("bind the other phrasings of this question: %w", aliasErr)
+		}
+		result.AliasesAdded = added
+	}
+
+	report, err := s.ReEvaluate(now)
+	if err != nil {
+		return result, err
+	}
+	result.QuestionsResolved = report.Resolved
+	result.ApplicationsHelped = report.Applications
+	result.StillUnresolved = report.StillUnresolved
+	return result, nil
+}
+
 // Report is what a re-evaluation pass found.
 type Report struct {
 	Examined        int `json:"examined"`
@@ -770,6 +894,10 @@ type FieldAnswer struct {
 	// so a caller cannot fill a suggestion by reading the wrong key.
 	Suggested    string `json:"suggested,omitempty"`
 	SkillSubject string `json:"skill_subject,omitempty"`
+	// IntentionalAbsence is true when the resolution is an operator's explicit
+	// decision to leave this field blank. The fill path uses it to skip the
+	// control entirely rather than typing an empty value.
+	IntentionalAbsence bool `json:"intentional_absence,omitempty"`
 }
 
 // Field answers a single-field query.
@@ -795,8 +923,9 @@ func (s *Service) Field(query FieldQuery) (FieldAnswer, error) {
 		Sensitivity:        string(resolution.Sensitivity),
 		Source:             string(resolution.Source),
 		SkillSubject:       answers.SkillExperienceSubject(question),
+		IntentionalAbsence: resolution.IntentionalAbsence,
 	}
-	if resolution.AutoFill {
+	if resolution.AutoFill && !resolution.IntentionalAbsence {
 		reply.Answer = resolution.Answer
 	} else if resolution.Resolved {
 		reply.Suggested = resolution.Answer

@@ -20,6 +20,11 @@ Automatic Apply and adds `fill_source` (`bugs.md` #551) in `pkg/storage/question
 `config.PII.EducationSummary()` (`pkg/answers/patterns.go`, `pkg/config/pii.go`,
 `pkg/answers/resolve.go`).
 
+**Amended 2026-08-19** with decision 11, which adds first-class intentional absence
+(`improvements.md` #545) in `pkg/answers/model.go`, `pkg/answers/store.go`,
+`pkg/answers/resolve.go`, `pkg/knowledge/knowledge.go`, and
+`cmd/dashboard/knowledge_api.go`.
+
 ## Context
 
 The Approved Answer Vault (ADR-adjacent; `pkg/answers`, `improvements.md` #497) already solved the
@@ -468,3 +473,50 @@ decision path used for work authorization and sponsorship. Free-text essay promp
 ("Describe how your education prepared you...", "Why did you choose your field of study?") and
 skill-scoped or possession questions ("Do you have a degree in computer science?") are rejected or
 miss the pattern's `RequireAll` groups, so they do not inherit the generic summary.
+
+### 11. Intentional absence is a first-class answer state, distinct from both "value" and "unanswered"
+
+*Added 2026-08-19. Closes `improvements.md` #545.*
+
+The vault previously had two states: a question has an approved answer (value), or it does not
+(unresolved). Production evidence showed a third: the operator has decided, and the decision is
+that an optional field gets nothing. Five out of six inspected applications asked for a Twitter/X
+URL the operator does not have. The vault rejected empty answers by design (`answer_text TEXT NOT
+NULL` and `Store.Save`'s empty-answer refusal), so there was no way to record this truthful,
+reusable fact.
+
+**Representation.** `KindAbsence` (`answer_kind = 'absence'`) is added to the existing `Kind`
+enum. The `answer_text` column stores a human-readable reason (e.g. "No Twitter/X account")
+rather than an empty string, preserving the non-NULL invariant and giving the vault management
+view something meaningful to display. `Resolution` gains an `IntentionalAbsence bool` field that
+the fill path uses to distinguish "leave the control untouched" from "type this value".
+
+**Optional-field safety invariant.** The central rule: absence may only auto-fill (resolve
+without operator intervention) when the live field is optional. If `Question.Required == true`,
+`applyAbsenceSafety` in `resolve.go` forces `AutoFill = false`, so the field surfaces as needing
+operator attention. The safety is enforced at the resolution boundary, not at storage time,
+because the same absence answer must correctly resolve an optional Twitter field on one
+application while surfacing as a conflict on another that marks the same field required.
+
+**Canonicalization boundaries.** Absence reuse follows the same deterministic alias/key/scope
+model as value answers. A Twitter absence does not spread to LinkedIn, GitHub, or portfolio
+because those are separate question keys and separate patterns. No semantic similarity or broad
+account-type inference is added.
+
+**Sensitive-question safety.** Sensitive questions (work authorization, sponsorship, privacy
+consent, legal attestations, EEO/demographic) require the same explicit two-decision approval
+path for absence as for value answers. `SaveAbsence` refuses `GeneratePerJob` outright and
+demands `ReuseDecisionMade && ReuseAllowed` for `Sensitive`.
+
+**Metrics.** `Readiness.AbsenceResolved` counts fields handled by operator absence decisions,
+as a subset of `Resolved`. The UI can accurately report "18/20 fields resolved (2 intentionally
+left blank)" without inflating the "fields filled" count. The fill path skips the control
+entirely rather than typing an empty string; `AssistedFillSummary.FilledCount` is not incremented.
+
+**Approval path.** `knowledge.ApproveAbsence` stores the absence, binds aliases for equivalent
+phrasings, and immediately re-evaluates the queue, following the same machinery `Approve` uses.
+`POST /api/knowledge/absence` exposes this to the dashboard. Absence always grants reuse (an
+absence without reuse resolves nothing and serves no purpose).
+
+**Revocation.** The existing `Store.Revoke` applies unchanged: revoking an absence row
+restores the question to unresolved, and the next re-evaluation surfaces it in the inbox.

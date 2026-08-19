@@ -548,6 +548,7 @@ func main() {
 	// per-row work for every queued application.
 	mux.HandleFunc("/api/knowledge", requireSameOrigin(serveKnowledge))
 	mux.HandleFunc("/api/knowledge/approve", requireSameOrigin(serveKnowledgeApprove))
+	mux.HandleFunc("/api/knowledge/absence", requireSameOrigin(serveKnowledgeAbsence))
 	mux.HandleFunc("/api/knowledge/preflight", requireSameOrigin(servePreflight))
 	mux.HandleFunc("/api/knowledge/field", requireSameOrigin(serveKnowledgeField))
 	mux.HandleFunc("/api/knowledge/profile", requireSameOrigin(serveKnowledgeProfile))

@@ -201,6 +201,117 @@ func (s *Store) Save(request SaveRequest) (Answer, error) {
 	}, nil
 }
 
+// SaveAbsenceRequest is the operator declaring that they do not have the thing
+// a question asks for. It is a real answer: "I have no Twitter account" is a
+// durable fact that resolves every optional Twitter question permanently.
+type SaveAbsenceRequest struct {
+	Question Question
+	// Reason is a human-readable note stored as answer_text, e.g.
+	// "No Twitter/X account". It must be non-empty so the vault management
+	// view has something meaningful to display and the existing non-empty
+	// answer_text invariant is preserved.
+	Reason       string
+	Scope        string
+	ReuseAllowed bool
+	// ReuseDecisionMade records that the operator was actually asked. Same
+	// semantics as SaveRequest.ReuseDecisionMade.
+	ReuseDecisionMade bool
+}
+
+// SaveAbsence stores an intentional-absence decision.
+//
+// It shares Save's safety rules for sensitive questions, and adds its own:
+// - GeneratePerJob questions cannot be absent (they need a per-employer answer).
+// - The reason must not be empty (the UI shows it, and a blank row looks broken).
+//
+// The approval is stored as answer_kind = 'absence' so the resolver can
+// distinguish it from a value answer. The answer_text holds the reason,
+// preserving the existing non-NULL TEXT invariant. Resolution-time enforcement
+// of the optional-field-only rule happens in Resolve, not here: the same
+// Twitter absence correctly resolves an optional field while refusing a
+// required one, and that distinction is a property of the live form, not of
+// the stored answer.
+func (s *Store) SaveAbsence(request SaveAbsenceRequest) (Answer, error) {
+	if s == nil || s.conn == nil {
+		return Answer{}, errors.New("answer vault is not initialized")
+	}
+	prompt := strings.TrimSpace(request.Question.Prompt)
+	reason := strings.TrimSpace(request.Reason)
+	if prompt == "" {
+		return Answer{}, errors.New("an approved answer needs the question it answers")
+	}
+	if reason == "" {
+		return Answer{}, errors.New("an intentional absence needs a reason (e.g. \"No Twitter/X account\")")
+	}
+
+	classified := Classify(request.Question)
+	if classified == GeneratePerJob {
+		return Answer{}, ErrNotReusable
+	}
+	if classified == Sensitive {
+		operatorApproved := true // caller is always the operator for absence
+		if !operatorApproved || !request.ReuseDecisionMade || !request.ReuseAllowed {
+			return Answer{}, ErrSensitiveNeedsApproval
+		}
+	}
+
+	scope := strings.TrimSpace(request.Scope)
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+	key := QuestionKey(prompt)
+	if key == "" {
+		return Answer{}, errors.New("the question has no recognizable text")
+	}
+	now := s.now()
+
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return Answer{}, fmt.Errorf("begin approved absence: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO approved_answers
+		(question_key, canonical_question, answer_text, answer_kind, sensitivity, scope, reuse_allowed, provenance, approved_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(question_key, scope) DO UPDATE SET
+			canonical_question = excluded.canonical_question,
+			answer_text = excluded.answer_text,
+			answer_kind = excluded.answer_kind,
+			sensitivity = excluded.sensitivity,
+			reuse_allowed = excluded.reuse_allowed,
+			provenance = excluded.provenance,
+			updated_at = excluded.updated_at,
+			revoked_at = NULL`,
+		key, prompt, reason, string(KindAbsence), string(classified), scope,
+		boolToInt(request.ReuseAllowed), string(OperatorApproved), now, now); err != nil {
+		return Answer{}, fmt.Errorf("store approved absence: %w", err)
+	}
+
+	var id int64
+	if err := tx.QueryRow(`SELECT id FROM approved_answers WHERE question_key = ? AND scope = ?`, key, scope).Scan(&id); err != nil {
+		return Answer{}, fmt.Errorf("read stored approved absence: %w", err)
+	}
+
+	if request.ReuseAllowed {
+		if _, err := tx.Exec(`INSERT INTO answer_aliases (alias_key, scope, answer_id, source, created_at)
+			VALUES (?, ?, ?, 'operator', ?)
+			ON CONFLICT(alias_key, scope) DO UPDATE SET answer_id = excluded.answer_id, created_at = excluded.created_at`,
+			Normalize(prompt), scope, id, now); err != nil {
+			return Answer{}, fmt.Errorf("store absence alias: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Answer{}, err
+	}
+	return Answer{
+		ID: id, QuestionKey: key, CanonicalQuestion: prompt, AnswerText: reason,
+		Kind: KindAbsence, Sensitivity: classified, Scope: scope,
+		ReuseAllowed: request.ReuseAllowed, Provenance: OperatorApproved,
+		ApprovedAt: now, UpdatedAt: now,
+	}, nil
+}
+
 // ErrSensitiveAliasNeedsConfirmation is returned when a caller tries to bind
 // extra phrasings to a sensitive answer without the operator having confirmed
 // that those phrasings mean the same thing.

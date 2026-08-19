@@ -131,6 +131,49 @@ func serveKnowledgeApprove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// serveKnowledgeAbsence stores an intentional-absence decision for a group.
+func serveKnowledgeAbsence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		GroupKey            string `json:"group_key"`
+		Reason              string `json:"reason"`
+		ConfirmedEquivalent bool   `json:"confirmed_equivalent"`
+		Scope               string `json:"scope"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxKnowledgeRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || strings.TrimSpace(request.GroupKey) == "" {
+		http.Error(w, "a question group and a reason are required", http.StatusBadRequest)
+		return
+	}
+	service, err := openKnowledgeService()
+	if err != nil {
+		log.Printf("serveKnowledgeAbsence: %v", err)
+		http.Error(w, "application knowledge is unavailable", http.StatusInternalServerError)
+		return
+	}
+	result, err := service.ApproveAbsence(knowledge.ApproveAbsenceRequest{
+		GroupKey:            request.GroupKey,
+		Reason:              request.Reason,
+		SaveForReuse:        true,
+		ConfirmedEquivalent: request.ConfirmedEquivalent,
+		Scope:               normalizeRequestedScope(request.Scope),
+	}, time.Now().UTC())
+	if err != nil {
+		switch {
+		case errors.Is(err, answers.ErrNotReusable):
+			http.Error(w, "this answer is written for one employer and cannot be marked absent", http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
+	writeJSON(w, result)
+}
+
 // serveKnowledgeField answers a single-field query.
 //
 // This is the endpoint ADR-005's normal-browser companion needs, so that

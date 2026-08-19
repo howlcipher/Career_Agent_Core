@@ -1636,3 +1636,27 @@ Regression coverage: `TestClassifyTitle_GenericSharedWordFalsePositives` pins al
 Verified `ManagementTrackTitle`/#556's classifier, `stretchSeniorityTitle`, and geography policy were untouched; separately confirmed the two production examples that don't map to a shared-word mechanism ("Senior Technical Consultant", "generic Staff/Senior Software Engineer") already reject under the current profile.yaml with no code change — they were relics of the pre-2026-08-17 broader 121-entry role list, already resolved by that list's narrowing. `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l ./cmd ./pkg ./internal` all passed.
 
 ---
+
+## 545. "I don't have this" is a real answer the vault cannot represent
+
+**Completed 2026-08-19.** Production evidence: 5 out of 6 inspected applications asked for a Twitter/X URL the operator does not have. All optional fields (`required = 0`). `Store.Save` refused empty answers by design, leaving no way to record the truthful reusable fact.
+
+**Root cause:** The vault's answer model had two states (value vs. unanswered) where three are needed (value, intentional absence, unanswered). `answer_text TEXT NOT NULL` combined with `Store.Save`'s empty-answer refusal prevented any explicit absence representation.
+
+**Fix:** Added `KindAbsence` (`answer_kind = 'absence'`) as a first-class `Kind`. The `answer_text` stores a human-readable reason ("No Twitter/X account"), preserving the non-NULL invariant. `Resolution.IntentionalAbsence` tells the fill path to leave the control untouched. `SaveAbsence` on the Store, `ApproveAbsence` on the knowledge service, and `POST /api/knowledge/absence` on the dashboard expose the full approval path.
+
+**Safety invariants enforced:**
+- `applyAbsenceSafety` in `resolve.go` demotes `AutoFill` to false when the live field is required, so absence never skips a required control.
+- `SaveAbsence` refuses `GeneratePerJob` outright (`ErrNotReusable`).
+- Sensitive questions (work auth, sponsorship, privacy consent, legal attestations) require the same two-decision explicit approval path as value answers.
+- Canonicalization boundaries are preserved: Twitter absence does not spread to LinkedIn, GitHub, or portfolio (separate question keys, separate curated patterns).
+- The fill path (`resolveAndApply` in `assisted_fill.go`) skips controls with `IntentionalAbsence` entirely rather than typing the reason text.
+- `Readiness.AbsenceResolved` tracks absence-resolved fields separately from value-filled fields.
+
+**Independent review findings:** Two critical defects caught and fixed before close: (1) fill path would have typed the reason text into the form field; (2) stale absence vs newly configured PII is the same precedence rule as any vault-vs-pattern answer and is handled by explicit revocation (documented in ADR-007 decision 11).
+
+**Test coverage:** 20 regression tests in `pkg/answers/answers_test.go` covering storage semantics, required-field safety, cross-account isolation, sensitive-question refusal, revocation, value-replaces-absence, absence-replaces-value, and kind persistence. 9 integration tests in `pkg/knowledge/knowledge_test.go` covering the service-level approval, per-job refusal, required-field conflict surfacing, policy classification, field query response, metrics accuracy, and validation.
+
+**Verification:** `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l ./cmd ./pkg ./internal` all pass. ADR-007 amended with decision 11. CHANGELOG updated.
+
+---
