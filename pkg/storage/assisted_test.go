@@ -711,32 +711,40 @@ func TestAssistedDocumentExists_CoverLetterReadinessFollowsTheMasterLetter(t *te
 	}
 }
 
-// A revalidated AWAITING_REVIEW handoff must still expose the explicit-submit
-// affordance. Without it the dashboard never renders "I saw a confirmation —
-// Mark Applied", so an application the operator genuinely submitted cannot be
-// confirmed from the UI once its browser closes (bugs.md #518). Revalidation
-// is routine before every launch, so this affected every assisted application.
-func TestActionForRevalidation_AwaitingReviewAllowsConfirmation(t *testing.T) {
-	action := actionForRevalidation("AWAITING_REVIEW", "", "application_ready")
-	if action.Code != "open_verified_application" {
-		t.Errorf("Code = %q, want open_verified_application", action.Code)
-	}
-	if !action.RequiresExplicitSubmit {
-		t.Error("RequiresExplicitSubmit = false; the Mark Applied control would not render")
-	}
-	if !action.RequiresBrowser {
-		t.Error("RequiresBrowser = false, want true")
+// A revalidated handoff of any status ConfirmAssistedSubmission itself
+// accepts must still expose the explicit-submit affordance. Without it the
+// dashboard never renders "I saw a confirmation — Mark Applied", so an
+// application the operator genuinely submitted cannot be confirmed from the
+// UI once its browser closes (bugs.md #518, then #557). #518 fixed this for
+// AWAITING_REVIEW only; #557 found a BLOCKED_CAPTCHA-origin job (Wurl, job
+// 1240, live dogfood run 2026-08-20) reach and submit a real form the exact
+// same way and lose the exact same control the exact same way, which
+// falsified the assumption the old version of this test asserted — that a
+// CAPTCHA-blocked page never has a prepared form to have been submitted. It
+// can, once the CAPTCHA is solved and the browser is later closed without the
+// guided Continue step.
+func TestActionForRevalidation_EligibleStatusesAllowConfirmation(t *testing.T) {
+	for _, status := range []string{"AWAITING_REVIEW", "BLOCKED_CAPTCHA", "MANUAL_REQUIRED"} {
+		action := actionForRevalidation(status, "", "application_ready")
+		if action.Code != "open_verified_application" {
+			t.Errorf("status %q: Code = %q, want open_verified_application", status, action.Code)
+		}
+		if !action.RequiresExplicitSubmit {
+			t.Errorf("status %q: RequiresExplicitSubmit = false; the Mark Applied control would not render", status)
+		}
+		if !action.RequiresBrowser {
+			t.Errorf("status %q: RequiresBrowser = false, want true", status)
+		}
 	}
 }
 
-// Other statuses must not gain a confirmation affordance they never had: a
-// CAPTCHA-blocked page has no prepared form to have been submitted.
-func TestActionForRevalidation_OtherStatusesUnchanged(t *testing.T) {
-	for _, status := range []string{"BLOCKED_CAPTCHA", "MANUAL_REQUIRED", ""} {
-		action := actionForRevalidation(status, "", "application_ready")
-		if action.RequiresExplicitSubmit {
-			t.Errorf("status %q: RequiresExplicitSubmit = true, want false", status)
-		}
+// A status ConfirmAssistedSubmission itself would refuse must not gain a
+// confirmation affordance either — there is no eligible funnel row for it to
+// commit against.
+func TestActionForRevalidation_IneligibleStatusUnchanged(t *testing.T) {
+	action := actionForRevalidation("", "", "application_ready")
+	if action.RequiresExplicitSubmit {
+		t.Error("RequiresExplicitSubmit = true for an ineligible status, want false")
 	}
 }
 
