@@ -141,7 +141,7 @@ func TestConfirmAssistedSubmission_AdvancesTheSessionInTheSameTransaction(t *tes
 	if started := GetApplySessionItemStartedAt(db, "1"); started.IsZero() {
 		t.Fatal("job 1 should report review start time when opened")
 	}
-	if err := ConfirmAssistedSubmission(db, "1"); err != nil {
+	if _, err := ConfirmAssistedSubmission(db, "1"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestStopAfterCurrent_RecordsTheRestAsStoppedRatherThanDroppingThem(t *testi
 	if err := SetApplySessionStopAfterCurrent(db); err != nil {
 		t.Fatal(err)
 	}
-	if err := ConfirmAssistedSubmission(db, "1"); err != nil {
+	if _, err := ConfirmAssistedSubmission(db, "1"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -6,6 +6,10 @@ import type {
   QualifiedJob,
   ApplySession,
   AnswerSubmission,
+  DogfoodCohort,
+  DogfoodReport,
+  DogfoodConfirmInfo,
+  DogfoodFeedbackCategory,
 } from '../types';
 
 const POLL_INTERVAL_MS = 2000;
@@ -33,6 +37,17 @@ export function useDashboard() {
   // useState, so a refresh silently ended a run mid-way through.
   const [applySession, setApplySession] = useState<ApplySession | null>(null);
   const [submittingAnswers, setSubmittingAnswers] = useState<boolean>(false);
+
+  // The five-application dogfood run. Like applySession, this lives on the
+  // server and is only ever mirrored here, so a dashboard refresh mid-run
+  // never loses track of it.
+  const [dogfoodCohort, setDogfoodCohort] = useState<DogfoodCohort | null>(null);
+  const [dogfoodReport, setDogfoodReport] = useState<DogfoodReport | null>(null);
+  // Set only by a confirmation that was just captured into the active
+  // cohort, alongside which job it was. The dashboard uses this, and only
+  // this, to decide whether to show the one-question feedback prompt.
+  const [dogfoodConfirmInfo, setDogfoodConfirmInfo] = useState<DogfoodConfirmInfo | null>(null);
+  const [dogfoodFeedbackJob, setDogfoodFeedbackJob] = useState<AssistedJob | null>(null);
 
   const opRef = useRef<OperatorSettings | null>(null);
   const draftRef = useRef<OperatorSettings | null>(null);
@@ -145,6 +160,30 @@ export function useDashboard() {
     }
   }, []);
 
+  const fetchDogfoodActive = useCallback(async () => {
+    try {
+      const res = await fetch('/api/dogfood/active');
+      if (res.ok) {
+        const data = await res.json();
+        setDogfoodCohort(data.cohort ?? null);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  const fetchDogfoodReport = useCallback(async () => {
+    try {
+      const res = await fetch('/api/dogfood/report');
+      if (res.ok) {
+        const data = await res.json();
+        setDogfoodReport(data.report ?? null);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const poll = useCallback(() => {
     const seq = ++pollSeq.current;
     fetchMetrics(seq);
@@ -152,7 +191,17 @@ export function useDashboard() {
     fetchOperatorSettings();
     fetchQualifiedJobs();
     fetchApplySession();
-  }, [fetchMetrics, checkAgent, fetchOperatorSettings, fetchQualifiedJobs, fetchApplySession]);
+    fetchDogfoodActive();
+    fetchDogfoodReport();
+  }, [
+    fetchMetrics,
+    checkAgent,
+    fetchOperatorSettings,
+    fetchQualifiedJobs,
+    fetchApplySession,
+    fetchDogfoodActive,
+    fetchDogfoodReport,
+  ]);
 
   useEffect(() => {
     poll();
@@ -243,7 +292,17 @@ export function useDashboard() {
         body: JSON.stringify({ job_id: job.id, confirmed: true }),
       });
       if (!res.ok) throw new Error('confirmation rejected');
+      const data = await res.json().catch(() => null);
+      // A nonzero ordinal means this confirmation just captured into the
+      // active dogfood cohort. Set only then -- a normal confirmation
+      // outside a run must never trigger the feedback prompt.
+      if (data?.dogfood) {
+        setDogfoodConfirmInfo(data.dogfood);
+        setDogfoodFeedbackJob(job);
+      }
       fetchAssisted();
+      fetchDogfoodActive();
+      fetchDogfoodReport();
       poll();
       return true;
     } catch (e) {
@@ -409,6 +468,62 @@ export function useDashboard() {
     }
   };
 
+  const startDogfoodRun = async (): Promise<boolean> => {
+    setActionError(null);
+    try {
+      const res = await fetch('/api/dogfood/start', { method: 'POST' });
+      if (!res.ok) {
+        setActionError('Could not start the dogfood run. Finish or check the currently active run first.');
+        return false;
+      }
+      const data = await res.json();
+      setDogfoodCohort(data.cohort ?? null);
+      setDogfoodReport(null);
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError('Could not start the dogfood run.');
+      return false;
+    }
+  };
+
+  const submitDogfoodFeedback = async (
+    jobId: string,
+    category: DogfoodFeedbackCategory,
+    manualCount?: number,
+    note?: string
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/dogfood/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id: jobId,
+          category,
+          manual_count: manualCount ?? null,
+          note: note ?? '',
+        }),
+      });
+      if (!res.ok) {
+        setActionError('Could not record that feedback.');
+        return false;
+      }
+      setDogfoodConfirmInfo(null);
+      setDogfoodFeedbackJob(null);
+      fetchDogfoodReport();
+      return true;
+    } catch (e) {
+      console.error(e);
+      setActionError('Could not record that feedback.');
+      return false;
+    }
+  };
+
+  const skipDogfoodFeedback = () => {
+    setDogfoodConfirmInfo(null);
+    setDogfoodFeedbackJob(null);
+  };
+
   const assistedBrowserOpen = assistedJobs.some((job) => job.live_browser);
 
   return {
@@ -447,5 +562,12 @@ export function useDashboard() {
     controlApplySession,
     submitAnswers,
     submittingAnswers,
+    dogfoodCohort,
+    dogfoodReport,
+    dogfoodConfirmInfo,
+    dogfoodFeedbackJob,
+    startDogfoodRun,
+    submitDogfoodFeedback,
+    skipDogfoodFeedback,
   };
 }

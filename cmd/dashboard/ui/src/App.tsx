@@ -13,6 +13,8 @@ import { TriageList } from './components/TriageList';
 import { ApplySessionBar } from './components/ApplySessionBar';
 import { ConfirmDialog, ConfirmActions } from './components/ConfirmDialog';
 import { ConsoleButton } from './components/ConsoleButton';
+import { DogfoodPanel } from './components/DogfoodPanel';
+import { DogfoodFeedbackDialog } from './components/DogfoodFeedbackDialog';
 import { KnowledgePanel } from './components/KnowledgePanel';
 import { MissingInfoInbox } from './components/MissingInfoInbox';
 import { PreparePanel } from './components/PreparePanel';
@@ -72,6 +74,13 @@ function App() {
     controlApplySession,
     submitAnswers,
     submittingAnswers,
+    dogfoodCohort,
+    dogfoodReport,
+    dogfoodConfirmInfo,
+    dogfoodFeedbackJob,
+    startDogfoodRun,
+    submitDogfoodFeedback,
+    skipDogfoodFeedback,
   } = useDashboard();
 
   const [showKnowledge, setShowKnowledge] = useState<boolean>(false);
@@ -652,6 +661,24 @@ function App() {
             <p>Only continue if the employer showed that your application was received or successfully submitted.</p>
           </ConfirmDialog>
         )}
+
+        {dogfoodConfirmInfo && dogfoodFeedbackJob && (
+          <DogfoodFeedbackDialog
+            ordinal={dogfoodConfirmInfo.ordinal}
+            targetCount={dogfoodConfirmInfo.target_count}
+            subject={assistedJobLabel(dogfoodFeedbackJob)}
+            onSubmit={(category, manualCount, note) =>
+              submitDogfoodFeedback(dogfoodFeedbackJob.id, category, manualCount, note)
+            }
+            onSkip={skipDogfoodFeedback}
+          />
+        )}
+
+        <section className="deck-section" id="dogfood-run">
+          <CommandSection title="Dogfood Run" subtitle="Five real applications, measured automatically." accent="info">
+            <DogfoodPanel cohort={dogfoodCohort} report={dogfoodReport} onStart={startDogfoodRun} />
+          </CommandSection>
+        </section>
 
         <section className="deck-section" id="mission-metrics">
           <CommandSection title="Mission Metrics" subtitle="Live counts from the job funnel." accent="brass">
