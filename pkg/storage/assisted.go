@@ -678,19 +678,25 @@ func actionForRevalidation(status, reason, state string) AssistedNextAction {
 	case "captcha_confirmed":
 		return actionForLegacy(status, reason)
 	case "application_ready":
-		// AWAITING_REVIEW means the pipeline already filled the form and
-		// stopped before submitting, so the only remaining steps are the
-		// operator's own Submit and their confirmation that the employer
-		// received it. Without RequiresExplicitSubmit the dashboard never
-		// renders "I saw a confirmation — Mark Applied", which left a
-		// genuinely submitted application with no way to be confirmed from
-		// the UI once its browser closed (bugs.md #518). Revalidating a
-		// candidate is routine, so this affected every assisted application.
+		// Any status ConfirmAssistedSubmission itself will accept means the
+		// pipeline already filled the form and stopped before submitting, so
+		// the only remaining steps are the operator's own Submit and their
+		// confirmation that the employer received it. Without
+		// RequiresExplicitSubmit the dashboard never renders "I saw a
+		// confirmation — Mark Applied", which left a genuinely submitted
+		// application with no way to be confirmed from the UI once its
+		// browser closed (bugs.md #518, originally fixed for AWAITING_REVIEW
+		// only). Revalidating a candidate is routine, so this affected every
+		// assisted application regardless of origin status (bugs.md #557: a
+		// BLOCKED_CAPTCHA-origin job reached and submitted a real form the
+		// same way, and lost the same confirmation control the same way once
+		// its browser closed without the guided Continue step).
 		instruction := "The current page matches this role and shows an application entry point. Review it before providing any information or submitting."
-		if status == "AWAITING_REVIEW" {
+		eligible := isAssistedEligibleStatus(status)
+		if eligible {
 			instruction = "The prepared application is ready. Review it, submit it yourself on the employer's site, then mark it applied only after the employer confirms it was received."
 		}
-		return AssistedNextAction{"open_verified_application", "Application ready", instruction, "Open Verified Application", true, false, status == "AWAITING_REVIEW", false}
+		return AssistedNextAction{"open_verified_application", "Application ready", instruction, "Open Verified Application", true, false, eligible, false}
 	case "unavailable":
 		return AssistedNextAction{"revalidate_current_page", "Current application is not ready", "The current page did not verify this role and an application entry point. No browser was opened.", "Check Current Page Again", false, false, false, false}
 	case "unreachable":

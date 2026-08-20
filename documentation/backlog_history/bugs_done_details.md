@@ -5474,3 +5474,35 @@ No findings required a further code change beyond what is described above.
 - `documentation/backlog/bugs.md`
 - `documentation/backlog_history/bugs_done_details.md`
 
+## 557. A revalidated legacy (CAPTCHA/manual-account) handoff loses its confirmation control once the browser closes, even after a genuine submit
+
+**Found and closed 2026-08-20**, live, during the controlled five-application dogfood run (`documentation/backlog_history` process — application #4 of cohort #1). Not a speculative audit finding: it stopped the run.
+
+### Root cause
+
+`pkg/storage/assisted.go`'s `actionForRevalidation`, in its `"application_ready"` case (the state a job lands in once `revalidateAssistedPlan` has re-checked the live employer page against the queued role and the browser is not currently open), decided whether to render the "I saw a confirmation — Mark Applied" control with a literal `status == "AWAITING_REVIEW"` check. That check was #518's fix: before it, *no* revalidated job could be confirmed once its browser closed. #518 closed the gap for `AWAITING_REVIEW`-origin jobs only, and a test (`TestActionForRevalidation_OtherStatusesUnchanged`) was written asserting `BLOCKED_CAPTCHA` and `MANUAL_REQUIRED` must *not* get the control, reasoning that "a CAPTCHA-blocked page has no prepared form to have been submitted."
+
+That reasoning held for a job that had never been opened, but not for one that had. Wurl (job 1240) was a `BLOCKED_CAPTCHA`-origin legacy handoff with `assisted_attempt_count = 2` already on it — prior sessions had opened its browser and reached `needs_answers` with two real questions (visa sponsorship, salary expectation) pending. Relaunching it for the dogfood run reset `assisted_state` back to `waiting_human` (launch always does this, regardless of prior progress — a separate, pre-existing behavior this fix does not change). The operator then filled and submitted the real Greenhouse form directly in the browser without returning to click "I completed this step — Continue" first (the same shortcut had already been taken, harmlessly, on an `AWAITING_REVIEW`-origin job earlier in the same run). Closing the browser released the lease but left `assisted_state` at `waiting_human`, which falls through to `actionForRevalidation`'s `"application_ready"` case — and because the job's *original* status was `BLOCKED_CAPTCHA`, not `AWAITING_REVIEW`, `RequiresExplicitSubmit` came back `false`. The operator had a genuine Greenhouse thank-you page and no way to tell Career Agent so.
+
+`ConfirmAssistedSubmission` itself was never the problem — it already accepts any status in `eligibleAssistedStatuses` (`AWAITING_REVIEW`, `MANUAL_REQUIRED`, `BLOCKED_CAPTCHA`). The gap was purely that the UI-facing gate in `actionForRevalidation` was narrower than the backend gate it was supposed to front for.
+
+### Fix
+
+`actionForRevalidation`'s `"application_ready"` case now gates on `isAssistedEligibleStatus(status)` instead of the `AWAITING_REVIEW` literal, for both the instruction text and `RequiresExplicitSubmit`. This is the same predicate `ConfirmAssistedSubmission` already uses, so the confirm control can no longer be narrower than what the backend will actually accept — closing the same class of gap #518 was meant to close, for every eligible origin status rather than one.
+
+Considered and rejected: gating the widened affordance on `assisted_attempt_count > 0` as well, to avoid ever showing "Mark Applied" for a `BLOCKED_CAPTCHA` job that was never opened. Rejected because the `AWAITING_REVIEW` path already carries this exact same shape of risk today (it shows the control on a bare `application_ready` page match, with no attempt-count check, and always has) — adding an asymmetric extra gate only for the other two statuses would be a new, narrower behavior than the one #518 already shipped and accepted, not a fix to what broke. The project's existing position is that confirmation is a deliberate human action and the UI does not try to prevent every way the button could be clicked in error; this fix keeps that position consistent across all three eligible statuses instead of introducing a fourth, different one.
+
+### Verification
+
+- `pkg/storage/assisted_test.go`: `TestActionForRevalidation_OtherStatusesUnchanged` (which asserted the now-falsified assumption) replaced with `TestActionForRevalidation_EligibleStatusesAllowConfirmation` (all three eligible statuses get the control) and `TestActionForRevalidation_IneligibleStatusUnchanged` (an empty/unrecognized status still does not).
+- `go build ./...`, `go vet ./...`, `gofmt -l ./cmd ./pkg ./internal` all clean.
+- `go test ./...`: full suite passes except `TestServeKnowledgeProfile_KeepsBackupsBoundedAndPrivate`, confirmed pre-existing and unrelated on `main` before this change (a timestamp-collision flake in PII backup naming, `cmd/dashboard/knowledge_api_test.go`) — not touched by this fix.
+- **Live-verification pending**: the running dashboard/agent binaries still need to be rebuilt and restarted against this fix, after which Wurl's card should regain "I saw a confirmation — Mark Applied" so the operator can confirm the real prior submission and the dogfood cohort can advance from 3/5 to 4/5. This bullet will be corrected once that is observed, not assumed.
+
+### Files changed
+
+- `pkg/storage/assisted.go`
+- `pkg/storage/assisted_test.go`
+- `documentation/backlog/bugs.md`
+- `documentation/backlog_history/bugs_done_details.md`
+
