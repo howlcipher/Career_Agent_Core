@@ -502,6 +502,7 @@ func main() {
 		storage.EnsureQuestionSchema,
 		storage.EnsureApplySessionSchema,
 		storage.EnsureHumanInteractionSchema,
+		storage.EnsureDogfoodSchema,
 		answers.EnsureSchema,
 	} {
 		if err := ensure(db); err != nil {
@@ -555,6 +556,14 @@ func main() {
 	mux.HandleFunc("/api/apply-session", requireSameOrigin(serveApplySession))
 	mux.HandleFunc("/api/apply-session/start", requireSameOrigin(serveApplySessionStart))
 	mux.HandleFunc("/api/apply-session/control", requireSameOrigin(serveApplySessionControl))
+	// The five-application dogfood harness. Same-origin gated like the rest of
+	// the assisted-application surface, even though a cohort record itself
+	// holds no PII: it still names real companies and roles per application.
+	mux.HandleFunc("/api/dogfood/start", requireSameOrigin(serveDogfoodStart))
+	mux.HandleFunc("/api/dogfood/active", requireSameOrigin(serveDogfoodActive))
+	mux.HandleFunc("/api/dogfood/feedback", requireSameOrigin(serveDogfoodFeedback))
+	mux.HandleFunc("/api/dogfood/cohorts", requireSameOrigin(serveDogfoodCohorts))
+	mux.HandleFunc("/api/dogfood/report", requireSameOrigin(serveDogfoodReport))
 	mux.HandleFunc("/api/agent/status", serveAgentStatus)
 
 	// These two are state-changing: start launches the agent (which submits
@@ -1030,7 +1039,8 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 	// Read the review clock before the confirmation, because confirming is
 	// what ends it.
 	reviewStartedAt := assistedReviewStartedAt(request.JobID)
-	if err := storage.ConfirmAssistedSubmission(db, request.JobID); err != nil {
+	dogfoodOrdinal, err := storage.ConfirmAssistedSubmission(db, request.JobID)
+	if err != nil {
 		log.Printf("serveAssistedConfirm: %v", err)
 		http.Error(w, "unable to record application confirmation", http.StatusConflict)
 		return
@@ -1048,8 +1058,21 @@ func serveAssistedConfirm(w http.ResponseWriter, r *http.Request) {
 	// application. Doing it here rather than waiting for the ticker is what
 	// makes the next job appear immediately instead of up to 20 seconds later.
 	go advanceApplySession()
+	response := map[string]any{"status": "confirmed"}
+	// A nonzero ordinal means this confirmation was just captured into the
+	// active dogfood cohort. The dashboard uses this, and only this, to
+	// decide whether to show the one-question feedback prompt -- a normal
+	// confirmation outside a dogfood run never sees it. The feedback endpoint
+	// itself does not need a cohort id from the client: it always targets the
+	// most recently started cohort, which is this one.
+	if dogfoodOrdinal > 0 {
+		response["dogfood"] = map[string]any{
+			"ordinal":      dogfoodOrdinal,
+			"target_count": storage.DogfoodCohortTarget,
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"confirmed"}`))
+	json.NewEncoder(w).Encode(response)
 }
 
 // assistedReviewStartedAt reports when this application became ready for the

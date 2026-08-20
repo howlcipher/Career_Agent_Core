@@ -64,6 +64,7 @@ func prepareDashboardSchema(conn *sql.DB) error {
 		storage.EnsureQuestionSchema,
 		storage.EnsureApplySessionSchema,
 		storage.EnsureHumanInteractionSchema,
+		storage.EnsureDogfoodSchema,
 		answers.EnsureSchema,
 	} {
 		if err := ensure(conn); err != nil {
@@ -82,6 +83,7 @@ func TestDashboardStartup_CreatesEveryTableAssistedApplyNeeds(t *testing.T) {
 		"assisted_applications", "application_questions", "assisted_fill_summary",
 		"pending_answers", "application_sessions", "application_session_items",
 		"human_interactions", "approved_answers", "answer_aliases",
+		"dogfood_cohorts", "dogfood_cohort_applications",
 	} {
 		var name string
 		err := conn.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)

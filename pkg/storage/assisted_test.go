@@ -233,7 +233,7 @@ func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *t
 	if err := GetDB().QueryRow("SELECT id FROM job_funnel WHERE url = ?", url).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if err := ConfirmAssistedSubmission(GetDB(), id); err != nil {
+	if _, err := ConfirmAssistedSubmission(GetDB(), id); err != nil {
 		t.Fatal(err)
 	}
 	var status, provenance string
@@ -243,7 +243,7 @@ func TestConfirmAssistedSubmission_RequiresPlanAndPreservesManualProvenance(t *t
 	if status != "APPLIED" || provenance != "manual_user_confirmation" {
 		t.Fatalf("status=%q provenance=%q", status, provenance)
 	}
-	if err := ConfirmAssistedSubmission(GetDB(), id); err == nil {
+	if _, err := ConfirmAssistedSubmission(GetDB(), id); err == nil {
 		t.Fatal("second confirmation must conflict")
 	}
 }
