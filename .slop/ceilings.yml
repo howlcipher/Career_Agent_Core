@@ -3,4 +3,4 @@ scopes:
   go_production:
     active_clones_ceiling: 103
   go_tests:
-    active_clones_ceiling: 317
+    active_clones_ceiling: 314
