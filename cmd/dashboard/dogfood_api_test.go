@@ -45,14 +45,12 @@ func TestServeDogfoodActive_NullWhenNoneStarted(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	var body struct {
-		Cohort *storage.DogfoodCohort `json:"cohort"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if body.Cohort != nil {
-		t.Fatalf("expected a null cohort before any run starts, got %+v", body.Cohort)
+	if string(payload["cohort"]) != "null" {
+		t.Fatalf("expected a null cohort before any run starts, got %s", payload["cohort"])
 	}
 }
 
@@ -82,23 +80,15 @@ func TestServeDogfoodStart_CreatesCohortThenConflictsOnASecondCall(t *testing.T)
 	}
 }
 
-func TestServeDogfoodFeedback_RequiresAJobID(t *testing.T) {
+func TestServeDogfoodFeedback_RejectsInvalidPayloads(t *testing.T) {
 	setupTestDB(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/dogfood/feedback", bytes.NewBufferString(`{"category":"nothing"}`))
-	rec := httptest.NewRecorder()
-	serveDogfoodFeedback(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", rec.Code)
-	}
-}
-
-func TestServeDogfoodFeedback_RejectsUnknownCategory(t *testing.T) {
-	setupTestDB(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/dogfood/feedback", bytes.NewBufferString(`{"job_id":"1","category":"not_a_real_category"}`))
-	rec := httptest.NewRecorder()
-	serveDogfoodFeedback(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", rec.Code)
+	for _, payload := range []string{`{"category":"nothing"}`, `{"job_id":"1","category":"not_a_real_category"}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/dogfood/feedback", bytes.NewBufferString(payload))
+		rec := httptest.NewRecorder()
+		serveDogfoodFeedback(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("payload %q: status=%d, want 400", payload, rec.Code)
+		}
 	}
 }
 
@@ -121,6 +111,20 @@ func TestServeDogfoodReport_NullWhenNoCohortsExist(t *testing.T) {
 	}
 }
 
+func seedTestDogfoodJob(t *testing.T, id int, ts time.Time) {
+	t.Helper()
+	u := "https://boards.greenhouse.io/example/jobs/dogfood-" + string(rune('0'+id))
+	_, err := db.Exec(`
+		INSERT INTO job_funnel (id, company_name, job_title, status, url, discovered_at)
+		VALUES (?, 'Company', 'Engineer', 'AWAITING_REVIEW', ?, ?);
+		INSERT INTO assisted_applications (job_id, original_status, next_action_code, assisted_state, revalidation_state, revalidation_version, created_at, updated_at)
+		VALUES (?, 'AWAITING_REVIEW', 'review_and_submit', 'waiting_human', 'required', 3, ?, ?);
+	`, id, u, ts, id, ts, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDogfoodRun_EndToEnd exercises the whole cohort lifecycle through this
 // package's own handlers plus the storage layer's confirmation path, the same
 // way a real five-application dogfood run would: start, confirm five
@@ -138,17 +142,7 @@ func TestDogfoodRun_EndToEnd(t *testing.T) {
 
 	now := time.Now().UTC()
 	for i := 1; i <= 5; i++ {
-		if _, err := db.Exec(`INSERT INTO job_funnel (url, id, company_name, job_title, status, discovered_at)
-			VALUES (?, ?, ?, 'Engineer', 'AWAITING_REVIEW', ?)`,
-			"https://boards.greenhouse.io/example/jobs/dogfood-"+string(rune('0'+i)), i, "Company", now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(`INSERT INTO assisted_applications
-			(job_id, original_status, next_action_code, assisted_state, revalidation_state, revalidation_version, created_at, updated_at)
-			VALUES (?, 'AWAITING_REVIEW', 'review_and_submit', 'waiting_human', 'required', 3, ?, ?)`,
-			i, now, now); err != nil {
-			t.Fatal(err)
-		}
+		seedTestDogfoodJob(t, i, now)
 		jobID := string(rune('0' + i))
 		ordinal, err := storage.ConfirmAssistedSubmission(db, jobID)
 		if err != nil {
