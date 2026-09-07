@@ -3,21 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Career Agent Core - a local-first, operator-controlled job application system built in Go.">
+    <meta name="description" content="Career Agent Core is a local-first, operator-controlled autonomous application operations platform built in Go with prompt quarantine and human handoffs.">
+    <link rel="canonical" href="https://howlcipher.github.io/Career_Agent_Core/">
     
     <title>Career Agent Core | Local Application Operations</title>
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="Career Agent Core | Local Application Operations">
-    <meta property="og:description" content="A local-first Go system for observable application operations and clear human handoffs.">
+    <meta property="og:description" content="A local-first Go system for observable application operations, prompt quarantine, and clear human handoffs.">
+    <meta property="og:url" content="https://howlcipher.github.io/Career_Agent_Core/">
     <meta property="og:image" content="https://howlcipher.github.io/Career_Agent_Core/images/og-image.jpg">
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Career Agent Core | Local Application Operations">
-    <meta name="twitter:description" content="A local-first Go system for observable application operations and clear human handoffs.">
+    <meta name="twitter:description" content="A local-first Go system for observable application operations, prompt quarantine, and clear human handoffs.">
     <meta name="twitter:image" content="https://howlcipher.github.io/Career_Agent_Core/images/og-image.jpg">
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Career Agent Core",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Linux, macOS, Windows",
+      "description": "Local-first, operator-controlled autonomous application operations system built in Go with layered form recovery, prompt quarantine, and human-in-the-loop handoffs.",
+      "url": "https://howlcipher.github.io/Career_Agent_Core/",
+      "author": {
+        "@type": "Person",
+        "name": "William Elias",
+        "url": "https://howlcipher.github.io/william_elias/"
+      }
+    }
+    </script>
 
     <link rel="icon" type="image/jpeg" href="images/favicon.jpg">
     
@@ -53,6 +73,7 @@
             <div id="nav-menu" class="nav-menu">
                 <a href="#features" class="nav-link">Systems</a>
                 <a href="#core-architecture" class="nav-link">Design</a>
+                <a href="#architecture-qa" class="nav-link">Q&amp;A</a>
                 <button id="theme-toggle" class="btn-icon" aria-label="Toggle Theme">
                     <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
                     <svg class="icon-moon" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
@@ -72,7 +93,7 @@
                 <span>LOCAL-FIRST APPLICATION OPERATIONS</span>
             </div>
             <h1 id="hero-title" class="fade-in-up delay-2">Run a precise<br><span class="gradient-text gradient-animated">application system.</span></h1>
-            <p id="hero-subtitle" class="subtitle fade-in-up delay-3">A local-first Go system for discovery, tailored documents, guarded browser work, and clear human handoffs. Built to make the work observable—not magical.</p>
+            <p id="hero-subtitle" class="subtitle fade-in-up delay-3">Designed and engineered by <a href="https://howlcipher.github.io/william_elias/" style="color: var(--color-primary, #6366f1); text-decoration: underline;">William Elias</a>, Career Agent Core is a local-first Go system for discovery, tailored documents, guarded browser work, and clear human handoffs. Built to make the work observable—not magical.</p>
             <div id="hero-actions" class="hero-actions fade-in-up delay-4">
                 <a href="https://github.com/howlcipher/Career_Agent_Core" id="deploy-btn" class="btn-primary" rel="noopener noreferrer">
                     View the repository
@@ -241,6 +262,39 @@
                             </div>
                         </li>
                     </ul>
+        <section id="architecture-qa" class="section">
+            <div class="section-header fade-in-up">
+                <h2 class="section-title">Technical <span class="gradient-text">Q&amp;A</span></h2>
+                <p class="section-subtitle">Core architectural decisions behind local-first autonomous application engineering.</p>
+            </div>
+
+            <div class="bento-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+                <div class="bento-card hover-glow fade-in-up delay-1">
+                    <div class="card-content">
+                        <h3 style="color: var(--color-primary, #6366f1); margin-bottom: 0.5rem;">Why build an autonomous application operations system in local-first Go?</h3>
+                        <p>Web scraping and agentic workflows typically rely on heavy Python runtimes with brittle dependencies. Building in Go provides single-binary deployment, zero-runtime overhead, deterministic goroutine concurrency with bounded worker pools, and memory safety without garbage collection stalls during long-running browser automation runs.</p>
+                    </div>
+                </div>
+
+                <div class="bento-card hover-glow fade-in-up delay-2">
+                    <div class="card-content">
+                        <h3 style="color: #10b981; margin-bottom: 0.5rem;">How does prompt-injection quarantine prevent adversarial ATS exploits?</h3>
+                        <p>Untrusted third-party job postings frequently contain hidden zero-width text, prompt override instructions, or adversarial HTML markup designed to trick generative models into unauthorized actions. Career Agent Core routes all incoming job descriptions and DOM text through an isolated sanitizer and AST boilerplate filter before model reasoning occurs.</p>
+                    </div>
+                </div>
+
+                <div class="bento-card hover-glow fade-in-up delay-3">
+                    <div class="card-content">
+                        <h3 style="color: #f59e0b; margin-bottom: 0.5rem;">Why are human-controlled handoffs superior to unconstrained automated submissions?</h3>
+                        <p>Fully unconstrained application bots degrade candidate reputation by sending misaligned or low-quality documents. Career Agent Core prepares tailored resumes and pre-fills multi-step forms up to the final confirmation gate, pausing execution and surfacing an exact diff for human review before any destructive submission event occurs.</p>
+                    </div>
+                </div>
+
+                <div class="bento-card hover-glow fade-in-up delay-4">
+                    <div class="card-content">
+                        <h3 style="color: #3b82f6; margin-bottom: 0.5rem;">How does resolver-bound networking prevent DNS rebinding attacks?</h3>
+                        <p>Browser-controlling agents that follow arbitrary external links risk being redirected to internal private networks (localhost, 127.0.0.1, or cloud metadata endpoints). Career Agent Core implements resolver-bound dialers that explicitly validate target IP addresses against private CIDR ranges prior to socket connection.</p>
+                    </div>
                 </div>
             </div>
         </section>
@@ -252,7 +306,7 @@
                 <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon></svg>
                 <span class="brand-text">Agent<span class="gradient-text">Core</span></span>
             </a>
-            <p id="copyright-text" class="copyright">&copy; 2026 William Elias (howlcipher). Agentic Workflow &amp; Automation Platform.</p>
+            <p id="copyright-text" class="copyright">&copy; 2026 <a href="https://howlcipher.github.io/william_elias/" style="color: inherit; text-decoration: underline;">William Elias</a> (howlcipher). Agentic Workflow &amp; Automation Platform.</p>
         </div>
     </footer>
 </body>

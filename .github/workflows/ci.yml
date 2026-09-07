@@ -46,6 +46,9 @@ jobs:
       - name: Run Build
         run: go build ./...
 
+      - name: Verify SEO Metadata & Artifacts
+        run: python3 scripts/test_seo.py
+
   frontend-ci:
     name: Frontend UI CI
     runs-on: ubuntu-latest

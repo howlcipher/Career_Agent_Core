@@ -170,6 +170,17 @@ func TestDogfoodCohort_SixthConfirmationIsNotCaptured(t *testing.T) {
 	}
 }
 
+func assertNoCapturesInActiveCohort(t *testing.T, msg string) {
+	t.Helper()
+	active, err := GetActiveDogfoodCohort(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.CapturedCount != 0 {
+		t.Fatalf("%s, got %d captures", msg, active.CapturedCount)
+	}
+}
+
 func TestDogfoodCohort_AbandonedSessionIsNotCaptured(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
@@ -184,18 +195,13 @@ func TestDogfoodCohort_AbandonedSessionIsNotCaptured(t *testing.T) {
 	if err := MarkApplySessionItemOpen(db, "1"); err != nil {
 		t.Fatal(err)
 	}
+
 	// The browser closed without the operator confirming anything.
 	if err := PauseApplySessionForClosedBrowser(db, "1"); err != nil {
 		t.Fatal(err)
 	}
 
-	active, err := GetActiveDogfoodCohort(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if active.CapturedCount != 0 {
-		t.Fatalf("an abandoned session must never be captured, got %d captures", active.CapturedCount)
-	}
+	assertNoCapturesInActiveCohort(t, "an abandoned session must never be captured")
 }
 
 func TestDogfoodCohort_AutomaticApplyBypassIsNotCaptured(t *testing.T) {
@@ -216,13 +222,7 @@ func TestDogfoodCohort_AutomaticApplyBypassIsNotCaptured(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	active, err := GetActiveDogfoodCohort(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if active.CapturedCount != 0 {
-		t.Fatalf("an automatic APPLIED transition must never be captured, got %d captures", active.CapturedCount)
-	}
+	assertNoCapturesInActiveCohort(t, "an automatic APPLIED transition must never be captured")
 }
 
 func TestRecordDogfoodFeedback_RejectsUnknownCategory(t *testing.T) {
@@ -365,10 +365,7 @@ func TestGetDogfoodReport_ComputesCountsCorrectly(t *testing.T) {
 	}
 }
 
-func TestGetDogfoodReport_HandlesMissingFeedback(t *testing.T) {
-	setupTestDB(t)
-	defer teardownTestDB()
-
+func seedBasicFiveJobCohort(t *testing.T) *DogfoodCohort {
 	cohort, err := StartDogfoodCohort(db)
 	if err != nil {
 		t.Fatal(err)
@@ -377,8 +374,15 @@ func TestGetDogfoodReport_HandlesMissingFeedback(t *testing.T) {
 		id := i + 1
 		confirmSeededJob(t, id, name)
 		seedDogfoodMetrics(t, id, "greenhouse", 2, 1, 0)
-		// Deliberately no RecordDogfoodFeedback call -- feedback is optional.
 	}
+	return cohort
+}
+
+func TestGetDogfoodReport_HandlesMissingFeedback(t *testing.T) {
+	setupTestDB(t)
+	defer teardownTestDB()
+
+	cohort := seedBasicFiveJobCohort(t)
 
 	report, err := GetDogfoodReport(db, cohort.ID)
 	if err != nil {
@@ -396,15 +400,7 @@ func TestGetDogfoodReport_HandlesMissingInteractionTiming(t *testing.T) {
 	setupTestDB(t)
 	defer teardownTestDB()
 
-	cohort, err := StartDogfoodCohort(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, name := range []string{"First", "Second", "Third", "Fourth", "Fifth"} {
-		id := i + 1
-		confirmSeededJob(t, id, name)
-		seedDogfoodMetrics(t, id, "greenhouse", 2, 1, 0) // no interaction timing recorded
-	}
+	cohort := seedBasicFiveJobCohort(t)
 
 	report, err := GetDogfoodReport(db, cohort.ID)
 	if err != nil {
@@ -430,12 +426,13 @@ func TestDogfoodVerdict_ExpectedHumanOnlyQuestionsAreNotFlaggedAsDefects(t *test
 		DogfoodFeedbackNothing,
 		DogfoodFeedbackOneOffQuestion,
 	}
-	for i, name := range []string{"First", "Second", "Third", "Fourth", "Fifth"} {
-		id := i + 1
-		confirmSeededJob(t, id, name)
-		seedDogfoodMetrics(t, id, "greenhouse", 4, 2, 0)
-		if err := RecordDogfoodFeedback(db, itoa(id), feedback[i], nil, ""); err != nil {
-			t.Fatal(err)
+	for jobIdx, companyName := range []string{"First", "Second", "Third", "Fourth", "Fifth"} {
+		jobNum := jobIdx + 1
+		confirmSeededJob(t, jobNum, companyName)
+		seedDogfoodMetrics(t, jobNum, "greenhouse", 4, 2, 0)
+		category := feedback[jobIdx]
+		if recErr := RecordDogfoodFeedback(db, itoa(jobNum), category, nil, ""); recErr != nil {
+			t.Fatal(recErr)
 		}
 	}
 

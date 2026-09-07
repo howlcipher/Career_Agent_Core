@@ -93,16 +93,21 @@ func TestDashboardStartup_CreatesEveryTableAssistedApplyNeeds(t *testing.T) {
 	}
 }
 
-// The behavioural half: starting a session is the operation that actually
-// failed. A schema assertion alone would not have caught a table created with
-// the wrong columns.
-func TestStartApplySession_WorksOnADatabaseFromAnEarlierRelease(t *testing.T) {
+func setupUpgradedLegacyDB(t *testing.T) {
+	t.Helper()
 	previous := db
 	t.Cleanup(func() { db = previous })
 	db = openLegacyDatabase(t)
 	if err := prepareDashboardSchema(db); err != nil {
 		t.Fatalf("prepare dashboard schema: %v", err)
 	}
+}
+
+// The behavioural half: starting a session is the operation that actually
+// failed. A schema assertion alone would not have caught a table created with
+// the wrong columns.
+func TestStartApplySession_WorksOnADatabaseFromAnEarlierRelease(t *testing.T) {
+	setupUpgradedLegacyDB(t)
 	if _, err := db.Exec(`INSERT INTO job_funnel (url, id, company_name, job_title, status, discovered_at, last_updated)
 		VALUES ('https://boards.greenhouse.io/example/jobs/1', 1, 'Example', 'Engineer', 'AWAITING_REVIEW', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
 		t.Fatal(err)
@@ -140,12 +145,7 @@ func controlRequest(t *testing.T, origin, host string) *httptest.ResponseRecorde
 }
 
 func TestApplySessionControl_AcceptsTheDashboardsOwnPortWhateverItIs(t *testing.T) {
-	previous := db
-	t.Cleanup(func() { db = previous })
-	db = openLegacyDatabase(t)
-	if err := prepareDashboardSchema(db); err != nil {
-		t.Fatal(err)
-	}
+	setupUpgradedLegacyDB(t)
 
 	// A dashboard started with -addr 127.0.0.1:8099 serves pages whose Origin
 	// is that address. Before #539 this was rejected outright, which broke
@@ -164,12 +164,7 @@ func TestApplySessionControl_AcceptsTheDashboardsOwnPortWhateverItIs(t *testing.
 // Removing decodeBoundedJSON's check must not be mistakable for removing the
 // guard: a cross-origin request is still refused, by requireSameOrigin.
 func TestApplySessionControl_StillRefusesAForeignOrigin(t *testing.T) {
-	previous := db
-	t.Cleanup(func() { db = previous })
-	db = openLegacyDatabase(t)
-	if err := prepareDashboardSchema(db); err != nil {
-		t.Fatal(err)
-	}
+	setupUpgradedLegacyDB(t)
 	for _, origin := range []string{
 		"http://evil.example.com",
 		"http://127.0.0.1:9999", // right host, wrong port

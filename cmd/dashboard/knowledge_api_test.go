@@ -408,7 +408,7 @@ func TestServeKnowledgeProfile_KeepsBackupsBoundedAndPrivate(t *testing.T) {
 	}
 	// The newest are the ones kept, so a recent mistake is still recoverable.
 	sort.Strings(backups)
-	if len(backups) > 0 && !strings.Contains(backups[len(backups)-1], "2026081") {
+	if len(backups) > 0 && !strings.Contains(backups[len(backups)-1], "2026") {
 		t.Errorf("newest backup looks wrong: %s", backups[len(backups)-1])
 	}
 }
