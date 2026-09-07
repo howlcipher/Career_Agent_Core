@@ -202,6 +202,22 @@ var patterns = []pattern{
 		Value:       func(pii *config.PII) string { return pii.Work.Certifications },
 	},
 	{
+		ID:          "education",
+		RequireAll:  [][]string{{"education", "educational", "academic", "college", "university", "degree"}, {"background", "summary", "history", "highest", "level", "post", "secondary", "earned", "attended", "attending", "completed", "qualifications"}},
+		Sensitivity: Sensitive,
+		Kind:        KindText,
+		Value:       func(pii *config.PII) string { return pii.EducationSummary() },
+		Reject: func(question Question) bool {
+			tokens := Tokens(question.Prompt)
+			for _, token := range tokens {
+				if educationEssayTokens[token] {
+					return true
+				}
+			}
+			return false
+		},
+	},
+	{
 		ID:          "how_did_you_hear",
 		RequireAll:  [][]string{{"hear", "heard", "find", "found", "learn", "learned", "source", "referral"}},
 		Sensitivity: Routine,
@@ -376,6 +392,21 @@ var otherPartyTokens = []string{
 	"manager", "supervisor", "recruiter", "contact",
 	"emergency", "spouse", "parent", "guardian",
 	"employer", "company", "school", "university", "institution",
+}
+
+// educationEssayTokens mark wording that turns an education prompt into a
+// free-text essay or a per-job answer (e.g., "Why did you choose your field
+// of study?", "Describe how your education prepared you for this role.").
+// Duration or graduation-only questions are excluded by the RequireAll groups
+// rather than by these tokens. They are kept out of the curated pattern so a
+// per-job or skill-scoped question does not inherit a generic education
+// summary.
+var educationEssayTokens = map[string]bool{
+	"describe": true, "tell": true, "explain": true, "elaborate": true,
+	"summarize": true, "summarise": true, "cover": true, "why": true,
+	"interest": true, "interested": true, "excites": true, "excited": true,
+	"attracts": true, "attracted": true, "motivates": true, "motivated": true,
+	"drew": true, "prepared": true, "prepare": true, "choose": true, "chose": true,
 }
 
 // matchPattern returns the first curated pattern whose token requirements the

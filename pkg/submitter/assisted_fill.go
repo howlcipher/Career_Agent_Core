@@ -144,6 +144,13 @@ func resolveAndApply(target fillTarget, plan AssistedFillPlan, stillEmpty []Form
 
 	for _, entry := range batch.Filled {
 		control := byKey[entry.Question.Key]
+		// Intentional absence means "leave this control untouched" — do not
+		// type the reason text, do not write an empty string, do not report
+		// it as a filled field. The operator's decision is that this optional
+		// field has no applicable value. Skip it entirely.
+		if entry.Resolution.IntentionalAbsence {
+			continue
+		}
 		if err := applyAnswerToControl(target, control, entry.Resolution.Answer); err != nil {
 			// A field the vault knew but could not commit is not silently
 			// dropped: it goes back to the operator with the known value

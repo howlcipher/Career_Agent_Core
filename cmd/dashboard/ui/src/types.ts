@@ -312,6 +312,105 @@ export interface AssistedJob {
 }
 
 /**
+ * Dogfood — the five-application evidence run. See pkg/storage/dogfood.go for
+ * the source of truth; these mirror its JSON shapes exactly.
+ */
+
+export interface DogfoodCohort {
+  id: number;
+  started_at: string;
+  target_count: number;
+  completed_at?: string;
+  captured_count: number;
+}
+
+export interface DogfoodCohortSummary {
+  id: number;
+  started_at: string;
+  completed_at?: string;
+  target_count: number;
+  captured_count: number;
+}
+
+/** The fixed, closed feedback vocabulary — never free text. */
+export type DogfoodFeedbackCategory =
+  | 'nothing'
+  | 'bad_match'
+  | 'known_not_filled'
+  | 'filled_incorrect'
+  | 'repeated_question'
+  | 'one_off_question'
+  | 'blocker'
+  | 'other';
+
+export interface DogfoodApplicationRecord {
+  ordinal: number;
+  job_id: string;
+  company?: string;
+  role?: string;
+  ats?: string;
+  fit_score?: number;
+  filled_count: number;
+  reused_answers: number;
+  unresolved_count: number;
+  document_count: number;
+  fill_source?: string;
+  interaction_seconds: number;
+  has_interaction_timing: boolean;
+  feedback_category?: DogfoodFeedbackCategory;
+  feedback_manual_count?: number;
+  feedback_note?: string;
+}
+
+export interface DogfoodFrictionEntry {
+  category: string;
+  count: number;
+}
+
+export type DogfoodVerdict = 'keep_using' | 'fix_one_repeated_problem' | 'pause_for_correctness';
+
+export interface DogfoodReport {
+  cohort_id: number;
+  started_at: string;
+  completed_at?: string;
+  target_count: number;
+  applications: DogfoodApplicationRecord[];
+
+  plausible_targets: number;
+  bad_matches: number;
+
+  total_fields_filled: number;
+  average_fields_filled: number;
+  total_answers_reused: number;
+  known_facts_not_filled: number;
+
+  median_interaction_seconds: number;
+  average_interaction_seconds: number;
+  applications_with_timing: number;
+  total_manual_fields_handled: number;
+  applications_with_manual_count: number;
+  average_manual_fields_handled: number;
+  one_off_questions: number;
+  repeated_questions: number;
+
+  wrong_fills: number;
+  blocked: number;
+
+  ats_distribution: Record<string, number>;
+  repeated_friction: DogfoodFrictionEntry[];
+
+  verdict: DogfoodVerdict;
+  verdict_reason: string;
+}
+
+/** What a dogfood-captured confirmation reports back, so the dashboard knows
+ *  to show the one-question feedback prompt. */
+export interface DogfoodConfirmInfo {
+  ordinal: number;
+  target_count: number;
+}
+
+/**
  * Application Knowledge — what Career Agent needs to know across the whole
  * queue, rather than for one open application.
  */

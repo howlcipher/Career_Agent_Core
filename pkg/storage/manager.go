@@ -268,6 +268,9 @@ func InitDBWithPath(path string) error {
 	if err := EnsureHumanInteractionSchema(db); err != nil {
 		return err
 	}
+	if err := EnsureDogfoodSchema(db); err != nil {
+		return err
+	}
 	if err := secureSQLiteFiles(databasePath); err != nil {
 		return fmt.Errorf("secure database files after initialization: %w", err)
 	}

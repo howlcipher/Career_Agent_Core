@@ -317,7 +317,7 @@ func setupTestDB(t *testing.T) {
 	CREATE TABLE applied_jobs (
 		company_name TEXT,
 		job_title TEXT,
-		url TEXT,
+		url TEXT UNIQUE,
 		applied_at DATETIME
 	);
 	CREATE TABLE application_attempts (
@@ -361,6 +361,7 @@ func setupTestDB(t *testing.T) {
 		storage.EnsureQuestionSchema,
 		storage.EnsureApplySessionSchema,
 		storage.EnsureHumanInteractionSchema,
+		storage.EnsureDogfoodSchema,
 	} {
 		if err := ensure(db); err != nil {
 			t.Fatalf("failed to create assisted schema: %v", err)

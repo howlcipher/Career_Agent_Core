@@ -1,5 +1,65 @@
 # Career Agent Core - Changelog
 
+## 2026-08-19 — "I don't have this" is a first-class answer the vault can now represent (improvements.md #545)
+
+The Approved Answer Vault gains a third state: intentional absence. Previously, the
+vault distinguished only "resolved with a value" from "unresolved" — so when the operator
+genuinely had no Twitter/X account, there was no way to record that fact. The question sat
+in the inbox permanently, competing for attention with questions that actually needed
+deciding.
+
+`KindAbsence` (`answer_kind = 'absence'`) is now a first-class `Kind` alongside `text`,
+`boolean`, `choice`, `number`, and `url`. The `answer_text` stores a human-readable reason
+("No Twitter/X account") rather than an empty string, preserving the non-NULL invariant.
+`Resolution.IntentionalAbsence` tells the fill path to leave the control untouched rather
+than typing anything.
+
+Safety invariants:
+- Absence auto-fills only optional fields. A required field with an absence answer surfaces
+  as needing operator attention (`applyAbsenceSafety` in `resolve.go`).
+- Sensitive questions (work auth, sponsorship, privacy consent, legal attestations) require
+  the same two-decision explicit approval path as value answers.
+- `GeneratePerJob` questions refuse absence outright (they need per-employer answers).
+- Canonicalization boundaries are preserved: Twitter absence does not spread to LinkedIn,
+  GitHub, or portfolio (separate question keys, separate patterns).
+
+`Readiness.AbsenceResolved` tracks absence-resolved fields separately from value-filled
+fields so metrics remain truthful. The dashboard exposes `POST /api/knowledge/absence` for
+the operator to declare absence, and the existing revocation path restores an absent
+question to unresolved when the operator's circumstances change.
+
+20 regression tests cover the full surface: storage, resolution, required-field safety,
+cross-account isolation, sensitive-question refusal, revocation, metrics, and policy
+classification.
+
+## 2026-08-19 — Education-summary questions now resolve from the configured profile after operator approval
+
+The production dogfood audit found that factual education-summary questions were
+falling into `generate_per_job` and being retyped on every application. Added a
+deterministic `education` pattern to `pkg/answers/patterns.go` that recognizes
+common phrasings ("Education background", "Highest level of education",
+"post-secondary education", "Degree earned", etc.) while rejecting per-job
+essays ("Why did you choose your field of study?") and role-specific possession
+questions ("Do you have a degree in computer science?").
+
+The answer is built deterministically from the existing `pii.yaml` `education`
+entries by `config.PII.EducationSummary()`; no second education store was added,
+and an empty profile returns no answer rather than a guess. The pattern is
+classified `Sensitive`, so it suggests the configured summary but never
+auto-fills until the operator explicitly approves it and allows reuse — the
+same two-decision path already enforced for work authorization and sponsorship.
+The canonical seed question "What is your education background?" lets
+`SeedFromPII` pre-fill a suggestion, and bulk approval through the Application
+Knowledge view immediately re-resolves equivalent queued questions.
+
+Live verification against a copy of `applications.db` showed the education
+question that had been grouped as `generate_per_job` now groups as
+`pattern:education` and disappears from the inbox after approval, reducing
+unresolved queue items from 18 to 15 (3 education occurrences resolved).
+Work-authorization and sponsorship reuse paths were left unchanged; the current
+cohort does not contain configured values for them, so no live approval was
+observed, and the existing unit/lifecycle tests continue to pin the behavior.
+
 ## 2026-08-17 — The role gate no longer admits management-track titles just because they also name an engineering keyword (bugs.md #556)
 
 The Assisted Apply queue was mostly `Director`/`Principal`/leadership roles

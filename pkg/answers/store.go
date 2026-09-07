@@ -92,17 +92,100 @@ type SaveRequest struct {
 // handler check protects one caller; a store check protects every caller,
 // including cmd/assist, a future migration, and whatever calls this next year.
 // Nothing in this package offers a way around it.
-func (s *Store) Save(request SaveRequest) (Answer, error) {
+// storeApprovedAnswer persists the common parts of Save and SaveAbsence.
+// The caller has already validated inputs and chosen kind, text, and provenance.
+func (s *Store) storeApprovedAnswer(key, prompt, text string, kind Kind, sensitivity Sensitivity, scope string, reuseAllowed bool, provenance Provenance, label string, now time.Time) (Answer, error) {
+	tx, err := s.conn.Begin()
+	if err != nil {
+		return Answer{}, fmt.Errorf("begin approved %s: %w", label, err)
+	}
+	defer tx.Rollback()
+
+	// An approval for a question already in the vault updates that row rather
+	// than adding a second one, and clears any prior revocation: re-approving
+	// something is a deliberate act.
+	if _, err := tx.Exec(`INSERT INTO approved_answers
+		(question_key, canonical_question, answer_text, answer_kind, sensitivity, scope, reuse_allowed, provenance, approved_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(question_key, scope) DO UPDATE SET
+			canonical_question = excluded.canonical_question,
+			answer_text = excluded.answer_text,
+			answer_kind = excluded.answer_kind,
+			sensitivity = excluded.sensitivity,
+			reuse_allowed = excluded.reuse_allowed,
+			provenance = excluded.provenance,
+			updated_at = excluded.updated_at,
+			revoked_at = NULL`,
+		key, prompt, text, string(kind), string(sensitivity), scope,
+		boolToInt(reuseAllowed), string(provenance), now, now); err != nil {
+		return Answer{}, fmt.Errorf("store approved %s: %w", label, err)
+	}
+
+	var id int64
+	if err := tx.QueryRow(`SELECT id FROM approved_answers WHERE question_key = ? AND scope = ?`, key, scope).Scan(&id); err != nil {
+		return Answer{}, fmt.Errorf("read stored approved %s: %w", label, err)
+	}
+
+	// The alias is what makes the learning loop deterministic. The exact
+	// phrasing the employer used is bound to this answer, so the next time any
+	// board asks it in those words the resolution is a lookup, not a match.
+	if reuseAllowed {
+		if _, err := tx.Exec(`INSERT INTO answer_aliases (alias_key, scope, answer_id, source, created_at)
+			VALUES (?, ?, ?, 'operator', ?)
+			ON CONFLICT(alias_key, scope) DO UPDATE SET answer_id = excluded.answer_id, created_at = excluded.created_at`,
+			Normalize(prompt), scope, id, now); err != nil {
+			return Answer{}, fmt.Errorf("store %s alias: %w", label, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Answer{}, err
+	}
+	return Answer{
+		ID: id, QuestionKey: key, CanonicalQuestion: prompt, AnswerText: text,
+		Kind: kind, Sensitivity: sensitivity, Scope: scope,
+		ReuseAllowed: reuseAllowed, Provenance: provenance,
+		ApprovedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+// prepareStoreInputs validates the store connection, trims the prompt and
+// value, ensures the question has a key, and chooses the scope. It is shared by
+// Save and SaveAbsence; the emptyValueErr parameter lets the two callers keep
+// their distinct error messages.
+func (s *Store) prepareStoreInputs(promptIn, value, scopeIn, emptyValueErr string) (prompt, trimmedValue, scope, key string, now time.Time, err error) {
 	if s == nil || s.conn == nil {
-		return Answer{}, errors.New("answer vault is not initialized")
+		return "", "", "", "", time.Time{}, errors.New("answer vault is not initialized")
 	}
-	prompt := strings.TrimSpace(request.Question.Prompt)
-	answerText := strings.TrimSpace(request.Answer)
+	prompt = strings.TrimSpace(promptIn)
+	trimmedValue = strings.TrimSpace(value)
 	if prompt == "" {
-		return Answer{}, errors.New("an approved answer needs the question it answers")
+		return "", "", "", "", time.Time{}, errors.New("an approved answer needs the question it answers")
 	}
-	if answerText == "" {
-		return Answer{}, errors.New("an approved answer needs an answer")
+	if trimmedValue == "" {
+		return "", "", "", "", time.Time{}, errors.New(emptyValueErr)
+	}
+	scope = strings.TrimSpace(scopeIn)
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+	key = QuestionKey(prompt)
+	if key == "" {
+		return "", "", "", "", time.Time{}, errors.New("the question has no recognizable text")
+	}
+	return prompt, trimmedValue, scope, key, s.now(), nil
+}
+
+// Save stores an approved answer, and is where the vault's central safety rule
+// lives.
+//
+// The rule is enforced here rather than in the dashboard handler on purpose. A
+// handler check protects one caller; a store check protects every caller,
+// including cmd/assist, a future migration, and whatever calls this next year.
+// Nothing in this package offers a way around it.
+func (s *Store) Save(request SaveRequest) (Answer, error) {
+	prompt, answerText, scope, key, now, err := s.prepareStoreInputs(request.Question.Prompt, request.Answer, request.Scope, "an approved answer needs an answer")
+	if err != nil {
+		return Answer{}, err
 	}
 
 	// The classifier decides sensitivity from the question. A caller may raise
@@ -134,71 +217,61 @@ func (s *Store) Save(request SaveRequest) (Answer, error) {
 		return Answer{}, errors.New("an approved answer needs a provenance")
 	}
 
-	scope := strings.TrimSpace(request.Scope)
-	if scope == "" {
-		scope = ScopeGlobal
-	}
 	kind := request.Kind
 	if kind == "" {
 		kind = KindText
 	}
-	key := QuestionKey(prompt)
-	if key == "" {
-		return Answer{}, errors.New("the question has no recognizable text")
-	}
-	now := s.now()
 
-	tx, err := s.conn.Begin()
+	return s.storeApprovedAnswer(key, prompt, answerText, kind, sensitivity, scope, request.ReuseAllowed, request.Provenance, "answer", now)
+}
+
+// SaveAbsenceRequest is the operator declaring that they do not have the thing
+// a question asks for. It is a real answer: "I have no Twitter account" is a
+// durable fact that resolves every optional Twitter question permanently.
+type SaveAbsenceRequest struct {
+	Question Question
+	// Reason is a human-readable note stored as answer_text, e.g.
+	// "No Twitter/X account". It must be non-empty so the vault management
+	// view has something meaningful to display and the existing non-empty
+	// answer_text invariant is preserved.
+	Reason       string
+	Scope        string
+	ReuseAllowed bool
+	// ReuseDecisionMade records that the operator was actually asked. Same
+	// semantics as SaveRequest.ReuseDecisionMade.
+	ReuseDecisionMade bool
+}
+
+// SaveAbsence stores an intentional-absence decision.
+//
+// It shares Save's safety rules for sensitive questions, and adds its own:
+// - GeneratePerJob questions cannot be absent (they need a per-employer answer).
+// - The reason must not be empty (the UI shows it, and a blank row looks broken).
+//
+// The approval is stored as answer_kind = 'absence' so the resolver can
+// distinguish it from a value answer. The answer_text holds the reason,
+// preserving the existing non-NULL TEXT invariant. Resolution-time enforcement
+// of the optional-field-only rule happens in Resolve, not here: the same
+// Twitter absence correctly resolves an optional field while refusing a
+// required one, and that distinction is a property of the live form, not of
+// the stored answer.
+func (s *Store) SaveAbsence(request SaveAbsenceRequest) (Answer, error) {
+	prompt, reason, scope, key, now, err := s.prepareStoreInputs(request.Question.Prompt, request.Reason, request.Scope, "an intentional absence needs a reason (e.g. \"No Twitter/X account\")")
 	if err != nil {
-		return Answer{}, fmt.Errorf("begin approved answer: %w", err)
-	}
-	defer tx.Rollback()
-
-	// An approval for a question already in the vault updates that row rather
-	// than adding a second one, and clears any prior revocation: re-approving
-	// something is a deliberate act.
-	if _, err := tx.Exec(`INSERT INTO approved_answers
-		(question_key, canonical_question, answer_text, answer_kind, sensitivity, scope, reuse_allowed, provenance, approved_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(question_key, scope) DO UPDATE SET
-			canonical_question = excluded.canonical_question,
-			answer_text = excluded.answer_text,
-			answer_kind = excluded.answer_kind,
-			sensitivity = excluded.sensitivity,
-			reuse_allowed = excluded.reuse_allowed,
-			provenance = excluded.provenance,
-			updated_at = excluded.updated_at,
-			revoked_at = NULL`,
-		key, prompt, answerText, string(kind), string(sensitivity), scope,
-		boolToInt(request.ReuseAllowed), string(request.Provenance), now, now); err != nil {
-		return Answer{}, fmt.Errorf("store approved answer: %w", err)
-	}
-
-	var id int64
-	if err := tx.QueryRow(`SELECT id FROM approved_answers WHERE question_key = ? AND scope = ?`, key, scope).Scan(&id); err != nil {
-		return Answer{}, fmt.Errorf("read stored approved answer: %w", err)
-	}
-
-	// The alias is what makes the learning loop deterministic. The exact
-	// phrasing the employer used is bound to this answer, so the next time any
-	// board asks it in those words the resolution is a lookup, not a match.
-	if request.ReuseAllowed {
-		if _, err := tx.Exec(`INSERT INTO answer_aliases (alias_key, scope, answer_id, source, created_at)
-			VALUES (?, ?, ?, 'operator', ?)
-			ON CONFLICT(alias_key, scope) DO UPDATE SET answer_id = excluded.answer_id, created_at = excluded.created_at`,
-			Normalize(prompt), scope, id, now); err != nil {
-			return Answer{}, fmt.Errorf("store answer alias: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
 		return Answer{}, err
 	}
-	return Answer{
-		ID: id, QuestionKey: key, CanonicalQuestion: prompt, AnswerText: answerText,
-		Kind: kind, Sensitivity: sensitivity, Scope: scope,
-		ReuseAllowed: request.ReuseAllowed, Provenance: request.Provenance,
-		ApprovedAt: now, UpdatedAt: now,
-	}, nil
+
+	classified := Classify(request.Question)
+	if classified == GeneratePerJob {
+		return Answer{}, ErrNotReusable
+	}
+	if classified == Sensitive {
+		if !request.ReuseDecisionMade || !request.ReuseAllowed {
+			return Answer{}, ErrSensitiveNeedsApproval
+		}
+	}
+
+	return s.storeApprovedAnswer(key, prompt, reason, KindAbsence, classified, scope, request.ReuseAllowed, OperatorApproved, "absence", now)
 }
 
 // ErrSensitiveAliasNeedsConfirmation is returned when a caller tries to bind

@@ -1855,3 +1855,68 @@ summary:hover {
   border-color: currentColor;
   font-weight: 600;
 }
+
+/* ── Dogfood run ─────────────────────────────────────────────────────────── */
+
+.dogfood-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.dogfood-friction {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border-left: 3px solid var(--status-warning);
+}
+
+.dogfood-friction h4 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--status-warning);
+}
+
+.dogfood-feedback-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: 0;
+  border: none;
+}
+
+.dogfood-feedback-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.dogfood-feedback-note,
+.dogfood-feedback-manual-count {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.dogfood-feedback-note textarea,
+.dogfood-feedback-manual-count input {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-inset);
+  border: 1px solid var(--trim);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.dogfood-feedback-manual-count input {
+  max-width: 8rem;
+}

@@ -265,3 +265,28 @@ func TestApplicationFacts_ConfiguredStartDateWins(t *testing.T) {
 		t.Error("a configured earliest_start_date must not be overwritten")
 	}
 }
+
+func TestEducationSummary_DerivesFromConfiguredEntries(t *testing.T) {
+	p := PII{Education: []Education{
+		{Degree: "B.S.", FieldOfStudy: "Computer Science", School: "CSU", StartYear: "2016", EndYear: "2020", Status: "Completed"},
+		{Degree: "M.S.", FieldOfStudy: "Engineering", School: "Tech U", StartYear: "2021", EndYear: "2023"},
+	}}
+	got := p.EducationSummary()
+	for _, want := range []string{
+		"B.S.", "Computer Science", "CSU", "Completed", "2016-2020",
+		"M.S.", "Engineering", "Tech U", "2021-2023",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in education summary %q", want, got)
+		}
+	}
+}
+
+func TestEducationSummary_ReturnsEmptyWhenUnconfigured(t *testing.T) {
+	if got := (PII{}).EducationSummary(); got != "" {
+		t.Errorf("expected empty summary, got %q", got)
+	}
+	if got := (PII{Education: []Education{{}}}).EducationSummary(); got != "" {
+		t.Errorf("expected empty summary for blank entry, got %q", got)
+	}
+}

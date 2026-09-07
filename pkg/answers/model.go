@@ -51,6 +51,19 @@ const (
 	KindChoice  Kind = "choice"
 	KindNumber  Kind = "number"
 	KindURL     Kind = "url"
+	// KindAbsence is the operator's explicit decision that a field has no
+	// applicable value. It is a first-class answer state, not an empty string:
+	// the vault still stores a human-readable reason ("No Twitter/X account")
+	// so the operator can see what they decided and why, but the fill path
+	// knows to leave the control untouched rather than typing anything.
+	//
+	// Absence resolves an optional field as "intentionally left blank" and
+	// removes it from the unresolved inbox. It must never resolve a required
+	// field -- the safety invariant is enforced at resolution time, not at
+	// storage time, so the same approval can correctly resolve an optional
+	// Twitter field on one application while surfacing as unresolved on
+	// another that marks the same field required.
+	KindAbsence Kind = "absence"
 )
 
 // Provenance records how an answer came to be in the vault. It is stored
@@ -188,6 +201,15 @@ type Resolution struct {
 	// PatternID names the curated pattern that matched, for diagnostics. Empty
 	// for alias and vault hits.
 	PatternID string
+	// IntentionalAbsence is true when the operator explicitly decided this
+	// field has no applicable value. It is a distinct state from Resolved with
+	// an empty Answer: absence means "leave the control untouched", not
+	// "type nothing". The fill path uses this to skip the control entirely,
+	// and metrics report it as "resolved by operator decision" rather than
+	// "filled". It may only resolve an optional field; when the live form
+	// marks the field required, this resolution is demoted to unresolved and
+	// surfaced to the operator as a conflict.
+	IntentionalAbsence bool
 }
 
 // ErrSensitiveNeedsApproval is returned by Save when a sensitive answer is
